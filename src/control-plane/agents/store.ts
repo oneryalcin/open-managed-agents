@@ -1,17 +1,11 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
   AgentStore,
+  AgentRow,
   CreateAgentRecord,
   ListAgentsOptions,
 } from "./types.ts";
-import type {
-  ManagedAgentsAgent,
-  ManagedAgentsListPage,
-  ManagedAgentsMcpServer,
-  ManagedAgentsMultiagent,
-  ManagedAgentsSkill,
-  ManagedAgentsTool,
-} from "../../types/agents.ts";
+import type { ManagedAgentsListPage } from "../../types/agents.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS agents (
@@ -107,11 +101,11 @@ export class SqliteAgentStore implements AgentStore {
     return new SqliteAgentStore(new DatabaseSync(path));
   }
 
-  create(record: CreateAgentRecord): ManagedAgentsAgent {
-    const a = record.agent;
+  create(record: CreateAgentRecord): AgentRow {
+    const a = record.row;
     this.insertStmt.run(
-      record.id,
-      record.workspace_id,
+      a.id,
+      a.workspace_id,
       a.type,
       a.name,
       JSON.stringify(a.model),
@@ -133,7 +127,7 @@ export class SqliteAgentStore implements AgentStore {
   retrieve(
     workspaceId: string,
     agentId: string,
-  ): ManagedAgentsAgent | undefined {
+  ): AgentRow | undefined {
     const row = this.retrieveActiveStmt.get(
       workspaceId,
       agentId,
@@ -144,7 +138,7 @@ export class SqliteAgentStore implements AgentStore {
   list(
     workspaceId: string,
     opts: ListAgentsOptions = {},
-  ): ManagedAgentsListPage<ManagedAgentsAgent> {
+  ): ManagedAgentsListPage<AgentRow> {
     const limit = normalizeLimit(opts.limit);
     const queryLimit = limit + 1;
     const includeArchived = opts.includeArchived ?? false;
@@ -186,22 +180,23 @@ function normalizeLimit(limit: number | undefined): number {
   return Math.min(limit, 100);
 }
 
-function deserialize(row: AgentDbRow): ManagedAgentsAgent {
+function deserialize(row: AgentDbRow): AgentRow {
   return {
     id: row.id,
+    workspace_id: row.workspace_id,
     type: "agent",
     name: row.name,
-    model: JSON.parse(row.model) as ManagedAgentsAgent["model"],
+    model: JSON.parse(row.model) as AgentRow["model"],
     system: row.system,
     description: row.description,
-    tools: JSON.parse(row.tools) as ManagedAgentsTool[],
-    skills: JSON.parse(row.skills) as ManagedAgentsSkill[],
-    mcp_servers: JSON.parse(row.mcp_servers) as ManagedAgentsMcpServer[],
+    tools: JSON.parse(row.tools) as AgentRow["tools"],
+    skills: JSON.parse(row.skills) as AgentRow["skills"],
+    mcp_servers: JSON.parse(row.mcp_servers) as AgentRow["mcp_servers"],
     metadata: JSON.parse(row.metadata) as Record<string, string>,
     multiagent:
       row.multiagent === null
         ? null
-        : (JSON.parse(row.multiagent) as ManagedAgentsMultiagent),
+        : (JSON.parse(row.multiagent) as AgentRow["multiagent"]),
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,

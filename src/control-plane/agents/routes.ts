@@ -13,7 +13,7 @@ export function agentsRoutes(service: AgentService): Hono {
 
   app.get("/", (c) => {
     const limit = parseLimit(c.req.query("limit"));
-    const page = c.req.query("page");
+    const page = c.req.query("page") || undefined;
     const includeArchived = parseBoolean(c.req.query("include_archived"));
     return c.json(
       service.list(DEFAULT_WORKSPACE_ID, {

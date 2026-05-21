@@ -2,6 +2,7 @@ import { newAgentId } from "../ids.ts";
 import { invalidRequest, notFound } from "../errors.ts";
 import type {
   AgentService,
+  AgentRow,
   AgentStore,
   CreateManagedAgentRequest,
   ListAgentsOptions,
@@ -31,8 +32,9 @@ export class DefaultAgentService implements AgentService {
     const req = parseCreateAgent(input);
     const now = new Date().toISOString();
     const id = newAgentId();
-    const agent: ManagedAgentsAgent = {
+    const row: AgentRow = {
       id,
+      workspace_id: workspaceId,
       type: "agent",
       name: req.name,
       model: normalizeModel(req.model),
@@ -48,30 +50,51 @@ export class DefaultAgentService implements AgentService {
       updated_at: now,
       archived_at: null,
     };
-    return this.store.create({
-      id,
-      workspace_id: workspaceId,
-      agent,
-    });
+    return toManagedAgent(this.store.create({ row }));
   }
 
   retrieve(
     workspaceId: WorkspaceId,
     agentId: string,
   ): ManagedAgentsAgent {
-    const agent = this.store.retrieve(workspaceId, agentId);
-    if (!agent) {
+    const row = this.store.retrieve(workspaceId, agentId);
+    if (!row) {
       throw notFound(`Agent ${agentId} not found`);
     }
-    return agent;
+    return toManagedAgent(row);
   }
 
   list(
     workspaceId: WorkspaceId,
     opts: ListAgentsOptions = {},
   ): ManagedAgentsListPage<ManagedAgentsAgent> {
-    return this.store.list(workspaceId, opts);
+    const page = this.store.list(workspaceId, opts);
+    return {
+      data: page.data.map(toManagedAgent),
+      has_more: page.has_more,
+      next_page: page.next_page,
+    };
   }
+}
+
+function toManagedAgent(row: AgentRow): ManagedAgentsAgent {
+  return {
+    id: row.id,
+    type: row.type,
+    name: row.name,
+    model: row.model,
+    system: row.system,
+    description: row.description,
+    tools: row.tools,
+    skills: row.skills,
+    mcp_servers: row.mcp_servers,
+    metadata: row.metadata,
+    multiagent: row.multiagent,
+    version: row.version,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    archived_at: row.archived_at,
+  };
 }
 
 function parseCreateAgent(input: unknown): CreateManagedAgentRequest {
@@ -392,6 +415,9 @@ function optionalToolConfigsSpread(
 }
 
 function parsePermissionPolicy(value: unknown): ManagedAgentsPermissionPolicy {
+  if (typeof value === "string" && value.length > 0) {
+    return { type: value };
+  }
   const obj = jsonObjectField(value, "permission_policy");
   return {
     type: stringField(obj, "type", { required: true }),

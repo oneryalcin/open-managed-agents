@@ -50,4 +50,17 @@ describe("AgentService + AgentStore", () => {
       next_page: null,
     });
   });
+
+  it("scopes list results by workspace internally", () => {
+    const store = SqliteAgentStore.open(":memory:");
+    const service = new DefaultAgentService(store);
+    const agentA = service.create("wrk_a", REQUEST);
+    service.create("wrk_b", { ...REQUEST, name: "Other Workspace" });
+
+    expect(service.list("wrk_a")).toEqual({
+      data: [agentA],
+      has_more: false,
+      next_page: null,
+    });
+  });
 });

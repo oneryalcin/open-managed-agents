@@ -33,9 +33,7 @@ export interface AgentRow {
 }
 
 export interface CreateAgentRecord {
-  id: string;
-  workspace_id: WorkspaceId;
-  agent: ManagedAgentsAgent;
+  row: AgentRow;
 }
 
 export interface ListAgentsOptions {
@@ -45,15 +43,15 @@ export interface ListAgentsOptions {
 }
 
 export interface AgentStore {
-  create(record: CreateAgentRecord): ManagedAgentsAgent;
+  create(record: CreateAgentRecord): AgentRow;
   retrieve(
     workspaceId: WorkspaceId,
     agentId: string,
-  ): ManagedAgentsAgent | undefined;
+  ): AgentRow | undefined;
   list(
     workspaceId: WorkspaceId,
     opts?: ListAgentsOptions,
-  ): ManagedAgentsListPage<ManagedAgentsAgent>;
+  ): ManagedAgentsListPage<AgentRow>;
   close?(): void;
 }
 
