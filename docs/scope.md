@@ -10,16 +10,31 @@ The platform shape — agents as persisted versioned objects, sessions as event-
 
 The smallest end-to-end flow that proves the architecture **and preserves the "base-URL swap" compatibility claim** in ADR 0004:
 
-- `POST /v1/environments` — create an environment (single default-env-per-workspace model in MVP; spins up Modal sandbox template on session-create)
-- `GET /v1/environments/{id}` — read environment
-- `POST /v1/agents` — persist an agent config (model, system prompt, tools list)
-- `GET /v1/agents/{id}` — read it back
-- `POST /v1/sessions` — accepts `agent_id` + `environment_id`, spins up Modal sandbox, boots a Pi session, persists session metadata
-- `POST /v1/sessions/{id}/events` — accept `user.message` and `user.custom_tool_result`
-- `GET /v1/sessions/{id}/events/stream` — SSE wrapping Pi's `session.subscribe()`
-- **`GET /v1/sessions/{id}/events`** — paginated list of all persisted events (the append-only event log). Required for client reconnect-with-consolidation (see `architecture.md` → Event log).
-- Event IDs persisted server-side (UUIDv7 or similar); events written to SQLite on emit, not just buffered in-memory.
+**Environments:**
+- `POST /v1/environments` — create an environment (single default-env-per-workspace model in MVP; spins up Modal sandbox template on session-create). Response: full environment object with field `id` (not `environment_id`).
+- `GET /v1/environments` — list environments (paginated).
+- `GET /v1/environments/{id}` — read one environment.
+
+**Agents:**
+- `POST /v1/agents` — persist an agent config (`name`, `model`, `system`, `tools`). Response: full agent object with field `id` (not `agent_id`).
+- `GET /v1/agents` — list agents (paginated).
+- `GET /v1/agents/{id}` — read one agent.
+
+**Sessions:**
+- `POST /v1/sessions` — request body `{ agent, environment_id }`, where **`agent` is the wire field** (NOT `agent_id`). `agent` accepts either a bare string `"agent_abc"` (latest version semantics — for MVP we just resolve the agent ID) or an object `{type: "agent", id, version?}`. We ignore `version` in MVP. Response: full session object with field `id`.
+- `GET /v1/sessions/{id}` — read one session (status, agent, environment, usage).
+
+**Session events:**
+- `POST /v1/sessions/{id}/events` — accept `user.message` and `user.custom_tool_result` (carries `custom_tool_use_id`, NOT `tool_use_id`).
+- `GET /v1/sessions/{id}/events/stream` — SSE wrapping Pi's `session.subscribe()`. Honors `Last-Event-ID` header for resume.
+- **`GET /v1/sessions/{id}/events`** — paginated list of all persisted events (the append-only event log). **Cursor query param is `?page=<token>`** (not `?after_id=...`), matching Anthropic's wire contract. Clients pass the returned `next_page` value unchanged; token internals are server-owned. Required for client reconnect-with-consolidation (see `architecture.md` → Event log).
+
+**Cross-cutting invariants:**
+- Event IDs persisted server-side (UUIDv7); events written to SQLite on emit, not just buffered in-memory.
 - One custom tool round-trip working end-to-end (`agent.custom_tool_use` + synthesized `session.status_idle{stop_reason:requires_action}` → `user.custom_tool_result`).
+- All endpoints accept the `anthropic-beta: managed-agents-2026-04-01` header (no-op pass-through; required because Anthropic SDKs send it on every call).
+- Success status code is **`200`** on every endpoint including POST creates (NOT `201`) — see [ADR 0004](adrs/0004-managed-agents-rest-sse-surface-as-north-star.md) Tier 1.
+- Error responses use the full envelope: `{type: "error", error: {type, message}, request_id: "req_..."}`. See [ADR 0004](adrs/0004-managed-agents-rest-sse-surface-as-north-star.md) Tier 1.
 
 **Definition of done:** one user can start a session, send a prompt, see streamed responses, drop their SSE connection, reconnect via `events.list` + `events.stream`, get asked a question via a custom tool, answer it, see the session finish with `session.status_idle{stop_reason:end_turn}`.
 
@@ -44,6 +59,20 @@ Each of these is an additive feature, not a redesign:
 - **Multi-process / horizontally-scaled control plane** — MVP is **single-process**; pending-call map and Pi sessions are process-local. Externalizing these (sticky routing, Redis-backed pending state) is post-MVP.
 - **Multiple environments per workspace** — MVP supports one default environment per workspace. Multiple named environments with distinct configs/networking come later.
 - **Self-hosted sandbox mode** — the Managed Agents "loop on Anthropic, sandbox on you" inversion (interesting but not MVP)
+
+## Deferred event types (intentional gaps in EVENT_TYPES)
+
+These appear in Anthropic's Managed Agents event stream but are tied to features deferred above. Documented here so the gap is explicit, not silent. When the corresponding feature lands, the event types get added to `src/types/events.ts` and the EventType alignment test (ADR 0008) gates the change.
+
+| Event type | Tied to | Deferred until |
+|---|---|---|
+| `agent.mcp_tool_use`, `agent.mcp_tool_result` | MCP servers | Post-MVP (vaults + MCP cycle) |
+| `agent.thread_context_compacted` | Pi compaction | Cycle C (SessionManager) — Pi will emit this when context fills; we translate then |
+| `session.status_rescheduled` | Retryable error recovery | Post-MVP |
+| `span.model_request_start`, `span.model_request_end` | Model-inference observability | Post-MVP |
+| `span.outcome_evaluation_*` | Outcomes (rubric-graded loop) | Post-MVP |
+| `session.thread_*`, `agent.thread_message_*` | Multiagent | Post-MVP |
+| `user.define_outcome` | Outcomes | Post-MVP |
 
 ## Non-goals
 

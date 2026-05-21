@@ -32,7 +32,7 @@ The control plane, the Pi loop, and the sandbox are three separate concerns — 
 
 ## Request flow — `POST /v1/sessions`
 
-1. Client posts `{ agent_id, environment_id }`
+1. Client posts `{ agent, environment_id }` — `agent` is the wire field (NOT `agent_id`), accepting either a bare string `"agent_abc"` or an object `{type: "agent", id, version?}`
 2. Control plane loads agent config from SQLite (model, system, tools list)
 3. Spins up a Modal sandbox via the `Sandbox` interface
 4. Creates a Pi `AgentSession` configured with:
@@ -40,7 +40,7 @@ The control plane, the Pi loop, and the sandbox are three separate concerns — 
    - Tools wired through our `Sandbox` interface (so Pi's `bash`/`read`/`write` execute in the Modal sandbox, not on the host)
    - Custom tools from the agent's `tools` list as async functions (see [ADR 0005](adrs/0005-custom-tools-as-blocking-async-functions.md))
 5. Wires Pi's `subscribe()` into a per-session event buffer + SSE broadcaster
-6. Returns `{ session_id }` to the client
+6. Returns the full session object (with field `id`, `status`, `created_at`, etc.) to the client — not a shorthand `{session_id}`
 
 ## Request flow — `events.send` with `user.message`
 

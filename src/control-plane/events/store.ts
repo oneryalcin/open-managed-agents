@@ -10,7 +10,8 @@
  */
 
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import type { ManagedAgentsEvent } from "../../types/events.ts";
+import type { EventType } from "../../types/events.ts";
+import type { PersistedSessionEvent } from "./types.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
@@ -79,7 +80,7 @@ export class EventStore {
     return new EventStore(new DatabaseSync(path));
   }
 
-  append(event: ManagedAgentsEvent): void {
+  append(event: PersistedSessionEvent): void {
     this.appendStmt.run(
       event.id,
       event.session_id,
@@ -90,7 +91,7 @@ export class EventStore {
     );
   }
 
-  list(sessionId: string, opts: ListOptions = {}): ManagedAgentsEvent[] {
+  list(sessionId: string, opts: ListOptions = {}): PersistedSessionEvent[] {
     const limit = opts.limit ?? 1000;
     const rows = (
       opts.afterId !== undefined
@@ -100,7 +101,7 @@ export class EventStore {
     return rows.map(deserialize);
   }
 
-  retrieve(id: string): ManagedAgentsEvent | undefined {
+  retrieve(id: string): PersistedSessionEvent | undefined {
     const row = this.retrieveStmt.get(id) as unknown as EventRow | undefined;
     return row ? deserialize(row) : undefined;
   }
@@ -110,11 +111,11 @@ export class EventStore {
   }
 }
 
-function deserialize(row: EventRow): ManagedAgentsEvent {
+function deserialize(row: EventRow): PersistedSessionEvent {
   return {
     id: row.id,
     session_id: row.session_id,
-    type: row.type as ManagedAgentsEvent["type"],
+    type: row.type as EventType,
     processed_at: row.processed_at,
     payload: JSON.parse(row.payload) as Record<string, unknown>,
     created_at: row.created_at,
