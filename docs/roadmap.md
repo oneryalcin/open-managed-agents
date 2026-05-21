@@ -74,7 +74,7 @@ B.1 proves environments and sessions as stored Managed Agents wire objects. It d
 **Session wire contract:**
 
 - Request requires `agent` and `environment_id`.
-- `agent` accepts either a string ID or `{type: "agent", id, version?}`. B.1 resolves the ID and ignores `version` except for echoing canonical output.
+- `agent` accepts either a string ID or `{type: "agent", id, version?}`. B.1 resolves the ID; if `version` is supplied it must match the stored current agent version.
 - Optional fields: `title?: string | null`, `metadata?: Record<string, string>`.
 - Metadata is a flat string-to-string map. Reject nested objects, arrays, numbers, booleans, and null values. Do not invent numeric limits unless verified against upstream docs or SDK behavior.
 - Unsupported runtime-bearing fields: reject `resources` and `vault_ids` with `invalid_request_error` and a message like `Field \`resources\` is not yet supported by this server.`.
@@ -114,10 +114,143 @@ B.1 proves environments and sessions as stored Managed Agents wire objects. It d
 - Prefer one B.1 PR so environments and sessions can be reviewed together, but keep the diff readable by committing in logical groups: beta middleware, environments, sessions, tests/probe.
 - Avoid amend/force-push churn after review begins. Use follow-up commits and squash on merge if needed.
 
-Acceptance:
+#### Cycle B.2 Implementation Plan
+
+B.2 proves the persisted session event log over HTTP. It accepts user-originated events, assigns server event IDs, persists them through the existing append-only `EventStore`, and exposes `events.list`. It does not stream live events and it does not resume an engine.
+
+**Endpoints:**
+
+- `POST /v1/sessions/{id}/events`
+- `GET /v1/sessions/{id}/events`
+
+**Out of scope for B.2:**
+
+- `GET /v1/sessions/{id}/events/stream` and SSE formatting. That is B.3.
+- Pi `AgentSession` execution or any runtime resume behavior.
+- Custom-tool promise resolution. B.2 only validates and persists `user.custom_tool_result`.
+- Tool-confirmation execution. B.2 only validates and persists `user.tool_confirmation`.
+- `user.interrupt`, `user.define_outcome`, `user.tool_result`, self-hosted sandbox events, thread events, MCP result events, and outcome events.
+- Event filters beyond `types[]` if the upstream shape is unclear at implementation time.
+
+**Wire contract — `events.send`:**
+
+- Request body: `{ events: UserEvent[] }`.
+- Success status: `200`.
+- Response body: `{ data: ManagedAgentsEvent[] }`, containing the server-assigned events in the same order as the request.
+- Server-assigned event IDs use the existing `newEventId()` helper (`sevt_` + UUIDv7).
+- B.2 sets `processed_at` to the event-log persistence timestamp for accepted user-originated events. This is the stable control-plane acceptance time, not an engine-completion signal. Runtime-originated events added later carry their own processed timestamp at emission time.
+- B.4+ MUST NOT redefine `processed_at` for user-originated events as "engine-applied time"; engine application timestamps require a separate field if needed.
+- Event log order is by event ID in MVP because UUIDv7 preserves creation order; do not order client replay by `processed_at`.
+- Missing session returns `not_found_error`.
+- Empty `events`, missing `events`, non-array `events`, unsupported event types, malformed event payloads, and non-finite JSON numbers anywhere in accepted payload fields return `invalid_request_error`.
+- Multi-event sends are atomic: validate the full batch first, then persist inside a SQLite transaction. If any event in the request is invalid or any insert fails, none are persisted.
+- `MAX_EVENTS_PER_REQUEST` is 200. Larger batches return `invalid_request_error`.
+- `MAX_EVENT_PAYLOAD_BYTES` is 64 KiB after JSON serialization. The existing app-level body limit still caps the whole request.
+- The session ID in the URL path is authoritative. B.2 rejects any event payload that includes a `session_id` field rather than ignoring or reconciling it.
+- Event payloads are persisted before any later broadcaster integration. B.2 has no broadcaster dependency.
+- B.2 does not implement idempotency keys. Retried `events.send` calls can duplicate events; this is tracked as a post-B.2 durability gap before external clients rely on retry-heavy workflows.
+
+**Supported user event variants in B.2:**
+
+- `user.message`
+  - Required: `content`.
+  - `content` is a non-empty array of JSON-compatible content blocks.
+  - Text block shape: `{type: "text", text: string}`.
+  - Non-text blocks are accepted as opaque JSON-compatible blocks with a non-empty string `type`. B.2 stores them but does not validate per-type resource semantics.
+- `user.custom_tool_result`
+  - Required: `custom_tool_use_id`.
+  - `custom_tool_use_id` is a non-empty string.
+  - `content` is optional upstream. If present, it follows the same content-block array contract as `user.message`.
+  - `custom_tool_use_id` is not interchangeable with `tool_use_id`.
+- `user.tool_confirmation`
+  - Required: `tool_use_id`, `result`.
+  - `tool_use_id` is a non-empty string.
+  - `result` is `"allow"` or `"deny"`.
+  - `deny_message` is optional string or null, and only accepted when `result` is `"deny"`.
+  - `tool_use_id` is not interchangeable with `custom_tool_use_id`.
+
+**Wire contract — `events.list`:**
+
+- Response body: `{data, next_page}`. Do not add `has_more`; Anthropic's events list uses a page-cursor response, not the B.1 `{data, has_more, next_page}` shape.
+- `data` contains public `ManagedAgentsEvent` objects only. Internal `session_id`, `created_at`, and `payload` fields never leak.
+- Supported query params:
+  - `limit`: positive integer, capped by the store/service.
+  - `page`: opaque token. B.2 returns the raw `sevt_...` event ID as `next_page` for MVP, but clients must pass it back unchanged and not derive it from the last event themselves.
+  - `order`: `"asc"` or `"desc"`. Default is `"asc"` because event logs replay oldest-first; this intentionally differs from sessions list, which defaults newest-first for session pickers.
+  - For `order=asc`, `page` means events with `id > page`. For `order=desc`, `page` means events with `id < page`. Descending pagination is an older-than-cursor scan, not a stable snapshot; events created after page 1 are recovered by B.3's stream-first reconnect pattern, not by page 2 of a descending history scan.
+  - `types[]`: optional repeated event type filter, e.g. `types[]=agent.tool_use&types[]=agent.tool_result`. B.2 implements this now and adds a `(session_id, type, id)` SQLite index in the same PR.
+- Empty `page=` is treated as omitted at the route boundary, with a store-level guard matching the Cycle A/B.1 cursor hardening.
+- Missing session returns `not_found_error`.
+- Invalid `order`, invalid `limit`, and malformed `page` values return `invalid_request_error`.
+- Unknown `types[]` values return `200` with an empty page, not `invalid_request_error`, so future upstream event types do not break older servers.
+
+**Architecture rules:**
+
+- Add `src/control-plane/events/routes.ts` and `src/control-plane/events/service.ts`. Do not put HTTP parsing into `EventStore`.
+- `EventStore` remains the append-only SQLite primitive. B.2 extends it deliberately for transactions, descending order, pagination, and type filtering rather than letting routes manipulate persisted rows directly.
+- Session existence checks happen in the event service via `SessionStore` or `SessionService`; route handlers do not reach into session storage directly.
+- Shared wire-visible event request/response types live in `src/types/events.ts` or a sibling `src/types/event-params.ts`; persisted row shapes stay in `src/control-plane/events/types.ts`.
+- All event publishing follows persist-first semantics. B.3 may add broadcaster publish after persistence, but B.2 should already make that ordering obvious.
+- Concurrent `events.send` calls for one session are serialized by SQLite writes. Within a single batch, request order is preserved; across concurrent batches, UUIDv7 event IDs define the replay order.
+- Keep route handlers thin: parse path/query/body, call service, return JSON.
+
+**B.2 test plan:**
+
+- `events.send` accepts and echoes `user.message`.
+- `events.send` accepts and echoes `user.custom_tool_result` with `custom_tool_use_id`, with and without optional `content`.
+- `events.send` accepts and echoes `user.tool_confirmation` with both allow and deny shapes.
+- Multi-event send preserves request order in the response and in `events.list`.
+- Multi-event send is atomic: a request with one valid event and one invalid event persists neither.
+- Sending more than `MAX_EVENTS_PER_REQUEST` events returns `invalid_request_error`.
+- Sending an event whose serialized payload exceeds `MAX_EVENT_PAYLOAD_BYTES` returns `invalid_request_error`.
+- Payload-level `session_id` is rejected; the path session ID is the only accepted session selector.
+- Successful send/list responses include the `request-id` header.
+- Missing session on send/list returns `not_found_error` with matching body/header `request_id`.
+- Missing, empty, or non-array `events` returns `invalid_request_error`.
+- Unsupported event type returns `invalid_request_error`.
+- `custom_tool_use_id`/`tool_use_id` mixups are rejected with specific messages.
+- `deny_message` with `result: "allow"` is rejected or explicitly ignored; pick one before implementation and test it. Prefer reject to avoid silent partial semantics.
+- Non-finite JSON numbers inside event content are rejected before storage.
+- `events.list` supports `limit`, `page`, `order=asc`, `order=desc`, and empty `page=`.
+- `events.list` response never includes `session_id`, `created_at`, or `payload`.
+- `events.list` only returns events for the requested session; events from another session never leak.
+- `types[]` filtering tests cover single type, multiple types, unknown type returning an empty page, and pagination after filtering.
+
+**B.2 probe:**
+
+- Add `scratch/08-events-api.ts`.
+- Probe flow:
+  1. Create agent, environment, session.
+  2. POST one `user.message`.
+  3. POST one `user.custom_tool_result`.
+  4. POST one `user.tool_confirmation`.
+  5. GET `events.list` ascending and verify event order, IDs, `processed_at`, and no internal fields.
+  6. GET with `limit=1&page=<next_page>` and verify no gaps or duplicates.
+  7. GET with `types[]=user.message` and verify filtering.
+  8. Verify a missing session error envelope.
+
+**B.2 PR shape:**
+
+- Prefer one PR if it stays send+list only.
+- Suggested logical commits: event request types/service contract, EventStore list adapter changes, routes/app wiring, tests/probe, docs/status.
+- Do not amend/force-push after review begins; use follow-up commits.
+
+**B.2 acceptance:**
+
+- `scratch/08-events-api.ts` creates an agent, environment, and session; posts supported user events; lists persisted history; verifies pagination and `types[]`; and verifies the missing-session error envelope.
+- `events.send` is persist-first and all-or-nothing for a batch.
+- `events.list` proves order, pagination, cross-session isolation, type filtering, and internal-field non-leakage.
+- Route handlers stay thin: routes call services, services depend on typed store interfaces, stores own persistence details.
+- `npm test`, `npm run typecheck`, `scratch/05-event-store.ts`, `scratch/06-agents-api.ts`, `scratch/07-b1-api.ts`, and `scratch/08-events-api.ts` pass.
+
+#### Cycle B.3 Implementation Plan
+
+B.3 connects the persisted event log to live SSE delivery through `SessionEventBroadcaster`. It proves the reconnect-with-consolidation pattern without Pi or Modal.
+
+**B.3 acceptance:**
 
 - A probe creates an agent, creates a session, posts an event, opens SSE, lists persisted history, tails live events while deduping by ID, drops/reopens the stream, and receives no duplicates.
-- The reconnect probe must force a disconnect-window event and assert it is recovered by `events.list`, not lost. It must also assert no duplicate event IDs, no missing event IDs across the persisted range, and dedupe by `event.id` rather than `processed_at`.
+- The reconnect probe uses the B.2 `events.list` endpoint plus the B.3 SSE stream. It must force a disconnect-window event and assert it is recovered by `events.list`, not lost. It must also assert no duplicate event IDs, no missing event IDs across the persisted range, and dedupe by `event.id` rather than `processed_at`.
 - A smaller assertion covers `Last-Event-ID` resume as server behavior, without making it the only reconnect contract.
 - The probe uses the public wire field names from `docs/scope.md`: `agent`, `environment_id`, `page`, `next_page`, and full object responses with `id`.
 - Route handlers stay thin: routes call services, services depend on typed store interfaces, stores own persistence details.
