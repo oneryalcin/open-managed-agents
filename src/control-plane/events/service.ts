@@ -48,6 +48,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
     const rows = req.events.map((event) =>
       toPersistedEvent(sessionId, event, now),
     );
+    // TODO(idempotency): events.send is non-idempotent in B.2. Add request-level
+    // dedupe before B.4 runtime consumers process irreversible actions
+    // (notably user.tool_confirmation and user.custom_tool_result).
     this.events.appendBatch(rows);
     return rows.map(toManagedAgentsEvent);
   }
