@@ -106,8 +106,4 @@ export interface ManagedAgentsAgent {
   archived_at: string | null;
 }
 
-export interface ManagedAgentsListPage<T> {
-  data: T[];
-  has_more: boolean;
-  next_page: string | null;
-}
+export type { ManagedAgentsListPage } from "./common.ts";

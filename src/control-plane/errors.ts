@@ -68,6 +68,10 @@ export function notFound(message: string): ApiError {
   return new ApiError(404, "not_found_error", message);
 }
 
+export function requestTooLarge(message = "Request body is too large"): ApiError {
+  return new ApiError(413, "request_too_large", message);
+}
+
 export function internalError(cause: unknown): ApiError {
   return new ApiError(500, "api_error", "Internal server error", {
     cause,

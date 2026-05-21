@@ -8,10 +8,9 @@ import type {
   ManagedAgentsSkill,
   ManagedAgentsTool,
 } from "../../types/agents.ts";
+import type { WorkspaceId } from "../workspace.ts";
 
-export const DEFAULT_WORKSPACE_ID = "wrk_default";
-
-export type WorkspaceId = string;
+export { DEFAULT_WORKSPACE_ID, type WorkspaceId } from "../workspace.ts";
 
 export interface AgentRow {
   id: string;
