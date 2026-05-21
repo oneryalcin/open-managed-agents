@@ -11,7 +11,7 @@ The platform shape — agents as persisted versioned objects, sessions as event-
 The smallest end-to-end flow that proves the architecture **and preserves the "base-URL swap" compatibility claim** in ADR 0004:
 
 **Environments:**
-- `POST /v1/environments` — create an environment (single default-env-per-workspace model in MVP; spins up Modal sandbox template on session-create). Response: full environment object with field `id` (not `environment_id`).
+- `POST /v1/environments` — create an environment config object. B.1 persists and returns config; Modal sandbox interpretation lands with sandbox runtime. Response: full environment object with field `id` (not `environment_id`).
 - `GET /v1/environments` — list environments (paginated).
 - `GET /v1/environments/{id}` — read one environment.
 
@@ -22,6 +22,7 @@ The smallest end-to-end flow that proves the architecture **and preserves the "b
 
 **Sessions:**
 - `POST /v1/sessions` — request body `{ agent, environment_id }`, where **`agent` is the wire field** (NOT `agent_id`). `agent` accepts either a bare string `"agent_abc"` (latest version semantics — for MVP we just resolve the agent ID) or an object `{type: "agent", id, version?}`. We ignore `version` in MVP. Response: full session object with field `id`.
+- `GET /v1/sessions` — list sessions (paginated), with `agent_id`, `limit`, `page`, and `order` query parameters.
 - `GET /v1/sessions/{id}` — read one session (status, agent, environment, usage).
 
 **Session events:**

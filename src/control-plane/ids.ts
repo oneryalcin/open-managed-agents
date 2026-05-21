@@ -4,6 +4,14 @@ export function newAgentId(): string {
   return `agent_${uuidv7()}`;
 }
 
+export function newEnvironmentId(): string {
+  return `env_${uuidv7()}`;
+}
+
 export function newRequestId(): string {
   return `req_${uuidv7()}`;
+}
+
+export function newSessionId(): string {
+  return `sesn_${uuidv7()}`;
 }

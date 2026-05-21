@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { invalidRequest } from "../errors.ts";
+import { parseJsonBody, parseLimit } from "../http.ts";
 import { DEFAULT_WORKSPACE_ID, type AgentService } from "./types.ts";
 
 export function agentsRoutes(service: AgentService): Hono {
@@ -33,25 +34,6 @@ export function agentsRoutes(service: AgentService): Hono {
   });
 
   return app;
-}
-
-async function parseJsonBody(req: {
-  json(): Promise<unknown>;
-}): Promise<unknown> {
-  try {
-    return await req.json();
-  } catch (error) {
-    throw invalidRequest("Request body must be valid JSON", String(error));
-  }
-}
-
-function parseLimit(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const limit = Number(value);
-  if (!Number.isSafeInteger(limit) || limit <= 0) {
-    throw invalidRequest("`limit` must be a positive integer");
-  }
-  return limit;
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {

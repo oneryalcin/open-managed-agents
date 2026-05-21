@@ -2,7 +2,7 @@
 
 Design-first home for an open-source clone of Anthropic's [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview), self-hostable on Modal / K8s / Docker.
 
-**Status:** Design + first HTTP slice. The architecture docs are still the source of intent, and the repo now has working TypeScript for the EventStore/Broadcaster primitives and the Agents API.
+**Status:** Design + stored HTTP surface. The architecture docs are still the source of intent, and the repo now has working TypeScript for the EventStore/Broadcaster primitives plus Agents, Environments, and Sessions APIs. Events-over-HTTP, Pi, and Modal remain intentionally unwired.
 
 ## Reading order
 
@@ -25,6 +25,7 @@ npm test
 npm run typecheck
 npx tsx scratch/05-event-store.ts
 npx tsx scratch/06-agents-api.ts
+npx tsx scratch/07-b1-api.ts
 ```
 
 ## Architecture Decision Records
