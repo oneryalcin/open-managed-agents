@@ -100,6 +100,8 @@ Once the MVP runs, we should be able to:
 2. Change the base URL to `http://localhost:8080` (or wherever our control plane runs)
 3. Have it work, modulo features we explicitly haven't implemented
 
+MVP DoD proves the core platform shape (agent, session, events, custom-tool round trip, reconnect). Full canonical tutorial compatibility is tracked separately in [roadmap.md](../roadmap.md) and requires additive surfaces such as Files API, session cleanup, resource mounts, and agent update/versioning.
+
 If that's not true, either our API has drifted or the example uses a deferred feature. Both are diagnostic.
 
 ## Open questions

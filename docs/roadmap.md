@@ -34,12 +34,81 @@ Scope:
 - Add a default environment stub and minimal environment read/list/create routes if needed by session creation.
 - Add session storage and service boundaries.
 - Implement `POST /v1/sessions`, `GET /v1/sessions`, and `GET /v1/sessions/{id}`.
-- Accept and persist `title` and `metadata` on session create. Treat `resources` and `vault_ids` explicitly: either reject them with a caller-safe unsupported-feature error or persist them as inert future-facing metadata; do not silently pretend mounts or vaults work.
+- Accept and persist `title` and `metadata` on session create. Reject runtime-bearing unsupported fields (`resources`, `vault_ids`) with a caller-safe `invalid_request_error`; do not silently pretend mounts or vaults work.
 - Implement `POST /v1/sessions/{id}/events` for synthetic `user.message`, `user.custom_tool_result`, and `user.tool_confirmation` events.
 - Implement `GET /v1/sessions/{id}/events` using the existing `EventStore`, with `page` as the opaque cursor token and `next_page` in the response. Support `order` where the upstream SDK examples rely on it.
 - Implement `GET /v1/sessions/{id}/events/stream` using the existing `SessionEventBroadcaster`.
 - Support the upstream reconnect pattern: open the live stream first, list persisted history, then dedupe live events by ID. Also honor `Last-Event-ID` as an additive SSE resume convenience.
 - Make `anthropic-beta: managed-agents-2026-04-01` acceptance explicit but permissive. SDK clients send it; local curl probes should not be punished for omitting it during development.
+
+#### Cycle B.1 Implementation Plan
+
+B.1 proves environments and sessions as stored Managed Agents wire objects. It does not start an engine and it does not provision a sandbox.
+
+**Endpoints:**
+
+- `POST /v1/environments`
+- `GET /v1/environments`
+- `GET /v1/environments/{id}`
+- `POST /v1/sessions`
+- `GET /v1/sessions`
+- `GET /v1/sessions/{id}`
+
+**Middleware contract:**
+
+- Parse the `anthropic-beta` header into `betaFeatures: Set<string>` on the Hono context.
+- Accept a missing header so local probes and manual curl remain easy.
+- Accept `managed-agents-2026-04-01` as a no-op for now.
+- Accept comma-separated beta values and preserve all trimmed values in the set.
+- Accept unknown beta values for forward compatibility; do not 400 on future SDK headers.
+
+**Environment wire contract:**
+
+- Request: `{ name: string, config: JsonObject }`.
+- Success status: `200`.
+- Response: full environment object with `id`, `type: "environment"`, `name`, `config`, `created_at`, `updated_at`, and `archived_at: null`.
+- Store behavior: persist `config` as opaque JSON. B.1 interprets no sandbox runtime semantics from it.
+
+**Session wire contract:**
+
+- Request requires `agent` and `environment_id`.
+- `agent` accepts either a string ID or `{type: "agent", id, version?}`. B.1 resolves the ID and ignores `version` except for echoing canonical output.
+- Optional fields: `title?: string | null`, `metadata?: Record<string, string>`.
+- Metadata is a flat string-to-string map. Reject nested objects, arrays, numbers, booleans, and null values. Do not invent numeric limits unless verified against upstream docs or SDK behavior.
+- Unsupported runtime-bearing fields: reject `resources` and `vault_ids` with `invalid_request_error` and a message like `Field \`resources\` is not yet supported by this server.`.
+- Missing referenced agent or environment: reject session create with `invalid_request_error`, not `not_found_error`.
+- Success status: `200`.
+- Response: full session object with `id`, `type: "session"`, `agent: {type: "agent", id, version}`, `environment_id`, `status: "idle"`, `title`, `metadata`, `created_at`, `updated_at`, `archived_at: null`, and `usage: null`.
+
+**List contracts:**
+
+- `GET /v1/environments` and `GET /v1/sessions` return `{data, has_more, next_page}`.
+- `GET /v1/sessions` supports `agent_id`, `limit`, `page`, and `order`.
+- Empty `page=` is treated as omitted at the route boundary, with a store-level guard matching the Cycle A cursor hardening.
+
+**Architecture rules:**
+
+- Each resource owns an independent SQLite table, `*Row` type, store interface, service, and routes module.
+- Routes know Hono and HTTP only. Services own validation and cross-resource coordination. Stores own SQLite and never return wire objects directly.
+- Shared wire-visible types live in `src/types/`; DB rows and service-only types live under `src/control-plane/<resource>/`.
+- No cross-resource JOINs in stores for B.1. Session create may call agent/environment services or stores to validate referenced IDs.
+
+**B.1 test plan:**
+
+- Environment create/list/retrieve round-trips opaque `config`, including nested finite JSON.
+- Session create works with `agent` as string and as object.
+- Session retrieve returns canonical object-form `agent`.
+- Session list supports `agent_id`, `limit`, `page`, `order`, and empty `page=` handling.
+- Missing agent and missing environment on session create return `invalid_request_error` with matching body/header `request_id`.
+- Unsupported `resources` and `vault_ids` return `invalid_request_error` with matching body/header `request_id`.
+- Non-finite JSON numbers in environment `config` or session `metadata` are rejected before storage.
+- Internal `workspace_id` and row-only fields never leak into environment or session wire responses.
+- Existing Cycle A app-level not-found coverage remains green; new route errors preserve the full error envelope.
+
+**B.1 PR shape:**
+
+- Prefer one B.1 PR so environments and sessions can be reviewed together, but keep the diff readable by committing in logical groups: beta middleware, environments, sessions, tests/probe.
+- Avoid amend/force-push churn after review begins. Use follow-up commits and squash on merge if needed.
 
 Acceptance:
 
