@@ -140,7 +140,7 @@ Managed Agents is fundamentally an **append-only event log**. SSE is the live ta
 3. **Idempotent receipt.** Clients dedupe on `event.id`. Re-delivering an already-seen event is allowed (encouraged on reconnect).
 4. **Append-only.** Events are never mutated after persistence. Corrections happen via *new* events, never by editing old ones.
 
-This is the implementation surface for the reconnect-with-consolidation pattern: on reconnect, client fetches `events.list` since the last seen ID, then attaches a fresh SSE stream, dedupes by ID. Without `events.list`, that pattern can't work and any connection drop loses events permanently.
+This is the implementation surface for the reconnect-with-consolidation pattern: on reconnect, the client first attaches a fresh SSE stream (buffering live events from the current point forward), then fetches `events.list` since the last seen ID, then dedupes the consolidated stream by event ID. Attaching the stream first is the gap-safe order; list-first leaves a window where events emitted between list return and stream attach are lost. Without `events.list`, this pattern can't work and any connection drop loses events permanently. `Last-Event-ID` is an additive SSE-level convenience for in-stream resume, not the primary reconnect contract.
 
 ## What lives in the sandbox vs. the control plane
 
