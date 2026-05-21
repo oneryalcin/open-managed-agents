@@ -8,6 +8,10 @@ import { environmentsRoutes } from "./environments/routes.ts";
 import { DefaultEnvironmentService } from "./environments/service.ts";
 import { SqliteEnvironmentStore } from "./environments/store.ts";
 import type { EnvironmentService } from "./environments/types.ts";
+import { sessionEventsRoutes } from "./events/routes.ts";
+import { DefaultSessionEventsService } from "./events/service.ts";
+import { EventStore } from "./events/store.ts";
+import type { SessionEventsService } from "./events/types.ts";
 import {
   ApiError,
   type ApiErrorBody,
@@ -35,6 +39,7 @@ export interface ControlPlaneServices {
   agents: AgentService;
   environments: EnvironmentService;
   sessions: SessionService;
+  sessionEvents: SessionEventsService;
 }
 
 export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppEnv> {
@@ -66,6 +71,7 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   app.route("/v1/agents", agentsRoutes(services.agents));
   app.route("/v1/environments", environmentsRoutes(services.environments));
   app.route("/v1/sessions", sessionsRoutes(services.sessions));
+  app.route("/v1/sessions/:sessionId/events", sessionEventsRoutes(services.sessionEvents));
 
   app.notFound((c) => {
     const err = new ApiError(404, "not_found_error", "Route not found");
@@ -84,6 +90,7 @@ export function createInMemoryControlPlaneApp(): Hono<AppEnv> {
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
+  const eventStore = EventStore.open(":memory:");
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore),
     environments: new DefaultEnvironmentService(environmentStore),
@@ -92,6 +99,7 @@ export function createInMemoryControlPlaneApp(): Hono<AppEnv> {
       agentStore,
       environmentStore,
     ),
+    sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore),
   });
 }
 
