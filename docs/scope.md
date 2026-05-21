@@ -55,7 +55,7 @@ Each of these is an additive feature, not a redesign:
 - **File resources** — upload + mount at absolute paths
 - **K8s sandbox impl** — second `Sandbox` implementation alongside Modal
 - **Postgres persistence** — replace SQLite when multi-process scaling matters
-- **Multi-tenant auth** — workspaces, API keys, rate limits
+- **Identity + multi-tenant auth** — users, organizations, teams, workspaces, API keys, memberships, roles, and rate limits. MVP uses one internal workspace (`wrk_default`) so stores/services are scoped correctly without exposing identity fields on the public wire API before an auth ADR exists.
 - **Multi-process / horizontally-scaled control plane** — MVP is **single-process**; pending-call map and Pi sessions are process-local. Externalizing these (sticky routing, Redis-backed pending state) is post-MVP.
 - **Multiple environments per workspace** — MVP supports one default environment per workspace. Multiple named environments with distinct configs/networking come later.
 - **Self-hosted sandbox mode** — the Managed Agents "loop on Anthropic, sandbox on you" inversion (interesting but not MVP)

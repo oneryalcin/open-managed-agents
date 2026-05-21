@@ -11,6 +11,7 @@
 
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type { EventType } from "../../types/events.ts";
+import type { JsonObject } from "../../types/json.ts";
 import type { PersistedSessionEvent } from "./types.ts";
 
 const SCHEMA = `
@@ -117,7 +118,7 @@ function deserialize(row: EventRow): PersistedSessionEvent {
     session_id: row.session_id,
     type: row.type as EventType,
     processed_at: row.processed_at,
-    payload: JSON.parse(row.payload) as Record<string, unknown>,
+    payload: JSON.parse(row.payload) as JsonObject,
     created_at: row.created_at,
   };
 }
