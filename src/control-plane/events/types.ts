@@ -1,4 +1,5 @@
 import type { EventType, ManagedAgentsEvent } from "../../types/events.ts";
+import type { JsonObject } from "../../types/json.ts";
 
 /**
  * Internal persisted event row shape.
@@ -12,7 +13,7 @@ export interface PersistedSessionEvent {
   session_id: string;
   type: EventType;
   processed_at: string | null;
-  payload: Record<string, unknown>;
+  payload: JsonObject;
   created_at: string;
 }
 

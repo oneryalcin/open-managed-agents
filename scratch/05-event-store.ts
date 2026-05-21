@@ -18,6 +18,7 @@
 import { EventStore } from "../src/control-plane/events/store.ts";
 import { SessionEventBroadcaster } from "../src/control-plane/events/broadcaster.ts";
 import type { PersistedSessionEvent } from "../src/control-plane/events/types.ts";
+import type { JsonObject } from "../src/types/json.ts";
 import { newEventId } from "../src/types/events.ts";
 
 const log = (msg: string) => console.log(msg);
@@ -25,7 +26,7 @@ const log = (msg: string) => console.log(msg);
 function makeEvent(
   sessionId: string,
   type: PersistedSessionEvent["type"],
-  payload: Record<string, unknown> = {},
+  payload: JsonObject = {},
 ): PersistedSessionEvent {
   const now = new Date().toISOString();
   return {
