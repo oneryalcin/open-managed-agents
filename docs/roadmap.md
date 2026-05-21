@@ -139,10 +139,14 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
 - Response body: `{ data: ManagedAgentsEvent[] }`, containing the server-assigned events in the same order as the request.
 - Server-assigned event IDs use `sevt_` UUIDv7 IDs.
 - B.2 sets `processed_at` to the server receipt timestamp for accepted user-originated events. There is no engine queue yet, so `processed_at: null` is reserved for a later runtime-backed queued state.
+- This `processed_at` behavior is transitional: once a runtime queue exists, `processed_at` shifts to engine-applied time rather than ingestion time. Clients must order by event ID for log order, not by `processed_at`.
 - Missing session returns `not_found_error`.
 - Empty `events`, missing `events`, non-array `events`, unsupported event types, and malformed event payloads return `invalid_request_error`.
 - Multi-event sends are atomic at the service level: if any event in the request is invalid, none are persisted.
+- `MAX_EVENTS_PER_REQUEST` is 200. Larger batches return `invalid_request_error`.
+- The session ID in the URL path is authoritative. B.2 rejects any event payload that includes a `session_id` field rather than ignoring or reconciling it.
 - Event payloads are persisted before any later broadcaster integration. B.2 has no broadcaster dependency.
+- B.2 does not implement idempotency keys. Retried `events.send` calls can duplicate events; this is tracked as a post-B.2 durability gap before external clients rely on retry-heavy workflows.
 
 **Supported user event variants in B.2:**
 
@@ -171,7 +175,7 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
   - `limit`: positive integer, capped by the store/service.
   - `page`: opaque token. B.2 may use the raw event ID internally but clients must pass back `next_page` unchanged.
   - `order`: `"asc"` or `"desc"`. Default is `"asc"` because tutorial UIs replay history oldest-first.
-  - `types[]`: optional repeated event type filter, e.g. `types[]=agent.tool_use&types[]=agent.tool_result`. B.2 supports filtering over persisted events if cheap; otherwise this is explicitly deferred before implementation starts.
+  - `types[]`: optional repeated event type filter, e.g. `types[]=agent.tool_use&types[]=agent.tool_result`. B.2 implements this now because tutorial/debug clients rely on it and it is cheap before the list adapter hardens.
 - Empty `page=` is treated as omitted at the route boundary, with a store-level guard matching the Cycle A/B.1 cursor hardening.
 - Missing session returns `not_found_error`.
 - Invalid `order`, invalid `limit`, unknown `types[]`, and malformed `page` values return `invalid_request_error`.
@@ -192,6 +196,8 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
 - `events.send` accepts and echoes `user.tool_confirmation` with both allow and deny shapes.
 - Multi-event send preserves request order in the response and in `events.list`.
 - Multi-event send is atomic: a request with one valid event and one invalid event persists neither.
+- Sending more than `MAX_EVENTS_PER_REQUEST` events returns `invalid_request_error`.
+- Payload-level `session_id` is rejected; the path session ID is the only accepted session selector.
 - Missing session on send/list returns `not_found_error` with matching body/header `request_id`.
 - Missing, empty, or non-array `events` returns `invalid_request_error`.
 - Unsupported event type returns `invalid_request_error`.
@@ -200,7 +206,8 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
 - Non-finite JSON numbers inside event content are rejected before storage.
 - `events.list` supports `limit`, `page`, `order=asc`, `order=desc`, and empty `page=`.
 - `events.list` response never includes `session_id`, `created_at`, or `payload`.
-- If `types[]` filtering lands, tests cover single type, multiple types, unknown type, and pagination after filtering.
+- `events.list` only returns events for the requested session; events from another session never leak.
+- `types[]` filtering tests cover single type, multiple types, unknown type, and pagination after filtering.
 
 **B.2 probe:**
 
@@ -212,7 +219,8 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
   4. POST one `user.tool_confirmation`.
   5. GET `events.list` ascending and verify event order, IDs, `processed_at`, and no internal fields.
   6. GET with `limit=1&page=<next_page>` and verify no gaps or duplicates.
-  7. Verify a missing session error envelope.
+  7. GET with `types[]=user.message` and verify filtering.
+  8. Verify a missing session error envelope.
 
 **B.2 PR shape:**
 
