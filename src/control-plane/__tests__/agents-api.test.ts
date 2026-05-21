@@ -130,11 +130,11 @@ describe("agents API", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(VALID_AGENT),
     });
-    const res = await app.request("/v1/agents?page=&limit=10");
+    const omittedRes = await app.request("/v1/agents?limit=10");
+    const emptyRes = await app.request("/v1/agents?page=&limit=10");
 
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { data: unknown[] };
-    expect(body.data).toHaveLength(1);
+    expect(emptyRes.status).toBe(200);
+    await expect(emptyRes.json()).resolves.toEqual(await omittedRes.json());
   });
 
   it("rejects non-finite numbers in JSON-compatible schemas", async () => {

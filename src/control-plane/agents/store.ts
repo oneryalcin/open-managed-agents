@@ -139,6 +139,9 @@ export class SqliteAgentStore implements AgentStore {
     workspaceId: string,
     opts: ListAgentsOptions = {},
   ): ManagedAgentsListPage<AgentRow> {
+    if (opts.page === "") {
+      return { data: [], has_more: false, next_page: null };
+    }
     const limit = normalizeLimit(opts.limit);
     const queryLimit = limit + 1;
     const includeArchived = opts.includeArchived ?? false;

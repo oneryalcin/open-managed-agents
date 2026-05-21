@@ -51,6 +51,18 @@ describe("AgentService + AgentStore", () => {
     });
   });
 
+  it("does not treat an empty cursor as a valid store page", () => {
+    const store = SqliteAgentStore.open(":memory:");
+    const service = new DefaultAgentService(store);
+    service.create("wrk_default", REQUEST);
+
+    expect(store.list("wrk_default", { page: "" })).toEqual({
+      data: [],
+      has_more: false,
+      next_page: null,
+    });
+  });
+
   it("scopes list results by workspace internally", () => {
     const store = SqliteAgentStore.open(":memory:");
     const service = new DefaultAgentService(store);
