@@ -2,7 +2,7 @@
 
 An open-source clone of Anthropic's [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) API surface. **Control plane runs as a single Node process**; sandboxes (Modal first, K8s later) are the part that runs "anywhere."
 
-**Status:** Design + first HTTP slice. The docs and EventStore/Broadcaster primitives are in place, and the Agents API (`POST /v1/agents`, `GET /v1/agents`, `GET /v1/agents/{id}`) is implemented and covered by tests. Sessions, environments, Pi runtime wiring, and Modal sandbox execution are next.
+**Status:** Design + stored HTTP surface. The docs and EventStore/Broadcaster primitives are in place, the Agents API is implemented, and Cycle B.1 adds stored Environments + Sessions APIs. Events-over-HTTP, Pi runtime wiring, and Modal sandbox execution are next.
 
 ## What this is
 
@@ -11,8 +11,9 @@ A REST + SSE control plane that exposes the Managed Agents endpoints (`/v1/agent
 **Scope today:**
 - ✅ Single-process control plane foundation (Hono, SQLite stores, Anthropic-shaped errors)
 - ✅ Agents API persisted in SQLite with typed route/service/store boundaries
+- ✅ Environments + Sessions APIs persisted in SQLite; no engine or sandbox runtime yet
 - ✅ Append-only EventStore + replay-then-tail broadcaster with reconnect/overflow probes
-- ✋ Sessions/events HTTP routes are next; Pi and Modal are intentionally not wired yet
+- ✋ Session events HTTP routes are next; Pi and Modal are intentionally not wired yet
 - ✋ Pluggable sandbox layer — Modal first, K8s/Docker via the same interface later
 - ✋ Horizontal scaling (multi-process control plane) is post-MVP — pending-call state is process-local; see [scope.md](docs/scope.md) and [ADR 0005](docs/adrs/0005-custom-tools-as-blocking-async-functions.md).
 
@@ -23,9 +24,11 @@ npm test
 npm run typecheck
 npx tsx scratch/05-event-store.ts
 npx tsx scratch/06-agents-api.ts
+npx tsx scratch/07-b1-api.ts
 ```
 
 `scratch/06-agents-api.ts` starts a real Hono server, creates an agent, retrieves it, lists it, and verifies the public error envelope.
+`scratch/07-b1-api.ts` extends that smoke to environments and sessions, including unsupported-field errors.
 
 ## Planned stack
 

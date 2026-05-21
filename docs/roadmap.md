@@ -10,7 +10,8 @@ This roadmap is the implementation plan for the Managed Agents MVP. Keep it hone
 | Cycle 0: event primitive | Done | `src/control-plane/events/store.ts`, `src/control-plane/events/broadcaster.ts`, `scratch/05-event-store.ts` |
 | Cycle A: Agents API | Done | `POST /v1/agents`, `GET /v1/agents`, `GET /v1/agents/{id}` in `src/control-plane/agents/` |
 | Cycle A.1: cursor hardening | Done | Empty `page=` route normalization and store-layer guard covered by agents API tests |
-| Sessions, environments, engine, sandbox | Not started | Planned below |
+| Cycle B.1: Environments + Sessions API | Done | `POST/GET /v1/environments`, `POST/GET /v1/sessions`, `scratch/07-b1-api.ts` |
+| Session events, engine, sandbox | Not started | Planned below |
 
 ## Working Smoke
 
@@ -21,6 +22,7 @@ npm test
 npm run typecheck
 npx tsx scratch/05-event-store.ts
 npx tsx scratch/06-agents-api.ts
+npx tsx scratch/07-b1-api.ts
 ```
 
 ## Next Cycles
