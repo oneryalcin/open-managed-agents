@@ -46,7 +46,11 @@ export interface ListOptions {
   afterId?: string;
   /** Cursor token from `next_page`. */
   page?: string;
-  /** Page size cap. Default 1000. */
+  /**
+   * Page size cap.
+   * - Legacy `list()` default: 1000
+   * - API-facing `listPage()` default: 20
+   */
   limit?: number;
   /** Sort order. Defaults to `asc`. */
   order?: "asc" | "desc";
@@ -110,7 +114,10 @@ export class EventStore implements SessionEventStore {
   }
 
   list(sessionId: string, opts: ListOptions = {}): PersistedSessionEvent[] {
-    return this.listPage(sessionId, opts).data;
+    return this.listPage(sessionId, {
+      ...opts,
+      limit: opts.limit ?? 1000,
+    }).data;
   }
 
   listPage(
