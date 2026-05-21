@@ -228,7 +228,19 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
 - Suggested logical commits: event request types/service contract, EventStore list adapter changes, routes/app wiring, tests/probe, docs/status.
 - Do not amend/force-push after review begins; use follow-up commits.
 
-Acceptance:
+**B.2 acceptance:**
+
+- `scratch/08-events-api.ts` creates an agent, environment, and session; posts supported user events; lists persisted history; verifies pagination and `types[]`; and verifies the missing-session error envelope.
+- `events.send` is persist-first and all-or-nothing for a batch.
+- `events.list` proves order, pagination, cross-session isolation, type filtering, and internal-field non-leakage.
+- Route handlers stay thin: routes call services, services depend on typed store interfaces, stores own persistence details.
+- `npm test`, `npm run typecheck`, `scratch/05-event-store.ts`, `scratch/06-agents-api.ts`, `scratch/07-b1-api.ts`, and `scratch/08-events-api.ts` pass.
+
+#### Cycle B.3 Implementation Plan
+
+B.3 connects the persisted event log to live SSE delivery through `SessionEventBroadcaster`. It proves the reconnect-with-consolidation pattern without Pi or Modal.
+
+**B.3 acceptance:**
 
 - A probe creates an agent, creates a session, posts an event, opens SSE, lists persisted history, tails live events while deduping by ID, drops/reopens the stream, and receives no duplicates.
 - The reconnect probe must force a disconnect-window event and assert it is recovered by `events.list`, not lost. It must also assert no duplicate event IDs, no missing event IDs across the persisted range, and dedupe by `event.id` rather than `processed_at`.
