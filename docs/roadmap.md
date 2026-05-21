@@ -100,7 +100,9 @@ B.1 proves environments and sessions as stored Managed Agents wire objects. It d
 - Session retrieve returns canonical object-form `agent`.
 - Session list supports `agent_id`, `limit`, `page`, `order`, and empty `page=` handling.
 - Missing agent and missing environment on session create return `invalid_request_error` with matching body/header `request_id`.
+- Missing session and missing environment on retrieve return `not_found_error` with matching body/header `request_id`.
 - Unsupported `resources` and `vault_ids` return `invalid_request_error` with matching body/header `request_id`.
+- Oversized JSON/request bodies return the full error envelope with `request_too_large`, not a framework-default plaintext response.
 - Non-finite JSON numbers in environment `config` or session `metadata` are rejected before storage.
 - Internal `workspace_id` and row-only fields never leak into environment or session wire responses.
 - Existing Cycle A app-level not-found coverage remains green; new route errors preserve the full error envelope.
