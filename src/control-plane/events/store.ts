@@ -12,7 +12,12 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type { EventType } from "../../types/events.ts";
 import type { JsonObject } from "../../types/json.ts";
-import type { PersistedSessionEvent } from "./types.ts";
+import type {
+  ListSessionEventRecordsOptions,
+  PersistedSessionEvent,
+  SessionEventRecordPage,
+  SessionEventStore,
+} from "./types.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
@@ -24,6 +29,7 @@ CREATE TABLE IF NOT EXISTS events (
   created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_by_session ON events (session_id, id);
+CREATE INDEX IF NOT EXISTS events_by_session_type ON events (session_id, type, id);
 `;
 
 interface EventRow {
@@ -36,18 +42,23 @@ interface EventRow {
 }
 
 export interface ListOptions {
-  /** Cursor — return events with `id > afterId`. Omit to start from the beginning. */
+  /** Legacy cursor alias — return events with `id > afterId` in ASC order. */
   afterId?: string;
+  /** Cursor token from `next_page`. */
+  page?: string;
   /** Page size cap. Default 1000. */
   limit?: number;
+  /** Sort order. Defaults to `asc`. */
+  order?: "asc" | "desc";
+  /** Optional event type filter. */
+  types?: readonly string[];
 }
 
-export class EventStore {
+export class EventStore implements SessionEventStore {
   private readonly db: DatabaseSync;
   private readonly appendStmt: StatementSync;
-  private readonly listAllStmt: StatementSync;
-  private readonly listSinceStmt: StatementSync;
   private readonly retrieveStmt: StatementSync;
+  private readonly listStmts = new Map<string, StatementSync>();
 
   constructor(db: DatabaseSync) {
     this.db = db;
@@ -55,20 +66,6 @@ export class EventStore {
     this.appendStmt = this.db.prepare(
       `INSERT INTO events (id, session_id, type, processed_at, payload, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    );
-    this.listAllStmt = this.db.prepare(
-      `SELECT id, session_id, type, processed_at, payload, created_at
-       FROM events
-       WHERE session_id = ?
-       ORDER BY id ASC
-       LIMIT ?`,
-    );
-    this.listSinceStmt = this.db.prepare(
-      `SELECT id, session_id, type, processed_at, payload, created_at
-       FROM events
-       WHERE session_id = ? AND id > ?
-       ORDER BY id ASC
-       LIMIT ?`,
     );
     this.retrieveStmt = this.db.prepare(
       `SELECT id, session_id, type, processed_at, payload, created_at
@@ -92,14 +89,51 @@ export class EventStore {
     );
   }
 
+  appendBatch(events: readonly PersistedSessionEvent[]): void {
+    this.db.exec("BEGIN");
+    try {
+      for (const event of events) {
+        this.appendStmt.run(
+          event.id,
+          event.session_id,
+          event.type,
+          event.processed_at,
+          JSON.stringify(event.payload),
+          event.created_at,
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   list(sessionId: string, opts: ListOptions = {}): PersistedSessionEvent[] {
-    const limit = opts.limit ?? 1000;
-    const rows = (
-      opts.afterId !== undefined
-        ? this.listSinceStmt.all(sessionId, opts.afterId, limit)
-        : this.listAllStmt.all(sessionId, limit)
-    ) as unknown as EventRow[];
-    return rows.map(deserialize);
+    return this.listPage(sessionId, opts).data;
+  }
+
+  listPage(
+    sessionId: string,
+    opts: ListSessionEventRecordsOptions = {},
+  ): SessionEventRecordPage {
+    const cursor = resolveCursor(opts);
+    if (cursor === "") {
+      return { data: [], next_page: null };
+    }
+    const order = resolveOrder(opts);
+    const limit = normalizeLimit(opts.limit);
+    const stmt = this.listStmt({
+      hasCursor: cursor !== undefined,
+      order,
+      types: opts.types ?? [],
+    });
+    const rows = stmt.all(...selectListArgs(sessionId, cursor, limit + 1, opts.types)) as unknown as EventRow[];
+    const data = rows.slice(0, limit).map(deserialize);
+    return {
+      data,
+      next_page: rows.length > limit ? data[data.length - 1]?.id ?? null : null,
+    };
   }
 
   retrieve(id: string): PersistedSessionEvent | undefined {
@@ -110,6 +144,69 @@ export class EventStore {
   close(): void {
     this.db.close();
   }
+
+  private listStmt(opts: {
+    hasCursor: boolean;
+    order: "asc" | "desc";
+    types: readonly string[];
+  }): StatementSync {
+    const key = JSON.stringify({
+      hasCursor: opts.hasCursor,
+      order: opts.order,
+      typeCount: opts.types.length,
+    });
+    const existing = this.listStmts.get(key);
+    if (existing) return existing;
+
+    const predicates = ["session_id = ?"];
+    if (opts.types.length > 0) {
+      predicates.push(`type IN (${opts.types.map(() => "?").join(", ")})`);
+    }
+    if (opts.hasCursor) {
+      predicates.push(opts.order === "asc" ? "id > ?" : "id < ?");
+    }
+    const stmt = this.db.prepare(
+      `SELECT id, session_id, type, processed_at, payload, created_at
+       FROM events
+       WHERE ${predicates.join(" AND ")}
+       ORDER BY id ${opts.order.toUpperCase()}
+       LIMIT ?`,
+    );
+    this.listStmts.set(key, stmt);
+    return stmt;
+  }
+}
+
+function selectListArgs(
+  sessionId: string,
+  cursor: string | undefined,
+  limit: number,
+  types: readonly string[] | undefined,
+): [string, number] | [string, ...string[], number] | [string, string, number] | [string, ...string[], string, number] {
+  const t = types ?? [];
+  if (cursor === undefined) {
+    return t.length === 0 ? [sessionId, limit] : [sessionId, ...t, limit];
+  }
+  return t.length === 0
+    ? [sessionId, cursor, limit]
+    : [sessionId, ...t, cursor, limit];
+}
+
+function resolveCursor(opts: ListSessionEventRecordsOptions): string | undefined {
+  return opts.page ?? opts.afterId;
+}
+
+function resolveOrder(opts: ListSessionEventRecordsOptions): "asc" | "desc" {
+  if (opts.afterId !== undefined && opts.order === undefined) {
+    return "asc";
+  }
+  return opts.order ?? "asc";
+}
+
+function normalizeLimit(limit: number | undefined): number {
+  if (limit === undefined) return 20;
+  if (!Number.isSafeInteger(limit) || limit <= 0) return 20;
+  return Math.min(limit, 1000);
 }
 
 function deserialize(row: EventRow): PersistedSessionEvent {
