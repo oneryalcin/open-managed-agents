@@ -2,18 +2,30 @@
 
 Design-first home for an open-source clone of Anthropic's [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview), self-hostable on Modal / K8s / Docker.
 
-**Status:** Design phase. No runtime code yet — this directory captures the decisions we've made before writing the first line of TypeScript.
+**Status:** Design + first HTTP slice. The architecture docs are still the source of intent, and the repo now has working TypeScript for the EventStore/Broadcaster primitives and the Agents API.
 
 ## Reading order
 
 1. [Scope](scope.md) — what's in the MVP slice, what's deferred, what's a non-goal
 2. [Architecture](architecture.md) — the three-tier decomposition and how Pi's `AgentSession` primitives map to Managed Agents endpoints
-3. [References](references.md) — upstream docs, SDK docs, related projects we evaluated
+3. [Roadmap](roadmap.md) — current implementation state and the next cycles
+4. [References](references.md) — upstream docs, SDK docs, related projects we evaluated
 
 ## Working notes
 
 - [Scratch: Pi 0.75.4 empirical findings](scratch-pi-findings.md) — what we learn from probing Pi; feeds back into the ADRs below as decisions firm up.
 - [Threat model (stub)](threat-model.md) — security categories to fill in before multi-tenant deployment or untrusted users.
+
+## Current smoke checks
+
+Run from the repo root:
+
+```bash
+npm test
+npm run typecheck
+npx tsx scratch/05-event-store.ts
+npx tsx scratch/06-agents-api.ts
+```
 
 ## Architecture Decision Records
 
