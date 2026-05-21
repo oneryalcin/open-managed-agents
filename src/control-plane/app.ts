@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { agentsRoutes } from "./agents/routes.ts";
 import { DefaultAgentService } from "./agents/service.ts";
 import { SqliteAgentStore } from "./agents/store.ts";
@@ -46,22 +47,16 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     await next();
   });
 
-  app.use("*", async (c, next) => {
-    const contentLength = c.req.header("content-length");
-    if (contentLength !== undefined) {
-      const length = Number(contentLength);
-      if (Number.isFinite(length) && length > MAX_REQUEST_BODY_BYTES) {
-        throw requestTooLarge();
-      }
-    }
-    if (contentLength === undefined && requestMayHaveBody(c.req.method)) {
-      const body = await c.req.raw.clone().arrayBuffer();
-      if (body.byteLength > MAX_REQUEST_BODY_BYTES) {
-        throw requestTooLarge();
-      }
-    }
-    await next();
-  });
+  app.use(
+    "*",
+    bodyLimit({
+      maxSize: MAX_REQUEST_BODY_BYTES,
+      onError: (c) => {
+        const err = requestTooLarge();
+        return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+      },
+    }),
+  );
 
   app.use("*", async (c, next) => {
     c.set("betaFeatures", parseBetaFeatures(c.req.header("anthropic-beta")));
@@ -107,10 +102,6 @@ export function parseBetaFeatures(header: string | undefined): Set<string> {
       .map((value) => value.trim())
       .filter((value) => value.length > 0),
   );
-}
-
-function requestMayHaveBody(method: string): boolean {
-  return method !== "GET" && method !== "HEAD";
 }
 
 function jsonError(body: ApiErrorBody, status: number): Response {

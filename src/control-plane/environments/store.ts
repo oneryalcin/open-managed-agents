@@ -119,6 +119,7 @@ export class SqliteEnvironmentStore implements EnvironmentStore {
     const limit = normalizeLimit(opts.limit);
     const queryLimit = limit + 1;
     const includeArchived = opts.includeArchived ?? false;
+    // Environments list is ASC-only in B.1; sessions carry order because SDK examples use it.
     const rows = this.listStmt(includeArchived, opts.page !== undefined).all(
       ...selectListArgs(workspaceId, queryLimit, opts.page),
     ) as unknown as EnvironmentDbRow[];

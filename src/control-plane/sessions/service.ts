@@ -1,9 +1,5 @@
 import type { ManagedAgentsListPage } from "../../types/common.ts";
-import type {
-  CreateManagedSessionAgentInput,
-  CreateManagedSessionRequest,
-  ManagedAgentsSession,
-} from "../../types/sessions.ts";
+import type { CreateManagedSessionRequest, ManagedAgentsSession } from "../../types/sessions.ts";
 import { isJsonObject } from "../../types/json.ts";
 import type { AgentStore } from "../agents/types.ts";
 import type { EnvironmentStore } from "../environments/types.ts";
@@ -29,10 +25,15 @@ export class DefaultSessionService implements SessionService {
     input: unknown,
   ): ManagedAgentsSession {
     const req = parseCreateSession(input);
-    const agentId = parseAgentId(req.agent);
-    const agent = this.agents.retrieve(workspaceId, agentId);
+    const agentRef = parseAgentRef(req.agent);
+    const agent = this.agents.retrieve(workspaceId, agentRef.id);
     if (!agent) {
-      throw invalidRequest(`Agent ${agentId} not found`);
+      throw invalidRequest(`Agent ${agentRef.id} not found`);
+    }
+    if (agentRef.version !== undefined && agentRef.version !== agent.version) {
+      throw invalidRequest(
+        `Agent ${agentRef.id} has version ${agent.version}; requested version ${agentRef.version} not found`,
+      );
     }
     const environment = this.environments.retrieve(workspaceId, req.environment_id);
     if (!environment) {
@@ -97,9 +98,14 @@ function parseCreateSession(input: unknown): CreateManagedSessionRequest {
   };
 }
 
-function parseAgentId(agent: CreateManagedSessionAgentInput): string {
-  if (typeof agent === "string") return agent;
-  return agent.id;
+function parseAgentRef(agent: CreateManagedSessionRequest["agent"]): {
+  id: string;
+  version?: number;
+} {
+  if (typeof agent === "string") return { id: agent };
+  return agent.version === undefined
+    ? { id: agent.id }
+    : { id: agent.id, version: agent.version };
 }
 
 function toManagedSession(row: SessionRow): ManagedAgentsSession {
@@ -131,7 +137,7 @@ function objectInput(input: unknown): Record<string, unknown> {
   return input;
 }
 
-function agentField(obj: Record<string, unknown>): CreateManagedSessionAgentInput {
+function agentField(obj: Record<string, unknown>): CreateManagedSessionRequest["agent"] {
   const value = obj.agent;
   if (typeof value === "string" && value.length > 0) return value;
   if (isJsonObject(value)) {

@@ -68,10 +68,10 @@ try {
     id: string;
     agent: { type: string; id: string; version: number };
   }>(`${baseUrl}/v1/sessions`, {
-    agent: { type: "agent", id: agent.id, version: 999 },
+    agent: { type: "agent", id: agent.id, version: 1 },
     environment_id: environment.id,
   });
-  assertEqual(secondSession.agent.version, 1, "stored agent version wins");
+  assertEqual(secondSession.agent.version, 1, "requested current version");
   console.log(`session object-ref: ${secondSession.id}`);
 
   const listRes = await fetch(

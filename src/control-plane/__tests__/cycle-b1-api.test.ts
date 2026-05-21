@@ -86,7 +86,7 @@ describe("Cycle B.1 API", () => {
     expect(fromString).not.toHaveProperty("workspace_id");
 
     const fromObject = await createSession(app, {
-      agent: { type: "agent", id: agent.id, version: 999 },
+      agent: { type: "agent", id: agent.id, version: 1 },
       environment_id: environment.id,
     });
     expect(fromObject.agent).toEqual({ type: "agent", id: agent.id, version: 1 });
@@ -94,6 +94,26 @@ describe("Cycle B.1 API", () => {
     const retrieveRes = await app.request(`/v1/sessions/${fromString.id}`);
     expect(retrieveRes.status).toBe(200);
     await expect(retrieveRes.json()).resolves.toEqual(fromString);
+  });
+
+  it("rejects requested agent versions that do not exist", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+
+    await expectError(
+      await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: { type: "agent", id: agent.id, version: 999 },
+          environment_id: environment.id,
+        }),
+      }),
+      400,
+      "invalid_request_error",
+      `Agent ${agent.id} has version 1; requested version 999 not found`,
+    );
   });
 
   it("lists sessions with agent_id filter, order, page, and empty page handling", async () => {
@@ -151,6 +171,26 @@ describe("Cycle B.1 API", () => {
     );
     expect(emptyRes.status).toBe(200);
     await expect(emptyRes.json()).resolves.toEqual(await omittedRes.json());
+
+    const ascRes = await app.request(
+      `/v1/sessions?agent_id=${agent.id}&order=asc&limit=1`,
+    );
+    expect(ascRes.status).toBe(200);
+    const ascPage = (await ascRes.json()) as {
+      data: ManagedAgentsSession[];
+      has_more: boolean;
+      next_page: string | null;
+    };
+    expect(ascPage.data.map((s) => s.id)).toEqual([first.id]);
+    expect(ascPage.has_more).toBe(true);
+    expect(ascPage.next_page).toBe(first.id);
+
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${agent.id}&order=sideways`),
+      400,
+      "invalid_request_error",
+      "`order` must be `asc` or `desc`",
+    );
   });
 
   it("uses invalid_request_error for missing referenced agent or environment", async () => {
@@ -290,6 +330,21 @@ describe("Cycle B.1 API", () => {
       413,
       "request_too_large",
       "Request body is too large",
+    );
+  });
+
+  it("returns the public invalid_request_error envelope for malformed JSON", async () => {
+    const app = createInMemoryControlPlaneApp();
+
+    await expectError(
+      await app.request("/v1/environments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{not json",
+      }),
+      400,
+      "invalid_request_error",
+      "Request body must be valid JSON",
     );
   });
 });

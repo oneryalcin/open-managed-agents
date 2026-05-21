@@ -193,6 +193,7 @@ function deserialize(row: SessionDbRow): SessionRow {
     created_at: row.created_at,
     updated_at: row.updated_at,
     archived_at: row.archived_at,
+    // B.1 has no runtime usage source yet; Cycle C/D should deserialize this column.
     usage: null,
   };
 }
