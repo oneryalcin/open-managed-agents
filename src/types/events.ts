@@ -1,3 +1,5 @@
+import type { JsonObject } from "./json.ts";
+
 /**
  * Managed Agents event types — the wire shapes we publish to API clients.
  *
@@ -48,6 +50,55 @@ export interface ManagedAgentsEvent {
   processed_at: string | null;
   /** Event-specific top-level fields. Shape varies by `type`. */
   [key: string]: unknown;
+}
+
+export interface ManagedAgentsTextContentBlock {
+  type: "text";
+  text: string;
+}
+
+export interface ManagedAgentsOpaqueContentBlock extends JsonObject {
+  type: string;
+}
+
+export type ManagedAgentsContentBlock =
+  | ManagedAgentsTextContentBlock
+  | ManagedAgentsOpaqueContentBlock;
+
+export interface ManagedAgentsUserMessageEventInput {
+  type: "user.message";
+  content: ManagedAgentsContentBlock[];
+}
+
+export interface ManagedAgentsUserCustomToolResultEventInput {
+  type: "user.custom_tool_result";
+  custom_tool_use_id: string;
+  content?: ManagedAgentsContentBlock[];
+}
+
+export interface ManagedAgentsUserToolConfirmationEventInput {
+  type: "user.tool_confirmation";
+  tool_use_id: string;
+  result: "allow" | "deny";
+  deny_message?: string | null;
+}
+
+export type ManagedAgentsUserEventInput =
+  | ManagedAgentsUserMessageEventInput
+  | ManagedAgentsUserCustomToolResultEventInput
+  | ManagedAgentsUserToolConfirmationEventInput;
+
+export interface SendSessionEventsRequest {
+  events: ManagedAgentsUserEventInput[];
+}
+
+export interface SendSessionEventsResponse {
+  data: ManagedAgentsEvent[];
+}
+
+export interface ListSessionEventsResponse {
+  data: ManagedAgentsEvent[];
+  next_page: string | null;
 }
 
 /**
