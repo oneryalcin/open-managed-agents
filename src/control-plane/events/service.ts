@@ -1,5 +1,4 @@
 import {
-  EVENT_TYPES,
   newEventId,
   type ListSessionEventsResponse,
   type ManagedAgentsContentBlock,
@@ -28,8 +27,6 @@ const SUPPORTED_USER_EVENT_TYPES = new Set([
   "user.custom_tool_result",
   "user.tool_confirmation",
 ] as const);
-
-const ALL_EVENT_TYPES = new Set<string>(EVENT_TYPES);
 
 export class DefaultSessionEventsService implements SessionEventsService {
   constructor(
@@ -61,10 +58,6 @@ export class DefaultSessionEventsService implements SessionEventsService {
     opts: ListSessionEventsOptions = {},
   ): ListSessionEventsResponse {
     requireSession(this.sessions, workspaceId, sessionId);
-    const types = opts.types ?? [];
-    if (types.length > 0 && types.some((type) => !ALL_EVENT_TYPES.has(type))) {
-      return { data: [], next_page: null };
-    }
     const page = this.events.listPage(sessionId, opts);
     return {
       data: page.data.map(toManagedAgentsEvent),

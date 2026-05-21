@@ -96,6 +96,10 @@ describe("Cycle B.2 API", () => {
     expect(listBody.data.map((event) => event.processed_at)).toEqual(
       sendBody.data.map((event) => event.processed_at),
     );
+    expect((listBody.data[0].content as Array<Record<string, unknown>>)[1]).toEqual({
+      type: "image",
+      source: { kind: "url", value: "https://x/y.png" },
+    });
     for (const event of listBody.data) {
       expect(event).not.toHaveProperty("session_id");
       expect(event).not.toHaveProperty("payload");
@@ -205,6 +209,12 @@ describe("Cycle B.2 API", () => {
       `/v1/sessions/${session.id}/events?types[]=user.future_event`,
     );
     expect(unknown).toEqual({ data: [], next_page: null });
+
+    const mixed = await getEvents(
+      app,
+      `/v1/sessions/${session.id}/events?types[]=user.message&types[]=user.future_event`,
+    );
+    expect(mixed.data.map((event) => event.type)).toEqual(["user.message"]);
   });
 
   it("rejects invalid send/list requests with public error envelope", async () => {
@@ -382,7 +392,12 @@ describe("Cycle B.2 API", () => {
 
     const firstList = await getEvents(app, `/v1/sessions/${first.id}/events`);
     expect(firstList.data).toHaveLength(1);
+    expect(firstList.data[0].id).not.toBeUndefined();
     expect(firstList.data[0].content).toEqual([{ type: "text", text: "first" }]);
+    const secondList = await getEvents(app, `/v1/sessions/${second.id}/events`);
+    expect(firstList.data.some((event) => event.id === secondList.data[0]?.id)).toBe(
+      false,
+    );
 
     await expectError(
       await app.request("/v1/sessions/sesn_missing/events"),
