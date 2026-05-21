@@ -58,6 +58,43 @@ console.log(
   `missing.status=${missing.status} type=${missingBody.error.type} message=${missingBody.error.message}`,
 );
 
+const atomicFail = await app.request(`/v1/sessions/${session.id}/events`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    events: [
+      { type: "user.message", content: [{ type: "text", text: "atomic-ok" }] },
+      { type: "user.message", content: [] },
+    ],
+  }),
+});
+const atomicBody = (await atomicFail.json()) as {
+  error: { type: string; message: string };
+};
+console.log(
+  `atomic.status=${atomicFail.status} type=${atomicBody.error.type} message=${atomicBody.error.message}`,
+);
+
+const pathBodyMismatch = await app.request(`/v1/sessions/${session.id}/events`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    events: [
+      {
+        type: "user.message",
+        session_id: "sesn_other",
+        content: [{ type: "text", text: "mismatch" }],
+      },
+    ],
+  }),
+});
+const mismatchBody = (await pathBodyMismatch.json()) as {
+  error: { type: string; message: string };
+};
+console.log(
+  `path-body.status=${pathBodyMismatch.status} type=${mismatchBody.error.type} message=${mismatchBody.error.message}`,
+);
+
 async function create(path: string, body: unknown): Promise<Record<string, unknown>> {
   const res = await app.request(path, {
     method: "POST",

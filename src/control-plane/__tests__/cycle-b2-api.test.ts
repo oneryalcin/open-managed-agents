@@ -93,6 +93,9 @@ describe("Cycle B.2 API", () => {
     expect(listBody.data.map((event) => event.id)).toEqual(
       sendBody.data.map((event) => event.id),
     );
+    expect(listBody.data.map((event) => event.processed_at)).toEqual(
+      sendBody.data.map((event) => event.processed_at),
+    );
     for (const event of listBody.data) {
       expect(event).not.toHaveProperty("session_id");
       expect(event).not.toHaveProperty("payload");
