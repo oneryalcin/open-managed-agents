@@ -139,6 +139,7 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
 - Response body: `{ data: ManagedAgentsEvent[] }`, containing the server-assigned events in the same order as the request.
 - Server-assigned event IDs use the existing `newEventId()` helper (`sevt_` + UUIDv7).
 - B.2 sets `processed_at` to the event-log persistence timestamp for accepted user-originated events. This is the stable control-plane acceptance time, not an engine-completion signal. Runtime-originated events added later carry their own processed timestamp at emission time.
+- B.4+ MUST NOT redefine `processed_at` for user-originated events as "engine-applied time"; engine application timestamps require a separate field if needed.
 - Event log order is by event ID in MVP because UUIDv7 preserves creation order; do not order client replay by `processed_at`.
 - Missing session returns `not_found_error`.
 - Empty `events`, missing `events`, non-array `events`, unsupported event types, malformed event payloads, and non-finite JSON numbers anywhere in accepted payload fields return `invalid_request_error`.
@@ -155,7 +156,7 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
   - Required: `content`.
   - `content` is a non-empty array of JSON-compatible content blocks.
   - Text block shape: `{type: "text", text: string}`.
-  - Image and document block shapes are accepted as opaque JSON-compatible blocks with a non-empty string `type`. B.2 stores them but does not inspect resource semantics.
+  - Non-text blocks are accepted as opaque JSON-compatible blocks with a non-empty string `type`. B.2 stores them but does not validate per-type resource semantics.
 - `user.custom_tool_result`
   - Required: `custom_tool_use_id`.
   - `custom_tool_use_id` is a non-empty string.
@@ -175,7 +176,8 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
 - Supported query params:
   - `limit`: positive integer, capped by the store/service.
   - `page`: opaque token. B.2 returns the raw `sevt_...` event ID as `next_page` for MVP, but clients must pass it back unchanged and not derive it from the last event themselves.
-  - `order`: `"asc"` or `"desc"`. Default is `"asc"` because upstream events list defaults to chronological order.
+  - `order`: `"asc"` or `"desc"`. Default is `"asc"` because event logs replay oldest-first; this intentionally differs from sessions list, which defaults newest-first for session pickers.
+  - For `order=asc`, `page` means events with `id > page`. For `order=desc`, `page` means events with `id < page`. Descending pagination is an older-than-cursor scan, not a stable snapshot; events created after page 1 are recovered by B.3's stream-first reconnect pattern, not by page 2 of a descending history scan.
   - `types[]`: optional repeated event type filter, e.g. `types[]=agent.tool_use&types[]=agent.tool_result`. B.2 implements this now and adds a `(session_id, type, id)` SQLite index in the same PR.
 - Empty `page=` is treated as omitted at the route boundary, with a store-level guard matching the Cycle A/B.1 cursor hardening.
 - Missing session returns `not_found_error`.
