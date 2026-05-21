@@ -17,15 +17,16 @@
 
 import { EventStore } from "../src/control-plane/events/store.ts";
 import { SessionEventBroadcaster } from "../src/control-plane/events/broadcaster.ts";
-import { newEventId, type ManagedAgentsEvent } from "../src/types/events.ts";
+import type { PersistedSessionEvent } from "../src/control-plane/events/types.ts";
+import { newEventId } from "../src/types/events.ts";
 
 const log = (msg: string) => console.log(msg);
 
 function makeEvent(
   sessionId: string,
-  type: ManagedAgentsEvent["type"],
+  type: PersistedSessionEvent["type"],
   payload: Record<string, unknown> = {},
-): ManagedAgentsEvent {
+): PersistedSessionEvent {
   const now = new Date().toISOString();
   return {
     id: newEventId(),
@@ -65,7 +66,7 @@ log("");
 log("--- Part 2: subscribe() with no lastSeenId replays full history ---");
 {
   const ac = new AbortController();
-  const collected: ManagedAgentsEvent[] = [];
+  const collected: PersistedSessionEvent[] = [];
   let iter = 0;
   for await (const event of broadcaster.subscribe(SID, { signal: ac.signal })) {
     collected.push(event);
@@ -98,7 +99,7 @@ log("--- Part 3: replay-then-tail with concurrent publishes ---");
   // Subscribe with lastSeenId = e1 → expect to replay e2, e3, e4, then see
   // live e5, e6 arriving during/after replay.
   const ac = new AbortController();
-  const collected: ManagedAgentsEvent[] = [];
+  const collected: PersistedSessionEvent[] = [];
   const expected = 5; // e2, e3, e4 from replay + e5, e6 live (5 total since e1)
   const lastSeenId = e1.id;
 

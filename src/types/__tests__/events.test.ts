@@ -88,7 +88,7 @@ describe("EventType wire contract", () => {
   it("`user.custom_tool_result` is present (the custom tool result regression check)", () => {
     // Specifically guards the custom-tool result path from drifting back toward
     // generic tool-result naming. The event type must stay user.custom_tool_result,
-    // and the event payload field must use custom_tool_use_id (covered by the
+    // and the event body field must use custom_tool_use_id (covered by the
     // custom-tool round-trip spec) rather than tool_use_id.
     expect(EVENT_TYPES).toContain("user.custom_tool_result");
     expect(EVENT_TYPES).not.toContain("user.tool_result" as never);

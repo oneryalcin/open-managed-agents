@@ -23,10 +23,14 @@ Feature: Session event log — list + stream + lossless reconnect
 
   Scenario: Paginate the event log
     Given the session has 1500 events
-    When I GET /v1/sessions/sesn_abc/events with cursor=after_id={lastEventId}&limit=500
+    When I GET /v1/sessions/sesn_abc/events with limit=500
     Then I receive 500 events
-    And the first event has an ID lexically greater than {lastEventId}
-    And paginating until the page size is less than the limit returns all 1500 events with no gaps or duplicates
+    And the response contains next_page
+    When I GET /v1/sessions/sesn_abc/events with page={next_page}&limit=500
+    Then I receive the next 500 events
+    And the page token is opaque to clients
+    And paginating with each response's next_page until next_page is null returns all 1500 events with no gaps or duplicates
+    # NOTE: the query param is `page` (not `after_id`) to match Anthropic's wire contract. See ADR 0004 Tier 1.
 
   # ── events.stream (SSE) ────────────────────────────────────────────────────
 

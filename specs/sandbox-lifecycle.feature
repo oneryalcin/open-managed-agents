@@ -13,7 +13,8 @@ Feature: Per-session sandbox lifecycle
     And an environment "env_default" is configured to use the Modal sandbox provider
 
   Scenario: Provision a sandbox on session create
-    When I POST /v1/sessions with agent_id and environment_id "env_default"
+    When I POST /v1/sessions with `agent` (string ID) and `environment_id` "env_default"
+    # NOTE: field name is `agent`, not `agent_id`. Matches Anthropic's wire contract. See ADR 0004 Tier 1.
     Then a new Modal sandbox is provisioned for this session
     And the response status is 200
     And the response body contains the session id

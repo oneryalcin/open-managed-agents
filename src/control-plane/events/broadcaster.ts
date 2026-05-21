@@ -25,9 +25,9 @@
  */
 
 import type { EventStore } from "./store.ts";
-import type { ManagedAgentsEvent } from "../../types/events.ts";
+import type { PersistedSessionEvent } from "./types.ts";
 
-type Subscriber = (event: ManagedAgentsEvent) => void;
+type Subscriber = (event: PersistedSessionEvent) => void;
 
 export interface SubscribeOptions {
   /** Resume cursor. If set, replay starts from events with `id > lastSeenId`. */
@@ -53,7 +53,7 @@ export class SessionEventBroadcaster {
    * Persist-before-publish: a subscriber that misses this live broadcast
    * can still recover the event via `store.list()`.
    */
-  publish(event: ManagedAgentsEvent): void {
+  publish(event: PersistedSessionEvent): void {
     this.store.append(event);
     const subs = this.subscribers.get(event.session_id);
     if (!subs) return;
@@ -70,7 +70,7 @@ export class SessionEventBroadcaster {
   async *subscribe(
     sessionId: string,
     opts: SubscribeOptions = {},
-  ): AsyncIterable<ManagedAgentsEvent> {
+  ): AsyncIterable<PersistedSessionEvent> {
     const pageSize = positiveIntegerOrThrow(
       opts.pageSize ?? DEFAULT_PAGE_SIZE,
       "pageSize",
@@ -80,7 +80,7 @@ export class SessionEventBroadcaster {
       "maxBuffer",
     );
 
-    const liveQueue: ManagedAgentsEvent[] = [];
+    const liveQueue: PersistedSessionEvent[] = [];
     let overflowed = false;
     let wake: (() => void) | null = null;
 
@@ -126,7 +126,7 @@ export class SessionEventBroadcaster {
      * we've caught up.
      */
     const store = this.store;
-    function* drainStore(): Generator<ManagedAgentsEvent> {
+    function* drainStore(): Generator<PersistedSessionEvent> {
       while (true) {
         const page = store.list(sessionId, {
           afterId: lastYieldedId,

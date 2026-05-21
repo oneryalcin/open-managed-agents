@@ -1,10 +1,10 @@
 /**
- * Managed Agents event types — the wire shapes we publish/persist.
+ * Managed Agents event types — the wire shapes we publish to API clients.
  *
  * The `type` strings are Tier 1 wire-compatible per ADR 0004 — they must match
- * Anthropic's Managed Agents API verbatim. The per-type `payload` shape is
- * `Record<string, unknown>` at the storage layer; typed elaboration lives in
- * the route/translator layer where the discriminator gives us the variant.
+ * Anthropic's Managed Agents API verbatim. Per-type fields are deliberately
+ * modeled as an open object at this layer; typed elaboration lives in the
+ * route/translator layer where the discriminator gives us the variant.
  */
 
 /**
@@ -38,8 +38,6 @@ export type EventType = (typeof EVENT_TYPES)[number];
 export interface ManagedAgentsEvent {
   /** Server-assigned event ID, prefixed `sevt_`. UUIDv7 for time-ordered cursor scans. */
   id: string;
-  /** Session this event belongs to. */
-  session_id: string;
   /** Event-type discriminator. Tier 1 wire-compatible. */
   type: EventType;
   /**
@@ -48,10 +46,8 @@ export interface ManagedAgentsEvent {
    * for user-originated events; agent-originated events are always non-null.
    */
   processed_at: string | null;
-  /** Event-specific data. Shape varies by `type`. */
-  payload: Record<string, unknown>;
-  /** Server-side insertion timestamp (ISO 8601). Stable tie-breaker for ordering. */
-  created_at: string;
+  /** Event-specific top-level fields. Shape varies by `type`. */
+  [key: string]: unknown;
 }
 
 /**
