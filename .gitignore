@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo
+coverage/
+.turbo/
+
+# Local tool artifacts (not part of the project)
+.omx/

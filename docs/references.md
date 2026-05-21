@@ -1,0 +1,62 @@
+# References
+
+## Anthropic Managed Agents (the API we're cloning)
+
+- Overview: https://platform.claude.com/docs/en/managed-agents/overview
+- Quickstart: https://platform.claude.com/docs/en/managed-agents/quickstart
+- Agent setup: https://platform.claude.com/docs/en/managed-agents/agent-setup
+- Sessions: https://platform.claude.com/docs/en/managed-agents/sessions
+- Events & streaming: https://platform.claude.com/docs/en/managed-agents/events-and-streaming
+- Environments: https://platform.claude.com/docs/en/managed-agents/environments
+- Tools: https://platform.claude.com/docs/en/managed-agents/tools
+- Self-hosted sandboxes: https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes
+- Webhooks: https://platform.claude.com/docs/en/managed-agents/webhooks
+- Multiagent: https://platform.claude.com/docs/en/managed-agents/multi-agent
+- Memory stores: https://platform.claude.com/docs/en/managed-agents/memory
+- Vaults: https://platform.claude.com/docs/en/managed-agents/vaults
+- Define outcomes: https://platform.claude.com/docs/en/managed-agents/define-outcomes
+
+## Anthropic SDK source (for endpoint shapes and types)
+
+- Python: https://github.com/anthropics/anthropic-sdk-python
+- TypeScript: https://github.com/anthropics/anthropic-sdk-typescript
+
+## Pi Agent SDK (the engine)
+
+- Docs: https://pi.dev/docs/latest/sdk
+- npm: `@earendil-works/pi-coding-agent`
+- Core types likely live in: `@earendil-works/pi-agent-core` (referenced from SDK docs as the source of `Agent`, `AgentTool`, `AgentState`)
+
+## Infrastructure
+
+- Modal Sandboxes: https://modal.com/docs/guide/sandbox
+- Modal TypeScript SDK: https://github.com/modal-labs/modal-js
+- Hono: https://hono.dev
+- Hono SSE: https://hono.dev/docs/helpers/streaming#sse
+- Better-SQLite3: https://github.com/WiseLibs/better-sqlite3
+
+## Anthropic CLI (`ant`)
+
+The official CLI exposes every Managed Agents endpoint as a subcommand. Useful for poking the upstream API to verify event shapes before cloning them.
+
+- CLI docs: https://platform.claude.com/docs/en/api/sdks/cli
+
+## Related projects (evaluated, not used)
+
+| Project | What it is | Why not for this |
+|---|---|---|
+| [Claude Agent SDK (Python)](https://github.com/anthropics/anthropic-quickstarts) | Mature SDK that spawns the Claude Code CLI as a subprocess. Local-first. | Wrong shape for a hosted multi-tenant platform — designed for "agent runs on your laptop," not "you run an agent platform for others." |
+| [Flue](https://github.com/withastro/flue) (`@flue/runtime`) | TypeScript agent harness framework from the Astro team. Built-in sandbox connectors (local, Daytona, Cloudflare). | Framework-shaped (imposes `.flue/agents/*.ts` filesystem convention); marked Experimental; agent definitions are TS files, not API objects — fights the persisted-agent model. |
+| [InsForge](https://github.com/InsForge/InsForge) | Apache-2.0 BaaS designed *for AI coding agents to consume* (Postgres + Auth + Storage + Edge Functions via MCP). | Solving the inverse problem — provides a backend *for* agents to drive, not a platform *to run* agents on. Used backwards, it's just a less-mature Supabase. |
+
+## Internal Claude API skill docs consulted
+
+These are the docs we read while making design decisions. They're loaded into the `/claude-api` skill — pulling them from there is the canonical way to refresh:
+
+- `shared/managed-agents-overview.md` — architecture, mandatory agent-first flow, beta headers
+- `shared/managed-agents-core.md` — agent + session object shapes, lifecycle
+- `shared/managed-agents-events.md` — event types, streaming patterns
+- `shared/managed-agents-tools.md` — server-vs-client tools, MCP, vaults
+- `shared/managed-agents-client-patterns.md` — reconnect, pending-call gating, custom-tool round-trip
+- `shared/managed-agents-self-hosted-sandboxes.md` — the inverse model (loop on Anthropic, sandbox on you)
+- `shared/managed-agents-api-reference.md` — endpoint and SDK-method reference
