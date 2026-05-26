@@ -114,6 +114,12 @@ Promise resolves → Pi loop resumes with the tool result, emits
 
 The mapping is not 1:1 in cardinality — Pi emits more granular per-token events; Managed Agents has session-lifecycle events Pi doesn't model. The control plane is responsible for the bidirectional translation.
 
+Cycle C mapping is implemented and tested in code, not duplicated as prose:
+- Translator: `src/control-plane/sessions/pi/translator.ts`
+- Fixture-driven mapping tests: `src/control-plane/sessions/pi/__tests__/translator.test.ts`
+- Captured Pi evidence fixtures: `scratch/artifacts/pi-events/*.jsonl`
+- Strategy and open design fork: [ADR 0010](adrs/0010-cassette-strategy-for-pi-translation.md), [ADR 0011](adrs/0011-tool-correlation-id-model.md)
+
 ## Event log — source of truth
 
 Managed Agents is fundamentally an **append-only event log**. SSE is the live tail; it is *not* the source of truth. Our architecture mirrors this:
