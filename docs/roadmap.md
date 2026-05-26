@@ -443,6 +443,65 @@ Goal: run live Pi sessions through the existing event-log path without changing 
 - Do not mark C.3 live validation complete while runtime remains per-message cold-start.
 - Before C.3 sign-off, runtime must preserve per-`sesn_*` continuity and serialize turns per session (ADR 0012).
 
+#### Cycle C.3a Plan — stateful Pi sessions before live validation
+
+Goal: make one Managed Agents session ID (`sesn_*`) map to one reusable Pi
+`AgentSession`, while keeping the existing B.2/B.3 event-log transport unchanged.
+
+**Evidence gate (closed): `scratch/11-pi-session-continuity.ts`**
+
+- Continuity works: one Pi `AgentSession` remembered a unique phrase across two
+  `prompt(...)` calls.
+- Busy-session behavior is native to Pi: `prompt(...)` without
+  `streamingBehavior` throws while running; `followUp(...)`, `steer(...)`, and
+  `prompt(...,{streamingBehavior:"followUp"|"steer"})` queue and produce a later
+  assistant turn.
+- Abort survives: the same Pi `AgentSession` accepted another prompt after
+  `abort()`, so abort does not require eviction.
+
+**C.3a scope (in):**
+
+1. Replace per-message cold start in `PiSessionRunner` with a per-`sesn_*`
+   runtime cache.
+2. Use Pi's native queueing instead of a control-plane mutex:
+   - idle `user.message` -> `prompt(text)`
+   - running `user.message` -> `followUp(text)`
+   - `user.interrupt` stays out of C.3a, but the observed target is
+     `steer(text)`/`abort()` once that event is wired.
+3. Track a per-session running flag from Pi events (`agent_start`/`agent_end`) so
+   the runner can choose `prompt` vs. `followUp`.
+4. Add idle-TTL eviction and `dispose()` to bound memory.
+5. Evict + dispose on hard runtime error; do **not** evict on abort.
+6. Keep event transport unchanged: Pi event -> `translatePiEvent` ->
+   `materializePersistedEvents` -> `persistAndPublish`.
+7. Emit `session.status_idle` only when Pi has drained the queued run
+   (`agent_end` for C.3a), not on each assistant `message_end`. This preserves
+   the lifecycle sequence `running -> ... -> idle` when `followUp(...)` queues
+   another turn.
+
+**C.3a scope (out):**
+
+- `user.interrupt` route semantics beyond preserving the future mapping target.
+- Full custom-tool blocking round trip (Cycle D).
+- Modal sandbox execution (Cycle E).
+- Idempotency hardening for duplicate `user.message`.
+
+**C.3a acceptance checks:**
+
+- Deterministic tests prove one `sesn_*` keeps runtime state across two user
+  messages.
+- Deterministic tests prove two `sesn_*` sessions do not share runtime state.
+- Deterministic tests prove a `user.message` submitted while the session is
+  running is forwarded through Pi's follow-up path, not dropped or raced.
+- Service-level tests prove an overlapping `user.message` does not synthesize
+  or persist `session.status_idle` before the queued follow-up response.
+- Deterministic tests prove idle-TTL eviction calls `dispose()` and removes the
+  cached runtime session.
+- Existing C.2/B.2/B.3 tests remain green with no wire-shape changes.
+- A live Pi probe proves two-turn continuity through `/events` and
+  `/events/stream`: turn 1 stores a unique phrase; turn 2 recalls it without the
+  phrase being repeated in the second prompt.
+
 **Cycle C acceptance:**
 
 - A real Pi run emits at least one `agent.message` and terminal session state events through the existing SSE route.

@@ -1,0 +1,57 @@
+{
+  "model": "anthropic/claude-haiku-4-5",
+  "continuity": {
+    "probe": "continuity",
+    "uniquePhrase": "lighthouse-no3g63",
+    "assistantTurns": 2,
+    "turn2Text": "lighthouse-no3g63",
+    "remembered": true,
+    "verdict": "CONTINUITY WORKS: one AgentSession accumulates context across prompt() calls."
+  },
+  "busy": {
+    "probe": "busy-session",
+    "note": "Maps the right Pi mechanism for user.message-while-running vs user.interrupt.",
+    "scenarios": [
+      {
+        "label": "prompt() no streamingBehavior (expect throw per docstring)",
+        "outcome": "threw",
+        "message": "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+        "assistantTurnsAfter": 1
+      },
+      {
+        "label": "prompt({streamingBehavior:'followUp'})",
+        "outcome": "resolved",
+        "ms": 0,
+        "assistantTurnsAfter": 2
+      },
+      {
+        "label": "prompt({streamingBehavior:'steer'})",
+        "outcome": "resolved",
+        "ms": 0,
+        "assistantTurnsAfter": 2
+      },
+      {
+        "label": "followUp()",
+        "outcome": "resolved",
+        "ms": 0,
+        "assistantTurnsAfter": 2
+      },
+      {
+        "label": "steer()",
+        "outcome": "resolved",
+        "ms": 0,
+        "assistantTurnsAfter": 2
+      }
+    ]
+  },
+  "abort": {
+    "probe": "abort-survivability",
+    "reuse": {
+      "label": "prompt-after-abort",
+      "outcome": "resolved",
+      "ms": 3726
+    },
+    "sawAliveReply": true,
+    "verdict": "SURVIVES: same AgentSession is reusable after abort() — no forced eviction needed."
+  }
+}

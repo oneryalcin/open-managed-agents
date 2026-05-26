@@ -157,22 +157,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
           prompt,
           { signal },
         );
-        let emittedTerminal = false;
         for await (const piEvent of source) {
           const drafts = this.runtimeTranslator(piEvent);
           if (drafts.length === 0) continue;
-          emittedTerminal ||= drafts.some((draft) => isTerminalType(draft.type));
           const now = new Date().toISOString();
           const rows = materializePersistedEvents(sessionId, drafts, now);
           persistAndPublish(this.events, this.broadcaster, rows);
-        }
-        if (!emittedTerminal) {
-          this.persistRuntimeDrafts(sessionId, [
-            {
-              type: "session.status_idle",
-              payload: { stop_reason: { type: "end_turn" } },
-            },
-          ]);
         }
       }
     } catch (error) {
@@ -341,16 +331,6 @@ function textFromContent(content: ManagedAgentsContentBlock[]): string | undefin
     .join("\n")
     .trim();
   return text.length > 0 ? text : undefined;
-}
-
-function isTerminalType(type: EventDraft["type"]): boolean {
-  return (
-    type === "session.status_idle" ||
-    type === "session.status_rescheduled" ||
-    type === "session.status_terminated" ||
-    type === "session.deleted" ||
-    type === "session.error"
-  );
 }
 
 function runtimeErrorDraft(error: unknown): EventDraft {

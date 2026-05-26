@@ -57,9 +57,11 @@ describe("Cycle C.2 API", () => {
     expect(sendBody.data.map((event) => event.type)).toEqual(["user.message"]);
 
     const liveUser = await reader.nextEvent();
+    const liveRunning = await reader.nextEvent();
     const liveAssistant = await reader.nextEvent();
     const liveIdle = await reader.nextEvent();
     expect(liveUser?.data.type).toBe("user.message");
+    expect(liveRunning?.data.type).toBe("session.status_running");
     expect(liveAssistant?.data.type).toBe("agent.message");
     expect(liveAssistant?.data.content).toEqual([
       { type: "text", text: "runtime: ping" },
@@ -76,6 +78,7 @@ describe("Cycle C.2 API", () => {
     );
     expect(list.data.map((event) => event.type)).toEqual([
       "user.message",
+      "session.status_running",
       "agent.message",
       "session.status_idle",
     ]);
@@ -116,6 +119,7 @@ class FakeRunner implements RuntimeEventRunner {
   ): AsyncIterable<unknown> {
     this.prompts.push(text);
     await Promise.resolve();
+    yield { type: "agent_start" };
     yield {
       type: "message_end",
       message: {
@@ -124,6 +128,7 @@ class FakeRunner implements RuntimeEventRunner {
         stopReason: "stop",
       },
     };
+    yield { type: "agent_end", messages: [], willRetry: false };
   }
 }
 

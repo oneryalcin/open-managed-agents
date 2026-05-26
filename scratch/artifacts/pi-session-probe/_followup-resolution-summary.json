@@ -1,0 +1,140 @@
+{
+  "generated_at": "2026-05-26T18:25:43.116Z",
+  "model": "anthropic/claude-haiku-4-5",
+  "unique_token": "followup-bvbgpw",
+  "prompt_resolved_at_ms": 2167,
+  "followup_text_at_ms": 2167,
+  "verdict": "SAFE: prompt() resolved after queued followUp() output was emitted.",
+  "observations": [
+    {
+      "at_ms": 1,
+      "kind": "event",
+      "type": "agent_start"
+    },
+    {
+      "at_ms": 1,
+      "kind": "event",
+      "type": "turn_start"
+    },
+    {
+      "at_ms": 1,
+      "kind": "event",
+      "type": "message_start"
+    },
+    {
+      "at_ms": 1,
+      "kind": "event",
+      "type": "message_end"
+    },
+    {
+      "at_ms": 127,
+      "kind": "event",
+      "type": "queue_update"
+    },
+    {
+      "at_ms": 127,
+      "kind": "followup_accepted"
+    },
+    {
+      "at_ms": 1184,
+      "kind": "event",
+      "type": "message_start"
+    },
+    {
+      "at_ms": 1185,
+      "kind": "event",
+      "type": "message_update"
+    },
+    {
+      "at_ms": 1185,
+      "kind": "event",
+      "type": "message_update"
+    },
+    {
+      "at_ms": 1226,
+      "kind": "event",
+      "type": "message_update"
+    },
+    {
+      "at_ms": 1254,
+      "kind": "event",
+      "type": "message_update"
+    },
+    {
+      "at_ms": 1257,
+      "kind": "event",
+      "type": "message_end",
+      "text": "first done"
+    },
+    {
+      "at_ms": 1257,
+      "kind": "event",
+      "type": "turn_end"
+    },
+    {
+      "at_ms": 1257,
+      "kind": "event",
+      "type": "turn_start"
+    },
+    {
+      "at_ms": 1257,
+      "kind": "event",
+      "type": "queue_update"
+    },
+    {
+      "at_ms": 1257,
+      "kind": "event",
+      "type": "message_start"
+    },
+    {
+      "at_ms": 1257,
+      "kind": "event",
+      "type": "message_end"
+    },
+    {
+      "at_ms": 2162,
+      "kind": "event",
+      "type": "message_start"
+    },
+    {
+      "at_ms": 2162,
+      "kind": "event",
+      "type": "message_update"
+    },
+    {
+      "at_ms": 2163,
+      "kind": "event",
+      "type": "message_update"
+    },
+    {
+      "at_ms": 2163,
+      "kind": "event",
+      "type": "message_update"
+    },
+    {
+      "at_ms": 2165,
+      "kind": "event",
+      "type": "message_update"
+    },
+    {
+      "at_ms": 2167,
+      "kind": "event",
+      "type": "message_end",
+      "text": "followup-bvbgpw"
+    },
+    {
+      "at_ms": 2167,
+      "kind": "event",
+      "type": "turn_end"
+    },
+    {
+      "at_ms": 2167,
+      "kind": "event",
+      "type": "agent_end"
+    },
+    {
+      "at_ms": 2167,
+      "kind": "prompt_resolved"
+    }
+  ]
+}
