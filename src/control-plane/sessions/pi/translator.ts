@@ -48,9 +48,11 @@ function translateMessageEnd(event: JsonObject): EventDraft[] {
     const name = typeof block.name === "string" ? block.name : undefined;
     const args = isObject(block.arguments) ? block.arguments : {};
     if (!toolUseId || !name) continue;
-    // Intentional Tier-2 deviation: keep Pi's toolu_* correlation key in payload
-    // as tool_use_id while preserving uniform server-assigned event IDs (`sevt_*`)
-    // at the top-level `ManagedAgentsEvent.id`.
+    // Open C.2/D decision: keep Pi's toolu_* correlation key in payload as
+    // tool_use_id while event IDs remain server-assigned sevt_*.
+    // The final correlation-id model (uniform sevt_* + inbound translation
+    // vs. toolu_* as event id for tool-use events) is resolved with runtime
+    // ingestion + custom-tool round-trip wiring.
     const payload: JsonObject = {
       tool_use_id: toolUseId,
       name,
@@ -66,6 +68,9 @@ function translateMessageEnd(event: JsonObject): EventDraft[] {
       payload: { stop_reason: { type: "end_turn" } },
     });
   } else if (stopReason === "aborted") {
+    // C.0 evidence: aborted is visible in-band via message.stopReason.
+    // MVP wire shape has no distinct "interrupted" stop_reason variant, so
+    // this currently maps to the same idle/end_turn payload as normal stop.
     drafts.push({
       type: "session.status_idle",
       payload: { stop_reason: { type: "end_turn" } },
