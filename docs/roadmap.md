@@ -396,10 +396,11 @@ This preserves B.2/B.3 replay and SSE guarantees while Cycle C only adds transla
 
 Goal: run live Pi sessions through the existing event-log path without changing B.2/B.3 transport contracts.
 
-**Decision gate (must resolve first): ADR 0011 correlation-id model**
+**Decision gate (resolved): ADR 0011 correlation-id model**
 
-- Pick Option A or B from [ADR 0011](adrs/0011-tool-correlation-id-model.md) before wiring inbound/runtime correlation behavior.
-- Record the chosen option by moving ADR 0011 from Proposed -> Accepted in the same PR that implements the C.2 runtime path.
+- [ADR 0011](adrs/0011-tool-correlation-id-model.md) is accepted as Option A.
+- C.2 uses uniform server-stamped `sevt_*` top-level event IDs and preserves Pi `toolu_*` correlation IDs in payload fields.
+- Cycle D implements inbound `sevt_* -> toolu_*` correlation translation for tool-result forwarding.
 
 **C.2 scope (in):**
 
