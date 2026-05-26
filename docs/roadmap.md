@@ -270,18 +270,137 @@ Out of scope:
 
 Goal: connect a real Pi `AgentSession` to the existing event surface without changing the HTTP contract.
 
-Scope:
+#### Cycle C Implementation Plan
 
-- Introduce a `SessionRunner` boundary so routes and services never import Pi directly.
-- Translate Pi's async event stream into Managed Agents events.
-- Design the translator as an async-iterable transformer so live Pi sessions and recorded cassettes can use the same path.
-- Add cassette tests for real Pi event trajectories before relying on the translator as a stable compatibility layer.
+Cycle C is the first runtime-integration cycle. Keep the transport and persistence path boring:
+translated runtime events must flow through the existing B.2/B.3 event path (`appendBatch` + `publishPersisted`) and therefore inherit ADR 0009 invariants.
 
-Acceptance:
+**Evidence-first inputs (must be read before coding):**
 
-- A real Pi run emits at least one `agent.message` and a terminal `session.status_idle` through the existing SSE route.
-- Recorded Pi cassettes cover at least simple message, tool call, thrown tool error, and abort trajectories.
+- `docs/scratch-pi-findings.md`
+- `scratch/01-smoke.ts` (simple message trajectory)
+- `scratch/02-abort.ts` (abort trajectory)
+- `scratch/03-throw.ts` (tool error trajectory)
+- `scratch/04-tool-array.ts` (custom tool registration path and runtime hooks)
+
+Do not draft the Pi→Managed mapping table from memory. Extract it from the observed event shapes above and pin unknowns explicitly.
+
+**C.0 gating probe — raw Pi event field dump (must land before C.1):**
+
+- Add `scratch/10-pi-event-dump.ts`.
+- Probe runs the four required trajectories and records every subscribed Pi event as JSONL:
+  1. simple message
+  2. tool call
+  3. thrown tool error
+  4. abort
+- Each JSONL line must include:
+  - `scenario` (one of the four trajectories)
+  - `seq` (monotonic per scenario)
+  - `captured_at` (ISO timestamp of capture)
+  - raw `event` object exactly as received from Pi subscription
+- Output files:
+  - `scratch/artifacts/pi-events/<scenario>.jsonl`
+  - optional summary `scratch/artifacts/pi-events/_summary.json` with counts by `event.type`
+- Redaction rules must be deterministic and documented in the probe:
+  - redact secrets/tokens from env-derived fields
+  - keep field names/shape and non-sensitive values intact
+  - do not rewrite event type names
+- Success criteria:
+  - all four files produced
+  - each trajectory contains at least one non-empty stream of events
+  - tool and abort trajectories include their expected tool/abort-related event families
+
+This probe is the source of truth for C.1 mapping granularity and payload shapes.
+
+**Runtime boundary (SessionRunner seam):**
+
+- Add a `SessionRunner` interface under `src/control-plane/sessions/` (or a sibling runtime module) that owns:
+  - start/run a session prompt against Pi
+  - expose an `AsyncIterable<PiEvent>` stream
+  - support abort/cancel
+- Routes and HTTP handlers must not import Pi SDK types directly.
+- Session event delivery remains:
+  1. translate Pi events to `EventDraft[]`
+  2. `appendBatch(...)` atomically
+  3. `publishPersisted(...)` in the same synchronous tick
+
+This preserves B.2/B.3 replay and SSE guarantees while Cycle C only adds translation + runtime source.
+
+**Translator contract:**
+
+- Define translator as a pure per-event mapper:
+  - `translate(piEvent: PiEvent): EventDraft[]` where `EventDraft` has no server-owned fields (`id`, `processed_at`, `created_at`).
+- Translator may emit 0/1/many drafts for one Pi event (N:1 and 1:N are allowed).
+- Pi-native IDs never become Managed Agents event IDs/cursors. Server IDs (`sevt_...`) are stamped only at persist boundary.
+- No HTTP concerns, no DB access, no broadcaster calls in translator code.
+- Use the same translator for:
+  - live Pi runs
+  - recorded cassettes (replayed as async iterable)
+
+**Termination and error semantics (first-class, not incidental):**
+
+- The event log remains the source of truth; stream is a courier.
+- Runtime failures that matter to clients must be persisted as events, not only surfaced as stream disconnects.
+- `session.status_idle` is a pause, not a terminal state. It may recur across turns (`idle -> running -> idle`).
+- Consumers stop on terminal events (`session.status_terminated` / `session.deleted`) by policy; the server stream itself is not required to close on idle and need not close on terminal.
+- Cycle C does not modify B.3 broadcaster/stream transport logic for terminal handling; it only persists translated status events and relies on existing stream-first + list-backfill + dedupe behavior.
+- Pin:
+  - mapping of Pi runtime status transitions to persisted session status events (including stop reasons where present, including known deferred statuses like `session.status_rescheduled`)
+  - tool-thrown errors map to persisted tool-result style events with error semantics (`is_error: true`), not stream-only transport failure
+  - abort behavior from Probe 02 must be represented in persisted events and recoverable via list/stream replay
+  - `session.deleted` is recognized terminal vocabulary in mapping table (even if not emitted in MVP probe trajectories)
+
+**Cassettes (committed in Cycle C, simple mechanism):**
+
+- Add ADR 0010 for cassette strategy (new ADR; do not overload ADR 0009).
+- Keep implementation minimal:
+  - static recorded JSON fixtures
+  - async-iterable replayer
+  - no HTTP interception/VCR framework
+- Required trajectories:
+  1. simple message
+  2. tool call
+  3. thrown tool error
+  4. abort
+- ADR 0010 must pin normalization rules (IDs/timestamps/non-deterministic fields) and refresh policy.
 - Pi version changes require explicit cassette review.
+
+**Idempotency forward note (tracked, not fixed in C):**
+
+- `events.send` idempotency remains deferred from B.2.
+- Cycle C must call out concrete duplicate-side-effect paths:
+  - duplicate `user.message` can cause duplicate runtime prompts
+  - duplicate `user.custom_tool_result` can double-resolve pending tool waits
+- Full idempotency enforcement may land in D, but risk ownership begins in C.
+
+**Cycle C slices:**
+
+- **C.1 Translator + cassette harness**
+  - land C.0 field-dump probe and derive mapping table from captured JSONL
+  - mapping table from probe evidence
+  - pure `translate(piEvent) -> EventDraft[]` module
+  - cassette fixtures + replayer
+  - unit tests over all four trajectories
+- **C.2 SessionRunner wiring**
+  - Pi-backed SessionRunner implementation
+  - hook translated drafts into existing event persistence/broadcast path
+  - perform behavior-preserving frozen-layer refactor if needed: extract shared persist+publish stamping path so B.2 `events.send` and C.2 runtime ingestion share server ID/timestamp stamping rules
+  - no wire contract changes
+- **C.3 End-to-end validation**
+  - real Pi run through existing `/events` and `/events/stream`
+  - reconnect-with-consolidation still holds
+  - translated terminal and error behavior verified
+
+**Cycle C acceptance:**
+
+- A real Pi run emits at least one `agent.message` and terminal session state events through the existing SSE route.
+- Cassettes cover simple message, tool call, thrown tool error, and abort, and all replay through the same translator path as live Pi.
+- Translator tests assert deterministic mapping and persisted-event shapes from cassette inputs.
+- Existing B.2/B.3 guarantees remain green:
+  - atomic append behavior
+  - persist-before-publish
+  - stream replay/tail semantics
+- Pi version changes require explicit cassette review before merge.
 
 ### Cycle D — Custom Tool Round Trip
 
