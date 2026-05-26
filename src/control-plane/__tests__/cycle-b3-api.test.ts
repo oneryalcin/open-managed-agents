@@ -10,6 +10,7 @@ import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
 import { DefaultSessionService } from "../sessions/service.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
+import { STREAM_TEST_TIMEOUT_MS, hasTimedOut } from "./test-timeouts.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
@@ -235,8 +236,8 @@ function sseReader(response: Response): {
 
   return {
     async nextEvent() {
-      const deadline = Date.now() + 2000;
-      while (Date.now() < deadline) {
+      const startedAt = Date.now();
+      while (!hasTimedOut(startedAt, STREAM_TEST_TIMEOUT_MS)) {
         const frameIdx = buffer.indexOf("\n\n");
         if (frameIdx !== -1) {
           const frame = buffer.slice(0, frameIdx);

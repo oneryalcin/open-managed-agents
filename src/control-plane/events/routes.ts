@@ -3,6 +3,7 @@ import { parseJsonBody, parseLimit, parseOrder } from "../http.ts";
 import { invalidRequest } from "../errors.ts";
 import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import type { SessionEventsService } from "./types.ts";
+import { sseEventFrame } from "./sse.ts";
 
 interface AppEnv {
   Variables: {
@@ -89,12 +90,7 @@ function toSseBody(events: AsyncIterable<Record<string, unknown>>): ReadableStre
     async start(controller) {
       try {
         for await (const event of events) {
-          const id = String(event.id ?? "");
-          const type = String(event.type ?? "message");
-          const data = JSON.stringify(event);
-          controller.enqueue(
-            encoder.encode(`id: ${id}\nevent: ${type}\ndata: ${data}\n\n`),
-          );
+          controller.enqueue(encoder.encode(sseEventFrame(event)));
         }
         controller.close();
       } catch (error) {

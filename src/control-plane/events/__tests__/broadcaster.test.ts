@@ -3,6 +3,7 @@ import { newEventId } from "../../../types/events.ts";
 import { SessionEventBroadcaster } from "../broadcaster.ts";
 import { EventStore } from "../store.ts";
 import type { PersistedSessionEvent } from "../types.ts";
+import { STREAM_TEST_TIMEOUT_MS, hasTimedOut } from "../../__tests__/test-timeouts.ts";
 
 describe("session event broadcaster", () => {
   it("replays persisted history then tails live notifications without duplicates", async () => {
@@ -79,8 +80,8 @@ function makeEvent(sessionId: string, text: string): PersistedSessionEvent {
 }
 
 async function until(condition: () => boolean): Promise<void> {
-  const deadline = Date.now() + 2000;
-  while (Date.now() < deadline) {
+  const startedAt = Date.now();
+  while (!hasTimedOut(startedAt, STREAM_TEST_TIMEOUT_MS)) {
     if (condition()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
