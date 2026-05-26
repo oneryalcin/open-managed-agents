@@ -84,11 +84,16 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
     const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
     await until(() => factory.sessions[0]?.followUps.length === 1);
+    factory.sessions[0]?.emitMessage("overlap");
     gate.resolve();
 
     const firstEvents = await first;
     const secondEvents = await second;
-    expect(messageTexts(firstEvents)).toEqual(["reply: one", "reply: two"]);
+    expect(messageTexts(firstEvents)).toEqual([
+      "reply: overlap",
+      "reply: one",
+      "reply: two",
+    ]);
     expect(messageTexts(secondEvents)).toEqual([]);
   });
 
@@ -225,7 +230,7 @@ class FakeSession implements PiRuntimeSession {
     for (const listener of this.listeners) listener(event);
   }
 
-  private emitMessage(text: string): void {
+  emitMessage(text: string): void {
     this.emit({
       type: "message_end",
       message: {

@@ -92,6 +92,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     const queue: unknown[] = [];
     let done = false;
     let failure: unknown;
+    let becameFollowUp = false;
     let wake: (() => void) | undefined;
 
     const stop = handle.session.subscribe((event) => {
@@ -111,6 +112,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
           await handle.session.followUp(text);
+          becameFollowUp = true;
+          queue.length = 0;
           return;
         }
         failure = error;
@@ -122,6 +125,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     try {
       while (!done || queue.length > 0) {
+        if (becameFollowUp) break;
         if (queue.length === 0) {
           await new Promise<void>((resolve) => {
             wake = resolve;
