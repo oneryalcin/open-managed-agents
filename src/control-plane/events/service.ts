@@ -1,28 +1,33 @@
 import {
-  newEventId,
   type ListSessionEventsResponse,
   type ManagedAgentsContentBlock,
   type ManagedAgentsEvent,
   type ManagedAgentsOpaqueContentBlock,
-  type ManagedAgentsUserEventInput,
   type SendSessionEventsRequest,
 } from "../../types/events.ts";
-import { isJsonObject, isJsonValue, type JsonValue } from "../../types/json.ts";
+import {
+  isJsonObject,
+  isJsonValue,
+  type JsonObject,
+  type JsonValue,
+} from "../../types/json.ts";
 import { invalidRequest, notFound } from "../errors.ts";
 import type { SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
+import { MAX_EVENTS_PER_REQUEST } from "./constants.ts";
+import {
+  materializePersistedEvents,
+  persistAndPublish,
+  type EventDraft,
+} from "./persist.ts";
 import type {
   ListSessionEventsOptions,
-  PersistedSessionEvent,
   SessionEventBroadcaster,
   SessionEventStore,
   SessionEventsService,
   StreamSessionEventsOptions,
 } from "./types.ts";
 import { toManagedAgentsEvent } from "./types.ts";
-
-export const MAX_EVENTS_PER_REQUEST = 200;
-export const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
 
 const SUPPORTED_USER_EVENT_TYPES = new Set([
   "user.message",
@@ -45,16 +50,15 @@ export class DefaultSessionEventsService implements SessionEventsService {
     requireSession(this.sessions, workspaceId, sessionId);
     const req = parseSendRequest(input);
     const now = new Date().toISOString();
-    const rows = req.events.map((event) =>
-      toPersistedEvent(sessionId, event, now),
-    );
+    const drafts: EventDraft[] = req.events.map((event) => ({
+      type: event.type,
+      payload: eventPayload(event),
+    }));
+    const rows = materializePersistedEvents(sessionId, drafts, now);
     // TODO(idempotency): events.send is non-idempotent in B.2. Add request-level
     // dedupe before B.4 runtime consumers process irreversible actions
     // (notably user.tool_confirmation and user.custom_tool_result).
-    // Keep persist-then-notify in the same sync tick. Do not `await` between
-    // appendBatch and publishPersisted; that would open a replay gap.
-    this.events.appendBatch(rows);
-    this.broadcaster.publishPersisted(rows);
+    persistAndPublish(this.events, this.broadcaster, rows);
     return rows.map(toManagedAgentsEvent);
   }
 
@@ -242,26 +246,9 @@ function parseContentBlock(
   return block as ManagedAgentsOpaqueContentBlock;
 }
 
-function toPersistedEvent(
-  sessionId: string,
-  event: ManagedAgentsUserEventInput,
-  now: string,
-): PersistedSessionEvent {
-  const { type, ...payload } = event;
-  const payloadJson = JSON.stringify(payload);
-  if (new TextEncoder().encode(payloadJson).byteLength > MAX_EVENT_PAYLOAD_BYTES) {
-    throw invalidRequest(
-      `Serialized event payload exceeds ${MAX_EVENT_PAYLOAD_BYTES} bytes`,
-    );
-  }
-  return {
-    id: newEventId(),
-    session_id: sessionId,
-    type,
-    processed_at: now,
-    payload: payload as Record<string, JsonValue>,
-    created_at: now,
-  };
+function eventPayload(event: SendSessionEventsRequest["events"][number]): JsonObject {
+  const { type: _type, ...payload } = event;
+  return payload as Record<string, JsonValue>;
 }
 
 function objectInput(input: unknown): Record<string, unknown> {
