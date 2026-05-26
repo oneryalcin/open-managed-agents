@@ -48,12 +48,6 @@ export class SessionEventBroadcaster {
 
   constructor(private readonly store: EventStore) {}
 
-  /** Persist one event, then fan out to live subscribers for this session. */
-  appendAndPublish(event: PersistedSessionEvent): void {
-    this.store.append(event);
-    this.publishPersisted([event]);
-  }
-
   /**
    * Fan out already-persisted events to live subscribers for their sessions.
    *

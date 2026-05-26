@@ -57,13 +57,13 @@ describe("session event broadcaster", () => {
     expect(seen).toEqual([e2.id, e3.id]);
   });
 
-  it("appendAndPublish persists and notifies in one call", async () => {
+  it("publishPersisted does not write to the store", async () => {
     const store = EventStore.open(":memory:");
     const broadcaster = new SessionEventBroadcaster(store);
     const sessionId = "sesn_broadcaster_c";
     const event = makeEvent(sessionId, "x");
-    broadcaster.appendAndPublish(event);
-    expect(store.retrieve(event.id)?.id).toBe(event.id);
+    broadcaster.publishPersisted([event]);
+    expect(store.retrieve(event.id)).toBeUndefined();
   });
 });
 

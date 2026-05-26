@@ -129,6 +129,27 @@ describe("Cycle B.3 API", () => {
     });
     expect(body.request_id).toBe(requestId);
   });
+
+  it("tears down subscriber on response-body cancel without requiring a later publish", async () => {
+    const fixture = makeFixture();
+    const session = await setupSession(fixture.app);
+    await sendMessage(fixture.app, session.id, "sentinel");
+
+    const res = await fixture.app.request(`/v1/sessions/${session.id}/events/stream`, {
+      headers: { accept: "text/event-stream" },
+    });
+    expect(res.status).toBe(200);
+    const reader = sseReader(res);
+    const first = await reader.nextEvent();
+    expect(first?.data.content).toEqual([{ type: "text", text: "sentinel" }]);
+    expect(fixture.broadcaster.subscriberCount(session.id)).toBeGreaterThan(0);
+
+    await reader.cancel();
+    await until(
+      () => fixture.broadcaster.subscriberCount(session.id) === 0,
+      "Timed out waiting for stream subscriber teardown",
+    );
+  });
 });
 
 function makeFixture(): {
@@ -225,6 +246,7 @@ async function getEvents(
 
 function sseReader(response: Response): {
   nextEvent(): Promise<{ id?: string; event?: string; data: Record<string, unknown> } | null>;
+  cancel(): Promise<void>;
 } {
   const body = response.body;
   if (!body) {
@@ -262,5 +284,17 @@ function sseReader(response: Response): {
       }
       throw new Error("Timed out waiting for SSE event");
     },
+    async cancel() {
+      await reader.cancel();
+    },
   };
+}
+
+async function until(condition: () => boolean, timeoutError: string): Promise<void> {
+  const startedAt = Date.now();
+  while (!hasTimedOut(startedAt, STREAM_TEST_TIMEOUT_MS)) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(timeoutError);
 }
