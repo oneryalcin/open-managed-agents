@@ -135,6 +135,9 @@ function translateToolExecutionEnd(event: PiToolExecutionEndEvent): EventDraft[]
 }
 
 function translateAgentEnd(event: PiAgentEndEvent): EventDraft[] {
+  // Provisional mapping: C.0 fixtures only observed willRetry=false.
+  // Keep this branch explicit (and easy to delete) until a retry trajectory
+  // is captured and the event shape is confirmed in fixtures.
   if (event.willRetry === true) {
     return [{ type: "session.status_rescheduled", payload: {} }];
   }
