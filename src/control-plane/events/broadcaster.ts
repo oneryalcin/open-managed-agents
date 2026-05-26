@@ -70,11 +70,6 @@ export class SessionEventBroadcaster {
     }
   }
 
-  /** @deprecated Use `appendAndPublish` or `publishPersisted` explicitly. */
-  publish(event: PersistedSessionEvent): void {
-    this.appendAndPublish(event);
-  }
-
   /**
    * AsyncIterable yielding events for `sessionId` in stable ID order, deduped.
    * Replays history with `id > lastSeenId` via paginated cursor, then tails

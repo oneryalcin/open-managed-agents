@@ -67,7 +67,7 @@ describe("Cycle B.3 API", () => {
     streamController.abort();
   });
 
-  it("resumes from valid Last-Event-ID and fail-opens for malformed or foreign cursors", async () => {
+  it("resumes from valid Last-Event-ID and fail-opens for malformed, missing, or foreign cursors", async () => {
     const fixture = makeFixture();
     const primary = await setupSession(fixture.app);
     await sendMessage(fixture.app, primary.id, "a");
@@ -90,6 +90,13 @@ describe("Cycle B.3 API", () => {
     const malformedReader = sseReader(malformed);
     const malformedFirst = await malformedReader.nextEvent();
     expect(malformedFirst?.data.content).toEqual([{ type: "text", text: "a" }]);
+
+    const missing = await fixture.app.request(`/v1/sessions/${primary.id}/events/stream`, {
+      headers: { "last-event-id": "sevt_00000000000000000000000000" },
+    });
+    const missingReader = sseReader(missing);
+    const missingFirst = await missingReader.nextEvent();
+    expect(missingFirst?.data.content).toEqual([{ type: "text", text: "a" }]);
 
     const other = await setupSession(fixture.app);
     await sendMessage(fixture.app, other.id, "other");

@@ -49,8 +49,8 @@ const broadcaster = new SessionEventBroadcaster(store);
 log("--- Part 1: EventStore round-trip ---");
 const e1 = makeEvent(SID, "agent.message", { text: "hello" });
 const e2 = makeEvent(SID, "agent.message", { text: "world" });
-broadcaster.publish(e1);
-broadcaster.publish(e2);
+broadcaster.appendAndPublish(e1);
+broadcaster.appendAndPublish(e2);
 {
   const list = store.list(SID);
   log(`store.list(): ${list.length} events (expected 2)`);
@@ -93,8 +93,8 @@ log("--- Part 3: replay-then-tail with concurrent publishes ---");
   // Add more history first.
   const e3 = makeEvent(SID, "agent.tool_use", { name: "bash" });
   const e4 = makeEvent(SID, "agent.tool_result", { result: "ok" });
-  broadcaster.publish(e3);
-  broadcaster.publish(e4);
+  broadcaster.appendAndPublish(e3);
+  broadcaster.appendAndPublish(e4);
   log(`Store now has 4 events: e1, e2, e3, e4`);
 
   // Subscribe with lastSeenId = e1 → expect to replay e2, e3, e4, then see
@@ -123,11 +123,11 @@ log("--- Part 3: replay-then-tail with concurrent publishes ---");
   // Microtask 1: yield once so the subscriber registers + starts replay.
   await new Promise((r) => setTimeout(r, 0));
   const e5 = makeEvent(SID, "agent.message", { text: "live-1" });
-  broadcaster.publish(e5);
+  broadcaster.appendAndPublish(e5);
   // Microtask 2: another publish a bit later.
   await new Promise((r) => setTimeout(r, 5));
   const e6 = makeEvent(SID, "agent.message", { text: "live-2" });
-  broadcaster.publish(e6);
+  broadcaster.appendAndPublish(e6);
 
   await consumePromise;
 
@@ -160,7 +160,7 @@ log("--- Part 4: subscribe() paginates replay across many events ---");
   for (let i = 0; i < N; i++) {
     const e = makeEvent(SID4, "agent.message", { i });
     ids.push(e.id);
-    broadcaster.publish(e);
+    broadcaster.appendAndPublish(e);
   }
 
   const ac = new AbortController();
@@ -198,7 +198,7 @@ log("--- Part 5: live buffer overflow → refetch from store ---");
 
   // Pre-populate 5 events before subscribe.
   for (let i = 0; i < 5; i++) {
-    broadcaster.publish(makeEvent(SID5, "agent.message", { i }));
+    broadcaster.appendAndPublish(makeEvent(SID5, "agent.message", { i }));
   }
 
   // Subscribe with a slow consumer: pause 200ms after first event so the
@@ -226,7 +226,7 @@ log("--- Part 5: live buffer overflow → refetch from store ---");
   // Burst 15K events while consumer is paused. With maxBuffer=1000, this
   // forces ≥1 overflow → buffer drop → refetch from store recovery.
   for (let i = 5; i < TOTAL; i++) {
-    broadcaster.publish(makeEvent(SID5, "agent.message", { i }));
+    broadcaster.appendAndPublish(makeEvent(SID5, "agent.message", { i }));
   }
 
   await consumePromise;

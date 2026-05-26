@@ -96,8 +96,9 @@ function toSseBody(events: AsyncIterable<Record<string, unknown>>): ReadableStre
             encoder.encode(`id: ${id}\nevent: ${type}\ndata: ${data}\n\n`),
           );
         }
-      } finally {
         controller.close();
+      } catch (error) {
+        controller.error(error);
       }
     },
   });
