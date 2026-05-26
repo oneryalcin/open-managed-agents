@@ -14,8 +14,10 @@ import type { WorkspaceId } from "../workspace.ts";
 import type {
   ListSessionEventsOptions,
   PersistedSessionEvent,
+  SessionEventBroadcaster,
   SessionEventStore,
   SessionEventsService,
+  StreamSessionEventsOptions,
 } from "./types.ts";
 import { toManagedAgentsEvent } from "./types.ts";
 
@@ -32,6 +34,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
   constructor(
     private readonly events: SessionEventStore,
     private readonly sessions: SessionStore,
+    private readonly broadcaster: SessionEventBroadcaster,
   ) {}
 
   send(
@@ -48,7 +51,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     // TODO(idempotency): events.send is non-idempotent in B.2. Add request-level
     // dedupe before B.4 runtime consumers process irreversible actions
     // (notably user.tool_confirmation and user.custom_tool_result).
+    // Keep persist-then-notify in the same sync tick. Do not `await` between
+    // appendBatch and publishPersisted; that would open a replay gap.
     this.events.appendBatch(rows);
+    this.broadcaster.publishPersisted(rows);
     return rows.map(toManagedAgentsEvent);
   }
 
@@ -63,6 +69,43 @@ export class DefaultSessionEventsService implements SessionEventsService {
       data: page.data.map(toManagedAgentsEvent),
       next_page: page.next_page,
     };
+  }
+
+  stream(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    opts: StreamSessionEventsOptions = {},
+  ): AsyncIterable<ManagedAgentsEvent> {
+    requireSession(this.sessions, workspaceId, sessionId);
+    const lastSeenId = this.resolveResumeCursor(sessionId, opts.lastEventId);
+    return streamMappedEvents(
+      this.broadcaster.subscribe(sessionId, {
+        lastSeenId,
+        signal: opts.signal,
+      }),
+    );
+  }
+
+  private resolveResumeCursor(
+    sessionId: string,
+    lastEventId: string | undefined,
+  ): string | undefined {
+    if (lastEventId === undefined || !lastEventId.startsWith("sevt_")) {
+      return undefined;
+    }
+    const cursor = this.events.retrieve(lastEventId);
+    if (!cursor || cursor.session_id !== sessionId) {
+      return undefined;
+    }
+    return lastEventId;
+  }
+}
+
+async function* streamMappedEvents(
+  source: AsyncIterable<PersistedSessionEvent>,
+): AsyncIterable<ManagedAgentsEvent> {
+  for await (const event of source) {
+    yield toManagedAgentsEvent(event);
   }
 }
 

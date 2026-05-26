@@ -58,6 +58,20 @@ export interface ListSessionEventsOptions {
   types?: readonly string[];
 }
 
+export interface StreamSessionEventsOptions {
+  lastEventId?: string;
+  signal?: AbortSignal;
+}
+
+export interface SessionEventBroadcaster {
+  publishPersisted(events: readonly PersistedSessionEvent[]): void;
+  subscribe(
+    sessionId: string,
+    opts?: { lastSeenId?: string; signal?: AbortSignal },
+  ): AsyncIterable<PersistedSessionEvent>;
+  subscriberCount?(sessionId: string): number;
+}
+
 export interface SessionEventsService {
   send(
     workspaceId: WorkspaceId,
@@ -69,6 +83,11 @@ export interface SessionEventsService {
     sessionId: string,
     opts?: ListSessionEventsOptions,
   ): { data: ManagedAgentsEvent[]; next_page: string | null };
+  stream(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    opts?: StreamSessionEventsOptions,
+  ): AsyncIterable<ManagedAgentsEvent>;
 }
 
 export function toManagedAgentsEvent(

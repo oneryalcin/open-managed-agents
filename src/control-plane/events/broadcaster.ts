@@ -48,18 +48,31 @@ export class SessionEventBroadcaster {
 
   constructor(private readonly store: EventStore) {}
 
-  /**
-   * Persist event, then fan out to live subscribers for this session.
-   * Persist-before-publish: a subscriber that misses this live broadcast
-   * can still recover the event via `store.list()`.
-   */
-  publish(event: PersistedSessionEvent): void {
+  /** Persist one event, then fan out to live subscribers for this session. */
+  appendAndPublish(event: PersistedSessionEvent): void {
     this.store.append(event);
-    const subs = this.subscribers.get(event.session_id);
-    if (!subs) return;
-    for (const sub of subs) {
-      sub(event);
+    this.publishPersisted([event]);
+  }
+
+  /**
+   * Fan out already-persisted events to live subscribers for their sessions.
+   *
+   * IMPORTANT: this method does not persist. Callers that need durability must
+   * persist first (e.g. `appendBatch`) before notifying.
+   */
+  publishPersisted(events: readonly PersistedSessionEvent[]): void {
+    for (const event of events) {
+      const subs = this.subscribers.get(event.session_id);
+      if (!subs) continue;
+      for (const sub of subs) {
+        sub(event);
+      }
     }
+  }
+
+  /** @deprecated Use `appendAndPublish` or `publishPersisted` explicitly. */
+  publish(event: PersistedSessionEvent): void {
+    this.appendAndPublish(event);
   }
 
   /**

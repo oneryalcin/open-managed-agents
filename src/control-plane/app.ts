@@ -10,6 +10,7 @@ import { SqliteEnvironmentStore } from "./environments/store.ts";
 import type { EnvironmentService } from "./environments/types.ts";
 import { sessionEventsRoutes } from "./events/routes.ts";
 import { DefaultSessionEventsService } from "./events/service.ts";
+import { SessionEventBroadcaster } from "./events/broadcaster.ts";
 import { EventStore } from "./events/store.ts";
 import type { SessionEventsService } from "./events/types.ts";
 import {
@@ -91,6 +92,7 @@ export function createInMemoryControlPlaneApp(): Hono<AppEnv> {
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
+  const broadcaster = new SessionEventBroadcaster(eventStore);
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore),
     environments: new DefaultEnvironmentService(environmentStore),
@@ -99,7 +101,11 @@ export function createInMemoryControlPlaneApp(): Hono<AppEnv> {
       agentStore,
       environmentStore,
     ),
-    sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore),
+    sessionEvents: new DefaultSessionEventsService(
+      eventStore,
+      sessionStore,
+      broadcaster,
+    ),
   });
 }
 
