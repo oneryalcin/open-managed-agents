@@ -63,6 +63,13 @@ export class PiSessionRunner implements RuntimeEventRunner {
     return this.runOnSession(sessionId, text, opts.signal);
   }
 
+  close(): void {
+    for (const [sessionId, handle] of this.sessions) {
+      this.evict(sessionId, handle);
+    }
+    this.pendingSessions.clear();
+  }
+
   private async *runOnSession(
     sessionId: string,
     text: string,
