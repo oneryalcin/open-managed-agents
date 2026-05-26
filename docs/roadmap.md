@@ -502,6 +502,44 @@ Goal: make one Managed Agents session ID (`sesn_*`) map to one reusable Pi
   `/events/stream`: turn 1 stores a unique phrase; turn 2 recalls it without the
   phrase being repeated in the second prompt.
 
+#### Cycle C.3b Plan — reconnect validation while Pi is producing events
+
+Goal: validate that the B.3 reconnect contract still holds when the writer is
+the asynchronous Pi runtime path, not a direct `events.send` POST.
+
+The new condition over B.3 is a disconnect mid-Pi-turn: runtime events continue
+to be translated and persisted while no SSE client is connected. The event log is
+still the source of truth, so the expected behavior is unchanged:
+stream-first reconnect plus list/backfill must recover a single ordered event set
+with no loss and no duplicate IDs.
+
+**C.3b scope (in):**
+
+1. Add a deterministic service-level regression with a fake queued Pi session:
+   subscribe, start a runtime turn, disconnect after `session.status_running`,
+   reconnect with `Last-Event-ID`, then let the runtime finish.
+2. Assert the consolidated stream events match `events.list` exactly by event ID
+   and type order.
+3. Add a live Pi probe (`scratch/14-c3-live-reconnect.ts`) that performs the same
+   mid-run disconnect/reconnect against the real runtime.
+4. Record the live probe summary under `scratch/artifacts/pi-session-probe`.
+
+**C.3b scope (out):**
+
+- Enabling the Pi runtime in the default served app. Cycle C validates the
+  runtime path; production enablement remains a separate decision.
+- Idempotency hardening for duplicate `user.message`.
+- Custom-tool `requires_action` round trips (Cycle D).
+- Session deletion / `user.interrupt` cleanup semantics.
+
+**C.3b acceptance checks:**
+
+- CI-protected deterministic reconnect test proves mid-runtime disconnect loses
+  no events and produces no duplicate event IDs.
+- Live probe proves a real Pi response emitted during the disconnect window is
+  recovered through both `/events/stream` and `/events`.
+- Existing B.2/B.3/C.3a tests remain green.
+
 **Cycle C acceptance:**
 
 - A real Pi run emits at least one `agent.message` and terminal session state events through the existing SSE route.
