@@ -57,6 +57,45 @@ describe("session event broadcaster", () => {
     expect(seen).toEqual([e2.id, e3.id]);
   });
 
+  it("recovers overflow-dropped live events by refetching from the store", async () => {
+    // The live queue is bounded by maxBuffer. When a suspended subscriber is
+    // flooded past that bound, the queue is dropped and the subscriber refetches
+    // from the store using its last-yielded ID as the cursor. This recovery
+    // depends on persist-before-publish: the events must already be durable, so
+    // the test appends them before notifying — mirroring `events.send`.
+    const store = EventStore.open(":memory:");
+    const broadcaster = new SessionEventBroadcaster(store);
+    const sessionId = "sesn_broadcaster_overflow";
+    const events = [
+      makeEvent(sessionId, "1"),
+      makeEvent(sessionId, "2"),
+      makeEvent(sessionId, "3"),
+    ];
+
+    const ac = new AbortController();
+    const seen: string[] = [];
+    const consume = (async () => {
+      for await (const event of broadcaster.subscribe(sessionId, {
+        signal: ac.signal,
+        maxBuffer: 2,
+      })) {
+        seen.push(event.id);
+        if (seen.length === events.length) ac.abort();
+      }
+    })();
+
+    // Let the subscriber finish its (empty) replay and park before the flood,
+    // so all three events land in the live queue and trip overflow (3 > 2).
+    await until(() => broadcaster.subscriberCount(sessionId) > 0);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    for (const event of events) store.append(event);
+    broadcaster.publishPersisted(events);
+
+    await consume;
+    expect(seen).toEqual(events.map((event) => event.id));
+  });
+
   it("publishPersisted does not write to the store", async () => {
     const store = EventStore.open(":memory:");
     const broadcaster = new SessionEventBroadcaster(store);

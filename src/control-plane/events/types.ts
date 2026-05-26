@@ -69,7 +69,6 @@ export interface SessionEventBroadcaster {
     sessionId: string,
     opts?: { lastSeenId?: string; signal?: AbortSignal },
   ): AsyncIterable<PersistedSessionEvent>;
-  subscriberCount?(sessionId: string): number;
 }
 
 export interface SessionEventsService {

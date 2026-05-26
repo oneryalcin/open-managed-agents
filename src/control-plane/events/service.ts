@@ -78,12 +78,15 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): AsyncIterable<ManagedAgentsEvent> {
     requireSession(this.sessions, workspaceId, sessionId);
     const lastSeenId = this.resolveResumeCursor(sessionId, opts.lastEventId);
-    return streamMappedEvents(
-      this.broadcaster.subscribe(sessionId, {
-        lastSeenId,
-        signal: opts.signal,
-      }),
-    );
+    const source = this.broadcaster.subscribe(sessionId, {
+      lastSeenId,
+      signal: opts.signal,
+    });
+    return (async function* () {
+      for await (const event of source) {
+        yield toManagedAgentsEvent(event);
+      }
+    })();
   }
 
   private resolveResumeCursor(
@@ -98,14 +101,6 @@ export class DefaultSessionEventsService implements SessionEventsService {
       return undefined;
     }
     return lastEventId;
-  }
-}
-
-async function* streamMappedEvents(
-  source: AsyncIterable<PersistedSessionEvent>,
-): AsyncIterable<ManagedAgentsEvent> {
-  for await (const event of source) {
-    yield toManagedAgentsEvent(event);
   }
 }
 
