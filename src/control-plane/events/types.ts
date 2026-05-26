@@ -1,6 +1,7 @@
 import type { EventType, ManagedAgentsEvent } from "../../types/events.ts";
 import type { JsonObject } from "../../types/json.ts";
 import type { WorkspaceId } from "../workspace.ts";
+import type { EventDraft } from "./persist.ts";
 
 /**
  * Internal persisted event row shape.
@@ -88,6 +89,17 @@ export interface SessionEventsService {
     opts?: StreamSessionEventsOptions,
   ): AsyncIterable<ManagedAgentsEvent>;
 }
+
+export interface RuntimeEventRunner {
+  runUserMessage(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    text: string,
+    opts?: { signal?: AbortSignal },
+  ): AsyncIterable<unknown>;
+}
+
+export type RuntimeEventTranslator = (event: unknown) => EventDraft[];
 
 export function toManagedAgentsEvent(
   event: PersistedSessionEvent,
