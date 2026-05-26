@@ -345,10 +345,10 @@ This preserves B.2/B.3 replay and SSE guarantees while Cycle C only adds transla
 - Consumers stop on terminal events (`session.status_terminated` / `session.deleted`) by policy; the server stream itself is not required to close on idle and need not close on terminal.
 - Cycle C does not modify B.3 broadcaster/stream transport logic for terminal handling; it only persists translated status events and relies on existing stream-first + list-backfill + dedupe behavior.
 - Pin:
-  - mapping of Pi runtime status transitions to persisted session status events (including stop reasons where present, including known deferred statuses like `session.status_rescheduled`)
+  - derive terminal/session-state mapping primarily from `message_end.message.stopReason` when present (`stop`, `toolUse`, `aborted` observed in C.0 dumps); treat `agent_end.willRetry` as secondary context (retry/reschedule signal), not primary terminal discriminator
   - tool-thrown errors map to persisted tool-result style events with error semantics (`is_error: true`), not stream-only transport failure
-  - preserve `evaluated_permission` on persisted tool-use style events; Cycle D confirmation gating depends on replaying this field from the event log
-  - abort behavior from Probe 02 must be represented in persisted events and recoverable via list/stream replay
+  - abort handling must consume in-band `stopReason: \"aborted\"` and `errorMessage` first; keep SessionRunner abort state as a fallback guardrail for abort-before-first-assistant-message_end races
+  - `evaluated_permission` is unobserved in current C.0 trajectories and requires a dedicated permission-policy probe to locate its source event/path before Cycle D confirmation gating
   - `session.deleted` is recognized terminal vocabulary in mapping table (even if not emitted in MVP probe trajectories)
 
 **Cassettes (committed in Cycle C, simple mechanism):**
