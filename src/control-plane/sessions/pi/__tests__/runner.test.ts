@@ -1,0 +1,259 @@
+import { describe, expect, it } from "vitest";
+import {
+  PiSessionRunner,
+  type PiRuntimeSession,
+} from "../runner.ts";
+
+describe("PiSessionRunner continuity (Cycle C.3a)", () => {
+  it("reuses one Pi session for multiple turns of the same managed session", async () => {
+    const factory = new FakeSessionFactory();
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const first = await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    const second = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+
+    expect(factory.sessions).toHaveLength(1);
+    expect(factory.sessions[0]?.prompts).toEqual(["one", "two"]);
+    expect(messageTexts(first)).toEqual(["reply: one"]);
+    expect(messageTexts(second)).toEqual(["reply: two"]);
+  });
+
+  it("does not share Pi state across different managed sessions", async () => {
+    const factory = new FakeSessionFactory();
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await collect(runner.runUserMessage("wrk", "sesn_2", "two"));
+
+    expect(factory.sessions).toHaveLength(2);
+    expect(factory.sessions[0]?.prompts).toEqual(["one"]);
+    expect(factory.sessions[1]?.prompts).toEqual(["two"]);
+  });
+
+  it("queues a user message with followUp while the session is running", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    const second = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    expect(second).toEqual([]);
+    expect(factory.sessions[0]?.followUps).toEqual(["two"]);
+
+    gate.resolve();
+    const firstEvents = await first;
+    expect(messageTexts(firstEvents)).toEqual(["reply: one", "reply: two"]);
+  });
+
+  it("falls back to followUp when Pi rejects prompt because the session is already running", async () => {
+    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const events = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+
+    expect(events).toEqual([]);
+    expect(factory.sessions[0]?.prompts).toEqual(["two"]);
+    expect(factory.sessions[0]?.followUps).toEqual(["two"]);
+  });
+
+  it("does not evict an active turn, then disposes after the turn drains and TTL elapses", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 20,
+    });
+
+    const run = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+    await delay(50);
+    expect(factory.sessions[0]?.disposed).toBe(false);
+
+    gate.resolve();
+    await run;
+    await until(() => factory.sessions[0]?.disposed === true);
+  });
+
+  it("evicts the cached session after a hard runtime error", async () => {
+    const factory = new FakeSessionFactory({ throwHardErrorOnce: true });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("hard runtime failure");
+    expect(factory.sessions[0]?.disposed).toBe(true);
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    expect(factory.sessions).toHaveLength(2);
+    expect(factory.sessions[1]?.prompts).toEqual(["two"]);
+  });
+});
+
+class FakeSessionFactory {
+  readonly sessions: FakeSession[] = [];
+  private hardErrorsRemaining: number;
+
+  constructor(private readonly opts: FakeSessionOptions = {}) {
+    this.hardErrorsRemaining = opts.throwHardErrorOnce === true ? 1 : 0;
+  }
+
+  async create(): Promise<PiRuntimeSession> {
+    const session = new FakeSession({
+      ...this.opts,
+      shouldThrowHardError: () => {
+        if (this.hardErrorsRemaining <= 0) return false;
+        this.hardErrorsRemaining -= 1;
+        return true;
+      },
+    });
+    this.sessions.push(session);
+    return session;
+  }
+}
+
+interface FakeSessionOptions {
+  promptGate?: Promise<void>;
+  throwAlreadyProcessingOnce?: boolean;
+  throwHardErrorOnce?: boolean;
+  shouldThrowHardError?: () => boolean;
+}
+
+class FakeSession implements PiRuntimeSession {
+  readonly prompts: string[] = [];
+  readonly followUps: string[] = [];
+  private readonly listeners = new Set<(event: unknown) => void>();
+  running = false;
+  disposed = false;
+  private threwAlreadyProcessing = false;
+
+  constructor(private readonly opts: FakeSessionOptions = {}) {}
+
+  async prompt(
+    text: string,
+    _opts?: { streamingBehavior?: "steer" | "followUp" },
+  ): Promise<void> {
+    this.prompts.push(text);
+    if (
+      this.opts.throwAlreadyProcessingOnce === true &&
+      this.threwAlreadyProcessing === false
+    ) {
+      this.threwAlreadyProcessing = true;
+      throw new Error(
+        "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+      );
+    }
+    if (this.opts.shouldThrowHardError?.() === true) {
+      throw new Error("hard runtime failure");
+    }
+    this.emit({ type: "agent_start" });
+    if (this.opts.promptGate) await this.opts.promptGate;
+    this.emitMessage(text);
+    for (const followUp of this.followUps) {
+      this.emitMessage(followUp);
+    }
+    this.emit({ type: "agent_end", messages: [], willRetry: false });
+  }
+
+  async followUp(text: string): Promise<void> {
+    this.followUps.push(text);
+  }
+
+  async abort(): Promise<void> {}
+
+  dispose(): void {
+    this.disposed = true;
+    this.listeners.clear();
+  }
+
+  subscribe(listener: (event: unknown) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private emit(event: unknown): void {
+    const type = (event as { type?: unknown }).type;
+    if (type === "agent_start") this.running = true;
+    if (type === "agent_end") this.running = false;
+    for (const listener of this.listeners) listener(event);
+  }
+
+  private emitMessage(text: string): void {
+    this.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `reply: ${text}` }],
+        stopReason: "stop",
+      },
+    });
+  }
+}
+
+async function collect(source: AsyncIterable<unknown>): Promise<unknown[]> {
+  const out: unknown[] = [];
+  for await (const event of source) out.push(event);
+  return out;
+}
+
+function messageTexts(events: unknown[]): string[] {
+  return events
+    .map((event) => {
+      if (typeof event !== "object" || event === null) return undefined;
+      const message = (event as { message?: unknown }).message;
+      if (typeof message !== "object" || message === null) return undefined;
+      const blocks = (message as { content?: unknown }).content;
+      if (!Array.isArray(blocks)) return undefined;
+      return blocks
+        .filter((block): block is { type: string; text: string } =>
+          typeof block === "object" &&
+          block !== null &&
+          (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string",
+        )
+        .map((block) => block.text)
+        .join("");
+    })
+    .filter((text): text is string => text !== undefined && text.length > 0);
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+async function until(predicate: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > 1_000) {
+      throw new Error("timed out waiting for predicate");
+    }
+    await delay(5);
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
