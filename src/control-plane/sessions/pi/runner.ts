@@ -112,6 +112,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
           await handle.session.followUp(text);
+          // Best effort for the losing prompt race: once Pi confirms this turn
+          // is a follow-up, discard overlap events captured by this temporary
+          // subscriber. A pre-rejection event can still escape; in practice that
+          // should be limited to early status frames, while the winning prompt
+          // subscriber owns the full turn and follow-up output.
           becameFollowUp = true;
           queue.length = 0;
           return;
