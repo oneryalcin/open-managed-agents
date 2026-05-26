@@ -252,6 +252,8 @@ B.3 connects the persisted event log to live SSE delivery through `SessionEventB
 - A probe creates an agent, creates a session, posts an event, opens SSE, lists persisted history, tails live events while deduping by ID, drops/reopens the stream, and receives no duplicates.
 - The reconnect probe uses the B.2 `events.list` endpoint plus the B.3 SSE stream. It must force a disconnect-window event and assert it is recovered by `events.list`, not lost. It must also assert no duplicate event IDs, no missing event IDs across the persisted range, and dedupe by `event.id` rather than `processed_at`.
 - A smaller assertion covers `Last-Event-ID` resume as server behavior, without making it the only reconnect contract.
+- `Last-Event-ID` handling is fail-open. Parse only well-formed `sevt_...` values; then verify cursor ownership before using it. If the cursor event is missing or belongs to a different session, drop the cursor and replay from the start of this session instead of returning 400 or silently skipping history.
+- The live-tail test must include a synchronization barrier so it exercises publish/notify wakeup, not just replay. Required shape: seed a sentinel event, open stream, confirm sentinel replay + active subscriber registration, then POST a new event and assert live arrival within timeout.
 - The probe uses the public wire field names from `docs/scope.md`: `agent`, `environment_id`, `page`, `next_page`, and full object responses with `id`.
 - Route handlers stay thin: routes call services, services depend on typed store interfaces, stores own persistence details.
 - `npm test`, `npm run typecheck`, `scratch/05-event-store.ts`, and the new Cycle B probe pass.
