@@ -58,6 +58,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     workspaceId: WorkspaceId,
     sessionId: string,
     input: unknown,
+    opts: { signal?: AbortSignal } = {},
   ): ManagedAgentsEvent[] {
     requireSession(this.sessions, workspaceId, sessionId);
     const req = parseSendRequest(input);
@@ -71,7 +72,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
     // dedupe before B.4 runtime consumers process irreversible actions
     // (notably user.tool_confirmation and user.custom_tool_result).
     persistAndPublish(this.events, this.broadcaster, rows);
-    this.maybeRunRuntimeFromUserMessages(workspaceId, sessionId, req.events);
+    this.maybeRunRuntimeFromUserMessages(
+      workspaceId,
+      sessionId,
+      req.events,
+      opts.signal,
+    );
     return rows.map(toManagedAgentsEvent);
   }
 
@@ -124,6 +130,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     workspaceId: WorkspaceId,
     sessionId: string,
     events: SendSessionEventsRequest["events"],
+    signal: AbortSignal | undefined,
   ): void {
     if (!this.runtimeRunner || !this.runtimeTranslator) return;
     const prompts = events
@@ -132,13 +139,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
       .filter((text): text is string => text !== undefined);
     if (prompts.length === 0) return;
 
-    void this.runRuntimePrompts(workspaceId, sessionId, prompts);
+    void this.runRuntimePrompts(workspaceId, sessionId, prompts, signal);
   }
 
   private async runRuntimePrompts(
     workspaceId: WorkspaceId,
     sessionId: string,
     prompts: string[],
+    signal: AbortSignal | undefined,
   ): Promise<void> {
     if (!this.runtimeRunner || !this.runtimeTranslator) return;
     try {
@@ -147,18 +155,38 @@ export class DefaultSessionEventsService implements SessionEventsService {
           workspaceId,
           sessionId,
           prompt,
+          { signal },
         );
+        let emittedTerminal = false;
         for await (const piEvent of source) {
           const drafts = this.runtimeTranslator(piEvent);
           if (drafts.length === 0) continue;
+          emittedTerminal ||= drafts.some((draft) => isTerminalType(draft.type));
           const now = new Date().toISOString();
           const rows = materializePersistedEvents(sessionId, drafts, now);
           persistAndPublish(this.events, this.broadcaster, rows);
         }
+        if (!emittedTerminal) {
+          this.persistRuntimeDrafts(sessionId, [
+            {
+              type: "session.status_idle",
+              payload: { stop_reason: { type: "end_turn" } },
+            },
+          ]);
+        }
       }
     } catch (error) {
-      console.error("runtime ingestion failed", { sessionId, error });
+      this.persistRuntimeDrafts(sessionId, [runtimeErrorDraft(error)]);
     }
+  }
+
+  private persistRuntimeDrafts(
+    sessionId: string,
+    drafts: readonly EventDraft[],
+  ): void {
+    const now = new Date().toISOString();
+    const rows = materializePersistedEvents(sessionId, drafts, now);
+    persistAndPublish(this.events, this.broadcaster, rows);
   }
 }
 
@@ -312,6 +340,24 @@ function textFromContent(content: ManagedAgentsContentBlock[]): string | undefin
     .join("\n")
     .trim();
   return text.length > 0 ? text : undefined;
+}
+
+function isTerminalType(type: EventDraft["type"]): boolean {
+  return (
+    type === "session.status_idle" ||
+    type === "session.status_rescheduled" ||
+    type === "session.status_terminated" ||
+    type === "session.deleted" ||
+    type === "session.error"
+  );
+}
+
+function runtimeErrorDraft(error: unknown): EventDraft {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    type: "session.error",
+    payload: { message },
+  };
 }
 
 function objectInput(input: unknown): Record<string, unknown> {

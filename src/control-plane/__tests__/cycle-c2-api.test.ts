@@ -82,6 +82,28 @@ describe("Cycle C.2 API", () => {
     expect(runner.prompts).toEqual(["ping"]);
     await reader.cancel();
   });
+
+  it("persists session.error when runtime runner fails", async () => {
+    const fixture = makeFixture(new ThrowingRunner());
+    const session = await setupSession(fixture.app);
+
+    const send = await fixture.app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.message", content: [{ type: "text", text: "boom" }] }],
+      }),
+    });
+    expect(send.status).toBe(200);
+
+    const list = await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc`,
+      (body) => body.data.some((event) => event.type === "session.error"),
+    );
+    const errorEvent = list.data.find((event) => event.type === "session.error");
+    expect(errorEvent?.message).toBe("runtime boom");
+  });
 });
 
 class FakeRunner implements RuntimeEventRunner {
@@ -102,6 +124,17 @@ class FakeRunner implements RuntimeEventRunner {
         stopReason: "stop",
       },
     };
+  }
+}
+
+class ThrowingRunner implements RuntimeEventRunner {
+  async *runUserMessage(
+    _workspaceId: string,
+    _sessionId: string,
+    _text: string,
+  ): AsyncIterable<unknown> {
+    await Promise.resolve();
+    throw new Error("runtime boom");
   }
 }
 

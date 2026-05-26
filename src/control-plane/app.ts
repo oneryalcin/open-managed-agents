@@ -105,6 +105,9 @@ export function createInMemoryControlPlaneApp(): Hono<AppEnv> {
       eventStore,
       sessionStore,
       broadcaster,
+      // C.2 keeps runtime wiring explicit in dedicated constructors/tests.
+      // This default in-memory app stays runtime-dark unless a runner is
+      // intentionally injected by the caller.
     ),
   });
 }
