@@ -70,6 +70,28 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.followUps).toEqual(["two"]);
   });
 
+  it("does not emit duplicate events when two idle sends race into prompt/followUp", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({
+      promptGate: gate.promise,
+      throwAlreadyProcessingAfterFirstPrompt: true,
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await until(() => factory.sessions[0]?.followUps.length === 1);
+    gate.resolve();
+
+    const firstEvents = await first;
+    const secondEvents = await second;
+    expect(messageTexts(firstEvents)).toEqual(["reply: one", "reply: two"]);
+    expect(messageTexts(secondEvents)).toEqual([]);
+  });
+
   it("does not evict an active turn, then disposes after the turn drains and TTL elapses", async () => {
     const gate = deferred<void>();
     const factory = new FakeSessionFactory({ promptGate: gate.promise });
@@ -131,6 +153,7 @@ class FakeSessionFactory {
 interface FakeSessionOptions {
   promptGate?: Promise<void>;
   throwAlreadyProcessingOnce?: boolean;
+  throwAlreadyProcessingAfterFirstPrompt?: boolean;
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
 }
@@ -150,6 +173,14 @@ class FakeSession implements PiRuntimeSession {
     _opts?: { streamingBehavior?: "steer" | "followUp" },
   ): Promise<void> {
     this.prompts.push(text);
+    if (
+      this.opts.throwAlreadyProcessingAfterFirstPrompt === true &&
+      this.prompts.length > 1
+    ) {
+      throw new Error(
+        "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+      );
+    }
     if (
       this.opts.throwAlreadyProcessingOnce === true &&
       this.threwAlreadyProcessing === false
