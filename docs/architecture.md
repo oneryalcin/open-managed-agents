@@ -142,6 +142,18 @@ Managed Agents is fundamentally an **append-only event log**. SSE is the live ta
 
 This is the implementation surface for the reconnect-with-consolidation pattern: on reconnect, the client first attaches a fresh SSE stream (buffering live events from the current point forward), then fetches `events.list` since the last seen ID, then dedupes the consolidated stream by event ID. Attaching the stream first is the gap-safe order; list-first leaves a window where events emitted between list return and stream attach are lost. Without `events.list`, this pattern can't work and any connection drop loses events permanently. `Last-Event-ID` is an additive SSE-level convenience for in-stream resume, not the primary reconnect contract.
 
+### Streaming invariants (B.3 implementation)
+
+These four invariants make the rules above *correct under concurrency*. Each is load-bearing — breaking any one reintroduces a bug that the test suite may not catch, because the failure is timing- or reconnect-dependent. The judgment calls behind two of them (fail-open vs. 400; atomic batch vs. looped publish) are recorded in [ADR 0009](adrs/0009-sse-stream-reconnect-invariants.md).
+
+1. **Persist and notify happen in the same synchronous tick.** `events.send` does `appendBatch(rows)` then `publishPersisted(rows)` with **no `await` between them**. Node is single-threaded; with no suspension point in the gap, no subscriber can register mid-operation and observe a half-applied state. Slipping an `await` in there (e.g. to "clean up" the method) reopens the subscribe-before-replay race — a new subscriber could read history that's missing the just-persisted batch *and* miss the live notify.
+
+2. **Batch append is atomic; fanout writes nothing.** `appendBatch` is a single SQLite transaction (all rows commit or none do — the B.2 guarantee). The broadcaster fanout (`publishPersisted`) only *notifies* already-persisted rows; it performs **zero** DB writes. Do not reintroduce an "append-and-publish" helper that does both: called after `appendBatch` it double-inserts → PRIMARY KEY violation; used instead of `appendBatch` it loops single-row appends → loses batch atomicity.
+
+3. **`Last-Event-ID` is fail-open with a mandatory ownership check.** Parse only well-formed `sevt_…` values. **Before** using one as a resume cursor, verify the cursor event belongs to *this* session. If it's malformed, missing, or from another session → drop it and replay from session start. Never return 400. The ownership check is not optional politeness: IDs are UUIDv7 and sort by time, the store cursor is `id > ?`, so a cursor from a *newer* session is lexically larger and would silently skip this session's real history. Fail-open is safe because `events.list` backfill guarantees no loss; a 400 instead wedges auto-reconnecting clients in a failure loop.
+
+4. **A subscriber is torn down on body-cancel, not only on request-abort.** A live subscriber is a registered in-memory listener; if the client leaves and we don't unregister, listeners accumulate and leak. The SSE route wires a per-stream `AbortController` to **both** the request abort signal **and** `ReadableStream.cancel()` (which also calls `iterator.return()`), so the broadcaster generator's `finally` always runs `removeSubscriber`. The regression test cancels an *idle* stream and asserts the subscriber count returns to zero **without** a later publish — the honest test, because the pre-fix code only cleaned up when the next event happened to arrive.
+
 ## What lives in the sandbox vs. the control plane
 
 | Concern | Sandbox | Control plane |

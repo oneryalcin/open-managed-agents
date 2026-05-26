@@ -40,6 +40,7 @@ The decisions we've already made, with the alternatives we rejected and why:
 - [ADR 0006: One-time supply-chain quarantine override for Pi 0.75.4](adrs/0006-one-time-supply-chain-override-pi-0.75.4.md)
 - [ADR 0007: Borrow Flue's algorithm-level patterns, not the framework](adrs/0007-flue-patterns-we-are-borrowing.md)
 - [ADR 0008: Contract-test patterns — spec-first specs, alignment lints, CI smoke](adrs/0008-contract-test-patterns.md)
+- [ADR 0009: SSE stream reconnect invariants — fail-open cursors, atomic-batch fanout](adrs/0009-sse-stream-reconnect-invariants.md)
 
 ## How this is organized
 
