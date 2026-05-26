@@ -392,6 +392,57 @@ This preserves B.2/B.3 replay and SSE guarantees while Cycle C only adds transla
   - reconnect-with-consolidation still holds
   - translated terminal and error behavior verified
 
+#### Cycle C.2 Plan (implementation gate before coding)
+
+Goal: run live Pi sessions through the existing event-log path without changing B.2/B.3 transport contracts.
+
+**Decision gate (resolved): ADR 0011 correlation-id model**
+
+- [ADR 0011](adrs/0011-tool-correlation-id-model.md) is accepted as Option A.
+- C.2 uses uniform server-stamped `sevt_*` top-level event IDs and preserves Pi `toolu_*` correlation IDs in payload fields.
+- Cycle D implements inbound `sevt_* -> toolu_*` correlation translation for tool-result forwarding.
+
+**C.2 scope (in):**
+
+1. Add concrete `PiSessionRunner` (no new abstraction layers beyond what C.1 already established).
+2. Consume Pi event stream and translate via `translatePiEvent` (C.1).
+3. Persist translated drafts via the same server stamping + append path used by B.2 (`sevt_*`, `processed_at`, atomic append).
+4. Notify live subscribers via existing `publishPersisted` in the same sync tick post-persist.
+5. Keep route wire shapes unchanged (`events.list`, `events.stream`, error envelope).
+
+**C.2 scope (out):**
+
+- Full custom-tool blocking round-trip mechanics (Cycle D).
+- Modal sandbox execution (Cycle E).
+- Permission-policy probing for `evaluated_permission` source (separate targeted probe before D).
+- Stateful runtime continuity keyed by `sesn_*` (tracked as a prerequisite before C.3-live sign-off; see ADR 0012).
+
+**Frozen-layer touch (must be explicit):**
+
+- If C.2 needs runtime ingestion to share server stamping rules with B.2, extract a shared persist+publish helper from current private B.2 service code.
+- This refactor must be behavior-preserving for existing B.2 tests.
+
+**Idempotency risk callout (document, do not solve here):**
+
+- Duplicate `user.message` may trigger duplicate prompts.
+- Duplicate `user.custom_tool_result` may double-resolve pending tool waits.
+- Keep TODO and trace points visible for Cycle D hardening.
+
+**C.2 acceptance checks:**
+
+- Live Pi run emits translated events that persist and appear in both `events.list` and `events.stream`.
+- B.2/B.3 invariants remain intact:
+  - atomic append semantics
+  - persist-before-publish
+  - replay/tail reconnect behavior
+- No wire-shape drift in existing endpoints.
+- `npm test`, `npm run typecheck`, and relevant scratch probes pass.
+
+**C.3 gate carried from C.2:**
+
+- Do not mark C.3 live validation complete while runtime remains per-message cold-start.
+- Before C.3 sign-off, runtime must preserve per-`sesn_*` continuity and serialize turns per session (ADR 0012).
+
 **Cycle C acceptance:**
 
 - A real Pi run emits at least one `agent.message` and terminal session state events through the existing SSE route.

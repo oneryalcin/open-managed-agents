@@ -1,28 +1,35 @@
 import {
-  newEventId,
   type ListSessionEventsResponse,
   type ManagedAgentsContentBlock,
   type ManagedAgentsEvent,
   type ManagedAgentsOpaqueContentBlock,
-  type ManagedAgentsUserEventInput,
   type SendSessionEventsRequest,
 } from "../../types/events.ts";
-import { isJsonObject, isJsonValue, type JsonValue } from "../../types/json.ts";
+import {
+  isJsonObject,
+  isJsonValue,
+  type JsonObject,
+  type JsonValue,
+} from "../../types/json.ts";
 import { invalidRequest, notFound } from "../errors.ts";
 import type { SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
+import { MAX_EVENTS_PER_REQUEST } from "./constants.ts";
+import {
+  materializePersistedEvents,
+  persistAndPublish,
+  type EventDraft,
+} from "./persist.ts";
 import type {
   ListSessionEventsOptions,
-  PersistedSessionEvent,
+  RuntimeEventRunner,
+  RuntimeEventTranslator,
   SessionEventBroadcaster,
   SessionEventStore,
   SessionEventsService,
   StreamSessionEventsOptions,
 } from "./types.ts";
 import { toManagedAgentsEvent } from "./types.ts";
-
-export const MAX_EVENTS_PER_REQUEST = 200;
-export const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
 
 const SUPPORTED_USER_EVENT_TYPES = new Set([
   "user.message",
@@ -31,30 +38,46 @@ const SUPPORTED_USER_EVENT_TYPES = new Set([
 ] as const);
 
 export class DefaultSessionEventsService implements SessionEventsService {
+  private readonly runtimeRunner: RuntimeEventRunner | undefined;
+  private readonly runtimeTranslator: RuntimeEventTranslator | undefined;
+
   constructor(
     private readonly events: SessionEventStore,
     private readonly sessions: SessionStore,
     private readonly broadcaster: SessionEventBroadcaster,
-  ) {}
+    runtime?: {
+      runner: RuntimeEventRunner;
+      translate: RuntimeEventTranslator;
+    },
+  ) {
+    this.runtimeRunner = runtime?.runner;
+    this.runtimeTranslator = runtime?.translate;
+  }
 
   send(
     workspaceId: WorkspaceId,
     sessionId: string,
     input: unknown,
+    opts: { signal?: AbortSignal } = {},
   ): ManagedAgentsEvent[] {
     requireSession(this.sessions, workspaceId, sessionId);
     const req = parseSendRequest(input);
     const now = new Date().toISOString();
-    const rows = req.events.map((event) =>
-      toPersistedEvent(sessionId, event, now),
-    );
+    const drafts: EventDraft[] = req.events.map((event) => ({
+      type: event.type,
+      payload: eventPayload(event),
+    }));
+    const rows = materializePersistedEvents(sessionId, drafts, now);
     // TODO(idempotency): events.send is non-idempotent in B.2. Add request-level
     // dedupe before B.4 runtime consumers process irreversible actions
     // (notably user.tool_confirmation and user.custom_tool_result).
-    // Keep persist-then-notify in the same sync tick. Do not `await` between
-    // appendBatch and publishPersisted; that would open a replay gap.
-    this.events.appendBatch(rows);
-    this.broadcaster.publishPersisted(rows);
+    persistAndPublish(this.events, this.broadcaster, rows);
+    this.maybeRunRuntimeFromUserMessages(
+      workspaceId,
+      sessionId,
+      req.events,
+      opts.signal,
+    );
     return rows.map(toManagedAgentsEvent);
   }
 
@@ -101,6 +124,70 @@ export class DefaultSessionEventsService implements SessionEventsService {
       return undefined;
     }
     return lastEventId;
+  }
+
+  private maybeRunRuntimeFromUserMessages(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    events: SendSessionEventsRequest["events"],
+    signal: AbortSignal | undefined,
+  ): void {
+    if (!this.runtimeRunner || !this.runtimeTranslator) return;
+    const prompts = events
+      .filter((event) => event.type === "user.message")
+      .map((event) => textFromContent(event.content))
+      .filter((text): text is string => text !== undefined);
+    if (prompts.length === 0) return;
+
+    void this.runRuntimePrompts(workspaceId, sessionId, prompts, signal);
+  }
+
+  private async runRuntimePrompts(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    prompts: string[],
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    if (!this.runtimeRunner || !this.runtimeTranslator) return;
+    try {
+      for (const prompt of prompts) {
+        const source = this.runtimeRunner.runUserMessage(
+          workspaceId,
+          sessionId,
+          prompt,
+          { signal },
+        );
+        let emittedTerminal = false;
+        for await (const piEvent of source) {
+          const drafts = this.runtimeTranslator(piEvent);
+          if (drafts.length === 0) continue;
+          emittedTerminal ||= drafts.some((draft) => isTerminalType(draft.type));
+          const now = new Date().toISOString();
+          const rows = materializePersistedEvents(sessionId, drafts, now);
+          persistAndPublish(this.events, this.broadcaster, rows);
+        }
+        if (!emittedTerminal) {
+          this.persistRuntimeDrafts(sessionId, [
+            {
+              type: "session.status_idle",
+              payload: { stop_reason: { type: "end_turn" } },
+            },
+          ]);
+        }
+      }
+    } catch (error) {
+      console.error("runtime ingestion failed", { sessionId, error });
+      this.persistRuntimeDrafts(sessionId, [runtimeErrorDraft(error)]);
+    }
+  }
+
+  private persistRuntimeDrafts(
+    sessionId: string,
+    drafts: readonly EventDraft[],
+  ): void {
+    const now = new Date().toISOString();
+    const rows = materializePersistedEvents(sessionId, drafts, now);
+    persistAndPublish(this.events, this.broadcaster, rows);
   }
 }
 
@@ -242,25 +329,35 @@ function parseContentBlock(
   return block as ManagedAgentsOpaqueContentBlock;
 }
 
-function toPersistedEvent(
-  sessionId: string,
-  event: ManagedAgentsUserEventInput,
-  now: string,
-): PersistedSessionEvent {
-  const { type, ...payload } = event;
-  const payloadJson = JSON.stringify(payload);
-  if (new TextEncoder().encode(payloadJson).byteLength > MAX_EVENT_PAYLOAD_BYTES) {
-    throw invalidRequest(
-      `Serialized event payload exceeds ${MAX_EVENT_PAYLOAD_BYTES} bytes`,
-    );
-  }
+function eventPayload(event: SendSessionEventsRequest["events"][number]): JsonObject {
+  const { type: _type, ...payload } = event;
+  return payload as Record<string, JsonValue>;
+}
+
+function textFromContent(content: ManagedAgentsContentBlock[]): string | undefined {
+  const text = content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+  return text.length > 0 ? text : undefined;
+}
+
+function isTerminalType(type: EventDraft["type"]): boolean {
+  return (
+    type === "session.status_idle" ||
+    type === "session.status_rescheduled" ||
+    type === "session.status_terminated" ||
+    type === "session.deleted" ||
+    type === "session.error"
+  );
+}
+
+function runtimeErrorDraft(error: unknown): EventDraft {
+  const message = "Runtime execution failed";
   return {
-    id: newEventId(),
-    session_id: sessionId,
-    type,
-    processed_at: now,
-    payload: payload as Record<string, JsonValue>,
-    created_at: now,
+    type: "session.error",
+    payload: { message },
   };
 }
 

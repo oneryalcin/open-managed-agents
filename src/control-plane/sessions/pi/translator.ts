@@ -9,6 +9,9 @@ export interface EventDraft {
 export function translatePiEvent(input: unknown): EventDraft[] {
   if (!isObject(input)) return [];
   const type = typeof input.type === "string" ? input.type : "";
+  if (type === "agent_start") {
+    return [{ type: "session.status_running", payload: {} }];
+  }
   if (type === "message_end") {
     return translateMessageEnd(input);
   }

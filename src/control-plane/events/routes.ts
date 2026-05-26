@@ -19,7 +19,9 @@ export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv>
     const body = await parseJsonBody(c.req);
     return c.json(
       {
-        data: service.send(DEFAULT_WORKSPACE_ID, sessionId, body),
+        data: service.send(DEFAULT_WORKSPACE_ID, sessionId, body, {
+          signal: c.req.raw.signal,
+        }),
       },
       200,
     );

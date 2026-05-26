@@ -76,6 +76,7 @@ export interface SessionEventsService {
     workspaceId: WorkspaceId,
     sessionId: string,
     input: unknown,
+    opts?: { signal?: AbortSignal },
   ): ManagedAgentsEvent[];
   list(
     workspaceId: WorkspaceId,
@@ -88,6 +89,19 @@ export interface SessionEventsService {
     opts?: StreamSessionEventsOptions,
   ): AsyncIterable<ManagedAgentsEvent>;
 }
+
+export interface RuntimeEventRunner {
+  runUserMessage(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    text: string,
+    opts?: { signal?: AbortSignal },
+  ): AsyncIterable<unknown>;
+}
+
+export type RuntimeEventTranslator = (
+  event: unknown,
+) => Array<{ type: EventType; payload: JsonObject }>;
 
 export function toManagedAgentsEvent(
   event: PersistedSessionEvent,

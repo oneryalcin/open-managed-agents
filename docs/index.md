@@ -43,6 +43,7 @@ The decisions we've already made, with the alternatives we rejected and why:
 - [ADR 0009: SSE stream reconnect invariants — fail-open cursors, atomic-batch fanout](adrs/0009-sse-stream-reconnect-invariants.md)
 - [ADR 0010: Cassette strategy for Pi translation](adrs/0010-cassette-strategy-for-pi-translation.md)
 - [ADR 0011: Tool correlation ID model (`sevt_*` vs `toolu_*`)](adrs/0011-tool-correlation-id-model.md)
+- [ADR 0012: Session continuity keyed by `sesn_*` before C.3 live validation](adrs/0012-session-continuity-before-c3-live.md)
 
 ## How this is organized
 

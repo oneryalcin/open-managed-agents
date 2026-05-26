@@ -1,0 +1,3 @@
+export const MAX_EVENTS_PER_REQUEST = 200;
+export const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
+
