@@ -347,6 +347,7 @@ This preserves B.2/B.3 replay and SSE guarantees while Cycle C only adds transla
 - Pin:
   - mapping of Pi runtime status transitions to persisted session status events (including stop reasons where present, including known deferred statuses like `session.status_rescheduled`)
   - tool-thrown errors map to persisted tool-result style events with error semantics (`is_error: true`), not stream-only transport failure
+  - preserve `evaluated_permission` on persisted tool-use style events; Cycle D confirmation gating depends on replaying this field from the event log
   - abort behavior from Probe 02 must be represented in persisted events and recoverable via list/stream replay
   - `session.deleted` is recognized terminal vocabulary in mapping table (even if not emitted in MVP probe trajectories)
 
