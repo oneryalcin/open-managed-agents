@@ -3,6 +3,7 @@ import {
   type ManagedAgentsContentBlock,
   type ManagedAgentsEvent,
   type ManagedAgentsOpaqueContentBlock,
+  type ManagedAgentsUserCustomToolResultEventInput,
   type SendSessionEventsRequest,
 } from "../../types/events.ts";
 import {
@@ -22,6 +23,7 @@ import {
 } from "./persist.ts";
 import type {
   ListSessionEventsOptions,
+  RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
   RuntimeEventTranslator,
   SessionEventBroadcaster,
@@ -40,6 +42,13 @@ const SUPPORTED_USER_EVENT_TYPES = new Set([
 export class DefaultSessionEventsService implements SessionEventsService {
   private readonly runtimeRunner: RuntimeEventRunner | undefined;
   private readonly runtimeTranslator: RuntimeEventTranslator | undefined;
+  private readonly pendingCustomToolActions = new Map<
+    string,
+    {
+      ids: string[];
+      timer: ReturnType<typeof setTimeout> | undefined;
+    }
+  >();
 
   constructor(
     private readonly events: SessionEventStore,
@@ -62,6 +71,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): ManagedAgentsEvent[] {
     requireSession(this.sessions, workspaceId, sessionId);
     const req = parseSendRequest(input);
+    const customToolResultClaims = this.claimCustomToolResults(
+      workspaceId,
+      sessionId,
+      req.events,
+    );
     const now = new Date().toISOString();
     const drafts: EventDraft[] = req.events.map((event) => ({
       type: event.type,
@@ -72,6 +86,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
     // dedupe before B.4 runtime consumers process irreversible actions
     // (notably user.tool_confirmation and user.custom_tool_result).
     persistAndPublish(this.events, this.broadcaster, rows);
+    if (customToolResultClaims.length > 0) {
+      for (const { customToolUseId } of customToolResultClaims) {
+        this.removePendingCustomToolAction(sessionId, customToolUseId);
+      }
+      this.persistRuntimeDrafts(sessionId, [
+        { type: "session.status_running", payload: {} },
+      ]);
+      for (const { commit } of customToolResultClaims) commit();
+      this.flushPendingCustomToolActions(sessionId);
+    }
     this.maybeRunRuntimeFromUserMessages(
       workspaceId,
       sessionId,
@@ -158,7 +182,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
           { signal },
         );
         for await (const piEvent of source) {
-          const drafts = this.runtimeTranslator(piEvent);
+          if (isRuntimeCustomToolUseEvent(piEvent)) {
+            this.persistCustomToolUse(sessionId, piEvent);
+            continue;
+          }
+          const drafts = this.runtimeTranslator(piEvent, {
+            customToolNames: this.runtimeRunner.customToolNames?.(
+              workspaceId,
+              sessionId,
+            ),
+          });
           if (drafts.length === 0) continue;
           const now = new Date().toISOString();
           const rows = materializePersistedEvents(sessionId, drafts, now);
@@ -178,6 +211,118 @@ export class DefaultSessionEventsService implements SessionEventsService {
     const now = new Date().toISOString();
     const rows = materializePersistedEvents(sessionId, drafts, now);
     persistAndPublish(this.events, this.broadcaster, rows);
+  }
+
+  private persistCustomToolUse(
+    sessionId: string,
+    event: RuntimeCustomToolUseEvent,
+  ): void {
+    const now = new Date().toISOString();
+    const useRows = materializePersistedEvents(
+      sessionId,
+      [
+        {
+          type: "agent.custom_tool_use",
+          payload: {
+            name: event.name,
+            input: event.input,
+          },
+        },
+      ],
+      now,
+    );
+    try {
+      event.bindCustomToolUseId(useRows[0].id, () => {
+        this.removePendingCustomToolAction(sessionId, useRows[0].id);
+      });
+      persistAndPublish(this.events, this.broadcaster, useRows);
+      this.addPendingCustomToolAction(sessionId, useRows[0].id);
+    } catch (error) {
+      event.rejectCustomToolUse(toError(error));
+      throw error;
+    }
+  }
+
+  private claimCustomToolResults(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    events: SendSessionEventsRequest["events"],
+  ): Array<{ customToolUseId: string; commit: () => void }> {
+    const commits: Array<{ customToolUseId: string; commit: () => void }> = [];
+    for (const event of events) {
+      if (event.type !== "user.custom_tool_result") continue;
+      const commit = this.runtimeRunner?.claimCustomToolResult?.(
+        workspaceId,
+        sessionId,
+        event,
+      );
+      if (!commit && this.runtimeRunner?.claimCustomToolResult) {
+        throw notFound(`No pending custom tool call: ${event.custom_tool_use_id}`);
+      }
+      if (commit) {
+        commits.push({
+          customToolUseId: event.custom_tool_use_id,
+          commit,
+        });
+      }
+    }
+    return commits;
+  }
+
+  private addPendingCustomToolAction(
+    sessionId: string,
+    customToolUseId: string,
+  ): void {
+    let pending = this.pendingCustomToolActions.get(sessionId);
+    if (!pending) {
+      pending = { ids: [], timer: undefined };
+      this.pendingCustomToolActions.set(sessionId, pending);
+    }
+    pending.ids.push(customToolUseId);
+    if (pending.timer) return;
+    // Pi may emit parallel custom-tool calls back-to-back in one runtime burst.
+    // Defer the idle by one macrotask so those calls coalesce into one
+    // requires_action event. If another tool arrives later, we re-emit
+    // requires_action with the full remaining pending set.
+    pending.timer = setTimeout(() => {
+      this.flushPendingCustomToolActions(sessionId);
+    }, 0);
+  }
+
+  private removePendingCustomToolAction(
+    sessionId: string,
+    customToolUseId: string,
+  ): void {
+    const pending = this.pendingCustomToolActions.get(sessionId);
+    if (!pending) return;
+    pending.ids = pending.ids.filter((id) => id !== customToolUseId);
+    if (pending.ids.length === 0 && pending.timer === undefined) {
+      this.pendingCustomToolActions.delete(sessionId);
+    }
+  }
+
+  private flushPendingCustomToolActions(sessionId: string): void {
+    const pending = this.pendingCustomToolActions.get(sessionId);
+    if (!pending) return;
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+      pending.timer = undefined;
+    }
+    if (pending.ids.length === 0) {
+      this.pendingCustomToolActions.delete(sessionId);
+      return;
+    }
+    this.persistRuntimeDrafts(sessionId, [
+      {
+        type: "session.status_idle",
+        payload: {
+          stop_reason: {
+            type: "requires_action",
+            event_ids: [...pending.ids],
+          },
+        },
+      },
+    ]);
   }
 }
 
@@ -249,6 +394,7 @@ function parseUserEvent(
               `events[${index}].content`,
             ),
           }),
+      ...optionalBooleanSpread(event.is_error, `events[${index}].is_error`),
     };
   }
   const toolUseId = nonEmptyString(
@@ -324,6 +470,15 @@ function eventPayload(event: SendSessionEventsRequest["events"][number]): JsonOb
   return payload as Record<string, JsonValue>;
 }
 
+function optionalBooleanSpread(
+  value: unknown,
+  field: string,
+): { is_error?: boolean } {
+  if (value === undefined) return {};
+  if (typeof value === "boolean") return { is_error: value };
+  throw invalidRequest(`\`${field}\` must be a boolean`);
+}
+
 function textFromContent(content: ManagedAgentsContentBlock[]): string | undefined {
   const text = content
     .filter((block): block is { type: "text"; text: string } => block.type === "text")
@@ -341,6 +496,24 @@ function runtimeErrorDraft(error: unknown): EventDraft {
   };
 }
 
+function isRuntimeCustomToolUseEvent(
+  event: unknown,
+): event is RuntimeCustomToolUseEvent {
+  if (!isObjectRecord(event)) return false;
+  return (
+    event.type === "oma.custom_tool_use" &&
+    typeof event.piToolCallId === "string" &&
+    typeof event.name === "string" &&
+    isJsonObject(event.input) &&
+    typeof event.bindCustomToolUseId === "function" &&
+    typeof event.rejectCustomToolUse === "function"
+  );
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function objectInput(input: unknown): Record<string, unknown> {
   if (!isJsonObject(input)) {
     throw invalidRequest("Request body must be a JSON object");
@@ -351,4 +524,8 @@ function objectInput(input: unknown): Record<string, unknown> {
 function nonEmptyString(value: unknown, field: string): string {
   if (typeof value === "string" && value.length > 0) return value;
   throw invalidRequest(`\`${field}\` must be a non-empty string`);
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

@@ -555,16 +555,37 @@ with no loss and no duplicate IDs.
 
 Goal: prove the blocking custom-tool protocol from ADR 0005 end to end.
 
-Scope:
+Status: implementation slice in progress on `feat/cycle-d-custom-tool-probe`.
+
+Evidence captured:
+
+- `scratch/15-d-custom-tool-capability.ts` confirms Pi custom tools are blocking async functions: `execute()` is called with a Pi `toolu_*`, `tool_execution_start` is emitted before the external result, `tool_execution_end` is emitted after the result, and the model observes the external result.
+- The permission-policy path is separate from custom tools in the observed SDK behavior: the `tool_call` hook can block execution before `execute()` runs, and no `evaluated_permission` payload field appeared in the captured Pi event stream.
+- `scratch/16-d-custom-tool-roundtrip.ts` proves the public Managed Agents round trip through the API: `user.message -> agent.custom_tool_use -> session.status_idle{requires_action} -> user.custom_tool_result -> session.status_running -> agent.message -> session.status_idle{end_turn}`. Stream IDs match `events.list` exactly with no duplicates.
+- `scratch/17-d-custom-tool-parallel.ts` confirms Pi can enter multiple custom-tool waits before any result is supplied. The public API aggregates those into one `requires_action.event_ids` array and, after a partial result, re-emits `requires_action` with the remaining ID.
+- `scratch/18-d-custom-tool-error.ts` confirms returned `{isError:true}` is not enough for Pi's emitted tool-result error flags. Cycle D maps `user.custom_tool_result.is_error` to a thrown Pi tool error using the submitted text content.
+
+Implemented scope:
 
 - Maintain the pending-call map for `agent.custom_tool_use`.
-- Synthesize `session.status_idle{stop_reason:{type:"requires_action", event_ids:[...]}}`.
+- Synthesize aggregate `session.status_idle{stop_reason:{type:"requires_action", event_ids:[...]}}` for all currently pending custom-tool uses.
 - Accept `user.custom_tool_result` carrying `custom_tool_use_id`.
 - Resume the Pi session and finish with `session.status_idle{stop_reason:{type:"end_turn"}}`.
 
+Deferred:
+
+- Request-level idempotency. Duplicate `user.custom_tool_result` handling is still non-idempotent at the API boundary, though a result with no pending runtime call is rejected.
+- Permission-gated built-in/MCP tools (`user.tool_confirmation`) and the source path for `evaluated_permission`.
+- Durable pending-call recovery after process crash or horizontal process handoff.
+- Structured multi-block error payload preservation for `user.custom_tool_result.is_error`.
+
 Acceptance:
 
-- A probe starts a real session, receives a custom-tool request, submits a result, and sees the session finish.
+- Deterministic service tests cover `agent.custom_tool_use`, aggregate `requires_action`, partial-result re-emission with remaining IDs, accepted result, runtime resume, and missing-pending-call rejection.
+- Bridge tests cover timeout, abort, service-persistence failure, and `is_error:true` cleanup/error behavior.
+- A live probe starts a real session, receives a custom-tool request, submits a result, and sees the session finish.
+- Live probes cover both a single custom-tool round trip and a parallel two-custom-tool wait.
+- Live error probe records the Pi `isError:true` return-shape limitation.
 - The emitted IDs round-trip through `events.list` and `events.stream`.
 
 ### Cycle E — Modal Sandbox

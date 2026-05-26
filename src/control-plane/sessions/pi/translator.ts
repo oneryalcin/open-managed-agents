@@ -1,22 +1,26 @@
 import type { EventType } from "../../../types/events.ts";
 import type { JsonObject } from "../../../types/json.ts";
+import type { RuntimeTranslatorContext } from "../../events/types.ts";
 
 export interface EventDraft {
   type: EventType;
   payload: JsonObject;
 }
 
-export function translatePiEvent(input: unknown): EventDraft[] {
+export function translatePiEvent(
+  input: unknown,
+  context: RuntimeTranslatorContext = {},
+): EventDraft[] {
   if (!isObject(input)) return [];
   const type = typeof input.type === "string" ? input.type : "";
   if (type === "agent_start") {
     return [{ type: "session.status_running", payload: {} }];
   }
   if (type === "message_end") {
-    return translateMessageEnd(input);
+    return translateMessageEnd(input, context);
   }
   if (type === "tool_execution_end") {
-    return translateToolExecutionEnd(input);
+    return translateToolExecutionEnd(input, context);
   }
   if (type === "agent_end") {
     return translateAgentEnd(input);
@@ -24,7 +28,10 @@ export function translatePiEvent(input: unknown): EventDraft[] {
   return [];
 }
 
-function translateMessageEnd(event: JsonObject): EventDraft[] {
+function translateMessageEnd(
+  event: JsonObject,
+  context: RuntimeTranslatorContext,
+): EventDraft[] {
   if (!isObject(event.message)) return [];
   const message = event.message;
   const role = typeof message.role === "string" ? message.role : "";
@@ -51,11 +58,9 @@ function translateMessageEnd(event: JsonObject): EventDraft[] {
     const name = typeof block.name === "string" ? block.name : undefined;
     const args = isObject(block.arguments) ? block.arguments : {};
     if (!toolUseId || !name) continue;
-    // Open C.2/D decision: keep Pi's toolu_* correlation key in payload as
-    // tool_use_id while event IDs remain server-assigned sevt_*.
-    // The final correlation-id model (uniform sevt_* + inbound translation
-    // vs. toolu_* as event id for tool-use events) is resolved with runtime
-    // ingestion + custom-tool round-trip wiring.
+    if (context.customToolNames?.has(name)) continue;
+    // ADR 0011: event IDs stay server-assigned sevt_*; Pi's toolu_* remains
+    // payload correlation data and inbound handling translates as needed.
     const payload: JsonObject = {
       tool_use_id: toolUseId,
       name,
@@ -67,7 +72,16 @@ function translateMessageEnd(event: JsonObject): EventDraft[] {
   return drafts;
 }
 
-function translateToolExecutionEnd(event: JsonObject): EventDraft[] {
+function translateToolExecutionEnd(
+  event: JsonObject,
+  context: RuntimeTranslatorContext,
+): EventDraft[] {
+  const toolName =
+    typeof event.toolName === "string" && event.toolName.length > 0
+      ? event.toolName
+      : undefined;
+  if (toolName && context.customToolNames?.has(toolName)) return [];
+
   const toolUseId =
     typeof event.toolCallId === "string" && event.toolCallId.length > 0
       ? event.toolCallId

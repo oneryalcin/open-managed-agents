@@ -1,0 +1,38 @@
+{
+  "generated_at": "2026-05-26T22:36:00.827Z",
+  "session_id": "sesn_019e666e-1ebf-77f3-a2d0-97d638aa4843",
+  "first_requires_action_event_count": 6,
+  "first_window_custom_tool_count": 2,
+  "first_window_requires_action_count": 1,
+  "entered_parallel_wait": true,
+  "later_custom_tool_count": 0,
+  "custom_tool_names": [
+    "ask_alpha",
+    "ask_beta"
+  ],
+  "requires_action_event_ids": [
+    [
+      "sevt_019e666e-24d9-7225-a87b-cae136827cc1",
+      "sevt_019e666e-24d9-7226-832e-71cec7ed44a4"
+    ],
+    [
+      "sevt_019e666e-24d9-7226-832e-71cec7ed44a4"
+    ]
+  ],
+  "final_event_types": [
+    "user.message",
+    "session.status_running",
+    "agent.message",
+    "agent.custom_tool_use",
+    "agent.custom_tool_use",
+    "session.status_idle",
+    "user.custom_tool_result",
+    "session.status_running",
+    "session.status_idle",
+    "user.custom_tool_result",
+    "session.status_running",
+    "agent.message",
+    "session.status_idle"
+  ],
+  "verdict": "PASS"
+}

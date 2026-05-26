@@ -76,9 +76,9 @@ function handleCustomToolResult(event: UserCustomToolResultEvent) {
   clearTimeout(pending.timer);
   pendingToolCalls.delete(event.custom_tool_use_id);
   if (event.is_error) {
-    pending.resolve({ isError: true, content: event.content });  // surface to model, don't reject
+    pending.reject(new Error(textFromContent(event.content)));  // Pi's proven error path
   } else {
-    pending.resolve({ isError: false, content: event.content });
+    pending.resolve({ content: event.content });
   }
 }
 ```
@@ -90,7 +90,7 @@ function handleCustomToolResult(event: UserCustomToolResultEvent) {
 - **Concurrency is free.** Multiple custom tools can be in-flight in one session (e.g., parallel `agent.custom_tool_use` calls from one assistant turn). The Map handles this naturally — one entry per `toolUseId`.
 - **Same shape as MCP** (post-MVP). When we add MCP tool support, MCP tools are *also* async functions Pi awaits. The mental model carries over.
 - **Horizontal scaling caveat.** A session is bound to one control-plane process for the duration of any in-flight tool call. To scale horizontally, we need sticky session routing or externalize the pending-call map (Redis, Postgres). Not MVP.
-- **Error semantics.** When a tool result has `is_error: true`, we resolve (not reject) the Promise with `{isError: true, content}`. Pi's tool layer is responsible for surfacing it to the model. Rejecting the Promise might cause Pi to retry or abort — undesired.
+- **Error semantics.** When a tool result has `is_error: true`, reject the Promise with an `Error` whose message comes from the submitted text content. Probe 18 showed that returning `{isError: true}` preserves `result.isError` inside the raw `tool_execution_end.result`, but Pi still emits the top-level `tool_execution_end.isError` and `toolResult.message.isError` as `false`. Throwing is the observed path that marks the tool result as failed.
 
 ## Alternatives considered
 
@@ -135,7 +135,7 @@ async execute(toolCallId, params, signal, onUpdate, ctx) {
 }
 ```
 
-**Result shape:** `execute` returns `{ content: (TextContent | ImageContent)[], details: unknown, isError?: boolean, terminate?: boolean }`. Errors are signaled via `{ isError: true }` on the result.
+**Result shape:** `execute` returns `{ content: (TextContent | ImageContent)[], details: unknown, isError?: boolean, terminate?: boolean }`. Earlier probes suggested errors could be signaled via `{ isError: true }` on the result; Probe 18 later narrowed that (see below).
 
 **Throwing from `execute` — CONFIRMED via Probe 03 (`scratch/03-throw.ts`).** Pi catches the thrown `Error` and surfaces it to the model as a `toolResult` message with `isError: true`, where `content[0].text === error.message`. Pi does NOT retry; the model decides based on its system prompt and the error content. `session.prompt()` resolves normally.
 
@@ -144,7 +144,7 @@ async execute(toolCallId, params, signal, onUpdate, ctx) {
 1. **Throw** — Pi catches, sets `isError: true`, uses `error.message` as the single-text-block content. Simple but loses control of content shape.
 2. **Return** `{ content: [...], details: {}, isError: true }` — explicit error result with structured content (multi-block possible).
 
-For the Managed Agents bridge specifically: when the API caller posts `user.custom_tool_result` with `is_error: true`, our `execute()` body **should resolve the Promise with `{content: event.content, details: {}, isError: true}` (path 2), not reject it**. Rejecting works (Pi catches) but loses the structured content from the API caller. Reserve path 1 (throw) for genuinely unexpected exceptions inside our handler — e.g., the Promise resolver got cleared but the tool body still ran.
+**Superseded for the Managed Agents bridge by Probe 18.** For API-submitted `user.custom_tool_result.is_error === true`, use path 1 (throw) so Pi marks the tool result as failed. This loses multi-block structured content as a first-class Pi result, but it preserves the caller-visible error semantics. Path 2 is not reliable for the observed Pi event/message error flags.
 
 **Abort propagation: CONFIRMED via Probe 02 (`scratch/02-abort.ts`).** `session.abort()` fires `AbortSignal.abort` on the signal passed to `execute()` within ~1ms. `tool_execution_end` and `agent_end` events fire after abort. `session.prompt()` resolves rather than throws. `session.isStreaming` returns to `false`. The pattern in this ADR is correct as written.
 
@@ -220,3 +220,31 @@ The blocking-async pattern from this ADR is unchanged. The registration ceremony
 Defensive guard recommended — see ADR body. Empirically (Probe 02), `signal` was always defined in our runs, but the type allows `undefined`. Don't rely on it being defined.
 
 **Permission gating (`always_ask`) is a separate hook.** `AgentLoopConfig.beforeToolCall(ctx)` returns `{ block?: boolean, reason?: string }`. Also exposed at the extension level via `pi.on("tool_call", ...)`. This is where Managed Agents `permission_policy: "always_ask"` plugs in — different code path from custom tools.
+
+## Findings (Cycle D implementation, 2026-05-26)
+
+Cycle D implemented this ADR's blocking-async pattern against the public event log.
+
+The durable runtime boundary is:
+
+1. `PiCustomToolBridge` creates Pi `customTools` whose `execute(toolCallId, params, signal)` returns a Promise.
+2. The bridge emits an internal runtime event when Pi enters `execute()`.
+3. `DefaultSessionEventsService` materializes that internal event as a persisted `agent.custom_tool_use`, using the server-stamped `sevt_*` event ID as the public `custom_tool_use_id`.
+4. The service coalesces all currently pending custom-tool use IDs for the session and persists `session.status_idle{stop_reason:{type:"requires_action", event_ids:[...]}}`.
+5. When the caller posts `user.custom_tool_result.custom_tool_use_id`, the service first claims the pending runtime call, persists the user result, emits `session.status_running`, then resolves the Pi Promise. If other custom-tool waits remain, it re-emits `session.status_idle{requires_action}` with only the remaining IDs.
+
+This keeps ADR 0011's uniform event-ID model intact: Pi's `toolu_*` remains internal bridge state for custom tools. Public clients only see and echo the server `sevt_*` ID from `agent.custom_tool_use.id`.
+
+Evidence:
+
+- `scratch/15-d-custom-tool-capability.ts` confirmed Pi blocks inside `execute()` until an external Promise resolves and does not expose `evaluated_permission` in the observed custom-tool event stream.
+- `scratch/16-d-custom-tool-roundtrip.ts` confirmed the full public API path through `/events`, `/events/stream`, `agent.custom_tool_use`, `requires_action`, `user.custom_tool_result`, resumed Pi output, and final `end_turn` idle.
+- `scratch/17-d-custom-tool-parallel.ts` confirmed Pi can enter multiple custom-tool waits before any result is supplied. The public bridge aggregates their `sevt_*` IDs into a single `requires_action.event_ids` array and re-emits a remainder idle after partial resolution.
+- `scratch/18-d-custom-tool-error.ts` confirmed returning `{isError: true}` from a custom tool is insufficient for Pi's top-level/toolResult error flags: raw `tool_execution_end.result.isError` was `true`, but `tool_execution_end.isError` and the emitted `toolResult.message.isError` were `false`. Cycle D therefore throws for `user.custom_tool_result.is_error === true`.
+
+Still deferred:
+
+- Durable pending-call recovery across process crash or horizontal handoff.
+- Request-level idempotency for duplicate `user.custom_tool_result`.
+- Structured multi-block error payload preservation for `is_error:true`; Cycle D preserves text as the thrown error message.
+- Permission-gated built-in/MCP tool confirmation (`user.tool_confirmation`) and the source path for `evaluated_permission`.
