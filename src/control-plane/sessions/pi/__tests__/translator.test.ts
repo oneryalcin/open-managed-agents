@@ -25,6 +25,7 @@ describe("Pi translator (Cycle C.1)", () => {
     ]);
     expect(drafts[0]?.payload.tool_use_id).toEqual(expect.stringMatching(/^toolu_/));
     expect(drafts[0]?.payload.name).toBe("ask_me");
+    expect(drafts[1]?.payload.tool_use_id).toBe(drafts[0]?.payload.tool_use_id);
     expect(drafts[1]?.payload.is_error).toBe(false);
     expect(drafts[2]?.payload.content).toEqual([
       { type: "text", text: "The phrase is: **PROBE_10_TOOL_CALL_OK**" },
@@ -49,16 +50,16 @@ describe("Pi translator (Cycle C.1)", () => {
     ]);
   });
 
-  it("maps abort to tool_use, error tool_result, then terminated(aborted)", () => {
+  it("maps abort to tool_use, error tool_result, then idle", () => {
     const drafts = translateScenario("abort");
     expect(types(drafts)).toEqual([
       "agent.tool_use",
       "agent.tool_result",
-      "session.status_terminated",
+      "session.status_idle",
     ]);
+    expect(drafts[1]?.payload.tool_use_id).toBe(drafts[0]?.payload.tool_use_id);
     expect(drafts[1]?.payload.is_error).toBe(true);
-    expect(drafts[2]?.payload.reason).toBe("aborted");
-    expect(drafts[2]?.payload.error_message).toBe("Request was aborted.");
+    expect(drafts[2]?.payload.stop_reason).toEqual({ type: "end_turn" });
   });
 });
 

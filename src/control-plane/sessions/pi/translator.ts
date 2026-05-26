@@ -6,52 +6,22 @@ export interface EventDraft {
   payload: JsonObject;
 }
 
-interface PiEventBase {
-  type?: unknown;
-}
-
-interface PiMessageEndEvent extends PiEventBase {
-  type: "message_end";
-  message?: {
-    role?: unknown;
-    content?: unknown;
-    stopReason?: unknown;
-    errorMessage?: unknown;
-  };
-}
-
-interface PiToolExecutionEndEvent extends PiEventBase {
-  type: "tool_execution_end";
-  toolCallId?: unknown;
-  toolName?: unknown;
-  result?: {
-    content?: unknown;
-    details?: unknown;
-  };
-  isError?: unknown;
-}
-
-interface PiAgentEndEvent extends PiEventBase {
-  type: "agent_end";
-  willRetry?: unknown;
-}
-
 export function translatePiEvent(input: unknown): EventDraft[] {
   if (!isObject(input)) return [];
   const type = typeof input.type === "string" ? input.type : "";
   if (type === "message_end") {
-    return translateMessageEnd(input as unknown as PiMessageEndEvent);
+    return translateMessageEnd(input);
   }
   if (type === "tool_execution_end") {
-    return translateToolExecutionEnd(input as unknown as PiToolExecutionEndEvent);
+    return translateToolExecutionEnd(input);
   }
   if (type === "agent_end") {
-    return translateAgentEnd(input as unknown as PiAgentEndEvent);
+    return translateAgentEnd(input);
   }
   return [];
 }
 
-function translateMessageEnd(event: PiMessageEndEvent): EventDraft[] {
+function translateMessageEnd(event: JsonObject): EventDraft[] {
   if (!isObject(event.message)) return [];
   const message = event.message;
   const role = typeof message.role === "string" ? message.role : "";
@@ -78,14 +48,14 @@ function translateMessageEnd(event: PiMessageEndEvent): EventDraft[] {
     const name = typeof block.name === "string" ? block.name : undefined;
     const args = isObject(block.arguments) ? block.arguments : {};
     if (!toolUseId || !name) continue;
+    // Intentional Tier-2 deviation: keep Pi's toolu_* correlation key in payload
+    // as tool_use_id while preserving uniform server-assigned event IDs (`sevt_*`)
+    // at the top-level `ManagedAgentsEvent.id`.
     const payload: JsonObject = {
       tool_use_id: toolUseId,
       name,
       input: args,
     };
-    if (typeof block.evaluated_permission === "string") {
-      payload.evaluated_permission = block.evaluated_permission;
-    }
     drafts.push({ type: "agent.tool_use", payload });
   }
 
@@ -96,17 +66,16 @@ function translateMessageEnd(event: PiMessageEndEvent): EventDraft[] {
       payload: { stop_reason: { type: "end_turn" } },
     });
   } else if (stopReason === "aborted") {
-    const payload: JsonObject = { reason: "aborted" };
-    if (typeof message.errorMessage === "string" && message.errorMessage.length > 0) {
-      payload.error_message = message.errorMessage;
-    }
-    drafts.push({ type: "session.status_terminated", payload });
+    drafts.push({
+      type: "session.status_idle",
+      payload: { stop_reason: { type: "end_turn" } },
+    });
   }
 
   return drafts;
 }
 
-function translateToolExecutionEnd(event: PiToolExecutionEndEvent): EventDraft[] {
+function translateToolExecutionEnd(event: JsonObject): EventDraft[] {
   const toolUseId =
     typeof event.toolCallId === "string" && event.toolCallId.length > 0
       ? event.toolCallId
@@ -119,22 +88,16 @@ function translateToolExecutionEnd(event: PiToolExecutionEndEvent): EventDraft[]
     is_error: event.isError === true,
   };
 
-  if (typeof event.toolName === "string" && event.toolName.length > 0) {
-    payload.name = event.toolName;
-  }
   if (isObject(event.result)) {
     if (Array.isArray(event.result.content)) {
       payload.content = event.result.content;
-    }
-    if (isObject(event.result.details) && Object.keys(event.result.details).length > 0) {
-      payload.details = event.result.details;
     }
   }
 
   return [{ type: "agent.tool_result", payload }];
 }
 
-function translateAgentEnd(event: PiAgentEndEvent): EventDraft[] {
+function translateAgentEnd(event: JsonObject): EventDraft[] {
   // Provisional mapping: C.0 fixtures only observed willRetry=false.
   // Keep this branch explicit (and easy to delete) until a retry trajectory
   // is captured and the event shape is confirmed in fixtures.
