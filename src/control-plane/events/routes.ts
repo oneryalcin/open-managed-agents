@@ -4,8 +4,14 @@ import { invalidRequest } from "../errors.ts";
 import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import type { SessionEventsService } from "./types.ts";
 
-export function sessionEventsRoutes(service: SessionEventsService): Hono {
-  const app = new Hono();
+interface AppEnv {
+  Variables: {
+    requestId: string;
+  };
+}
+
+export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
 
   app.post("/", async (c) => {
     const sessionId = requiredSessionId(c.req.param("sessionId"));
@@ -35,6 +41,24 @@ export function sessionEventsRoutes(service: SessionEventsService): Hono {
     );
   });
 
+  app.get("/stream", (c) => {
+    const sessionId = requiredSessionId(c.req.param("sessionId"));
+    const events = service.stream(DEFAULT_WORKSPACE_ID, sessionId, {
+      lastEventId: c.req.header("last-event-id"),
+      signal: c.req.raw.signal,
+    });
+    const requestId = c.get("requestId");
+    return new Response(toSseBody(events), {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+        "request-id": requestId,
+      },
+    });
+  });
+
   return app;
 }
 
@@ -57,4 +81,24 @@ function parseTypesQuery(url: string): string[] {
   const params = new URL(url).searchParams;
   const values = params.getAll("types[]");
   return values.filter((value) => value.length > 0);
+}
+
+function toSseBody(events: AsyncIterable<Record<string, unknown>>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for await (const event of events) {
+          const id = String(event.id ?? "");
+          const type = String(event.type ?? "message");
+          const data = JSON.stringify(event);
+          controller.enqueue(
+            encoder.encode(`id: ${id}\nevent: ${type}\ndata: ${data}\n\n`),
+          );
+        }
+      } finally {
+        controller.close();
+      }
+    },
+  });
 }
