@@ -176,6 +176,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         }
       }
     } catch (error) {
+      console.error("runtime ingestion failed", { sessionId, error });
       this.persistRuntimeDrafts(sessionId, [runtimeErrorDraft(error)]);
     }
   }
@@ -353,7 +354,7 @@ function isTerminalType(type: EventDraft["type"]): boolean {
 }
 
 function runtimeErrorDraft(error: unknown): EventDraft {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = "Runtime execution failed";
   return {
     type: "session.error",
     payload: { message },

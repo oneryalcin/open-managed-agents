@@ -102,7 +102,7 @@ describe("Cycle C.2 API", () => {
       (body) => body.data.some((event) => event.type === "session.error"),
     );
     const errorEvent = list.data.find((event) => event.type === "session.error");
-    expect(errorEvent?.message).toBe("runtime boom");
+    expect(errorEvent?.message).toBe("Runtime execution failed");
   });
 });
 

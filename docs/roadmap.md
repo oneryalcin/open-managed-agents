@@ -415,6 +415,7 @@ Goal: run live Pi sessions through the existing event-log path without changing 
 - Full custom-tool blocking round-trip mechanics (Cycle D).
 - Modal sandbox execution (Cycle E).
 - Permission-policy probing for `evaluated_permission` source (separate targeted probe before D).
+- Stateful runtime continuity keyed by `sesn_*` (tracked as a prerequisite before C.3-live sign-off; see ADR 0012).
 
 **Frozen-layer touch (must be explicit):**
 
@@ -436,6 +437,11 @@ Goal: run live Pi sessions through the existing event-log path without changing 
   - replay/tail reconnect behavior
 - No wire-shape drift in existing endpoints.
 - `npm test`, `npm run typecheck`, and relevant scratch probes pass.
+
+**C.3 gate carried from C.2:**
+
+- Do not mark C.3 live validation complete while runtime remains per-message cold-start.
+- Before C.3 sign-off, runtime must preserve per-`sesn_*` continuity and serialize turns per session (ADR 0012).
 
 **Cycle C acceptance:**
 
