@@ -48,7 +48,9 @@ const WIRE_COMPATIBLE_EVENT_TYPES = [
   // Session lifecycle
   "session.status_running",
   "session.status_idle",
+  "session.status_rescheduled",
   "session.status_terminated",
+  "session.deleted",
   "session.error",
   // User-originated
   "user.message",

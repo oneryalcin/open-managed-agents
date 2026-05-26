@@ -26,7 +26,9 @@ export const EVENT_TYPES = [
   // Session lifecycle
   "session.status_running",
   "session.status_idle",
+  "session.status_rescheduled",
   "session.status_terminated",
+  "session.deleted",
   "session.error",
   // User-originated (echoed back on the stream after server processes them)
   "user.message",
