@@ -24,6 +24,10 @@ validation is considered complete.
 - C.3a uses Pi's native turn queueing instead of a control-plane mutex:
   `prompt(...)` when idle, `followUp(...)` for `user.message` while running, and
   `steer(...)`/`abort()` for interrupt behavior once `user.interrupt` is wired.
+- `session.status_idle` is emitted when the Pi session is genuinely drained,
+  not on each assistant `message_end`. For C.3a this means normal idle derives
+  from Pi `agent_end`; Cycle D's `requires_action` pause will add a separate
+  mid-run idle path for tool-result waits.
 
 ## Evidence
 
@@ -52,6 +56,9 @@ Pi 0.75.4 / `claude-haiku-4-5`; the committed summary lives at
 4. Runtime session cache must be memory-bounded: idle-TTL eviction and
    dispose-on-hard-error are part of the continuity work. Abort alone does not
    force eviction.
+5. The translator must not treat every assistant `message_end{stopReason:"stop"}`
+   as `session.status_idle`. With queued follow-ups, that would publish a false
+   idle between turns before Pi has drained its queue.
 
 ## Rejected alternative
 

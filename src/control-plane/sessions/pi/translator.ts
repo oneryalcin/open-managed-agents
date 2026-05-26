@@ -64,22 +64,6 @@ function translateMessageEnd(event: JsonObject): EventDraft[] {
     drafts.push({ type: "agent.tool_use", payload });
   }
 
-  const stopReason = typeof message.stopReason === "string" ? message.stopReason : "";
-  if (stopReason === "stop") {
-    drafts.push({
-      type: "session.status_idle",
-      payload: { stop_reason: { type: "end_turn" } },
-    });
-  } else if (stopReason === "aborted") {
-    // C.0 evidence: aborted is visible in-band via message.stopReason.
-    // MVP wire shape has no distinct "interrupted" stop_reason variant, so
-    // this currently maps to the same idle/end_turn payload as normal stop.
-    drafts.push({
-      type: "session.status_idle",
-      payload: { stop_reason: { type: "end_turn" } },
-    });
-  }
-
   return drafts;
 }
 
@@ -112,7 +96,12 @@ function translateAgentEnd(event: JsonObject): EventDraft[] {
   if (event.willRetry === true) {
     return [{ type: "session.status_rescheduled", payload: {} }];
   }
-  return [];
+  return [
+    {
+      type: "session.status_idle",
+      payload: { stop_reason: { type: "end_turn" } },
+    },
+  ];
 }
 
 function isObject(value: unknown): value is JsonObject {

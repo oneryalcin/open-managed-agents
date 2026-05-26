@@ -474,6 +474,10 @@ Goal: make one Managed Agents session ID (`sesn_*`) map to one reusable Pi
 5. Evict + dispose on hard runtime error; do **not** evict on abort.
 6. Keep event transport unchanged: Pi event -> `translatePiEvent` ->
    `materializePersistedEvents` -> `persistAndPublish`.
+7. Emit `session.status_idle` only when Pi has drained the queued run
+   (`agent_end` for C.3a), not on each assistant `message_end`. This preserves
+   the lifecycle sequence `running -> ... -> idle` when `followUp(...)` queues
+   another turn.
 
 **C.3a scope (out):**
 
@@ -489,6 +493,8 @@ Goal: make one Managed Agents session ID (`sesn_*`) map to one reusable Pi
 - Deterministic tests prove two `sesn_*` sessions do not share runtime state.
 - Deterministic tests prove a `user.message` submitted while the session is
   running is forwarded through Pi's follow-up path, not dropped or raced.
+- Service-level tests prove an overlapping `user.message` does not synthesize
+  or persist `session.status_idle` before the queued follow-up response.
 - Deterministic tests prove idle-TTL eviction calls `dispose()` and removes the
   cached runtime session.
 - Existing C.2/B.2/B.3 tests remain green with no wire-shape changes.

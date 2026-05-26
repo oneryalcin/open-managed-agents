@@ -131,6 +131,42 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions).toHaveLength(2);
     expect(factory.sessions[1]?.prompts).toEqual(["two"]);
   });
+
+  it("close waits for an active turn to drain before disposing", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 20,
+    });
+
+    const run = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+    runner.close();
+    await delay(50);
+    expect(factory.sessions[0]?.disposed).toBe(false);
+
+    gate.resolve();
+    await run;
+    await until(() => factory.sessions[0]?.disposed === true);
+  });
+
+  it("close disposes pending sessions that resolve after shutdown", async () => {
+    const created = deferred<PiRuntimeSession>();
+    const runner = new PiSessionRunner({
+      sessionFactory: () => created.promise,
+      idleTtlMs: 0,
+    });
+    const run = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await delay(10);
+
+    const session = new FakeSession();
+    runner.close();
+    created.resolve(session);
+
+    await expect(run).rejects.toThrow("PiSessionRunner is closed");
+    expect(session.disposed).toBe(true);
+  });
 });
 
 class FakeSessionFactory {

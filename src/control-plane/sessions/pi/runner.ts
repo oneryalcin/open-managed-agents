@@ -26,6 +26,7 @@ export type PiRuntimeSessionFactory = () => Promise<PiRuntimeSession>;
 interface RuntimeHandle {
   session: PiRuntimeSession;
   running: boolean;
+  closeWhenIdle: boolean;
   lastUsedAt: number;
   timer: ReturnType<typeof setTimeout> | undefined;
 }
@@ -38,6 +39,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly idleTtlMs: number;
   private readonly now: () => number;
   private readonly sessionFactory: PiRuntimeSessionFactory;
+  private closed = false;
 
   constructor(
     private readonly opts: {
@@ -64,10 +66,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
   }
 
   close(): void {
+    this.closed = true;
     for (const [sessionId, handle] of this.sessions) {
-      this.evict(sessionId, handle);
+      if (handle.running) {
+        handle.closeWhenIdle = true;
+        this.scheduleEviction(sessionId, handle);
+      } else {
+        this.evict(sessionId, handle);
+      }
     }
-    this.pendingSessions.clear();
   }
 
   private async *runOnSession(
@@ -76,6 +83,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     signal: AbortSignal | undefined,
   ): AsyncIterable<unknown> {
     const handle = await this.getOrCreateHandle(sessionId);
+    if (this.closed) {
+      this.evict(sessionId, handle);
+      throw new Error("PiSessionRunner is closed");
+    }
     this.touch(sessionId, handle);
 
     if (handle.running) {
@@ -134,6 +145,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
         if (queue.length === 0) {
           await new Promise<void>((resolve) => {
             wake = resolve;
+            if (done || becameFollowUp || queue.length > 0) {
+              wake = undefined;
+              resolve();
+            }
           });
           wake = undefined;
           continue;
@@ -143,7 +158,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
       await run;
       if (failure) throw failure;
-      this.touch(sessionId, handle);
+      if (handle.closeWhenIdle) {
+        this.evict(sessionId, handle);
+      } else {
+        this.touch(sessionId, handle);
+      }
     } catch (error) {
       this.evict(sessionId, handle);
       throw error;
@@ -154,6 +173,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   }
 
   private async getOrCreateHandle(sessionId: string): Promise<RuntimeHandle> {
+    if (this.closed) throw new Error("PiSessionRunner is closed");
     const existing = this.sessions.get(sessionId);
     if (existing) return existing;
 
@@ -165,9 +185,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
         const handle: RuntimeHandle = {
           session,
           running: false,
+          closeWhenIdle: false,
           lastUsedAt: this.now(),
           timer: undefined,
         };
+        if (this.closed) {
+          session.dispose();
+          this.pendingSessions.delete(sessionId);
+          throw new Error("PiSessionRunner is closed");
+        }
         this.sessions.set(sessionId, handle);
         this.pendingSessions.delete(sessionId);
         this.scheduleEviction(sessionId, handle);
@@ -210,6 +236,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     handle.timer = setTimeout(() => {
       if (handle.running) {
         this.scheduleEviction(sessionId, handle);
+        return;
+      }
+      if (handle.closeWhenIdle) {
+        this.evict(sessionId, handle);
         return;
       }
       if (this.now() - handle.lastUsedAt < this.idleTtlMs) {
