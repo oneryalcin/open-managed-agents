@@ -22,6 +22,8 @@ import {
 } from "./persist.ts";
 import type {
   ListSessionEventsOptions,
+  RuntimeEventRunner,
+  RuntimeEventTranslator,
   SessionEventBroadcaster,
   SessionEventStore,
   SessionEventsService,
@@ -36,11 +38,21 @@ const SUPPORTED_USER_EVENT_TYPES = new Set([
 ] as const);
 
 export class DefaultSessionEventsService implements SessionEventsService {
+  private readonly runtimeRunner: RuntimeEventRunner | undefined;
+  private readonly runtimeTranslator: RuntimeEventTranslator | undefined;
+
   constructor(
     private readonly events: SessionEventStore,
     private readonly sessions: SessionStore,
     private readonly broadcaster: SessionEventBroadcaster,
-  ) {}
+    runtime?: {
+      runner: RuntimeEventRunner;
+      translate: RuntimeEventTranslator;
+    },
+  ) {
+    this.runtimeRunner = runtime?.runner;
+    this.runtimeTranslator = runtime?.translate;
+  }
 
   send(
     workspaceId: WorkspaceId,
@@ -59,6 +71,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     // dedupe before B.4 runtime consumers process irreversible actions
     // (notably user.tool_confirmation and user.custom_tool_result).
     persistAndPublish(this.events, this.broadcaster, rows);
+    this.maybeRunRuntimeFromUserMessages(workspaceId, sessionId, req.events);
     return rows.map(toManagedAgentsEvent);
   }
 
@@ -105,6 +118,47 @@ export class DefaultSessionEventsService implements SessionEventsService {
       return undefined;
     }
     return lastEventId;
+  }
+
+  private maybeRunRuntimeFromUserMessages(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    events: SendSessionEventsRequest["events"],
+  ): void {
+    if (!this.runtimeRunner || !this.runtimeTranslator) return;
+    const prompts = events
+      .filter((event) => event.type === "user.message")
+      .map((event) => textFromContent(event.content))
+      .filter((text): text is string => text !== undefined);
+    if (prompts.length === 0) return;
+
+    void this.runRuntimePrompts(workspaceId, sessionId, prompts);
+  }
+
+  private async runRuntimePrompts(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    prompts: string[],
+  ): Promise<void> {
+    if (!this.runtimeRunner || !this.runtimeTranslator) return;
+    try {
+      for (const prompt of prompts) {
+        const source = this.runtimeRunner.runUserMessage(
+          workspaceId,
+          sessionId,
+          prompt,
+        );
+        for await (const piEvent of source) {
+          const drafts = this.runtimeTranslator(piEvent);
+          if (drafts.length === 0) continue;
+          const now = new Date().toISOString();
+          const rows = materializePersistedEvents(sessionId, drafts, now);
+          persistAndPublish(this.events, this.broadcaster, rows);
+        }
+      }
+    } catch (error) {
+      console.error("runtime ingestion failed", { sessionId, error });
+    }
   }
 }
 
@@ -249,6 +303,15 @@ function parseContentBlock(
 function eventPayload(event: SendSessionEventsRequest["events"][number]): JsonObject {
   const { type: _type, ...payload } = event;
   return payload as Record<string, JsonValue>;
+}
+
+function textFromContent(content: ManagedAgentsContentBlock[]): string | undefined {
+  const text = content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+  return text.length > 0 ? text : undefined;
 }
 
 function objectInput(input: unknown): Record<string, unknown> {
