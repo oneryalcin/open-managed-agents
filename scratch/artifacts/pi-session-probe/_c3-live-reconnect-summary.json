@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-05-26T20:53:31.142Z",
+  "session_id": "sesn_019e6610-5a54-741d-ad77-07a595217a79",
+  "unique_token": "C3_RECONNECT_F7819B",
+  "disconnected_after_id": "sevt_019e6610-5a90-7457-a58f-a33a8c080b01",
+  "stream_event_count": 4,
+  "list_event_count": 4,
+  "stream_ids_match_list": true,
+  "duplicate_stream_ids": [],
+  "stream_saw_token": true,
+  "list_saw_token": true,
+  "event_types": [
+    "user.message",
+    "session.status_running",
+    "agent.message",
+    "session.status_idle"
+  ],
+  "verdict": "PASS"
+}

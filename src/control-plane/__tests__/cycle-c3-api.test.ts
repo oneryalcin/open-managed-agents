@@ -11,6 +11,7 @@ import { DefaultSessionService } from "../sessions/service.ts";
 import { PiSessionRunner } from "../sessions/pi/runner.ts";
 import { translatePiEvent } from "../sessions/pi/translator.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
+import { STREAM_TEST_TIMEOUT_MS, hasTimedOut } from "./test-timeouts.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
@@ -59,6 +60,72 @@ describe("Cycle C.3 API", () => {
     expect(secondAgentIndex).toBeGreaterThan(-1);
     expect(idleIndex).toBeGreaterThan(secondAgentIndex);
     expect(eventTypes.filter((type) => type === "session.status_idle")).toHaveLength(1);
+  });
+
+  it("reconnects without loss or duplicate events while runtime events are still being produced", async () => {
+    const gate = deferred<void>();
+    const fixture = makeFixture(new FakeQueuedSessionFactory(gate.promise));
+    const session = await setupSession(fixture.app);
+
+    const firstStream = await openStream(fixture.app, session.id);
+    const firstReader = sseReader(firstStream);
+    await until(() => fixture.broadcaster.subscriberCount(session.id) > 0);
+
+    const firstSend = sendMessage(fixture.app, session.id, "one");
+    const beforeDisconnect = await readUntil(
+      firstReader,
+      (event) => event.data.type === "session.status_running",
+    );
+    const lastSeenId = beforeDisconnect.at(-1)?.id;
+    expect(lastSeenId).toEqual(expect.stringMatching(/^sevt_/));
+    expect(typesFromFrames(beforeDisconnect)).toEqual([
+      "user.message",
+      "session.status_running",
+    ]);
+
+    await firstReader.cancel();
+    await until(() => fixture.broadcaster.subscriberCount(session.id) === 0);
+
+    await sendMessage(fixture.app, session.id, "two");
+
+    const secondStream = await openStream(fixture.app, session.id, lastSeenId);
+    const secondReader = sseReader(secondStream);
+    await until(() => fixture.broadcaster.subscriberCount(session.id) > 0);
+
+    const afterReconnect = readUntil(
+      secondReader,
+      (event) => event.data.type === "session.status_idle",
+    );
+    gate.resolve();
+    await firstSend;
+
+    const replayAndLive = await afterReconnect;
+    const consolidated = [...beforeDisconnect, ...replayAndLive];
+    const finalList = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "session.status_idle"),
+    );
+
+    expect(ids(consolidated)).toEqual(finalList.map((event) => event.id));
+    expect(new Set(ids(consolidated)).size).toBe(consolidated.length);
+    expect(typesFromFrames(consolidated)).toEqual([
+      "user.message",
+      "session.status_running",
+      "agent.message",
+      "user.message",
+      "agent.message",
+      "session.status_idle",
+    ]);
+    expect(types(finalList)).toEqual(typesFromFrames(consolidated));
+    expect(
+      finalList.filter((event) => event.type === "agent.message").map((event) => event.content),
+    ).toEqual([
+      [{ type: "text", text: "runtime: one" }],
+      [{ type: "text", text: "runtime: two" }],
+    ]);
+
+    await secondReader.cancel();
   });
 });
 
@@ -127,6 +194,7 @@ class FakeQueuedSession {
 
 function makeFixture(factory: FakeQueuedSessionFactory): {
   app: ReturnType<typeof createControlPlaneApp>;
+  broadcaster: SessionEventBroadcaster;
   eventStore: EventStore;
   factory: FakeQueuedSessionFactory;
 } {
@@ -140,6 +208,7 @@ function makeFixture(factory: FakeQueuedSessionFactory): {
     idleTtlMs: 0,
   });
   return {
+    broadcaster,
     eventStore,
     factory,
     app: createControlPlaneApp({
@@ -152,6 +221,21 @@ function makeFixture(factory: FakeQueuedSessionFactory): {
       }),
     }),
   };
+}
+
+async function openStream(
+  app: ReturnType<typeof createControlPlaneApp>,
+  sessionId: string,
+  lastEventId?: string,
+): Promise<Response> {
+  const res = await app.request(`/v1/sessions/${sessionId}/events/stream`, {
+    headers: {
+      accept: "text/event-stream",
+      ...(lastEventId === undefined ? {} : { "last-event-id": lastEventId }),
+    },
+  });
+  expect(res.status).toBe(200);
+  return res;
 }
 
 async function setupSession(
@@ -226,8 +310,102 @@ async function getEvents(
   return ((await res.json()) as { data: Array<Record<string, unknown>> }).data;
 }
 
+async function eventuallyEvents(
+  app: ReturnType<typeof createControlPlaneApp>,
+  sessionId: string,
+  predicate: (events: Array<Record<string, unknown>>) => boolean,
+): Promise<Array<Record<string, unknown>>> {
+  const startedAt = Date.now();
+  while (!hasTimedOut(startedAt, STREAM_TEST_TIMEOUT_MS)) {
+    const events = await getEvents(app, sessionId);
+    if (predicate(events)) return events;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("timed out waiting for expected events");
+}
+
 function types(events: Array<Record<string, unknown>>): unknown[] {
   return events.map((event) => event.type);
+}
+
+function ids(
+  events: Array<{ id?: string } | Record<string, unknown>>,
+): Array<string | undefined> {
+  return events.map((event) => event.id as string | undefined);
+}
+
+function typesFromFrames(
+  frames: Array<{ data: Record<string, unknown> }>,
+): unknown[] {
+  return frames.map((frame) => frame.data.type);
+}
+
+function sseReader(response: Response): {
+  nextEvent(): Promise<{ id?: string; event?: string; data: Record<string, unknown> } | null>;
+  cancel(): Promise<void>;
+} {
+  const body = response.body;
+  if (!body) {
+    throw new Error("Expected streaming response body");
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  return {
+    async nextEvent() {
+      const startedAt = Date.now();
+      while (!hasTimedOut(startedAt, STREAM_TEST_TIMEOUT_MS)) {
+        const split = buffer.indexOf("\n\n");
+        if (split !== -1) {
+          const frame = buffer.slice(0, split);
+          buffer = buffer.slice(split + 2);
+          if (frame.length === 0) continue;
+          return parseSseFrame(frame);
+        }
+        const chunk = await reader.read();
+        if (chunk.done) return null;
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
+      throw new Error("Timed out waiting for SSE event");
+    },
+    async cancel() {
+      await reader.cancel();
+    },
+  };
+}
+
+async function readUntil(
+  reader: ReturnType<typeof sseReader>,
+  predicate: (event: {
+    id?: string;
+    event?: string;
+    data: Record<string, unknown>;
+  }) => boolean,
+): Promise<Array<{ id?: string; event?: string; data: Record<string, unknown> }>> {
+  const events: Array<{ id?: string; event?: string; data: Record<string, unknown> }> = [];
+  while (true) {
+    const event = await reader.nextEvent();
+    if (!event) throw new Error("SSE stream ended before expected event");
+    events.push(event);
+    if (predicate(event)) return events;
+  }
+}
+
+function parseSseFrame(frame: string): {
+  id?: string;
+  event?: string;
+  data: Record<string, unknown>;
+} {
+  let id: string | undefined;
+  let event: string | undefined;
+  let data = "";
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("id: ")) id = line.slice(4);
+    else if (line.startsWith("event: ")) event = line.slice(7);
+    else if (line.startsWith("data: ")) data = line.slice(6);
+  }
+  return { id, event, data: JSON.parse(data) as Record<string, unknown> };
 }
 
 function deferred<T>(): {
