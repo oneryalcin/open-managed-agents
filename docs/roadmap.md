@@ -674,6 +674,57 @@ Out of scope:
 - Full env/policy DSL beyond an explicit key allowlist.
 - Reimplementing Pi tool semantics by hand. E.1 uses Pi's own `create*ToolDefinition` factories, not bespoke bash/read/write/edit/find/ls definitions.
 
+#### Cycle E.3 Plan — provider selection, fail-closed by default
+
+Goal: make sandbox provider choice an explicit run/session execution setting without making any unsafe provider reachable by accident.
+
+This slice is design-first rather than probe-first. E.0 through E.2 used probes because the unknowns were Pi and Docker capability. Provider selection is ordinary control-plane wiring; the risk is a bad default, not unknown SDK behavior.
+
+Core decision:
+
+- Provider selection is run/session execution config, not agent identity. A persisted agent definition should not encode "Docker vs Modal" unless a later product feature explicitly models environments that way.
+- Missing provider selection must fail closed. It must never silently route builtin tool execution to host passthrough.
+- Host passthrough remains explicit unsafe opt-in only.
+- Docker-local can become selectable only after the Docker bash infrastructure-error follow-up is closed: [#22](https://github.com/oneryalcin/open-managed-agents/issues/22).
+- Until #22 closes, provider selection may validate and store/parse the shape, but normal runtime creation must not route to Docker-local by default.
+
+Proposed config shape:
+
+```ts
+type SandboxProviderSelection =
+  | { type: "none" } // no builtin execution provider; builtin tools unavailable
+  | { type: "host-passthrough"; unsafeAllowHostPassthrough: true; envAllowlist?: string[] }
+  | { type: "docker-local"; envAllowlist?: string[]; operationTimeoutMs?: number };
+```
+
+Implementation rules:
+
+1. Add a small resolver that maps a validated `SandboxProviderSelection` to a `SandboxProviderFactory | undefined`.
+2. Keep the resolver boring: no policy engine, provider negotiation, or capability matching.
+3. Reject `host-passthrough` unless `unsafeAllowHostPassthrough: true` is present.
+4. Reject or gate `docker-local` while #22 is open. Do not make it the implicit default in this slice.
+5. If builtin execution is requested with `{type: "none"}` or no provider, return a caller-safe configuration error before starting a Pi runtime turn.
+6. Keep provider-specific options narrow: env allowlist and operation timeout only. Network, mounts, snapshots, durable state, and egress policy are later provider slices.
+7. Do not persist provider selection on the agent. If session persistence needs to remember it for continuity, persist it as session/runtime config, not agent config.
+
+Test plan:
+
+- No provider configured plus builtin tool use fails closed before host execution.
+- No provider configured plus user/custom-tool-only flow still works if no builtin tool is needed.
+- Host passthrough without unsafe opt-in is rejected.
+- Host passthrough with unsafe opt-in routes through the existing guarded provider.
+- Docker-local is rejected or disabled while #22 is open.
+- The resolver never defaults to host passthrough.
+- Session/runtime config, not agent identity, owns the provider selection.
+
+Out of scope:
+
+- Modal, E2B, Daytona, Cloudflare, Kubernetes, or VM providers.
+- Provider UI/dashboard selection.
+- Mounts/resources/snapshots.
+- Production defaulting to Docker-local.
+- Closing #22 itself, unless the provider-selection implementation needs Docker-local to be selectable in the same PR.
+
 ## Canonical Tutorial Compatibility Backlog
 
 These items were found by tracing Anthropic's public Managed Agents workshop tutorials end to end. They are not all required for the first MVP platform-shape proof, but they are required before claiming that the canonical tutorials run unchanged against this server with only a base-URL swap.
