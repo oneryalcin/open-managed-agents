@@ -78,17 +78,21 @@ describe("sandbox provider selection (Cycle E.3)", () => {
     ).toThrow("`unsafeAllowHostPassthrough` must be true");
   });
 
-  it("hard-rejects docker-local until the wiring gate is closed", () => {
+  it("keeps docker-local disabled unless deployment config allows it", () => {
     const selection = parseSandboxProviderSelection({
       type: "docker-local",
       envAllowlist: ["PATH"],
       operationTimeoutMs: 1000,
     });
 
-    expect(() =>
+    expect(() => resolveSandboxProviderFactory(selection)).toThrow(
+      "disabled by deployment configuration",
+    );
+
+    expect(
       resolveSandboxProviderFactory(selection, {
-        dockerLocalEnabled: true,
-      } as never),
-    ).toThrow("unavailable until issue #22 is closed");
+        allowDockerLocal: true,
+      }),
+    ).toBeTypeOf("function");
   });
 });
