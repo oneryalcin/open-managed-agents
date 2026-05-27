@@ -44,6 +44,7 @@ type PiAgentTool =
 
 export interface SandboxInvocationStats {
   readonly total: number;
+  readonly byTool: Readonly<Record<SandboxedBuiltinToolName, number>>;
 }
 
 export interface SandboxOperations {
@@ -77,6 +78,7 @@ export interface HostPassthroughSandboxOptions {
 
 interface MutableSandboxInvocationStats extends SandboxInvocationStats {
   total: number;
+  byTool: Record<SandboxedBuiltinToolName, number>;
 }
 
 export function createHostPassthroughSandboxProvider(
@@ -87,50 +89,53 @@ export function createHostPassthroughSandboxProvider(
   }
   const workspaceRoot = resolve(opts.workspaceRoot);
   const envAllowlist = new Set(opts.envAllowlist ?? []);
-  const invocations: MutableSandboxInvocationStats = { total: 0 };
+  const invocations: MutableSandboxInvocationStats = {
+    total: 0,
+    byTool: emptyToolCounts(),
+  };
   const disposed = { value: false };
 
   const readOps: ReadOperations = {
     access: async (absolutePath) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "read");
       await access(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     readFile: async (absolutePath) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "read");
       return readFile(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
   };
   const writeOps: WriteOperations = {
     mkdir: async (dir) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "write");
       await mkdir(assertInsideWorkspace(dir, workspaceRoot), { recursive: true });
     },
     writeFile: async (absolutePath, content) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "write");
       await writeFile(assertInsideWorkspace(absolutePath, workspaceRoot), content, "utf8");
     },
   };
   const editOps: EditOperations = {
     access: async (absolutePath) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "edit");
       await access(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     readFile: async (absolutePath) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "edit");
       return readFile(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     writeFile: async (absolutePath, content) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "edit");
       await writeFile(assertInsideWorkspace(absolutePath, workspaceRoot), content, "utf8");
     },
   };
   const findOps: FindOperations = {
     exists: (absolutePath) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "find");
       return existsSync(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     glob: async (pattern, cwd, options) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "find");
       return globInsideWorkspace(pattern, assertInsideWorkspace(cwd, workspaceRoot), {
         ignore: options.ignore,
         limit: options.limit,
@@ -140,22 +145,22 @@ export function createHostPassthroughSandboxProvider(
   };
   const lsOps: LsOperations = {
     exists: (absolutePath) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "ls");
       return existsSync(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     stat: async (absolutePath) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "ls");
       const result = await stat(assertInsideWorkspace(absolutePath, workspaceRoot));
       return { isDirectory: () => result.isDirectory() };
     },
     readdir: async (absolutePath) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "ls");
       return readdir(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
   };
   const bashOps: BashOperations = {
     exec: (command, cwd, options) => {
-      record(invocations, disposed);
+      record(invocations, disposed, "bash");
       return execHostCommand(command, assertInsideWorkspace(cwd, workspaceRoot), {
         env: filterEnv(options.env ?? {}, envAllowlist),
         onData: options.onData,
@@ -221,11 +226,24 @@ export function filterEnv(
 function record(
   invocations: MutableSandboxInvocationStats,
   disposed: { value: boolean },
+  toolName: SandboxedBuiltinToolName,
 ): void {
   if (disposed.value) {
     throw new Error("Sandbox provider is disposed");
   }
   invocations.total += 1;
+  invocations.byTool[toolName] += 1;
+}
+
+function emptyToolCounts(): Record<SandboxedBuiltinToolName, number> {
+  return {
+    bash: 0,
+    read: 0,
+    write: 0,
+    edit: 0,
+    find: 0,
+    ls: 0,
+  };
 }
 
 async function execHostCommand(

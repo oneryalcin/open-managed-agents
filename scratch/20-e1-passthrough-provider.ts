@@ -98,6 +98,7 @@ const summary = {
   provider_is_isolating: false,
   env_allowlist: ["PATH"],
   provider_invocation_count: providerInvocationCount,
+  provider_invocations_by_tool: provider?.invocations.byTool ?? null,
   event_types: eventTypes,
   final_text: finalText,
   verdict:

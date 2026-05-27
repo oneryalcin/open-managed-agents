@@ -14,7 +14,11 @@ import {
   PiCustomToolBridge,
   type PiCustomToolsProvider,
 } from "./custom-tools.ts";
-import type { SandboxProvider, SandboxProviderFactory } from "./sandbox/provider.ts";
+import type {
+  SandboxedBuiltinToolName,
+  SandboxProvider,
+  SandboxProviderFactory,
+} from "./sandbox/provider.ts";
 
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000;
 const ALREADY_PROCESSING_MESSAGE = "Agent is already processing";
@@ -143,8 +147,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
 
     const queue: unknown[] = [];
-    const sandboxStartCount = handle.sandbox?.invocations.total ?? 0;
-    let observedSandboxedToolCall = false;
+    const sandboxStartCounts = snapshotSandboxInvocations(handle.sandbox);
+    const observedSandboxedToolStarts = new Map<SandboxedBuiltinToolName, number>();
     let done = false;
     let failure: unknown;
     let becameFollowUp = false;
@@ -152,8 +156,12 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     const stop = handle.session.subscribe((event) => {
       updateRunning(handle, event);
-      if (isSandboxedToolStart(handle.sandbox, event)) {
-        observedSandboxedToolCall = true;
+      const sandboxedTool = sandboxedToolStart(handle.sandbox, event);
+      if (sandboxedTool) {
+        observedSandboxedToolStarts.set(
+          sandboxedTool,
+          (observedSandboxedToolStarts.get(sandboxedTool) ?? 0) + 1,
+        );
       }
       queue.push(event);
       wake?.();
@@ -215,8 +223,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
       if (failure) throw failure;
       assertSandboxProviderWasInvoked({
         sandbox: handle.sandbox,
-        observedSandboxedToolCall,
-        startCount: sandboxStartCount,
+        observedSandboxedToolStarts,
+        startCounts: sandboxStartCounts,
       });
       if (handle.closeWhenIdle) {
         this.evict(sessionId, handle);
@@ -413,27 +421,43 @@ function isAlreadyProcessing(error: unknown): boolean {
   );
 }
 
-function isSandboxedToolStart(
+function sandboxedToolStart(
   sandbox: SandboxProvider | undefined,
   event: unknown,
-): boolean {
-  if (!sandbox || typeof event !== "object" || event === null) return false;
+): SandboxedBuiltinToolName | undefined {
+  if (!sandbox || typeof event !== "object" || event === null) return undefined;
   const typed = event as { type?: unknown; toolName?: unknown };
-  return (
-    typed.type === "tool_execution_start" &&
-    typeof typed.toolName === "string" &&
-    sandbox.toolNames.has(typed.toolName as never)
-  );
+  if (typed.type !== "tool_execution_start") return undefined;
+  if (typeof typed.toolName !== "string") return undefined;
+  if (!sandbox.toolNames.has(typed.toolName as never)) return undefined;
+  return typed.toolName as SandboxedBuiltinToolName;
 }
 
 function assertSandboxProviderWasInvoked(opts: {
   sandbox: SandboxProvider | undefined;
-  observedSandboxedToolCall: boolean;
-  startCount: number;
+  observedSandboxedToolStarts: ReadonlyMap<SandboxedBuiltinToolName, number>;
+  startCounts: Readonly<Record<SandboxedBuiltinToolName, number>>;
 }): void {
-  if (!opts.sandbox || !opts.observedSandboxedToolCall) return;
-  if (opts.sandbox.invocations.total > opts.startCount) return;
-  throw new Error(
-    "Sandboxed builtin tool executed without invoking the sandbox provider",
-  );
+  if (!opts.sandbox || opts.observedSandboxedToolStarts.size === 0) return;
+  for (const [toolName, observedStarts] of opts.observedSandboxedToolStarts) {
+    const providerDelta =
+      opts.sandbox.invocations.byTool[toolName] - opts.startCounts[toolName];
+    if (providerDelta >= observedStarts) continue;
+    throw new Error(
+      `Sandboxed builtin tool ${toolName} executed without invoking the sandbox provider`,
+    );
+  }
+}
+
+function snapshotSandboxInvocations(
+  sandbox: SandboxProvider | undefined,
+): Record<SandboxedBuiltinToolName, number> {
+  return {
+    bash: sandbox?.invocations.byTool.bash ?? 0,
+    read: sandbox?.invocations.byTool.read ?? 0,
+    write: sandbox?.invocations.byTool.write ?? 0,
+    edit: sandbox?.invocations.byTool.edit ?? 0,
+    find: sandbox?.invocations.byTool.find ?? 0,
+    ls: sandbox?.invocations.byTool.ls ?? 0,
+  };
 }

@@ -200,11 +200,29 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(sandbox.disposed).toBe(true);
   });
 
-  it("accepts a sandboxed builtin tool when the provider was invoked", async () => {
+  it("fails closed when the wrong provider tool was invoked", async () => {
+    const sandbox = new FakeSandboxProvider(["bash", "read"]);
+    const factory = new FakeSessionFactory({
+      emitSandboxedTool: "bash",
+      onSandboxedTool: () => sandbox.recordInvocation("read"),
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("builtin tool bash");
+    expect(sandbox.disposed).toBe(true);
+  });
+
+  it("accepts a sandboxed builtin tool when the matching provider tool was invoked", async () => {
     const sandbox = new FakeSandboxProvider(["bash"]);
     const factory = new FakeSessionFactory({
       emitSandboxedTool: "bash",
-      onSandboxedTool: () => sandbox.recordInvocation(),
+      onSandboxedTool: () => sandbox.recordInvocation("bash"),
     });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
@@ -403,15 +421,26 @@ class FakeSandboxProvider implements SandboxProvider {
   readonly operations = {} as SandboxProvider["operations"];
   readonly tools = [];
   readonly toolNames: ReadonlySet<"bash" | "read" | "write" | "edit" | "find" | "ls">;
-  readonly invocations = { total: 0 };
+  readonly invocations = {
+    total: 0,
+    byTool: {
+      bash: 0,
+      read: 0,
+      write: 0,
+      edit: 0,
+      find: 0,
+      ls: 0,
+    },
+  };
   disposed = false;
 
   constructor(toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "ls">) {
     this.toolNames = new Set(toolNames);
   }
 
-  recordInvocation(): void {
+  recordInvocation(toolName: "bash" | "read" | "write" | "edit" | "find" | "ls"): void {
     this.invocations.total += 1;
+    this.invocations.byTool[toolName] += 1;
   }
 
   dispose(): void {

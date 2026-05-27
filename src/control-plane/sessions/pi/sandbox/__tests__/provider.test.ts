@@ -79,6 +79,8 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
       expect(result).toEqual({ exitCode: 0 });
       expect(Buffer.concat(chunks).toString("utf8")).toBe("/bin:/usr/bin|");
       expect(provider.invocations.total).toBe(1);
+      expect(provider.invocations.byTool.bash).toBe(1);
+      expect(provider.invocations.byTool.read).toBe(0);
     } finally {
       await rm(workspace, { force: true, recursive: true });
     }
@@ -121,6 +123,8 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
       expect(results.map((path) => path.replace(`${workspace}/`, ""))).toEqual([
         "a.txt",
       ]);
+      expect(provider.invocations.byTool.find).toBe(1);
+      expect(provider.invocations.byTool.write).toBe(1);
     } finally {
       await rm(workspace, { force: true, recursive: true });
     }
