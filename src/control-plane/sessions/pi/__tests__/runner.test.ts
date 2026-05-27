@@ -233,11 +233,20 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[1]?.disposed).toBe(true);
   });
 
-  it("hard-rejects docker-local while the wiring gate is closed", async () => {
+  it("requires deployment config before docker-local is selectable", async () => {
     expect(() => new PiSessionRunner({
       sandboxProviderSelection: { type: "docker-local" },
       idleTtlMs: 0,
-    })).toThrow("unavailable until issue #22");
+    })).toThrow("disabled by deployment configuration");
+
+    expect(
+      () =>
+        new PiSessionRunner({
+          sandboxProviderSelection: { type: "docker-local" },
+          sandboxProviderSelectionOptions: { allowDockerLocal: true },
+          idleTtlMs: 0,
+        }),
+    ).not.toThrow();
   });
 
   it("eagerly validates pre-typed sandbox selection at construction", () => {

@@ -686,8 +686,8 @@ Core decision:
 - Provider selection is trusted execution configuration. It must be supplied by the control plane, operator config, or an authenticated API boundary that is allowed to choose execution backends. It must never be derived from prompt/model content or from untrusted agent-definition fields.
 - Missing provider selection must fail closed. It must never silently route builtin tool execution to host passthrough.
 - Host passthrough remains explicit unsafe opt-in only, and requires two gates: a deployment-level "allow unsafe passthrough" setting plus the per-session `unsafeAllowHostPassthrough: true` literal. Either gate missing means reject.
-- Docker-local can become selectable only after the Docker bash infrastructure-error follow-up is closed: [#22](https://github.com/oneryalcin/open-managed-agents/issues/22).
-- Until #22 closes, provider selection may validate and store/parse the shape, but normal runtime creation must hard-reject `docker-local` with a clear "unavailable until #22" configuration error. Do not silently disable it or substitute another provider.
+- Docker-local is selectable only after the Docker bash infrastructure-error follow-up is closed: [#22](https://github.com/oneryalcin/open-managed-agents/issues/22). #22 is now closed, so Docker-local may be enabled behind an explicit deployment-level gate.
+- Docker-local must remain default-closed. If the deployment does not allow Docker-local, normal runtime creation must reject `docker-local` with a clear configuration error. Do not silently disable it or substitute another provider.
 
 Proposed config shape:
 
@@ -704,7 +704,7 @@ Implementation rules:
 2. Add a small resolver that maps a validated `SandboxProviderSelection` to a `SandboxProviderFactory | undefined`.
 3. Keep the resolver boring: no policy engine, provider negotiation, or capability matching.
 4. Reject `host-passthrough` unless the deployment allows unsafe passthrough and `unsafeAllowHostPassthrough: true` is present on the selection.
-5. Hard-reject `docker-local` while #22 is open. Do not make it the implicit default and do not silently disable it.
+5. Reject `docker-local` unless the deployment explicitly enables it. Do not make it the implicit default and do not silently disable it.
 6. If a session exposes builtin tools with `{type: "none"}` or no provider, return a caller-safe configuration error at session/runtime construction. Do not wait until the model first tries a builtin tool.
 7. Keep provider-specific options narrow: env allowlist and operation timeout only. Network, mounts, snapshots, durable state, and egress policy are later provider slices.
 8. Do not persist provider selection on the agent. If session persistence needs to remember it for continuity, persist it as session/runtime config, not agent config.
@@ -717,7 +717,8 @@ Test plan:
 - Host passthrough without unsafe opt-in is rejected.
 - Host passthrough with only the per-session flag but no deployment-level allowance is rejected.
 - Host passthrough with unsafe opt-in routes through the existing guarded provider.
-- Docker-local is hard-rejected while #22 is open.
+- Docker-local without the deployment-level allowance is rejected.
+- Docker-local with the deployment-level allowance resolves to the Docker-local provider factory.
 - The resolver never defaults to host passthrough.
 - Session/runtime config, not agent identity, owns the provider selection.
 
@@ -727,7 +728,7 @@ Out of scope:
 - Provider UI/dashboard selection.
 - Mounts/resources/snapshots.
 - Production defaulting to Docker-local.
-- Closing #22 itself, unless the provider-selection implementation needs Docker-local to be selectable in the same PR.
+- Changing the production default to Docker-local.
 
 ## Canonical Tutorial Compatibility Backlog
 

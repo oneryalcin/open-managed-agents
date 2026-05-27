@@ -2,6 +2,7 @@ import {
   createHostPassthroughSandboxProvider,
   type SandboxProviderFactory,
 } from "./provider.ts";
+import { createDockerSandboxProviderFactory } from "./docker.ts";
 
 export type SandboxProviderSelection =
   | { type: "none" }
@@ -18,6 +19,7 @@ export type SandboxProviderSelection =
 
 export interface SandboxProviderSelectionResolverOptions {
   allowUnsafeHostPassthrough?: boolean;
+  allowDockerLocal?: boolean;
   hostPassthroughWorkspaceRoot?: string;
 }
 
@@ -102,9 +104,15 @@ export function resolveSandboxProviderFactory(
       });
   }
   if (selection.type === "docker-local") {
-    throw new Error(
-      "Docker-local sandbox provider is unavailable until issue #22 is closed",
-    );
+    if (opts.allowDockerLocal !== true) {
+      throw new Error(
+        "Docker-local sandbox provider is disabled by deployment configuration",
+      );
+    }
+    return createDockerSandboxProviderFactory({
+      envAllowlist: selection.envAllowlist,
+      operationTimeoutMs: selection.operationTimeoutMs,
+    });
   }
   const _exhaustive: never = selection;
   throw new Error(`Unsupported sandbox provider type: ${String(_exhaustive)}`);
