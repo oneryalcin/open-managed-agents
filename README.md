@@ -1,48 +1,109 @@
-# open-managed-agents
+# Open Managed Agents
 
-An open-source clone of Anthropic's [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) API surface. **Control plane runs as a single Node process**; sandboxes (Modal first, K8s later) are the part that runs "anywhere."
+**Open Managed Agents** is an open-source, self-hostable implementation of the
+Claude Managed Agents API surface.
 
-**Status:** Design + stored HTTP surface. The docs and EventStore/Broadcaster primitives are in place, the Agents API is implemented, and Cycle B.1 adds stored Environments + Sessions APIs. Events-over-HTTP, Pi runtime wiring, and Modal sandbox execution are next.
+The goal is wire compatibility with Anthropic's hosted Managed Agents: clients
+that speak the Claude Managed Agents REST + SSE protocol should be able to point
+at this server with a base-URL change, while you keep execution, data, and
+sandboxes on infrastructure you control.
 
-## What this is
+## Why This Exists
 
-A REST + SSE control plane that exposes the Managed Agents endpoints (`/v1/agents`, `/v1/sessions`, `/v1/environments`, `/v1/sessions/{id}/events`) and runs the agent loop behind it — but on infrastructure you control instead of Anthropic's. Clients written against Anthropic's hosted Managed Agents should target this with a base-URL swap; see [docs/adrs/0004 — Compatibility Tiers](docs/adrs/0004-managed-agents-rest-sse-surface-as-north-star.md) for what's wire-compatible vs. allowed-to-deviate.
+Managed Agents are useful because they give agents a durable place to work:
+sessions, event history, streaming updates, custom tools, and sandboxed
+filesystem/shell execution. The hosted version is convenient, but some teams
+need the same API shape with their own runtime, data boundary, sandbox policy,
+or deployment environment.
 
-**Scope today:**
-- ✅ Single-process control plane foundation (Hono, SQLite stores, Anthropic-shaped errors)
-- ✅ Agents API persisted in SQLite with typed route/service/store boundaries
-- ✅ Environments + Sessions APIs persisted in SQLite; no engine or sandbox runtime yet
-- ✅ Append-only EventStore + replay-then-tail broadcaster with reconnect/overflow probes
-- ✋ Session events HTTP routes are next; Pi and Modal are intentionally not wired yet
-- ✋ Pluggable sandbox layer — Modal first, K8s/Docker via the same interface later
-- ✋ Horizontal scaling (multi-process control plane) is post-MVP — pending-call state is process-local; see [scope.md](docs/scope.md) and [ADR 0005](docs/adrs/0005-custom-tools-as-blocking-async-functions.md).
+Open Managed Agents aims to be that control plane:
 
-## Current smoke checks
+- Claude Managed Agents-compatible REST and SSE endpoints;
+- persisted agents, environments, sessions, and events;
+- resumable event streams;
+- server-side custom tools that keep secrets outside the sandbox;
+- pluggable sandbox providers for model-directed shell and file work.
+
+## Current Status
+
+This project is still early, but the core platform shape is in place.
+
+Working today:
+
+- persisted agent, environment, and session APIs;
+- append-only session event log;
+- event listing and SSE streaming with reconnect support;
+- explicit Pi runtime wiring for agent execution;
+- public custom-tool pause/resume round trips;
+- guarded local passthrough provider for development tests;
+- Docker-local sandbox provider as the first real isolation provider;
+- fail-closed provider-selection foundation.
+
+Still gated before production use:
+
+- runtime enablement policy;
+- Docker-local provider selection, pending
+  [#22](https://github.com/oneryalcin/open-managed-agents/issues/22);
+- durable recovery for pending custom-tool waits;
+- request-level idempotency;
+- permission-gated builtin/MCP tools;
+- managed remote sandbox providers such as Modal.
+
+## Architecture
+
+Open Managed Agents keeps the **harness** separate from **compute**.
+
+The harness is the trusted control plane: API requests, session state, event
+history, model/runtime orchestration, custom-tool correlation, approvals, and
+recovery state.
+
+Compute is the sandbox execution plane: shell commands, filesystem changes,
+packages, generated artifacts, and future provider-specific resources such as
+volumes, ports, snapshots, and managed remote sandboxes.
+
+That split lets applications keep secrets, auth, billing, audit logs, and human
+review outside the untrusted coding sandbox.
+
+## Compatibility
+
+The north star is Claude Managed Agents wire compatibility:
+
+- same endpoint family;
+- Anthropic-shaped error envelopes;
+- persisted session event stream;
+- SSE replay and reconnect behavior;
+- public custom-tool use/result events.
+
+Details and intentional deviations are tracked in
+[ADR 0004](docs/adrs/0004-managed-agents-rest-sse-surface-as-north-star.md).
+
+## Stack
+
+| Layer | Current choice |
+| --- | --- |
+| Control plane | TypeScript + Hono |
+| Runtime engine | Pi Agent SDK |
+| Persistence | SQLite now, Postgres later |
+| First isolation provider | Docker-local |
+| First managed remote target | Modal Sandboxes |
+
+## Development
 
 ```bash
-npm test
+npm install
 npm run typecheck
-npx tsx scratch/05-event-store.ts
-npx tsx scratch/06-agents-api.ts
-npx tsx scratch/07-b1-api.ts
+npm test
 ```
 
-`scratch/06-agents-api.ts` starts a real Hono server, creates an agent, retrieves it, lists it, and verifies the public error envelope.
-`scratch/07-b1-api.ts` extends that smoke to environments and sessions, including unsupported-field errors.
+The detailed roadmap, architecture notes, and compatibility decisions live in
+the docs:
 
-## Planned stack
-
-| Layer | Choice | Rationale |
-|---|---|---|
-| Engine | [Pi Agent SDK](https://pi.dev/docs/latest/sdk) (`@earendil-works/pi-coding-agent`) | Library-shaped, async-tool model, explicit session primitives |
-| Control plane | TypeScript + [Hono](https://hono.dev) | Lightweight, first-class SSE, runtime-agnostic |
-| Sandbox | [Modal Sandboxes](https://modal.com/docs/guide/sandbox) (first impl) | Purpose-built per-session containers; pluggable interface for K8s/Docker later |
-| Persistence | SQLite → Postgres later | Start simple |
-
-## Decisions made
-
-See [docs/adrs/](docs/adrs/). Reading order is in [docs/index.md](docs/index.md). The implementation plan is tracked in [docs/roadmap.md](docs/roadmap.md).
+- [Roadmap](docs/roadmap.md)
+- [Architecture](docs/architecture.md)
+- [ADRs](docs/adrs/)
+- [Scope](docs/scope.md)
+- [References](docs/references.md)
 
 ## License
 
-TBD — likely Apache-2.0.
+TBD.
