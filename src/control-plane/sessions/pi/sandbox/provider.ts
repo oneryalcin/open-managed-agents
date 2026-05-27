@@ -74,10 +74,14 @@ export interface HostPassthroughSandboxOptions {
   envAllowlist?: string[];
 }
 
-interface MutableSandboxInvocationStats extends SandboxInvocationStats {
+export interface MutableSandboxInvocationStats extends SandboxInvocationStats {
   total: number;
   byTool: Record<SandboxedBuiltinToolName, number>;
   toolCallIds: Record<SandboxedBuiltinToolName, Set<string>>;
+}
+
+export interface SandboxDisposedFlag {
+  value: boolean;
 }
 
 interface ToolExecutionContext {
@@ -95,55 +99,51 @@ export function createHostPassthroughSandboxProvider(
   }
   const workspaceRoot = resolve(opts.workspaceRoot);
   const envAllowlist = new Set(opts.envAllowlist ?? []);
-  const invocations: MutableSandboxInvocationStats = {
-    total: 0,
-    byTool: emptyToolCounts(),
-    toolCallIds: emptyToolCallIds(),
-  };
-  const disposed = { value: false };
+  const invocations = createSandboxInvocationStats();
+  const disposed: SandboxDisposedFlag = { value: false };
   const activeProcessGroups = new Set<number>();
 
   const readOps: ReadOperations = {
     access: async (absolutePath) => {
-      record(invocations, disposed, "read");
+      recordSandboxInvocation(invocations, disposed, "read");
       await access(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     readFile: async (absolutePath) => {
-      record(invocations, disposed, "read");
+      recordSandboxInvocation(invocations, disposed, "read");
       return readFile(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
   };
   const writeOps: WriteOperations = {
     mkdir: async (dir) => {
-      record(invocations, disposed, "write");
+      recordSandboxInvocation(invocations, disposed, "write");
       await mkdir(assertInsideWorkspace(dir, workspaceRoot), { recursive: true });
     },
     writeFile: async (absolutePath, content) => {
-      record(invocations, disposed, "write");
+      recordSandboxInvocation(invocations, disposed, "write");
       await writeFileNoFollow(assertInsideWorkspace(absolutePath, workspaceRoot), content);
     },
   };
   const editOps: EditOperations = {
     access: async (absolutePath) => {
-      record(invocations, disposed, "edit");
+      recordSandboxInvocation(invocations, disposed, "edit");
       await access(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     readFile: async (absolutePath) => {
-      record(invocations, disposed, "edit");
+      recordSandboxInvocation(invocations, disposed, "edit");
       return readFile(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     writeFile: async (absolutePath, content) => {
-      record(invocations, disposed, "edit");
+      recordSandboxInvocation(invocations, disposed, "edit");
       await writeFileNoFollow(assertInsideWorkspace(absolutePath, workspaceRoot), content);
     },
   };
   const findOps: FindOperations = {
     exists: (absolutePath) => {
-      record(invocations, disposed, "find");
+      recordSandboxInvocation(invocations, disposed, "find");
       return existsSync(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     glob: async (pattern, cwd, options) => {
-      record(invocations, disposed, "find");
+      recordSandboxInvocation(invocations, disposed, "find");
       return globInsideWorkspace(pattern, assertInsideWorkspace(cwd, workspaceRoot), {
         ignore: options.ignore,
         limit: options.limit,
@@ -153,22 +153,22 @@ export function createHostPassthroughSandboxProvider(
   };
   const lsOps: LsOperations = {
     exists: (absolutePath) => {
-      record(invocations, disposed, "ls");
+      recordSandboxInvocation(invocations, disposed, "ls");
       return existsSync(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
     stat: async (absolutePath) => {
-      record(invocations, disposed, "ls");
+      recordSandboxInvocation(invocations, disposed, "ls");
       const result = await stat(assertInsideWorkspace(absolutePath, workspaceRoot));
       return { isDirectory: () => result.isDirectory() };
     },
     readdir: async (absolutePath) => {
-      record(invocations, disposed, "ls");
+      recordSandboxInvocation(invocations, disposed, "ls");
       return readdir(assertInsideWorkspace(absolutePath, workspaceRoot));
     },
   };
   const bashOps: BashOperations = {
     exec: (command, cwd, options) => {
-      record(invocations, disposed, "bash");
+      recordSandboxInvocation(invocations, disposed, "bash");
       return execHostCommand(command, assertInsideWorkspace(cwd, workspaceRoot), {
         activeProcessGroups,
         env: filterEnv(options.env ?? {}, envAllowlist),
@@ -191,44 +191,19 @@ export function createHostPassthroughSandboxProvider(
       ls: lsOps,
     },
     toolNames: new Set(["bash", "read", "write", "edit", "find", "ls"]),
-    tools: [
-      withToolCallAccounting(
-        "bash",
-        createBashToolDefinition(workspaceRoot, { operations: bashOps }),
-        invocations,
-        disposed,
-      ),
-      withToolCallAccounting(
-        "read",
-        createReadToolDefinition(workspaceRoot, { operations: readOps }),
-        invocations,
-        disposed,
-      ),
-      withToolCallAccounting(
-        "write",
-        createWriteToolDefinition(workspaceRoot, { operations: writeOps }),
-        invocations,
-        disposed,
-      ),
-      withToolCallAccounting(
-        "edit",
-        createEditToolDefinition(workspaceRoot, { operations: editOps }),
-        invocations,
-        disposed,
-      ),
-      withToolCallAccounting(
-        "find",
-        createFindToolDefinition(workspaceRoot, { operations: findOps }),
-        invocations,
-        disposed,
-      ),
-      withToolCallAccounting(
-        "ls",
-        createLsToolDefinition(workspaceRoot, { operations: lsOps }),
-        invocations,
-        disposed,
-      ),
-    ],
+    tools: createSandboxToolDefinitions(
+      workspaceRoot,
+      {
+        bash: bashOps,
+        read: readOps,
+        write: writeOps,
+        edit: editOps,
+        find: findOps,
+        ls: lsOps,
+      },
+      invocations,
+      disposed,
+    ),
     dispose: () => {
       disposed.value = true;
       for (const pid of activeProcessGroups) {
@@ -290,9 +265,17 @@ export function filterEnv(
   return out;
 }
 
-function record(
+export function createSandboxInvocationStats(): MutableSandboxInvocationStats {
+  return {
+    total: 0,
+    byTool: emptyToolCounts(),
+    toolCallIds: emptyToolCallIds(),
+  };
+}
+
+export function recordSandboxInvocation(
   invocations: MutableSandboxInvocationStats,
-  disposed: { value: boolean },
+  disposed: SandboxDisposedFlag,
   toolName: SandboxedBuiltinToolName,
 ): void {
   if (disposed.value) {
@@ -304,6 +287,52 @@ function record(
   if (context?.toolName === toolName) {
     invocations.toolCallIds[toolName].add(context.toolCallId);
   }
+}
+
+export function createSandboxToolDefinitions(
+  cwd: string,
+  operations: SandboxOperations,
+  invocations: MutableSandboxInvocationStats,
+  disposed: SandboxDisposedFlag,
+): ToolDefinition<any, any, any>[] {
+  return [
+    withToolCallAccounting(
+      "bash",
+      createBashToolDefinition(cwd, { operations: operations.bash }),
+      invocations,
+      disposed,
+    ),
+    withToolCallAccounting(
+      "read",
+      createReadToolDefinition(cwd, { operations: operations.read }),
+      invocations,
+      disposed,
+    ),
+    withToolCallAccounting(
+      "write",
+      createWriteToolDefinition(cwd, { operations: operations.write }),
+      invocations,
+      disposed,
+    ),
+    withToolCallAccounting(
+      "edit",
+      createEditToolDefinition(cwd, { operations: operations.edit }),
+      invocations,
+      disposed,
+    ),
+    withToolCallAccounting(
+      "find",
+      createFindToolDefinition(cwd, { operations: operations.find }),
+      invocations,
+      disposed,
+    ),
+    withToolCallAccounting(
+      "ls",
+      createLsToolDefinition(cwd, { operations: operations.ls }),
+      invocations,
+      disposed,
+    ),
+  ];
 }
 
 function emptyToolCounts(): Record<SandboxedBuiltinToolName, number> {
@@ -332,7 +361,7 @@ function withToolCallAccounting<T extends ToolDefinition<any, any, any>>(
   toolName: SandboxedBuiltinToolName,
   tool: T,
   invocations: MutableSandboxInvocationStats,
-  disposed: { value: boolean },
+  disposed: SandboxDisposedFlag,
 ): T {
   return {
     ...tool,
