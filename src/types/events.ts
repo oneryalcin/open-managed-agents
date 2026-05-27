@@ -76,6 +76,7 @@ export interface ManagedAgentsUserCustomToolResultEventInput {
   type: "user.custom_tool_result";
   custom_tool_use_id: string;
   content?: ManagedAgentsContentBlock[];
+  is_error?: boolean;
 }
 
 export interface ManagedAgentsUserToolConfirmationEventInput {

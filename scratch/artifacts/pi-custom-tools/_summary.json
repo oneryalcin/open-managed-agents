@@ -1,0 +1,85 @@
+{
+  "generated_at": "2026-05-26T21:25:48.755Z",
+  "model": "anthropic/claude-haiku-4-5",
+  "out_dir": "/Users/mehmetoneryalcin/dev/personal/open-managed-agents/scratch/artifacts/pi-custom-tools",
+  "scenarios": [
+    {
+      "scenario": "blocking_roundtrip",
+      "eventCount": 25,
+      "eventTypes": {
+        "agent_end": 1,
+        "agent_start": 1,
+        "message_end": 4,
+        "message_start": 4,
+        "message_update": 9,
+        "tool_execution_end": 1,
+        "tool_execution_start": 1,
+        "turn_end": 2,
+        "turn_start": 2
+      },
+      "facts": {
+        "execute_called": true,
+        "execute_call": {
+          "toolCallId": "toolu_0129X82PcbGaKdx6L3ihMEFc",
+          "params": {
+            "question": "probe-15"
+          },
+          "signalPresent": true,
+          "signalInitiallyAborted": false
+        },
+        "events_before_result": 12,
+        "event_types_before_result": [
+          "agent_start",
+          "turn_start",
+          "message_start",
+          "message_end",
+          "message_start",
+          "message_update",
+          "message_update",
+          "message_update",
+          "message_update",
+          "message_update",
+          "message_end",
+          "tool_execution_start"
+        ],
+        "tool_execution_start_before_result": true,
+        "tool_execution_end_after_result": true,
+        "external_result_seen_by_model": true,
+        "evaluated_permission_paths": [],
+        "verdict": "PASS"
+      }
+    },
+    {
+      "scenario": "permission_block",
+      "eventCount": 26,
+      "eventTypes": {
+        "agent_end": 1,
+        "agent_start": 1,
+        "message_end": 4,
+        "message_start": 4,
+        "message_update": 10,
+        "tool_execution_end": 1,
+        "tool_execution_start": 1,
+        "turn_end": 2,
+        "turn_start": 2
+      },
+      "facts": {
+        "tool_call_hook_count": 1,
+        "tool_call_hook_events": [
+          {
+            "type": "tool_call",
+            "toolName": "permission_probe",
+            "toolCallId": "toolu_0157BXEL3chQQACaYvcvyY84",
+            "input": {
+              "marker": "probe-15-permission"
+            }
+          }
+        ],
+        "execute_called": false,
+        "prompt_outcome": "resolved",
+        "evaluated_permission_paths": [],
+        "verdict": "PASS"
+      }
+    }
+  ]
+}

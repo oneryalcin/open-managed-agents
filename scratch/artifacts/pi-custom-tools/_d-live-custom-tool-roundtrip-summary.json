@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-05-26T22:35:51.443Z",
+  "session_id": "sesn_019e666e-0f43-76f9-8ab6-855fbc9d26fc",
+  "unique_token": "D_CUSTOM_RB4QW2",
+  "custom_tool_use_id": "sevt_019e666e-141b-743e-8491-2683bc32cd3a",
+  "stream_ids_match_list": true,
+  "duplicate_stream_ids": [],
+  "stream_saw_token": true,
+  "list_saw_token": true,
+  "event_types": [
+    "user.message",
+    "session.status_running",
+    "agent.custom_tool_use",
+    "session.status_idle",
+    "user.custom_tool_result",
+    "session.status_running",
+    "agent.message",
+    "session.status_idle"
+  ],
+  "verdict": "PASS"
+}

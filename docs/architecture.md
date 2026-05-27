@@ -45,8 +45,8 @@ The control plane, the Pi loop, and the sandbox are three separate concerns — 
 ## Request flow — `events.send` with `user.message`
 
 1. Client posts to `/v1/sessions/{id}/events` with `{ type: "user.message", content: [...] }`
-2. Control plane resolves session → checks Pi's `isStreaming`
-3. If idle: `session.prompt(text)`. If streaming: `session.steer(text)` or `session.followUp(text)` depending on the queueing intent
+2. Control plane resolves session and persists the user event to the event log.
+3. Runtime ingestion forwards the text into the cached Pi session. If idle: `session.prompt(text)`. If already running: `session.followUp(text)`; Pi owns the turn queue.
 4. Pi runs the loop; emits `tool_execution_start`, `message_update`, `agent_end`, etc.
 5. Control plane translates Pi events → Managed Agents event shapes → SSE stream
 
@@ -61,14 +61,19 @@ Agent decides to call a custom tool
 Pi invokes the AgentTool's async execute()
     │
     ▼
-Our async tool body:
-    1. Generates server-side event ID (sevt_<custom_tool_use_id>)
-    2. Persists + emits `agent.custom_tool_use` event
-    3. Persists + emits `session.status_idle` with
-       stop_reason: {type: "requires_action", event_ids: [<id>]}
+PiCustomToolBridge:
+    1. Emits an internal runtime custom-tool-use event.
+    2. Returns a Promise (Pi loop awaits).
+    │
+    ▼
+DefaultSessionEventsService:
+    3. Generates server-side event ID (sevt_<custom_tool_use_id>)
+    4. Persists + emits `agent.custom_tool_use` event
+    5. Coalesces pending custom-tool IDs and persists + emits
+       `session.status_idle` with
+       stop_reason: {type: "requires_action", event_ids: [<ids...>]}
        ← REQUIRED for SDK clients that drain on the idle event.
-    4. Stores resolver in pendingToolCalls Map keyed by `custom_tool_use_id`
-    5. Returns a Promise (Pi loop awaits)
+    6. Binds the pending Promise resolver by the public `custom_tool_use_id`.
     │
     ▼
 Pi loop suspended (await Promise)
@@ -86,8 +91,13 @@ sees stop_reason.requires_action, executes the tool, posts:
 Control plane: lookup resolver by `custom_tool_use_id` → call it
     │
     ▼
-Promise resolves → Pi loop resumes with the tool result, emits
-`session.status_running` event for stream consumers
+Control plane persists `user.custom_tool_result`, emits `session.status_running`,
+then resolves the Promise. Pi resumes with the tool result.
+If multiple custom tools are pending and only one result arrives, the control
+plane re-emits `session.status_idle{requires_action}` with the remaining IDs.
+If `user.custom_tool_result.is_error` is true, the bridge throws a Pi tool
+error using the submitted text content; returning `{isError:true}` was probed
+and does not set Pi's emitted tool-result error flag.
 ```
 
 > ‼️ **`custom_tool_use_id` is the field name on `user.custom_tool_result`** — distinct from `tool_use_id` (which is used on `user.tool_confirmation` for permission gating, a separate feature). See ADR 0005.

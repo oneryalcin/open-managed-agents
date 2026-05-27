@@ -4,8 +4,16 @@ import {
   ModelRegistry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import type { RuntimeEventRunner } from "../../events/types.ts";
+import type {
+  RuntimeCustomToolUseEvent,
+  RuntimeEventRunner,
+} from "../../events/types.ts";
+import type { ManagedAgentsUserCustomToolResultEventInput } from "../../../types/events.ts";
 import type { WorkspaceId } from "../../workspace.ts";
+import {
+  PiCustomToolBridge,
+  type PiCustomToolsProvider,
+} from "./custom-tools.ts";
 
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000;
 const ALREADY_PROCESSING_MESSAGE = "Agent is already processing";
@@ -21,14 +29,18 @@ export interface PiRuntimeSession {
   subscribe(listener: (event: unknown) => void): () => void;
 }
 
-export type PiRuntimeSessionFactory = () => Promise<PiRuntimeSession>;
-
+export type PiRuntimeSessionFactory = (
+  workspaceId: WorkspaceId,
+  sessionId: string,
+) => Promise<PiRuntimeSession>;
 interface RuntimeHandle {
   session: PiRuntimeSession;
   running: boolean;
   closeWhenIdle: boolean;
   lastUsedAt: number;
   timer: ReturnType<typeof setTimeout> | undefined;
+  customToolNames: Set<string>;
+  emitInternal: ((event: RuntimeCustomToolUseEvent) => void) | undefined;
 }
 
 export class PiSessionRunner implements RuntimeEventRunner {
@@ -36,6 +48,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly modelRegistry = ModelRegistry.create(this.authStorage);
   private readonly sessions = new Map<string, RuntimeHandle>();
   private readonly pendingSessions = new Map<string, Promise<RuntimeHandle>>();
+  private readonly customToolBridge: PiCustomToolBridge;
   private readonly idleTtlMs: number;
   private readonly now: () => number;
   private readonly sessionFactory: PiRuntimeSessionFactory;
@@ -49,20 +62,45 @@ export class PiSessionRunner implements RuntimeEventRunner {
       idleTtlMs?: number;
       now?: () => number;
       sessionFactory?: PiRuntimeSessionFactory;
+      customTools?: PiCustomToolsProvider;
+      customToolTimeoutMs?: number;
     } = {},
   ) {
     this.idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
     this.now = opts.now ?? Date.now;
-    this.sessionFactory = opts.sessionFactory ?? (() => this.createPiSession());
+    this.sessionFactory =
+      opts.sessionFactory ??
+      ((workspaceId, sessionId) => this.createPiSession(workspaceId, sessionId));
+    this.customToolBridge = new PiCustomToolBridge({
+      customTools: opts.customTools,
+      timeoutMs: opts.customToolTimeoutMs,
+    });
   }
 
   runUserMessage(
-    _workspaceId: WorkspaceId,
+    workspaceId: WorkspaceId,
     sessionId: string,
     text: string,
     opts: { signal?: AbortSignal } = {},
   ): AsyncIterable<unknown> {
-    return this.runOnSession(sessionId, text, opts.signal);
+    return this.runOnSession(workspaceId, sessionId, text, opts.signal);
+  }
+
+  claimCustomToolResult(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    event: ManagedAgentsUserCustomToolResultEventInput,
+  ): (() => void) | undefined {
+    return this.customToolBridge.claimResult(workspaceId, sessionId, event);
+  }
+
+  customToolNames(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): ReadonlySet<string> {
+    const handle = this.sessions.get(sessionId);
+    if (handle) return handle.customToolNames;
+    return this.customToolBridge.customToolNames(workspaceId, sessionId);
   }
 
   close(): void {
@@ -78,11 +116,12 @@ export class PiSessionRunner implements RuntimeEventRunner {
   }
 
   private async *runOnSession(
+    workspaceId: WorkspaceId,
     sessionId: string,
     text: string,
     signal: AbortSignal | undefined,
   ): AsyncIterable<unknown> {
-    const handle = await this.getOrCreateHandle(sessionId);
+    const handle = await this.getOrCreateHandle(workspaceId, sessionId);
     if (this.closed) {
       this.evict(sessionId, handle);
       throw new Error("PiSessionRunner is closed");
@@ -111,6 +150,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
       queue.push(event);
       wake?.();
     });
+    const previousInternal = handle.emitInternal;
+    const installedInternalEmitter = previousInternal === undefined;
+    if (installedInternalEmitter) {
+      handle.emitInternal = (event) => {
+        queue.push(event);
+        wake?.();
+      };
+    }
 
     const onAbort = () => {
       void handle.session.abort();
@@ -167,12 +214,18 @@ export class PiSessionRunner implements RuntimeEventRunner {
       this.evict(sessionId, handle);
       throw error;
     } finally {
+      if (installedInternalEmitter) {
+        handle.emitInternal = previousInternal;
+      }
       stop();
       signal?.removeEventListener("abort", onAbort);
     }
   }
 
-  private async getOrCreateHandle(sessionId: string): Promise<RuntimeHandle> {
+  private async getOrCreateHandle(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<RuntimeHandle> {
     if (this.closed) throw new Error("PiSessionRunner is closed");
     const existing = this.sessions.get(sessionId);
     if (existing) return existing;
@@ -180,14 +233,21 @@ export class PiSessionRunner implements RuntimeEventRunner {
     const pending = this.pendingSessions.get(sessionId);
     if (pending) return pending;
 
-    const created = this.sessionFactory()
+    const created = this.sessionFactory(workspaceId, sessionId)
       .then((session) => {
+        const customToolNames = new Set(
+          (this.opts.customTools?.(workspaceId, sessionId) ?? []).map(
+            (tool) => tool.name,
+          ),
+        );
         const handle: RuntimeHandle = {
           session,
           running: false,
           closeWhenIdle: false,
           lastUsedAt: this.now(),
           timer: undefined,
+          customToolNames,
+          emitInternal: undefined,
         };
         if (this.closed) {
           session.dispose();
@@ -207,7 +267,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     return created;
   }
 
-  private async createPiSession(): Promise<PiRuntimeSession> {
+  private async createPiSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<PiRuntimeSession> {
     const provider = this.opts.provider ?? "anthropic";
     const modelId = this.opts.model ?? "claude-haiku-4-5";
     const model = this.modelRegistry.find(provider, modelId);
@@ -218,6 +281,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
       model,
       thinkingLevel: this.opts.thinkingLevel ?? "off",
       noTools: "builtin",
+      customTools: this.customToolBridge.createTools(
+        workspaceId,
+        sessionId,
+        () => this.sessions.get(sessionId)?.emitInternal,
+      ),
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
       sessionManager: SessionManager.inMemory(),
@@ -255,6 +323,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     if (this.sessions.get(sessionId) === handle) {
       this.sessions.delete(sessionId);
     }
+    this.customToolBridge.rejectSession(
+      sessionId,
+      new Error("Runtime session evicted"),
+    );
     handle.session.dispose();
   }
 }

@@ -1,0 +1,13 @@
+{
+  "generated_at": "2026-05-26T22:36:11.409Z",
+  "model": "anthropic/claude-haiku-4-5",
+  "tool_execution_end_is_error": false,
+  "tool_execution_end_content": [
+    {
+      "type": "text",
+      "text": "PROBE_18_TOOL_ERROR"
+    }
+  ],
+  "final_text": "ERROR_SEEN",
+  "verdict": "FAIL"
+}

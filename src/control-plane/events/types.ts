@@ -1,4 +1,9 @@
-import type { EventType, ManagedAgentsEvent } from "../../types/events.ts";
+import type {
+  EventType,
+  ManagedAgentsContentBlock,
+  ManagedAgentsEvent,
+  ManagedAgentsUserCustomToolResultEventInput,
+} from "../../types/events.ts";
 import type { JsonObject } from "../../types/json.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
@@ -97,11 +102,42 @@ export interface RuntimeEventRunner {
     text: string,
     opts?: { signal?: AbortSignal },
   ): AsyncIterable<unknown>;
+  claimCustomToolResult?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    event: ManagedAgentsUserCustomToolResultEventInput,
+  ): (() => void) | undefined;
+  customToolNames?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): ReadonlySet<string>;
+}
+
+export interface RuntimeCustomToolUseEvent {
+  type: "oma.custom_tool_use";
+  piToolCallId: string;
+  name: string;
+  input: JsonObject;
+  bindCustomToolUseId: (
+    customToolUseId: string,
+    releaseCustomToolUseId: () => void,
+  ) => void;
+  rejectCustomToolUse: (error: Error) => void;
+}
+
+export interface RuntimeTranslatorContext {
+  customToolNames?: ReadonlySet<string>;
 }
 
 export type RuntimeEventTranslator = (
   event: unknown,
+  context?: RuntimeTranslatorContext,
 ) => Array<{ type: EventType; payload: JsonObject }>;
+
+export interface RuntimeCustomToolResult {
+  content?: ManagedAgentsContentBlock[];
+  is_error?: boolean;
+}
 
 export function toManagedAgentsEvent(
   event: PersistedSessionEvent,
