@@ -620,6 +620,8 @@ Design constraints coming out of E.0:
 - Do not build a parallel sandbox file/shell abstraction over Pi's Operations interfaces. Our owned layer is lifecycle; Pi's typed Operations are the per-tool boundary.
 - Pi passes host environment data into `BashOperations.exec`; provider implementations must apply an explicit env allowlist/drop policy and must not blindly forward `options.env`.
 - The `session.agent.state.tools = [...]` injection path is internal coupling and must fail closed. E.1 must assert provider invocation for sandbox-backed builtin tool calls and treat a builtin tool execution that bypasses the provider as a runtime failure, not as a successful host fallback. Pi SDK bumps must re-run `scratch/19-e0-builtin-operations-injection.ts`.
+- File Operations receive absolute paths after Pi resolves the model's input against `cwd`; that resolution is not a jail. E.1 providers must enforce workspace containment before read/write/list/search operations touch a backend.
+- Pi's current `createGrepTool` is not fully provider-backed: even with custom `GrepOperations`, it still shells out to host `rg`. Keep grep disabled for sandbox-backed builtin tools until that path is replaced or upstreamed.
 
 Scope:
 
@@ -634,6 +636,30 @@ Acceptance:
 - The passthrough provider is explicitly unsafe and guarded.
 - Session end destroys or releases the provider instance.
 - Provider failure emits a caller-safe API error and developer-useful logs.
+
+#### Cycle E.1 Plan — guarded passthrough provider and fail-closed runtime wiring
+
+Goal: land the provider boundary without choosing Docker-local or Modal yet.
+
+Evidence:
+
+- `scratch/20-e1-passthrough-provider.ts` proves a real Pi bash turn routed through `PiSessionRunner` invokes the guarded host-passthrough provider.
+- Unit tests cover deny-by-default env filtering, workspace path containment, explicit unsafe opt-in, provider invocation accounting, dispose behavior, and the fail-closed runtime assertion.
+
+Scope:
+
+1. Add `SandboxProvider` as a thin owner of Pi's Operations objects, not a parallel shell/file vocabulary.
+2. Implement guarded host passthrough for `bash`, `read`, `write`, `edit`, `find`, and `ls`.
+3. Keep `grep` disabled for sandbox-backed builtins until Pi offers a fully delegated grep path or we replace it.
+4. Wire the provider into `PiSessionRunner` behind explicit construction.
+5. Fail closed if Pi emits a sandboxed builtin tool event but the provider saw no operation invocation.
+
+Out of scope:
+
+- Docker-local isolation.
+- Modal provisioning.
+- Production enablement of host passthrough.
+- Full env/policy DSL beyond an explicit key allowlist.
 
 ## Canonical Tutorial Compatibility Backlog
 

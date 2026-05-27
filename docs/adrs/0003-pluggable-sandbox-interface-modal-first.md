@@ -221,6 +221,8 @@ Findings:
 - **The current public injection path works:** create the session normally, then replace the active tool list with `session.agent.state.tools = [createBashTool(cwd, { operations })]`. A live Haiku run invoked `BashOperations.exec` exactly once and the model observed the returned tool output.
 - **Pi passes host environment data into `BashOperations.exec`.** The probe recorded 124 env keys and detected secret-like names. Provider implementations must not blindly forward `options.env` into passthrough, Docker, or Modal. Apply an allowlist/drop policy at the provider boundary.
 - **The injection path must fail closed.** `session.agent.state.tools = [...]` is internal coupling. If a future Pi SDK changes that state shape and our replacement stops taking effect, Pi could fall back to its default builtin bash implementation: host execution with host env. E.1 must assert that provider-backed Operations were invoked for every sandbox-backed builtin tool call, and must fail the run if a builtin tool appears to execute without the provider seeing it. Pi version bumps must re-run this probe before merge.
+- **File path containment is separate from env filtering.** Pi resolves model-supplied paths to absolute paths before calling file Operations; providers must still reject paths outside the workspace root. Env allowlisting protects bash. Path jail protects read/write/edit/find/ls.
+- **Grep is not sandbox-safe through Operations in Pi 0.75.4.** `createGrepTool` accepts `GrepOperations`, but its implementation still runs host `rg` and only uses Operations for directory checks/context reads. Do not enable grep as a sandbox-backed builtin until we own or upstream a fully delegated grep implementation.
 
 Updated implementation direction:
 

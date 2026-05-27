@@ -3,6 +3,7 @@ import {
   PiSessionRunner,
   type PiRuntimeSession,
 } from "../runner.ts";
+import type { SandboxProvider } from "../sandbox/provider.ts";
 
 describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   it("reuses one Pi session for multiple turns of the same managed session", async () => {
@@ -167,6 +168,55 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     await expect(run).rejects.toThrow("PiSessionRunner is closed");
     expect(session.disposed).toBe(true);
   });
+
+  it("disposes a created session if sandbox provisioning fails", async () => {
+    const factory = new FakeSessionFactory();
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => {
+        throw new Error("sandbox provision failed");
+      },
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("sandbox provision failed");
+    expect(factory.sessions[0]?.disposed).toBe(true);
+  });
+
+  it("fails closed when a sandboxed builtin tool bypasses the provider", async () => {
+    const factory = new FakeSessionFactory({ emitSandboxedTool: "bash" });
+    const sandbox = new FakeSandboxProvider(["bash"]);
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("without invoking the sandbox provider");
+    expect(sandbox.disposed).toBe(true);
+  });
+
+  it("accepts a sandboxed builtin tool when the provider was invoked", async () => {
+    const sandbox = new FakeSandboxProvider(["bash"]);
+    const factory = new FakeSessionFactory({
+      emitSandboxedTool: "bash",
+      onSandboxedTool: () => sandbox.recordInvocation(),
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    const events = await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+
+    expect(messageTexts(events)).toEqual(["reply: one"]);
+    expect(sandbox.disposed).toBe(false);
+  });
 });
 
 class FakeSessionFactory {
@@ -197,6 +247,8 @@ interface FakeSessionOptions {
   throwAlreadyProcessingAfterFirstPrompt?: boolean;
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
+  emitSandboxedTool?: string;
+  onSandboxedTool?: () => void;
 }
 
 class FakeSession implements PiRuntimeSession {
@@ -236,6 +288,22 @@ class FakeSession implements PiRuntimeSession {
     }
     this.emit({ type: "agent_start" });
     if (this.opts.promptGate) await this.opts.promptGate;
+    if (this.opts.emitSandboxedTool) {
+      this.emit({
+        type: "tool_execution_start",
+        toolCallId: "toolu_fake",
+        toolName: this.opts.emitSandboxedTool,
+        args: {},
+      });
+      this.opts.onSandboxedTool?.();
+      this.emit({
+        type: "tool_execution_end",
+        toolCallId: "toolu_fake",
+        toolName: this.opts.emitSandboxedTool,
+        result: { content: [{ type: "text", text: "tool ok" }] },
+        isError: false,
+      });
+    }
     this.emitMessage(text);
     for (const followUp of this.followUps) {
       this.emitMessage(followUp);
@@ -328,4 +396,25 @@ async function until(predicate: () => boolean): Promise<void> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+class FakeSandboxProvider implements SandboxProvider {
+  readonly cwd = "/workspace";
+  readonly operations = {} as SandboxProvider["operations"];
+  readonly tools = [];
+  readonly toolNames: ReadonlySet<"bash" | "read" | "write" | "edit" | "find" | "ls">;
+  readonly invocations = { total: 0 };
+  disposed = false;
+
+  constructor(toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "ls">) {
+    this.toolNames = new Set(toolNames);
+  }
+
+  recordInvocation(): void {
+    this.invocations.total += 1;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+  }
 }
