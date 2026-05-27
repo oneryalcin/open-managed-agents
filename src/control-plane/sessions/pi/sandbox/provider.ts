@@ -27,6 +27,7 @@ import {
   createWriteToolDefinition,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { matchGlob, toPosix } from "./glob.ts";
 
 export type SandboxedBuiltinToolName =
   | "bash"
@@ -439,62 +440,29 @@ async function globInsideWorkspace(
     workspaceRoot: string;
   },
 ): Promise<string[]> {
-  const matcher = globMatcher(pattern);
-  const ignores = opts.ignore.map(globMatcher);
-  const out: string[] = [];
+  const files: string[] = [];
+  const absoluteByRelativePath = new Map<string, string>();
 
   async function visit(dir: string): Promise<void> {
-    if (out.length >= opts.limit) return;
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (out.length >= opts.limit) return;
       const fullPath = assertInsideWorkspace(
         `${dir}${sep}${entry.name}`,
         opts.workspaceRoot,
       );
       const rel = toPosix(relative(cwd, fullPath));
-      if (ignores.some((ignore) => ignore(rel))) continue;
       if (entry.isDirectory()) {
         await visit(fullPath);
-      } else if (matcher(rel)) {
-        out.push(fullPath);
+      } else {
+        files.push(rel);
+        absoluteByRelativePath.set(rel, fullPath);
       }
     }
   }
 
   await visit(cwd);
-  return out;
-}
-
-function globMatcher(pattern: string): (value: string) => boolean {
-  const normalized = toPosix(pattern);
-  const regex = globToRegexSource(normalized);
-  const exact = new RegExp(`^${regex}$`);
-  const basename = new RegExp(`(^|/)${regex}$`);
-  return (value) => exact.test(toPosix(value)) || basename.test(toPosix(value));
-}
-
-function globToRegexSource(pattern: string): string {
-  let out = "";
-  for (let i = 0; i < pattern.length; i += 1) {
-    const char = pattern[i];
-    const next = pattern[i + 1];
-    const afterNext = pattern[i + 2];
-    if (char === "*" && next === "*" && afterNext === "/") {
-      out += "(?:.*/)?";
-      i += 2;
-    } else if (char === "*" && next === "*") {
-      out += ".*";
-      i += 1;
-    } else if (char === "*") {
-      out += "[^/]*";
-    } else {
-      out += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  return out;
-}
-
-function toPosix(value: string): string {
-  return value.split(sep).join("/");
+  return matchGlob(files, pattern, {
+    ignore: opts.ignore,
+    limit: opts.limit,
+  }).map((rel) => absoluteByRelativePath.get(rel)!);
 }

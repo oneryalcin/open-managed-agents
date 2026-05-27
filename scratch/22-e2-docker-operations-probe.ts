@@ -15,6 +15,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { matchGlob } from "../src/control-plane/sessions/pi/sandbox/glob.ts";
 
 const OUT_DIR = join(process.cwd(), "scratch", "artifacts", "docker-sandbox");
 const IMAGE = process.env.OMA_DOCKER_PROBE_IMAGE ?? "alpine:3.19";
@@ -396,10 +397,10 @@ async function probeGlobBoundary(): Promise<ProbeSummary["file_ops"]["glob_bound
   ];
   const patternResults = patterns.map((entry) => ({
     ...entry,
-    matches: matchGlob(singleExecFiles, entry.pattern, entry.ignore).slice(
-      0,
-      entry.limit,
-    ),
+    matches: matchGlob(singleExecFiles, entry.pattern, {
+      ignore: entry.ignore,
+      limit: entry.limit,
+    }),
   }));
 
   return {
@@ -455,18 +456,6 @@ async function listFilesHostOrchestrated(
   }
   files.sort();
   return { files, dirExecs };
-}
-
-function matchGlob(
-  files: string[],
-  pattern: string,
-  ignore: string[],
-): string[] {
-  const matcher = globMatcher(pattern);
-  const ignores = ignore.map(globMatcher);
-  return files
-    .filter((file) => !ignores.some((ignoreMatcher) => ignoreMatcher(file)))
-    .filter(matcher);
 }
 
 async function rawAbortProbe(): Promise<CommandResult> {
@@ -648,39 +637,6 @@ function summaryPasses(summary: ProbeSummary): boolean {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function globMatcher(pattern: string): (value: string) => boolean {
-  const normalized = toPosix(pattern);
-  const regex = globToRegexSource(normalized);
-  const exact = new RegExp(`^${regex}$`);
-  const basename = new RegExp(`(^|/)${regex}$`);
-  return (value) => exact.test(toPosix(value)) || basename.test(toPosix(value));
-}
-
-function globToRegexSource(pattern: string): string {
-  let out = "";
-  for (let i = 0; i < pattern.length; i += 1) {
-    const char = pattern[i];
-    const next = pattern[i + 1];
-    const afterNext = pattern[i + 2];
-    if (char === "*" && next === "*" && afterNext === "/") {
-      out += "(?:.*/)?";
-      i += 2;
-    } else if (char === "*" && next === "*") {
-      out += ".*";
-      i += 1;
-    } else if (char === "*") {
-      out += "[^/]*";
-    } else {
-      out += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  return out;
-}
-
-function toPosix(value: string): string {
-  return value.split("\\").join("/");
 }
 
 function delay(ms: number): Promise<void> {
