@@ -30,6 +30,7 @@ const SANDBOX_LABEL_KEY = "open-managed-agents.sandbox";
 const SANDBOX_LABEL_VALUE = "docker-local";
 const OWNER_LABEL_KEY = "open-managed-agents.owner";
 const OWNER_LABEL_VALUE = "open-managed-agents";
+const BASH_DISPATCH_PREFIX = "__OMA_DISPATCHED__:";
 
 export interface DockerSandboxOptions {
   image?: string;
@@ -70,6 +71,8 @@ interface DockerSandboxResolvedOptions {
 interface DockerExecOptions {
   input?: Buffer | string;
   onData?: (data: Buffer) => void;
+  onStderr?: (data: Buffer) => void;
+  onStdout?: (data: Buffer) => void;
   onAbort?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -300,15 +303,30 @@ export async function createDockerSandboxProvider(
           ? options.timeout
           : resolved.operationTimeoutMs / 1000;
       const execId = randomExecId();
-      const pidFile = posix.join(resolved.workspacePath, `.oma-exec-${execId}.pid`);
-      const shellCommand = buildDockerBashCommand(command, timeoutSeconds, pidFile);
+      const dispatchToken = randomExecId();
+      const pidFile = posix.join(
+        resolved.workspacePath,
+        `.oma-exec-${execId}.pid`,
+      );
+      const shellCommand = buildDockerBashCommand(
+        command,
+        timeoutSeconds,
+        pidFile,
+        dispatchToken,
+      );
+      const dispatchFilter = createBashDispatchFilter(dispatchToken);
       try {
         const result = await dockerExec(
           resolved.dockerCommand,
-          buildDockerExecShellArgs(containerName, shellCommand.script, shellCommand.args, {
-            workdir: path,
-            env: filterDockerEnv(options.env ?? {}, resolved.envAllowlist),
-          }),
+          buildDockerExecShellArgs(
+            containerName,
+            shellCommand.script,
+            shellCommand.args,
+            {
+              workdir: path,
+              env: filterDockerEnv(options.env ?? {}, resolved.envAllowlist),
+            },
+          ),
           {
             activePids: activeDockerExecPids,
             onAbort: () => {
@@ -318,12 +336,25 @@ export async function createDockerSandboxProvider(
                 pidFile,
               );
             },
-            onData: options.onData,
+            onStderr: (chunk) => {
+              const forwarded = dispatchFilter.stderr(chunk);
+              if (forwarded.length > 0) options.onData(forwarded);
+            },
+            onStdout: (chunk) => {
+              const forwarded = dispatchFilter.stdout(chunk);
+              if (forwarded.length > 0) options.onData(forwarded);
+            },
             signal: options.signal,
             timeoutMs: Math.ceil(timeoutSeconds * 1000) + 2_000,
           },
         );
-        throwIfDockerInfrastructureFailure(result, "docker bash");
+        if (!dispatchFilter.dispatchSeen()) {
+          throw new Error(
+            `docker bash failed before command dispatch: ${
+              result.stderr.toString("utf8") || result.stdout.toString("utf8")
+            }`,
+          );
+        }
         if (result.exitCode === 137 && timeoutSeconds > 0) {
           throw new DockerTimeoutError();
         }
@@ -450,15 +481,17 @@ export function buildDockerBashCommand(
   command: string,
   timeoutSeconds: number,
   pidFile: string,
+  dispatchToken = "",
 ): DockerShellCommand {
   return {
     script: [
       "pidfile=\"$1\"",
       "timeout_secs=\"$2\"",
       "command=\"$3\"",
-      "timeout_file=\"${pidfile}.timeout\"",
+      "dispatch_token=\"$4\"",
+      "printf '%s\\n' \"__OMA_DISPATCHED__:${dispatch_token}\"",
       "timer_file=\"${pidfile}.timer\"",
-      "rm -f \"$timeout_file\" \"$timer_file\"",
+      "rm -f \"$timer_file\"",
       "setsid bash -lc \"$command\" &",
       "pid=$!",
       "printf '%s' \"$pid\" > \"$pidfile\"",
@@ -468,10 +501,9 @@ export function buildDockerBashCommand(
       "wait -n -p completed \"$pid\" \"$timer\"",
       "status=$?",
       "if [ \"${completed:-}\" = \"$timer\" ]; then",
-      "  : > \"$timeout_file\"",
       "  kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
       "  wait \"$pid\" 2>/dev/null || true",
-      "  rm -f \"$pidfile\" \"$timeout_file\" \"$timer_file\"",
+      "  rm -f \"$pidfile\" \"$timer_file\"",
       "  exit 137",
       "fi",
       "kill \"$timer\" 2>/dev/null || true",
@@ -479,7 +511,7 @@ export function buildDockerBashCommand(
       "rm -f \"$pidfile\" \"$timer_file\"",
       "exit \"$status\"",
     ].join("\n"),
-    args: [pidFile, String(timeoutSeconds), command],
+    args: [pidFile, String(timeoutSeconds), command, dispatchToken],
   };
 }
 
@@ -681,6 +713,45 @@ function randomExecId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function bashDispatchSentinel(token: string): Buffer {
+  return Buffer.from(`${BASH_DISPATCH_PREFIX}${token}\n`);
+}
+
+export function createBashDispatchFilter(token: string): {
+  dispatchSeen: () => boolean;
+  stderr: (chunk: Buffer) => Buffer;
+  stdout: (chunk: Buffer) => Buffer;
+} {
+  const sentinel = bashDispatchSentinel(token);
+  let dispatchSeen = false;
+  let pendingStdout = Buffer.alloc(0);
+  let pendingStderr = Buffer.alloc(0);
+
+  return {
+    dispatchSeen: () => dispatchSeen,
+    stderr: (chunk) => {
+      if (dispatchSeen) return chunk;
+      pendingStderr = Buffer.concat([pendingStderr, chunk]);
+      return Buffer.alloc(0);
+    },
+    stdout: (chunk) => {
+      if (dispatchSeen) return chunk;
+      pendingStdout = Buffer.concat([pendingStdout, chunk]);
+      const index = pendingStdout.indexOf(sentinel);
+      if (index < 0) return Buffer.alloc(0);
+      dispatchSeen = true;
+      const out = Buffer.concat([
+        pendingStdout.subarray(0, index),
+        pendingStderr,
+        pendingStdout.subarray(index + sentinel.length),
+      ]);
+      pendingStdout = Buffer.alloc(0);
+      pendingStderr = Buffer.alloc(0);
+      return out;
+    },
+  };
+}
+
 function filterDockerEnvObject(
   env: NodeJS.ProcessEnv | undefined,
 ): NodeJS.ProcessEnv {
@@ -705,20 +776,6 @@ async function dockerChecked(
     );
   }
   return result;
-}
-
-function throwIfDockerInfrastructureFailure(
-  result: DockerExecResult,
-  context: string,
-): void {
-  if (result.exitCode === 0) return;
-  const stderr = result.stderr.toString("utf8").trim();
-  if (
-    stderr.startsWith("Error response from daemon:") ||
-    stderr.startsWith("Cannot connect to the Docker daemon")
-  ) {
-    throw new Error(`${context} failed: ${stderr}`);
-  }
 }
 
 function throwIfUnexpectedBoundedExit(
@@ -778,10 +835,12 @@ async function dockerExec(
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout.push(chunk);
+      opts.onStdout?.(chunk);
       opts.onData?.(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr.push(chunk);
+      opts.onStderr?.(chunk);
       opts.onData?.(chunk);
     });
     child.on("error", (error) => settle(() => reject(error)));

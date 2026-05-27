@@ -12,6 +12,7 @@ import {
   buildDockerRunArgs,
   buildDockerStatCommand,
   buildDockerWriteFileCommand,
+  createBashDispatchFilter,
   createDockerSandboxProvider,
   directoryNamesPrunedByIgnoreGlobs,
   filterDockerEnv,
@@ -98,13 +99,30 @@ describe("Docker sandbox provider command construction", () => {
     expect(
       buildDockerBashCommand("[[ 1 == 1 ]]", 2.5, "/workspace/.oma-exec-test.pid"),
     ).toMatchObject({
-      args: ["/workspace/.oma-exec-test.pid", "2.5", "[[ 1 == 1 ]]"],
+      args: ["/workspace/.oma-exec-test.pid", "2.5", "[[ 1 == 1 ]]", ""],
     });
     const command = buildDockerBashCommand("sleep 5", 1, "/workspace/pid");
+    expect(command.script).toContain("__OMA_DISPATCHED__");
     expect(command.script).toContain("setsid bash -lc");
     expect(command.script).toContain("sleep \"$timeout_secs\"");
     expect(command.script).toContain("kill -KILL \"-$pid\"");
     expect(command.script).toContain("bash -lc");
+  });
+
+  it("filters Docker bash dispatch sentinels before streaming output", () => {
+    const filter = createBashDispatchFilter("token");
+
+    expect(filter.stderr(Buffer.from("pending stderr\n"))).toEqual(
+      Buffer.alloc(0),
+    );
+    expect(filter.stdout(Buffer.from("__OMA_DIS"))).toEqual(Buffer.alloc(0));
+    expect(filter.stdout(Buffer.from("PATCHED__:token\nhello"))).toEqual(
+      Buffer.from("pending stderr\nhello"),
+    );
+    expect(filter.dispatchSeen()).toBe(true);
+    expect(filter.stderr(Buffer.from("later stderr\n"))).toEqual(
+      Buffer.from("later stderr\n"),
+    );
   });
 
   it("builds file-operation commands as data", () => {
@@ -270,6 +288,18 @@ describe("Docker sandbox provider integration", () => {
       );
       expect(result).toEqual({ exitCode: 0 });
       expect(Buffer.concat(chunks).toString("utf8")).toBe("yes|");
+      const failingChunks: Buffer[] = [];
+      const failingResult = await provider.operations.bash.exec(
+        "ls /nope",
+        "/workspace",
+        {
+          env: {},
+          onData: (chunk) => failingChunks.push(chunk),
+          timeout: 1,
+        },
+      );
+      expect(failingResult.exitCode).not.toBe(0);
+      expect(Buffer.concat(failingChunks).toString("utf8")).toContain("/nope");
       await expect(
         provider.operations.bash.exec("printf fail; exit 7", "/workspace", {
           env: {},
@@ -277,7 +307,7 @@ describe("Docker sandbox provider integration", () => {
           timeout: 1,
         }),
       ).resolves.toEqual({ exitCode: 7 });
-      expect(provider.invocations.byTool.bash).toBe(2);
+      expect(provider.invocations.byTool.bash).toBe(3);
       expect(provider.invocations.byTool.edit).toBe(3);
       expect(provider.invocations.byTool.find).toBe(2);
       expect(provider.invocations.byTool.ls).toBe(2);
@@ -419,7 +449,7 @@ describe("Docker sandbox provider integration", () => {
           onData: () => {},
           timeout: 1,
         }),
-      ).rejects.toThrow("docker bash failed");
+      ).rejects.toThrow("docker bash failed before command dispatch");
     } finally {
       provider.dispose();
     }
