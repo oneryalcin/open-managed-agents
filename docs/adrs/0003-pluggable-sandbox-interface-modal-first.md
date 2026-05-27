@@ -253,6 +253,7 @@ Findings:
 - **The cleaner route does not require owning Pi's bash semantics.** Pi already exports `createBashToolDefinition`, `createReadToolDefinition`, `createWriteToolDefinition`, `createEditToolDefinition`, `createFindToolDefinition`, and `createLsToolDefinition`. Register those definitions through `customTools` with provider Operations. That uses public APIs, preserves Pi's tool descriptions/rendering/execution semantics, and avoids internal `session.agent.state.tools` mutation.
 - **The bypass class is designed out, not merely detected.** Pi executes the registered `ToolDefinition`; the provider Operations live inside that execute body. Keep invocation accounting and gated release as defense in depth, but validate by `toolCallId` only when a real Operation runs inside that tool execution context. Dispatch alone is not proof of provider use.
 - **Host passthrough path containment is best-effort, not isolation.** E.1 realpath containment plus `O_NOFOLLOW` writes rejects existing symlink escapes and final-component write symlinks, but it cannot close every intermediate-component TOCTOU race against a concurrent host process. That is acceptable only because passthrough is explicitly unsafe and non-isolating; Docker/remote providers must rely on their OS isolation boundary.
+- **Cycle E.2 uses Operations delegation, not whole-agent-in-container.** The control plane still owns the Pi session, model loop, and tool dispatch on the host; Docker-local becomes the backend for Pi's `bash/read/write/edit/find/ls` Operations. This is the smallest step from E.1 to real isolation for provider-backed operations, but it means the active-tool allowlist and fail-closed provider validator remain load-bearing. The validator prevents bypassed output from reaching the model; it does not undo host-side effects from a bypassing tool, which is why the exact active-tool allowlist is the primary containment guard in this architecture. Running the whole Pi agent inside the sandbox would provide a stronger containment story, but it is a larger architecture and is deferred until a later remote/managed-provider decision, if ever.
 
 Updated implementation direction:
 
@@ -273,3 +274,25 @@ const { session } = await createAgentSession({
 ```
 
 `grep` remains disabled. The current Pi `createGrepToolDefinition` still delegates part of its behavior to host `rg`, so grep-like capability stays routed through policed `bash` until we own or upstream a fully delegated grep implementation.
+
+## Findings (Cycle E.2.0 Docker Operations probe, 2026-05-27)
+
+Probe: `scratch/22-e2-docker-operations-probe.ts`.
+
+Findings:
+
+- **Docker-local is available and can meet the first isolation bar locally.** The probe started an `alpine:3.19` container with non-root user, `--network none`, read-only rootfs, tmpfs `/workspace`, no Docker socket, `--cap-drop ALL`, `no-new-privileges`, PID limit, memory limit, and successful cleanup.
+- **`docker exec` supports the needed bash shape.** Streaming stdout arrived before command exit, timeout killed the in-container process with no leftover `sleep`, and abort/CLI termination left no leftover process in this OrbStack environment. The provider still needs explicit abort cleanup because Docker CLI behavior is not the contract.
+- **File Operations can start as exec-per-op inside the container.** The probe wrote, read, edited, listed, and found files under `/workspace` without host-side file access. This keeps both bash and file Operations inside Docker for E.2.1.
+- **`FindOperations.glob` should not be host-orchestrated per directory.** On a 90-file corpus, one in-container `find` enumeration plus the E.1 JS glob matcher took 56ms and preserved matcher semantics, while host-orchestrated per-directory listing took 50 Docker execs and 2406ms. E.2.1 should implement glob as one container-side enumeration followed by shared JS matching.
+- **Do not use host bind mounts for provider-internal file Operations by default.** Bind mounts are useful later for explicit resource mounting, but using them as the provider-internal filesystem boundary would put file contents back on the host and weaken the Docker-local isolation claim.
+- **Defer fs-bridge.** OpenClaw's Docker prior art shows a richer fs bridge with canonical path checks, mount tables, read/write policy, and pinned mutation helpers. That is the better long-term shape if exec-per-op becomes too slow or too quoting-heavy, but it is too much surface for E.2.1.
+
+Updated Docker-local direction:
+
+- One long-lived Docker container per managed session/provider handle.
+- Operations delegation only: Pi stays in the control plane; Docker backs `bash/read/write/edit/find/ls`.
+- Use `docker exec` for bash and first-pass file Operations.
+- For `FindOperations.glob`, run one in-container file enumeration and apply the shared JS matcher outside the container; do not issue one Docker exec per directory.
+- Default egress off; make network access an explicit provider option later.
+- No arbitrary Docker binds, no Docker socket mount, no silent fallback to host execution.
