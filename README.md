@@ -26,7 +26,9 @@ Open Managed Agents aims to be that control plane:
 
 ## Current Status
 
-This project is still early, but the core platform shape is in place.
+This project is still early. It is now a working MVP control plane with proven
+Docker-local sandbox execution, but it is not yet a full Anthropic Managed
+Agents-compatible beta.
 
 Working today:
 
@@ -37,17 +39,23 @@ Working today:
 - public custom-tool pause/resume round trips;
 - guarded local passthrough provider for development tests;
 - Docker-local sandbox provider as the first real isolation provider;
-- fail-closed provider-selection foundation.
+- fail-closed provider selection;
+- trusted deployment config for enabling Docker-local;
+- live proof that a served session can execute `bash` inside Docker and record
+  the expected `agent.tool_use` / `agent.tool_result` events.
 
-Still gated before production use:
+Still missing before claiming Anthropic tutorial parity:
 
-- runtime enablement policy;
-- Docker-local provider selection, pending
-  [#22](https://github.com/oneryalcin/open-managed-agents/issues/22);
+- `DELETE /v1/sessions`, archive, and interrupt cleanup;
+- file resources and session `resources`;
+- permission/evaluated tool confirmations;
 - durable recovery for pending custom-tool waits;
 - request-level idempotency;
-- permission-gated builtin/MCP tools;
-- managed remote sandbox providers such as Modal.
+- agent update/versioning;
+- span/model request events;
+- managed remote sandbox providers such as Modal;
+- production auth, RBAC, tenancy, and billing boundaries;
+- CI and a real license.
 
 ## Architecture
 

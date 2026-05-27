@@ -734,6 +734,20 @@ Out of scope:
 - Production defaulting to Docker-local.
 - Changing the production default to Docker-local.
 
+## Parity Checkpoint — MVP Control Plane, Not Full Anthropic Parity
+
+Current checkpoint:
+
+- Open Managed Agents has a working self-hosted control-plane MVP shape.
+- The REST/SSE surface covers persisted agents, environments, sessions, session events, event listing, and stream replay.
+- Runtime integration is real: user messages can flow through Pi, custom tools can pause/resume, and sandbox-backed builtin tool calls can be translated into `agent.tool_use` / `agent.tool_result` events.
+- Docker-local is the first real isolation provider. It is deployment-gated, default-closed, and live-smoked through the served deployment app path with `bash` executing in-container at `/workspace`.
+
+This is enough to call the project an MVP control plane with proven Docker-local execution.
+It is not enough to claim full Anthropic Managed Agents compatibility or canonical tutorial parity.
+
+Remaining parity gaps include lifecycle cleanup (`DELETE /v1/sessions`, archive, interrupt), file resources and session `resources`, evaluated permissions/tool confirmations, durable custom-tool recovery, request idempotency, agent update/versioning, span/model request events, managed remote sandbox providers, and production auth/RBAC/tenancy.
+
 ## Canonical Tutorial Compatibility Backlog
 
 These items were found by tracing Anthropic's public Managed Agents workshop tutorials end to end. They are not all required for the first MVP platform-shape proof, but they are required before claiming that the canonical tutorials run unchanged against this server with only a base-URL swap.
