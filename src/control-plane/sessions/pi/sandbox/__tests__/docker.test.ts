@@ -103,6 +103,7 @@ describe("Docker sandbox provider command construction", () => {
     });
     const command = buildDockerBashCommand("sleep 5", 1, "/workspace/pid");
     expect(command.script).toContain("__OMA_DISPATCHED__");
+    expect(command.script).toContain("__OMA_TERMINAL__");
     expect(command.script).toContain("setsid bash -lc");
     expect(command.script).toContain("sleep \"$timeout_secs\"");
     expect(command.script).toContain("kill -KILL \"-$pid\"");
@@ -117,12 +118,31 @@ describe("Docker sandbox provider command construction", () => {
     );
     expect(filter.stdout(Buffer.from("__OMA_DIS"))).toEqual(Buffer.alloc(0));
     expect(filter.stdout(Buffer.from("PATCHED__:token\nhello"))).toEqual(
-      Buffer.from("pending stderr\nhello"),
+      Buffer.alloc(0),
     );
+    expect(
+      filter.stdout(Buffer.from("__OMA_TERMINAL__:token:exit:7\n")),
+    ).toEqual(Buffer.from("pending stderr\nhello"));
+    expect(filter.terminalRecord()).toEqual({ kind: "exit", exitCode: 7 });
     expect(filter.dispatchSeen()).toBe(true);
     expect(filter.stderr(Buffer.from("later stderr\n"))).toEqual(
       Buffer.from("later stderr\n"),
     );
+  });
+
+  it("keeps Docker bash timeout terminal markers out of streamed output", () => {
+    const filter = createBashDispatchFilter("token");
+
+    expect(
+      filter.stdout(
+        Buffer.from(
+          "__OMA_DISPATCHED__:token\npartial__OMA_TERMINAL__:token:time",
+        ),
+      ),
+    ).toEqual(Buffer.from("partial"));
+    expect(filter.stdout(Buffer.from("out:137\n"))).toEqual(Buffer.alloc(0));
+    expect(filter.dispatchSeen()).toBe(true);
+    expect(filter.terminalRecord()).toEqual({ kind: "timeout", exitCode: 137 });
   });
 
   it("builds file-operation commands as data", () => {
@@ -307,7 +327,14 @@ describe("Docker sandbox provider integration", () => {
           timeout: 1,
         }),
       ).resolves.toEqual({ exitCode: 7 });
-      expect(provider.invocations.byTool.bash).toBe(3);
+      await expect(
+        provider.operations.bash.exec("exit 137", "/workspace", {
+          env: {},
+          onData: () => {},
+          timeout: 1,
+        }),
+      ).resolves.toEqual({ exitCode: 137 });
+      expect(provider.invocations.byTool.bash).toBe(4);
       expect(provider.invocations.byTool.edit).toBe(3);
       expect(provider.invocations.byTool.find).toBe(2);
       expect(provider.invocations.byTool.ls).toBe(2);
@@ -449,7 +476,43 @@ describe("Docker sandbox provider integration", () => {
           onData: () => {},
           timeout: 1,
         }),
-      ).rejects.toThrow("docker bash failed before command dispatch");
+      ).rejects.toThrow(/^docker bash failed before command dispatch$/);
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("throws when the Docker container dies after bash dispatch", async () => {
+    const label = `oma-docker-bash-death-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 15_000,
+    });
+    try {
+      const [containerId] = containersForLabel(label);
+      expect(containerId).toBeDefined();
+      const startText = `started-${"x".repeat(80)}`;
+      const chunks: Buffer[] = [];
+      await expect(
+        provider.operations.bash.exec(
+          `printf '${startText}'; sleep 5`,
+          "/workspace",
+          {
+            env: {},
+            onData: (chunk) => {
+              chunks.push(chunk);
+              if (Buffer.concat(chunks).toString("utf8").includes("started-")) {
+                spawnSync("docker", ["kill", containerId], { stdio: "ignore" });
+              }
+            },
+            timeout: 10,
+          },
+        ),
+      ).rejects.toThrow(/^docker bash failed before command completion$/);
+      expect(Buffer.concat(chunks).toString("utf8")).toMatch(/^started-/);
     } finally {
       provider.dispose();
     }

@@ -31,6 +31,7 @@ const SANDBOX_LABEL_VALUE = "docker-local";
 const OWNER_LABEL_KEY = "open-managed-agents.owner";
 const OWNER_LABEL_VALUE = "open-managed-agents";
 const BASH_DISPATCH_PREFIX = "__OMA_DISPATCHED__:";
+const BASH_TERMINAL_PREFIX = "__OMA_TERMINAL__:";
 
 export interface DockerSandboxOptions {
   image?: string;
@@ -83,6 +84,10 @@ interface DockerExecResult {
   stderr: Buffer;
   exitCode: number | null;
 }
+
+type BashTerminalRecord =
+  | { kind: "exit"; exitCode: number }
+  | { kind: "timeout"; exitCode: number };
 
 export interface DockerShellCommand {
   script: string;
@@ -349,16 +354,16 @@ export async function createDockerSandboxProvider(
           },
         );
         if (!dispatchFilter.dispatchSeen()) {
-          throw new Error(
-            `docker bash failed before command dispatch: ${
-              result.stderr.toString("utf8") || result.stdout.toString("utf8")
-            }`,
-          );
+          throw new Error("docker bash failed before command dispatch");
         }
-        if (result.exitCode === 137 && timeoutSeconds > 0) {
+        const terminal = dispatchFilter.terminalRecord();
+        if (terminal === undefined) {
+          throw new Error("docker bash failed before command completion");
+        }
+        if (terminal.kind === "timeout") {
           throw new DockerTimeoutError();
         }
-        return { exitCode: result.exitCode };
+        return { exitCode: terminal.exitCode };
       } catch (error) {
         if (error instanceof DockerTimeoutError) {
           throw new Error(`timeout:${timeoutSeconds}`);
@@ -490,6 +495,8 @@ export function buildDockerBashCommand(
       "command=\"$3\"",
       "dispatch_token=\"$4\"",
       "printf '%s\\n' \"__OMA_DISPATCHED__:${dispatch_token}\"",
+      "terminal_exit() { printf '%s\\n' \"__OMA_TERMINAL__:${dispatch_token}:exit:$1\"; }",
+      "terminal_timeout() { printf '%s\\n' \"__OMA_TERMINAL__:${dispatch_token}:timeout:137\"; }",
       "timer_file=\"${pidfile}.timer\"",
       "rm -f \"$timer_file\"",
       "setsid bash -lc \"$command\" &",
@@ -504,11 +511,13 @@ export function buildDockerBashCommand(
       "  kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
       "  wait \"$pid\" 2>/dev/null || true",
       "  rm -f \"$pidfile\" \"$timer_file\"",
+      "  terminal_timeout",
       "  exit 137",
       "fi",
       "kill \"$timer\" 2>/dev/null || true",
       "wait \"$timer\" 2>/dev/null || true",
       "rm -f \"$pidfile\" \"$timer_file\"",
+      "terminal_exit \"$status\"",
       "exit \"$status\"",
     ].join("\n"),
     args: [pidFile, String(timeoutSeconds), command, dispatchToken],
@@ -717,39 +726,89 @@ function bashDispatchSentinel(token: string): Buffer {
   return Buffer.from(`${BASH_DISPATCH_PREFIX}${token}\n`);
 }
 
+function bashTerminalPrefix(token: string): Buffer {
+  return Buffer.from(`${BASH_TERMINAL_PREFIX}${token}:`);
+}
+
 export function createBashDispatchFilter(token: string): {
   dispatchSeen: () => boolean;
+  terminalRecord: () => BashTerminalRecord | undefined;
   stderr: (chunk: Buffer) => Buffer;
   stdout: (chunk: Buffer) => Buffer;
 } {
-  const sentinel = bashDispatchSentinel(token);
+  const dispatchSentinel = bashDispatchSentinel(token);
+  const terminalPrefix = bashTerminalPrefix(token);
   let dispatchSeen = false;
+  let terminalRecord: BashTerminalRecord | undefined;
   let pendingStdout = Buffer.alloc(0);
   let pendingStderr = Buffer.alloc(0);
 
+  const filterAfterDispatch = (chunk: Buffer): Buffer => {
+    pendingStdout = Buffer.concat([pendingStdout, chunk]);
+    const index = pendingStdout.indexOf(terminalPrefix);
+    if (index >= 0) {
+      const lineEnd = pendingStdout.indexOf("\n", index);
+      if (lineEnd < 0) {
+        const out = pendingStdout.subarray(0, index);
+        pendingStdout = pendingStdout.subarray(index);
+        return out;
+      }
+      const line = pendingStdout.subarray(index, lineEnd).toString("utf8");
+      terminalRecord = parseBashTerminalRecord(line, token);
+      const out = Buffer.concat([
+        pendingStdout.subarray(0, index),
+        pendingStdout.subarray(lineEnd + 1),
+      ]);
+      pendingStdout = Buffer.alloc(0);
+      return out;
+    }
+
+    const keep = terminalPrefix.length - 1;
+    if (pendingStdout.length <= keep) return Buffer.alloc(0);
+    const out = pendingStdout.subarray(0, pendingStdout.length - keep);
+    pendingStdout = pendingStdout.subarray(pendingStdout.length - keep);
+    return out;
+  };
+
   return {
     dispatchSeen: () => dispatchSeen,
+    terminalRecord: () => terminalRecord,
     stderr: (chunk) => {
       if (dispatchSeen) return chunk;
       pendingStderr = Buffer.concat([pendingStderr, chunk]);
       return Buffer.alloc(0);
     },
     stdout: (chunk) => {
-      if (dispatchSeen) return chunk;
+      if (dispatchSeen) return filterAfterDispatch(chunk);
       pendingStdout = Buffer.concat([pendingStdout, chunk]);
-      const index = pendingStdout.indexOf(sentinel);
+      const index = pendingStdout.indexOf(dispatchSentinel);
       if (index < 0) return Buffer.alloc(0);
       dispatchSeen = true;
-      const out = Buffer.concat([
+      const afterDispatch = Buffer.concat([
         pendingStdout.subarray(0, index),
         pendingStderr,
-        pendingStdout.subarray(index + sentinel.length),
+        pendingStdout.subarray(index + dispatchSentinel.length),
       ]);
       pendingStdout = Buffer.alloc(0);
       pendingStderr = Buffer.alloc(0);
-      return out;
+      return filterAfterDispatch(afterDispatch);
     },
   };
+}
+
+function parseBashTerminalRecord(
+  line: string,
+  token: string,
+): BashTerminalRecord | undefined {
+  const prefix = `${BASH_TERMINAL_PREFIX}${token}:`;
+  if (!line.startsWith(prefix)) return undefined;
+  const payload = line.slice(prefix.length);
+  const [kind, exitCodeText] = payload.split(":");
+  const exitCode = Number(exitCodeText);
+  if (!Number.isInteger(exitCode)) return undefined;
+  if (kind === "exit") return { kind, exitCode };
+  if (kind === "timeout") return { kind, exitCode };
+  return undefined;
 }
 
 function filterDockerEnvObject(
