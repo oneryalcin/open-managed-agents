@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ManagedAgentsCustomTool } from "../../../../types/agents.ts";
 import type { ManagedAgentsUserCustomToolResultEventInput } from "../../../../types/events.ts";
 import type { PiRuntimeSession } from "../runner.ts";
@@ -20,7 +20,10 @@ const sdk = vi.hoisted(() => {
     readonly results: unknown[] = [];
     private readonly listeners = new Set<(event: unknown) => void>();
 
-    constructor(private readonly customTools: MockToolDefinition[]) {}
+    constructor(
+      private readonly customTools: MockToolDefinition[],
+      private readonly activeToolNames: string[],
+    ) {}
 
     async prompt(): Promise<void> {
       this.emit({ type: "agent_start" });
@@ -50,6 +53,10 @@ const sdk = vi.hoisted(() => {
       return () => this.listeners.delete(listener);
     }
 
+    getActiveToolNames(): string[] {
+      return this.activeToolNames;
+    }
+
     private emit(event: unknown): void {
       for (const listener of this.listeners) listener(event);
     }
@@ -67,6 +74,13 @@ const sdk = vi.hoisted(() => {
   };
 
   let lastSession: MockSession | undefined;
+  let lastCreateOptions: MockCreateOptions | undefined;
+
+  type MockCreateOptions = {
+    noTools?: "all" | "builtin";
+    tools?: string[];
+    customTools?: MockToolDefinition[];
+  };
 
   return {
     AuthStorage: MockAuthStorage,
@@ -74,12 +88,14 @@ const sdk = vi.hoisted(() => {
     SessionManager: { inMemory: vi.fn(() => ({})) },
     defineTool: vi.fn((tool: MockToolDefinition) => tool),
     createAgentSession: vi.fn(
-      async (opts: { customTools?: MockToolDefinition[] }) => {
-        lastSession = new MockSession(opts.customTools ?? []);
+      async (opts: MockCreateOptions) => {
+        lastCreateOptions = opts;
+        lastSession = new MockSession(opts.customTools ?? [], opts.tools ?? []);
         return { session: lastSession };
       },
     ),
     lastSession: () => lastSession,
+    lastCreateOptions: () => lastCreateOptions,
   };
 });
 
@@ -92,8 +108,13 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 }));
 
 import { PiSessionRunner } from "../runner.ts";
+import type { SandboxProvider } from "../sandbox/provider.ts";
 
 describe("PiSessionRunner custom-tool bridge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("binds a public custom-tool event ID and resumes the Pi tool through the runner path", async () => {
     const released: string[] = [];
     const runner = new PiSessionRunner({
@@ -138,6 +159,49 @@ describe("PiSessionRunner custom-tool bridge", () => {
     ]);
     expect(released).toEqual(["sevt_runner_tool"]);
   });
+
+  it("registers sandbox tools through public customTools and an exact tools allowlist", async () => {
+    const sandboxTool = {
+      name: "bash",
+      execute: vi.fn(),
+    };
+    const runner = new PiSessionRunner({
+      customTools: () => [ASK_USER],
+      sandboxProviderFactory: async () =>
+        ({
+          cwd: "/workspace",
+          operations: {},
+          tools: [sandboxTool] as unknown as SandboxProvider["tools"],
+          toolNames: new Set(["bash"]),
+          invocations: {
+            total: 0,
+            byTool: {
+              bash: 0,
+              read: 0,
+              write: 0,
+              edit: 0,
+              find: 0,
+              ls: 0,
+            },
+          },
+          dispose: vi.fn(),
+        }) as unknown as SandboxProvider,
+      customToolTimeoutMs: 0,
+      idleTtlMs: 0,
+    });
+
+    await collect(runner.runUserMessage("wrk_default", "sesn_sandbox", "run"));
+
+    expect(sdk.lastCreateOptions()).toMatchObject({
+      noTools: "builtin",
+      tools: ["bash", "ask_user"],
+    });
+    expect(sdk.lastCreateOptions()?.customTools).toContain(sandboxTool);
+    expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
+      "bash",
+      "ask_user",
+    ]);
+  });
 });
 
 const ASK_USER: ManagedAgentsCustomTool = {
@@ -149,3 +213,9 @@ const ASK_USER: ManagedAgentsCustomTool = {
     required: ["question"],
   },
 };
+
+async function collect(source: AsyncIterable<unknown>): Promise<unknown[]> {
+  const out: unknown[] = [];
+  for await (const event of source) out.push(event);
+  return out;
+}

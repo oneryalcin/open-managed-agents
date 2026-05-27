@@ -112,15 +112,15 @@ See [scratch-pi-findings.md](../scratch-pi-findings.md) for full evidence.
 
 **The `Sandbox` interface I sketched in this ADR is unnecessary — Pi already exposes the exact abstraction.** Every built-in tool has a typed `Operations` interface that's the backend plug-in:
 
-| Tool | Operations interface | Factory |
+| Tool | Operations interface | Public custom-tool factory |
 |---|---|---|
-| bash | `BashOperations` | `createBashTool(cwd, { operations })` |
-| read | `ReadOperations` | `createReadTool(cwd, { operations })` |
-| write | `WriteOperations` | `createWriteTool(cwd, { operations })` |
-| edit | `EditOperations` | `createEditTool(cwd, { operations })` |
-| grep | `GrepOperations` | `createGrepTool(cwd, { operations })` |
-| find | `FindOperations` | `createFindTool(cwd, { operations })` |
-| ls | `LsOperations` | `createLsTool(cwd, { operations })` |
+| bash | `BashOperations` | `createBashToolDefinition(cwd, { operations })` |
+| read | `ReadOperations` | `createReadToolDefinition(cwd, { operations })` |
+| write | `WriteOperations` | `createWriteToolDefinition(cwd, { operations })` |
+| edit | `EditOperations` | `createEditToolDefinition(cwd, { operations })` |
+| grep | `GrepOperations` | `createGrepToolDefinition(cwd, { operations })` |
+| find | `FindOperations` | `createFindToolDefinition(cwd, { operations })` |
+| ls | `LsOperations` | `createLsToolDefinition(cwd, { operations })` |
 
 Each interface is the minimal contract for that tool's filesystem/shell backend. Example, `BashOperations`:
 
@@ -138,10 +138,10 @@ export interface BashOperations {
 **Revised plan** (supersedes the `Sandbox interface (sketch)` section above):
 
 1. Implement Pi's `*Operations` interfaces against each backend. Start with a guarded host-passthrough provider for wiring/tests, then the first isolating provider (Docker-local or Modal), then Modal as the managed remote.
-2. Provide provider-backed tool factories that produce active `AgentTool` records by passing our Operations impls into Pi's `create*Tool(cwd, {operations: ...})` factories. In Pi 0.75.4, the public install path is `session.agent.state.tools = [...]`; `baseToolsOverride` remains an internal `AgentSessionConfig` field but is not exposed by the SDK helpers.
+2. Provide provider-backed `ToolDefinition` records by passing our Operations impls into Pi's `create*ToolDefinition(cwd, {operations: ...})` factories, then register them through `createAgentSession({ noTools: "builtin", tools: [...names], customTools: [...definitions] })`. This keeps the tool surface public and provider-owned without mutating `session.agent.state.tools`.
 3. The single high-level `ManagedSandbox` value our codebase owns becomes a wrapper that handles the *lifecycle* (provision instance, mount resources, stop on session end) and produces the per-tool Operations impls against it. It is *not* an alternative to Pi's Operations interfaces — it sits one level above them.
 
-**Follow-up question (raised in scratch-pi-findings.md):** Can `createAgentSession({ tools })` accept a `Tool[]` array directly (constructed via `create*Tool(cwd, {operations})`)? Or only string-names? If only string-names, we'll need to inject our Operations through `ToolsOptions` (the per-tool options map on the SDK config). Verify in Task 1 smoke test.
+**Resolved follow-up:** `tools` is a string allowlist, not a `Tool[]` slot. Use `customTools` for provider-backed `ToolDefinition`s and `tools` for the exact active tool names.
 
 ## Historical findings (post code-review, 2026-05-21; superseded in part)
 
@@ -167,35 +167,35 @@ Empirical verification via `scratch/04-tool-array.ts`:
 
   `baseToolsOverride` is documented on `AgentSessionConfig`, but Cycle E.0 verified that Pi 0.75.4 does not expose or forward it through the exported session helper APIs. Treat it as an internal/low-level field unless a future SDK re-exposes it through helpers.
 
-- **`baseToolsOverride` is on `AgentSessionConfig`, not `CreateAgentSessionOptions` or `CreateAgentSessionFromServicesOptions`.** The current public path is to create a session normally and install Operations-backed `AgentTool` instances into the active tool list (`session.agent.state.tools = [...]`).
+- **`baseToolsOverride` is on `AgentSessionConfig`, not `CreateAgentSessionOptions` or `CreateAgentSessionFromServicesOptions`.** Cycle E.0 first used `session.agent.state.tools = [...]` as a working route, but Cycle E.1 superseded it with public `customTools` registration of Operations-backed `ToolDefinition`s.
 
-- **Reviewer's "core integration risk" concern is narrower than stated, but the precise injection point moved:** Operations-backed tools are still the correct boundary; the public install path is `session.agent.state.tools`, not `createAgentSessionFromServices(... baseToolsOverride)`.
+- **Reviewer's "core integration risk" concern is narrower than stated, but the precise injection point moved:** Operations-backed tools are still the correct boundary; the public install path is `customTools` plus a strict `tools` allowlist, not `createAgentSessionFromServices(... baseToolsOverride)` and not internal active-tool mutation.
 
-**Current consumer pattern** (Cycle E.0):
+**Current consumer pattern** (Cycle E.1):
 
 ```ts
 import {
   createAgentSession,
-  createBashTool,
-  createReadTool,
+  createBashToolDefinition,
+  createReadToolDefinition,
   // ... etc.
 } from "@earendil-works/pi-coding-agent";
 
 const { session } = await createAgentSession({
   model,
   sessionManager,
+  noTools: "builtin",
   tools: ["bash", "read"],
-  // ... auth/model registry/custom tools/etc.
+  customTools: [
+    createBashToolDefinition(sandboxCwd, { operations: ourModalBashOps }),
+    createReadToolDefinition(sandboxCwd, { operations: ourModalReadOps }),
+    // ... write/edit/find/ls.
+  ],
+  // ... auth/model registry/user custom tools/etc.
 });
-
-session.agent.state.tools = [
-  createBashTool(sandboxCwd, { operations: ourModalBashOps }),
-  createReadTool(sandboxCwd, { operations: ourModalReadOps }),
-  // ... write/edit/grep/find/ls.
-];
 ```
 
-This supersedes both the `createAgentSession({ tools: customTools })` approach mentioned in the original ADR text and the later `createAgentSessionFromServices(... baseToolsOverride)` plan. The ADR direction (pluggable Operations, Modal as first managed remote) is unchanged; the precise current public injection point is now pinned by Cycle E.0.
+This supersedes the original `createAgentSession({ tools: customTools })` guess, the later `createAgentSessionFromServices(... baseToolsOverride)` plan, and the interim `session.agent.state.tools = [...]` E.0 route. The ADR direction (pluggable Operations, Modal as first managed remote) is unchanged; the precise current public injection point is now pinned by Cycle E.1.
 
 ## Findings (Cycle E planning, 2026-05-27)
 
@@ -211,6 +211,22 @@ Adopt the same split:
 3. **First isolation decision.** Choose Docker-local or Modal deliberately. Docker-local gives locally testable isolation; Modal gives the production remote target.
 4. **Modal remote hardening.** Measure cold start, forced sandbox death, teardown reliability, and orphan/cost behavior.
 
+OpenAI Agents sandbox docs add four design constraints we should copy conceptually, not as an API dependency:
+
+- **Harness and compute stay separate.** The trusted harness/control plane owns the agent loop, model calls, tool routing, approvals, tracing, recovery, and run state. The sandbox owns provider-specific execution: files, commands, packages, ports, mounts, and snapshots. This matches our control-plane/Pi-vs-sandbox split and argues against running API orchestration inside the sandbox.
+- **Provider is run/session configuration, not agent identity.** OpenAI keeps the sandbox agent/manifest/capabilities stable while swapping the sandbox client and provider options per run. Mirror that: an OMA agent's persisted definition should not bake in "Docker vs Modal" unless the user explicitly makes that part of the environment/session config.
+- **Separate manifest, live session, serialized state, and snapshots.** A manifest is the fresh-session workspace contract; a live sandbox session is current execution state; serialized sandbox state resumes a provider session; snapshots seed a new workspace. For OMA, this maps to future environment/session resources and prevents overloading one `resources` blob with both initial inputs and resumable state.
+- **Workspace paths are portable, relative contracts.** Manifest/input paths are workspace-relative and cannot escape with absolute paths or `..`. Keep that rule for mounted resources and generated outputs so Docker-local, Modal, and future providers do not each invent path semantics.
+
+OpenClaw prior art (checked at `OpenClaw/OpenClaw@3e351b71`) adds useful sandbox-provider details, but not a framework to copy:
+
+- **Backend handle before second real provider.** OpenClaw's sandbox backend handle includes `buildExecSpec`, `finalizeExec`, `runShellCommand`, optional `createFsBridge`, runtime metadata, and capabilities (`src/agents/sandbox/backend-handle.types.ts:40`). Before Docker-local or Modal, evolve our provider boundary toward that shape rather than a bare `exec(command)` API. Remote backends need exec specs and finalizers for cleanup tokens; file operations need an explicit bridge.
+- **Separate backend, scope, and workspace access.** OpenClaw treats backend choice (`docker`, `ssh`, managed remote), sandbox scope (`agent`, `session`, `shared`), and workspace access (`none`, `ro`, `rw`) as independent configuration dimensions (`docs/gateway/sandboxing.md:60`, `docs/gateway/sandboxing.md:68`). Do not let "Docker vs Modal" implicitly decide lifecycle scope or file-write policy.
+- **Env and path policies are distinct.** OpenClaw has explicit env sanitization (`src/agents/sandbox/sanitize-env-vars.ts:1`) and separate filesystem bridge/path containment logic. Our E.1 deny-by-default env allowlist is stricter, but Docker/Modal will still need mount/path translation rather than a single host-root jail.
+- **Tool-surface control must stay fail-closed.** OpenClaw converts its registered tools to Pi `customTools`, passes an exact `tools` name allowlist, and then calls `setActiveToolsByName(...)` (`src/agents/pi-embedded-runner/run/attempt.ts:2735`). We should keep the E.1 exact active-tool assertion and unknown-tool rejection; "bash ran" is not enough to prove sandboxing.
+- **Provider-owned builtins through `customTools`.** OpenClaw always routes its tool implementations through Pi `customTools` so policy filtering and sandbox integration stay provider-owned (`src/agents/pi-embedded-runner/tool-split.ts:5`). Cycle E.1 verified the same public shape works here without reimplementing Pi's tool semantics: Pi's `create*ToolDefinition(cwd, {operations})` factories produce `ToolDefinition`s that can be registered as custom tools under the public builtin names.
+- **Do not copy the embedded runner.** OpenClaw's channel delivery, transcript repair, tool-result guard, compaction, and reply plumbing solve its product surface. Importing that stack would add the wrong abstraction pressure here. Lift the backend/lifecycle lessons only.
+
 ## Findings (Cycle E.0 probe, 2026-05-27)
 
 Probe: `scratch/19-e0-builtin-operations-injection.ts`.
@@ -218,24 +234,42 @@ Probe: `scratch/19-e0-builtin-operations-injection.ts`.
 Findings:
 
 - **`baseToolsOverride` is not a public helper path in Pi 0.75.4.** `AgentSessionConfig` still has `baseToolsOverride`, but neither `CreateAgentSessionOptions` nor `CreateAgentSessionFromServicesOptions` exposes it, and neither exported helper forwards it at runtime.
-- **The current public injection path works:** create the session normally, then replace the active tool list with `session.agent.state.tools = [createBashTool(cwd, { operations })]`. A live Haiku run invoked `BashOperations.exec` exactly once and the model observed the returned tool output.
+- **The interim internal injection path works:** create the session normally, then replace the active tool list with `session.agent.state.tools = [createBashTool(cwd, { operations })]`. A live Haiku run invoked `BashOperations.exec` exactly once and the model observed the returned tool output. Cycle E.1 later superseded this with public `customTools` registration.
 - **Pi passes host environment data into `BashOperations.exec`.** The probe recorded 124 env keys and detected secret-like names. Provider implementations must not blindly forward `options.env` into passthrough, Docker, or Modal. Apply an allowlist/drop policy at the provider boundary.
-- **The injection path must fail closed.** `session.agent.state.tools = [...]` is internal coupling. If a future Pi SDK changes that state shape and our replacement stops taking effect, Pi could fall back to its default builtin bash implementation: host execution with host env. E.1 must assert that provider-backed Operations were invoked for every sandbox-backed builtin tool call, and must fail the run if a builtin tool appears to execute without the provider seeing it. Pi version bumps must re-run this probe before merge.
+- **The internal injection path would have to fail closed.** `session.agent.state.tools = [...]` is internal coupling. If a future Pi SDK changed that state shape and our replacement stopped taking effect, Pi could fall back to its default builtin bash implementation: host execution with host env. That risk is why E.1 moved to public `customTools` registration; the runtime still keeps provider-invocation accounting as defense in depth.
+- **File path containment is separate from env filtering.** Pi resolves model-supplied paths to absolute paths before calling file Operations; providers must still reject paths outside the workspace root. Env allowlisting protects bash. Path jail protects read/write/edit/find/ls.
+- **Grep is not sandbox-safe through Operations in Pi 0.75.4.** `createGrepTool` accepts `GrepOperations`, but its implementation still runs host `rg` and only uses Operations for directory checks/context reads. Do not enable grep as a sandbox-backed builtin until we own or upstream a fully delegated grep implementation. Grep-like capability is still available through the policed bash path.
+
+If a future Pi SDK re-exposes `baseToolsOverride` through `createAgentSessionFromServices`, we can consider it without changing the provider boundary. The provider still owns lifecycle; Pi Operations still own per-tool calls.
+
+## Findings (Cycle E.1 public customTools probe, 2026-05-27)
+
+Probe: `scratch/21-e2-define-tool-builtins.ts`.
+
+Findings:
+
+- **A custom tool can occupy the public builtin name.** `createAgentSession({ noTools: "builtin", tools: ["bash"], customTools: [defineTool({ name: "bash", ... })] })` activated exactly `["bash"]`, exposed a tool definition for `bash`, and emitted Pi events with `toolName: "bash"`.
+- **The custom-tool path streams.** Pi passed `onUpdate` into `ToolDefinition.execute(...)`, and the probe observed `tool_execution_update` before `tool_execution_end`.
+- **The cleaner route does not require owning Pi's bash semantics.** Pi already exports `createBashToolDefinition`, `createReadToolDefinition`, `createWriteToolDefinition`, `createEditToolDefinition`, `createFindToolDefinition`, and `createLsToolDefinition`. Register those definitions through `customTools` with provider Operations. That uses public APIs, preserves Pi's tool descriptions/rendering/execution semantics, and avoids internal `session.agent.state.tools` mutation.
+- **The bypass class is designed out, not merely detected.** Pi executes the registered `ToolDefinition`; the provider Operations live inside that execute body. Keep invocation accounting and gated release as defense in depth, but validate by `toolCallId` only when a real Operation runs inside that tool execution context. Dispatch alone is not proof of provider use.
+- **Host passthrough path containment is best-effort, not isolation.** E.1 realpath containment plus `O_NOFOLLOW` writes rejects existing symlink escapes and final-component write symlinks, but it cannot close every intermediate-component TOCTOU race against a concurrent host process. That is acceptable only because passthrough is explicitly unsafe and non-isolating; Docker/remote providers must rely on their OS isolation boundary.
 
 Updated implementation direction:
 
 ```ts
+const sandboxTools = [
+  createBashToolDefinition("/workspace", { operations: provider.operations.bash }),
+  createReadToolDefinition("/workspace", { operations: provider.operations.read }),
+  // ... write/edit/find/ls.
+];
+
 const { session } = await createAgentSession({
   model,
-  tools: ["bash"],
+  noTools: "builtin",
+  tools: ["bash", "read", "write", "edit", "find", "ls", ...userToolNames],
+  customTools: [...sandboxTools, ...userCustomTools],
   sessionManager,
 });
-
-session.agent.state.tools = [
-  createBashTool("/workspace", {
-    operations: provider.bashOperations({ envPolicy: "allowlist" }),
-  }),
-];
 ```
 
-If a future Pi SDK re-exposes `baseToolsOverride` through `createAgentSessionFromServices`, we can switch back without changing the provider boundary. The provider still owns lifecycle; Pi Operations still own per-tool calls.
+`grep` remains disabled. The current Pi `createGrepToolDefinition` still delegates part of its behavior to host `rg`, so grep-like capability stays routed through policed `bash` until we own or upstream a fully delegated grep implementation.

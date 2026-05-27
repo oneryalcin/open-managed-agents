@@ -68,6 +68,43 @@ describe("Pi translator (Cycle C.1)", () => {
     expect(drafts[2]?.payload.is_error).toBe(true);
     expect(drafts[3]?.payload.stop_reason).toEqual({ type: "end_turn" });
   });
+
+  it("keeps sandboxed builtin tools on the agent.tool_use/tool_result wire path", () => {
+    const context = { customToolNames: new Set(["ask_user"]) };
+    const drafts = [
+      ...translatePiEvent(
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "toolu_builtin_bash",
+                name: "bash",
+                arguments: { command: "printf ok" },
+              },
+            ],
+          },
+        },
+        context,
+      ),
+      ...translatePiEvent(
+        {
+          type: "tool_execution_end",
+          toolCallId: "toolu_builtin_bash",
+          toolName: "bash",
+          result: { content: [{ type: "text", text: "ok" }] },
+          isError: false,
+        },
+        context,
+      ),
+    ];
+
+    expect(types(drafts)).toEqual(["agent.tool_use", "agent.tool_result"]);
+    expect(drafts[0]?.payload.name).toBe("bash");
+    expect(drafts[1]?.payload.tool_use_id).toBe("toolu_builtin_bash");
+  });
 });
 
 function translateScenario(scenario: Scenario): EventDraft[] {

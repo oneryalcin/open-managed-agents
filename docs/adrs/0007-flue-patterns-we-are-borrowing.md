@@ -43,9 +43,9 @@ ManagedSandbox  (our wrapper — owns provisioning lifecycle)
 ├── destroy()      → stops it
 ├── mount(r)       → file/repo mounts
 ├── outputs()      → reads /mnt/session/outputs/
-└── tools(cwd)     → returns AgentTool records for Pi's active tool list,
+└── tools(cwd)     → returns ToolDefinition records for Pi customTools,
                      built by feeding OUR Operations impls into Pi's
-                     create*Tool(cwd, {operations: ...}) factories
+                     create*ToolDefinition(cwd, {operations: ...}) factories
 ```
 
 The `ManagedSandbox` wrapper owns lifecycle; the `*Operations` interfaces (Pi's types) handle per-call file/shell adaptation. Two layers, each doing one thing.

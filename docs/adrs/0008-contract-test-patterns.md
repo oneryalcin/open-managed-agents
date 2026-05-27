@@ -43,6 +43,16 @@ CI does typecheck + tests + build + server-boot smoke (create agent/env/session,
 
 - **Deferred:** Until first push to a remote.
 
+## Prior art checked (2026-05-27)
+
+`rogeriochaves/open-managed-agents@e9a0743` is a broader full-stack product, not a Pi-backed Managed Agents protocol clone, so do not copy its runtime architecture. It does validate several contract-hygiene patterns from this ADR:
+
+- **BDD specs as the product backlog.** Its `AGENTS.md` requires discover → spec → implement → test → compare, and the repo carries many `specs/*.feature` files. This supports our decision to keep feature specs as design-pressure and acceptance artifacts even before they become fully executable.
+- **Schema/type/event alignment lints.** Its server has meta-tests that regex-scan emitted event-type literals and compare them against declared TypeScript/Zod event unions (`packages/server/src/__tests__/event-type-alignment.test.ts:1`, `packages/server/src/__tests__/schemas-types-event-alignment.test.ts:1`). This is exactly ADR 0008's v2 direction once our route/schema surface grows.
+- **What not to adopt.** Its event pagination uses `processed_at` cursors (`packages/server/src/routes/events.ts:126`) and its engine is a local Vercel-AI-style loop (`packages/server/src/engine/index.ts:397`) with provider abstractions, MCP routing, UI/governance, and Helm packaging. Those are useful product ideas but not our current architecture: ADR 0001 keeps Pi as loop owner, and ADR 0009 keeps UUIDv7 `sevt_*` IDs as cursor truth.
+
+Net: borrow the contract-test discipline, not the engine, event cursor, or full-stack product shape.
+
 ## Adoption discipline
 
 These patterns are standard engineering practices, not proprietary inventions. Implementations are written from scratch to fit our codebase. When extending an alignment test or adding a new contract guard, contributors should reference the *technique* (e.g., "regex-scan source files for emitted event-type literals") rather than a specific external implementation. If we ever do borrow code verbatim from a project with a license whose terms we haven't accepted for this project, that's a separate license decision — not a routine adoption.

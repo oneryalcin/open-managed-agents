@@ -29,6 +29,7 @@
 
 ## Infrastructure
 
+- OpenAI Agents sandbox guide: https://developers.openai.com/api/docs/guides/agents/sandboxes
 - Modal Sandboxes: https://modal.com/docs/guide/sandbox
 - Modal TypeScript SDK: https://github.com/modal-labs/modal-js
 - Hono: https://hono.dev
@@ -47,6 +48,8 @@ The official CLI exposes every Managed Agents endpoint as a subcommand. Useful f
 |---|---|---|
 | [Claude Agent SDK (Python)](https://github.com/anthropics/anthropic-quickstarts) | Mature SDK that spawns the Claude Code CLI as a subprocess. Local-first. | Wrong shape for a hosted multi-tenant platform — designed for "agent runs on your laptop," not "you run an agent platform for others." |
 | [Flue](https://github.com/withastro/flue) (`@flue/runtime`) | TypeScript agent harness framework from the Astro team. Built-in sandbox connectors (local, Daytona, Cloudflare). | Framework-shaped (imposes `.flue/agents/*.ts` filesystem convention); marked Experimental; agent definitions are TS files, not API objects — fights the persisted-agent model. |
+| [OpenClaw](https://github.com/OpenClaw/OpenClaw) | Pi-based agent runner with Docker/SSH/managed-remote sandbox backends, filesystem bridges, and provider-owned tool wiring. | Useful sandbox backend prior art, not a platform dependency. Borrow backend/lifecycle lessons; do not copy its embedded runner, channel delivery, transcript repair, or non-Managed-Agents event surface. Evaluated at `3e351b71`; see ADR 0003. |
+| [rogeriochaves/open-managed-agents](https://github.com/rogeriochaves/open-managed-agents) | Full-stack self-hosted agent platform with Hono, React UI, OpenAPI/Zod schemas, BDD specs, provider abstractions, MCP routing, governance, and Helm packaging. | Useful contract-test prior art, especially BDD specs and event/schema/type alignment lints. Do not copy its engine loop, timestamp cursoring, UI-first scope, or non-Pi provider architecture. Evaluated at `e9a0743`; see ADR 0008. |
 | [InsForge](https://github.com/InsForge/InsForge) | Apache-2.0 BaaS designed *for AI coding agents to consume* (Postgres + Auth + Storage + Edge Functions via MCP). | Solving the inverse problem — provides a backend *for* agents to drive, not a platform *to run* agents on. Used backwards, it's just a less-mature Supabase. |
 
 ## Internal Claude API skill docs consulted

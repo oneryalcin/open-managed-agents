@@ -3,6 +3,7 @@ import {
   createAgentSession,
   ModelRegistry,
   SessionManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type {
   RuntimeCustomToolUseEvent,
@@ -14,6 +15,11 @@ import {
   PiCustomToolBridge,
   type PiCustomToolsProvider,
 } from "./custom-tools.ts";
+import type {
+  SandboxedBuiltinToolName,
+  SandboxProvider,
+  SandboxProviderFactory,
+} from "./sandbox/provider.ts";
 
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000;
 const ALREADY_PROCESSING_MESSAGE = "Agent is already processing";
@@ -27,6 +33,7 @@ export interface PiRuntimeSession {
   abort(): Promise<void>;
   dispose(): void;
   subscribe(listener: (event: unknown) => void): () => void;
+  getActiveToolNames?(): string[];
 }
 
 export type PiRuntimeSessionFactory = (
@@ -35,6 +42,7 @@ export type PiRuntimeSessionFactory = (
 ) => Promise<PiRuntimeSession>;
 interface RuntimeHandle {
   session: PiRuntimeSession;
+  sandbox: SandboxProvider | undefined;
   running: boolean;
   closeWhenIdle: boolean;
   lastUsedAt: number;
@@ -51,7 +59,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly customToolBridge: PiCustomToolBridge;
   private readonly idleTtlMs: number;
   private readonly now: () => number;
-  private readonly sessionFactory: PiRuntimeSessionFactory;
+  private readonly sessionFactory: PiRuntimeSessionFactory | undefined;
   private closed = false;
 
   constructor(
@@ -62,15 +70,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
       idleTtlMs?: number;
       now?: () => number;
       sessionFactory?: PiRuntimeSessionFactory;
+      sandboxProviderFactory?: SandboxProviderFactory;
       customTools?: PiCustomToolsProvider;
       customToolTimeoutMs?: number;
     } = {},
   ) {
     this.idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
     this.now = opts.now ?? Date.now;
-    this.sessionFactory =
-      opts.sessionFactory ??
-      ((workspaceId, sessionId) => this.createPiSession(workspaceId, sessionId));
+    this.sessionFactory = opts.sessionFactory;
     this.customToolBridge = new PiCustomToolBridge({
       customTools: opts.customTools,
       timeoutMs: opts.customToolTimeoutMs,
@@ -140,6 +147,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
 
     const queue: unknown[] = [];
+    const gatedEvents: unknown[] = [];
+    const activeSandboxedToolCalls = new Map<
+      string,
+      SandboxedBuiltinToolName
+    >();
     let done = false;
     let failure: unknown;
     let becameFollowUp = false;
@@ -200,11 +212,77 @@ export class PiSessionRunner implements RuntimeEventRunner {
           wake = undefined;
           continue;
         }
-        yield queue.shift();
+        const event = queue.shift();
+        const sandboxedToolCalls = sandboxedToolCallsInMessage(
+          handle.sandbox,
+          event,
+        );
+        if (sandboxedToolCalls.length > 0) {
+          for (const call of sandboxedToolCalls) {
+            activeSandboxedToolCalls.set(call.toolCallId, call.toolName);
+          }
+          gatedEvents.push(event);
+          continue;
+        }
+
+        const sandboxedStart = sandboxedToolEvent(
+          handle.sandbox,
+          event,
+          "tool_execution_start",
+        );
+        if (sandboxedStart) {
+          activeSandboxedToolCalls.set(
+            sandboxedStart.toolCallId,
+            sandboxedStart.toolName,
+          );
+          gatedEvents.push(event);
+          continue;
+        }
+
+        const sandboxedEnd = sandboxedToolEvent(
+          handle.sandbox,
+          event,
+          "tool_execution_end",
+        );
+        if (activeSandboxedToolCalls.size > 0) {
+          gatedEvents.push(event);
+          if (sandboxedEnd) {
+            assertSandboxProviderHandledToolCall({
+              sandbox: handle.sandbox,
+              toolName: sandboxedEnd.toolName,
+              toolCallId: sandboxedEnd.toolCallId,
+            });
+            activeSandboxedToolCalls.delete(sandboxedEnd.toolCallId);
+            if (activeSandboxedToolCalls.size === 0) {
+              const releasableEvents = gatedEvents.splice(0);
+              for (const releasableEvent of releasableEvents) {
+                yield releasableEvent;
+              }
+            }
+          }
+          continue;
+        }
+
+        if (sandboxedEnd) {
+          assertSandboxProviderHandledToolCall({
+            sandbox: handle.sandbox,
+            toolName: sandboxedEnd.toolName,
+            toolCallId: sandboxedEnd.toolCallId,
+          });
+          yield event;
+          continue;
+        }
+
+        yield event;
       }
 
       await run;
       if (failure) throw failure;
+      if (activeSandboxedToolCalls.size > 0 || gatedEvents.length > 0) {
+        throw new Error(
+          "Sandboxed builtin tool execution ended without validation",
+        );
+      }
       if (handle.closeWhenIdle) {
         this.evict(sessionId, handle);
       } else {
@@ -233,15 +311,34 @@ export class PiSessionRunner implements RuntimeEventRunner {
     const pending = this.pendingSessions.get(sessionId);
     if (pending) return pending;
 
-    const created = this.sessionFactory(workspaceId, sessionId)
-      .then((session) => {
+    const created = (async () => {
         const customToolNames = new Set(
           (this.opts.customTools?.(workspaceId, sessionId) ?? []).map(
             (tool) => tool.name,
           ),
         );
+        let sandbox: SandboxProvider | undefined;
+        let session: PiRuntimeSession | undefined;
+        try {
+          sandbox = await this.opts.sandboxProviderFactory?.(
+            workspaceId,
+            sessionId,
+          );
+          assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
+          session =
+            this.sessionFactory === undefined
+              ? await this.createPiSession(workspaceId, sessionId, sandbox)
+              : await this.sessionFactory(workspaceId, sessionId);
+          assertActiveToolSurface(session, sandbox, customToolNames);
+        } catch (error) {
+          sandbox?.dispose();
+          session?.dispose();
+          throw error;
+        }
+        if (!session) throw new Error("Pi session was not created");
         const handle: RuntimeHandle = {
           session,
+          sandbox,
           running: false,
           closeWhenIdle: false,
           lastUsedAt: this.now(),
@@ -250,6 +347,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           emitInternal: undefined,
         };
         if (this.closed) {
+          sandbox?.dispose();
           session.dispose();
           this.pendingSessions.delete(sessionId);
           throw new Error("PiSessionRunner is closed");
@@ -258,7 +356,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         this.pendingSessions.delete(sessionId);
         this.scheduleEviction(sessionId, handle);
         return handle;
-      })
+      })()
       .catch((error) => {
         this.pendingSessions.delete(sessionId);
         throw error;
@@ -270,6 +368,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private async createPiSession(
     workspaceId: WorkspaceId,
     sessionId: string,
+    sandbox: SandboxProvider | undefined,
   ): Promise<PiRuntimeSession> {
     const provider = this.opts.provider ?? "anthropic";
     const modelId = this.opts.model ?? "claude-haiku-4-5";
@@ -277,15 +376,28 @@ export class PiSessionRunner implements RuntimeEventRunner {
     if (!model) {
       throw new Error(`Pi model not available: ${provider}/${modelId}`);
     }
-    const { session } = await createAgentSession({
-      model,
-      thinkingLevel: this.opts.thinkingLevel ?? "off",
-      noTools: "builtin",
-      customTools: this.customToolBridge.createTools(
+    const customToolNames = (
+      this.opts.customTools?.(workspaceId, sessionId) ?? []
+    ).map((tool) => tool.name);
+    const customTools: ToolDefinition<any, any, any>[] = [
+      ...(sandbox?.tools ?? []),
+      ...this.customToolBridge.createTools(
         workspaceId,
         sessionId,
         () => this.sessions.get(sessionId)?.emitInternal,
       ),
+    ];
+    const { session } = await createAgentSession({
+      model,
+      thinkingLevel: this.opts.thinkingLevel ?? "off",
+      noTools: "builtin",
+      tools: sandbox
+        ? [
+            ...sandbox.toolNames,
+            ...customToolNames,
+          ]
+        : customToolNames,
+      customTools,
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
       sessionManager: SessionManager.inMemory(),
@@ -327,7 +439,34 @@ export class PiSessionRunner implements RuntimeEventRunner {
       sessionId,
       new Error("Runtime session evicted"),
     );
+    handle.sandbox?.dispose();
     handle.session.dispose();
+  }
+}
+
+function assertActiveToolSurface(
+  session: PiRuntimeSession,
+  sandbox: SandboxProvider | undefined,
+  customToolNames: ReadonlySet<string>,
+): void {
+  const activeToolNames = session.getActiveToolNames?.();
+  if (activeToolNames === undefined) return;
+  const expectedToolNames = new Set<string>(customToolNames);
+  for (const name of sandbox?.toolNames ?? []) expectedToolNames.add(name);
+  for (const name of activeToolNames) {
+    if (expectedToolNames.has(name)) continue;
+    throw new Error(`Unexpected active Pi tool after sandbox setup: ${name}`);
+  }
+}
+
+function assertNoSandboxCustomToolNameCollision(
+  sandbox: SandboxProvider | undefined,
+  customToolNames: ReadonlySet<string>,
+): void {
+  if (!sandbox) return;
+  for (const name of customToolNames) {
+    if (!sandbox.toolNames.has(name as SandboxedBuiltinToolName)) continue;
+    throw new Error(`Custom tool name conflicts with sandbox builtin: ${name}`);
   }
 }
 
@@ -342,5 +481,67 @@ function isAlreadyProcessing(error: unknown): boolean {
   return (
     error instanceof Error &&
     error.message.includes(ALREADY_PROCESSING_MESSAGE)
+  );
+}
+
+function sandboxedToolEvent(
+  sandbox: SandboxProvider | undefined,
+  event: unknown,
+  eventType: "tool_execution_start" | "tool_execution_end",
+): { toolName: SandboxedBuiltinToolName; toolCallId: string } | undefined {
+  if (!sandbox || typeof event !== "object" || event === null) return undefined;
+  const typed = event as {
+    type?: unknown;
+    toolName?: unknown;
+    toolCallId?: unknown;
+  };
+  if (typed.type !== eventType) return undefined;
+  if (typeof typed.toolName !== "string") return undefined;
+  if (typeof typed.toolCallId !== "string") return undefined;
+  if (!sandbox.toolNames.has(typed.toolName as never)) return undefined;
+  return {
+    toolName: typed.toolName as SandboxedBuiltinToolName,
+    toolCallId: typed.toolCallId,
+  };
+}
+
+function sandboxedToolCallsInMessage(
+  sandbox: SandboxProvider | undefined,
+  event: unknown,
+): Array<{ toolName: SandboxedBuiltinToolName; toolCallId: string }> {
+  if (!sandbox || typeof event !== "object" || event === null) return [];
+  const typed = event as { type?: unknown; message?: unknown };
+  if (typed.type !== "message_end") return [];
+  if (typeof typed.message !== "object" || typed.message === null) return [];
+  const message = typed.message as { role?: unknown; content?: unknown };
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
+  const out: Array<{ toolName: SandboxedBuiltinToolName; toolCallId: string }> = [];
+  for (const block of message.content) {
+    if (typeof block !== "object" || block === null) continue;
+    const toolCall = block as { type?: unknown; id?: unknown; name?: unknown };
+    if (toolCall.type !== "toolCall") continue;
+    if (typeof toolCall.id !== "string" || typeof toolCall.name !== "string") {
+      continue;
+    }
+    if (!sandbox.toolNames.has(toolCall.name as never)) continue;
+    out.push({
+      toolName: toolCall.name as SandboxedBuiltinToolName,
+      toolCallId: toolCall.id,
+    });
+  }
+  return out;
+}
+
+function assertSandboxProviderHandledToolCall(opts: {
+  sandbox: SandboxProvider | undefined;
+  toolName: SandboxedBuiltinToolName;
+  toolCallId: string;
+}): void {
+  if (!opts.sandbox) return;
+  if (opts.sandbox.invocations.toolCallIds[opts.toolName].has(opts.toolCallId)) {
+    return;
+  }
+  throw new Error(
+    `Sandboxed builtin tool ${opts.toolName} executed without invoking the sandbox provider`,
   );
 }

@@ -108,7 +108,7 @@ and does not set Pi's emitted tool-result error flag.
 |---|---|
 | `POST /v1/agents` | (none — store in SQLite, no Pi call) |
 | `POST /v1/sessions` | `createAgentSession()` |
-| `POST /v1/sessions/{id}` (update) | mutate session config in our DB; possibly `session.agent.state.tools = …` |
+| `POST /v1/sessions/{id}` (update) | mutate session config in our DB; future Pi updates use public tool/session APIs, not internal active-tool mutation |
 | `events.send` `user.message` | `session.prompt()` / `steer()` / `followUp()` |
 | `events.send` `user.interrupt` | `session.abort()` |
 | `events.send` `user.custom_tool_result` | resolves a pending tool promise (see ADR 0005) |

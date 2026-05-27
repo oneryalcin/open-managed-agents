@@ -598,13 +598,13 @@ Cycle E is infrastructure lifecycle work, not just another event-mapping slice. 
 
 Anchor the probe in the already-recorded design:
 
-- ADR 0003: Pi's Operations interfaces are the typed per-tool boundary; Cycle E.0 verified the current public injection path after SDK drift.
+- ADR 0003: Pi's Operations interfaces are the typed per-tool boundary; Cycle E.0 found the SDK-helper drift, and Cycle E.1 verified the public `customTools` route for provider-owned builtin definitions.
 - ADR 0007: keep sandbox provisioning lifecycle separate from per-call Operations adapters. `ManagedSandbox` owns provision/teardown; Pi `*Operations` implementations own shell/file calls.
 - Cycle C.3a: one runtime session is cached per `sesn_*`; Cycle E sandboxes should follow the same lifecycle boundary.
 
 Probe outputs:
 
-1. **Injection path (closed by `scratch/19-e0-builtin-operations-injection.ts`).** Pi 0.75.4 does not expose or forward `baseToolsOverride` through `createAgentSession(...)` or `createAgentSessionFromServices(...)`. The working public path is to create a session normally, then set `session.agent.state.tools = [createBashTool(cwd, { operations })]`. The live probe proved a bash call reached our `BashOperations.exec` once.
+1. **Injection path (closed by `scratch/19-e0-builtin-operations-injection.ts` and superseded by `scratch/21-e2-define-tool-builtins.ts`).** Pi 0.75.4 does not expose or forward `baseToolsOverride` through `createAgentSession(...)` or `createAgentSessionFromServices(...)`. The first working route was internal active-tool replacement; the accepted E.1 route is public `customTools` registration of `create*ToolDefinition(cwd, { operations })` definitions under the builtin names with `noTools: "builtin"` and a strict `tools` allowlist.
 2. **Guarded passthrough provider.** Implement or probe a host-passthrough provider only as a non-isolating dev/test tool. It must be named and guarded as unsafe, not described as a sandbox.
 3. **Deterministic lifecycle tests.** Use passthrough to prove provision/exec/teardown wiring, TTL eviction, hard runtime error cleanup, and runner close behavior without Modal credentials.
 4. **First-isolation decision.** Decide Docker-local vs Modal as the first real isolation provider. Docker-local gives locally testable isolation without cloud credentials or cost; Modal gives the first managed remote target and cost/teardown realities.
@@ -619,21 +619,51 @@ Design constraints coming out of E.0:
 - Provider failures must preserve ADR 0007's caller-safe/developer-only error split: public events/errors get safe messages; provider IDs, stack traces, and internal paths stay in logs.
 - Do not build a parallel sandbox file/shell abstraction over Pi's Operations interfaces. Our owned layer is lifecycle; Pi's typed Operations are the per-tool boundary.
 - Pi passes host environment data into `BashOperations.exec`; provider implementations must apply an explicit env allowlist/drop policy and must not blindly forward `options.env`.
-- The `session.agent.state.tools = [...]` injection path is internal coupling and must fail closed. E.1 must assert provider invocation for sandbox-backed builtin tool calls and treat a builtin tool execution that bypasses the provider as a runtime failure, not as a successful host fallback. Pi SDK bumps must re-run `scratch/19-e0-builtin-operations-injection.ts`.
+- Avoid `session.agent.state.tools = [...]` internal mutation. E.1 uses public `customTools` definitions so Pi calls our provider-backed execute bodies directly. Keep provider invocation accounting and gated event release as defense in depth; validate by `toolCallId` only when a real provider Operation runs inside that tool execution context. Re-run `scratch/21-e2-define-tool-builtins.ts` on Pi SDK bumps.
+- File Operations receive absolute paths after Pi resolves the model's input against `cwd`; that resolution is not a jail. E.1 providers must enforce workspace containment before read/write/list/search operations touch a backend.
+- Host-passthrough path containment is best-effort hardening for a non-isolating provider. It rejects existing symlink escapes and final-component write symlinks, but real isolation belongs to Docker/remote providers.
+- Pi's current `createGrepTool` is not fully provider-backed: even with custom `GrepOperations`, it still shells out to host `rg`. Keep grep disabled for sandbox-backed builtin tools until that path is replaced or upstreamed; grep-like capability remains available through policed bash.
 
 Scope:
 
 - Implement the provider lifecycle wrapper from ADR 0003.
-- Use Pi's current public Operations injection path (`session.agent.state.tools = [...]`) for sandbox-backed operations unless a future SDK re-exposes `baseToolsOverride` through helper APIs.
+- Register sandbox-backed Operations through Pi's public `create*ToolDefinition(...)` factories in `customTools`, with `noTools: "builtin"` and an exact `tools` allowlist.
 - Add environment endpoints beyond the current default stub only as required by the sandbox lifecycle.
 - Add teardown and orphan-cleanup behavior before running untrusted prompts.
 
 Acceptance:
 
-- A bash tool call reaches a provider-backed `BashOperations.exec` through Pi's real builtin-tool path.
+- A bash tool call reaches a provider-backed `BashOperations.exec` through Pi's public custom-tool definition path while preserving public `toolName: "bash"` and `tool_execution_update` streaming.
 - The passthrough provider is explicitly unsafe and guarded.
 - Session end destroys or releases the provider instance.
 - Provider failure emits a caller-safe API error and developer-useful logs.
+
+#### Cycle E.1 Plan — guarded passthrough provider and fail-closed runtime wiring
+
+Goal: land the provider boundary without choosing Docker-local or Modal yet.
+
+Evidence:
+
+- `scratch/20-e1-passthrough-provider.ts` proves a real Pi bash turn routed through `PiSessionRunner` invokes the guarded host-passthrough provider.
+- `scratch/21-e2-define-tool-builtins.ts` proves a provider-owned custom tool can use the public builtin name `bash` and stream updates through Pi's `onUpdate` callback.
+- Unit tests cover deny-by-default env filtering, workspace path containment, explicit unsafe opt-in, provider invocation accounting, dispose behavior, active-tool surface enforcement, and the fail-closed runtime assertion.
+
+Scope:
+
+1. Add `SandboxProvider` as a thin owner of Pi's Operations objects, not a parallel shell/file vocabulary.
+2. Implement guarded host passthrough for `bash`, `read`, `write`, `edit`, `find`, and `ls`.
+3. Keep `grep` disabled for sandbox-backed builtins until Pi offers a fully delegated grep path or we replace it.
+4. Wire the provider into `PiSessionRunner` behind explicit construction.
+5. Register provider-owned builtin definitions through `customTools`, not internal active-tool mutation.
+6. Keep a defense-in-depth fail-closed gate if Pi emits a sandboxed builtin tool event but the provider saw no operation invocation.
+
+Out of scope:
+
+- Docker-local isolation.
+- Modal provisioning.
+- Production enablement of host passthrough.
+- Full env/policy DSL beyond an explicit key allowlist.
+- Reimplementing Pi tool semantics by hand. E.1 uses Pi's own `create*ToolDefinition` factories, not bespoke bash/read/write/edit/find/ls definitions.
 
 ## Canonical Tutorial Compatibility Backlog
 
