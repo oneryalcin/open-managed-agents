@@ -141,6 +141,42 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
     }
   });
 
+  it("attributes concurrent same-tool provider calls to their own Pi tool ids", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
+    try {
+      const provider = createHostPassthroughSandboxProvider({
+        workspaceRoot: workspace,
+        unsafeAllowHostPassthrough: true,
+        envAllowlist: ["PATH"],
+      });
+      const bash = provider.tools.find((tool) => tool.name === "bash");
+      expect(bash).toBeDefined();
+
+      await Promise.all([
+        bash?.execute(
+          "toolu_parallel_a",
+          { command: "sleep 0.05; printf a", timeout: 1 },
+          new AbortController().signal,
+          undefined,
+          {} as never,
+        ),
+        bash?.execute(
+          "toolu_parallel_b",
+          { command: "sleep 0.05; printf b", timeout: 1 },
+          new AbortController().signal,
+          undefined,
+          {} as never,
+        ),
+      ]);
+
+      expect(provider.invocations.byTool.bash).toBe(2);
+      expect(provider.invocations.toolCallIds.bash.has("toolu_parallel_a")).toBe(true);
+      expect(provider.invocations.toolCallIds.bash.has("toolu_parallel_b")).toBe(true);
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
   it("treats bash timeout values as seconds", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
     try {
