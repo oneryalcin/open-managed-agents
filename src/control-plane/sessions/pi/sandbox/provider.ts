@@ -253,6 +253,11 @@ export function assertInsideWorkspace(
     relative(existingAncestor, resolvedPath),
   );
   if (isInsideOrEqual(realCandidate, resolvedRoot)) {
+    // Host passthrough is a guarded test/development provider, not real
+    // isolation. This realpath check plus O_NOFOLLOW writes reject existing
+    // symlink escapes and final-component write symlinks, but cannot close all
+    // intermediate-component TOCTOU races against a concurrent host process.
+    // Docker/remote providers must rely on their OS isolation boundary.
     return realCandidate;
   }
   throw new Error(`Sandbox path escapes workspace: ${absolutePath}`);

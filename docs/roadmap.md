@@ -621,6 +621,7 @@ Design constraints coming out of E.0:
 - Pi passes host environment data into `BashOperations.exec`; provider implementations must apply an explicit env allowlist/drop policy and must not blindly forward `options.env`.
 - Avoid `session.agent.state.tools = [...]` internal mutation. E.1 uses public `customTools` definitions so Pi calls our provider-backed execute bodies directly. Keep provider invocation accounting and gated event release as defense in depth; validate by `toolCallId` only when a real provider Operation runs inside that tool execution context. Re-run `scratch/21-e2-define-tool-builtins.ts` on Pi SDK bumps.
 - File Operations receive absolute paths after Pi resolves the model's input against `cwd`; that resolution is not a jail. E.1 providers must enforce workspace containment before read/write/list/search operations touch a backend.
+- Host-passthrough path containment is best-effort hardening for a non-isolating provider. It rejects existing symlink escapes and final-component write symlinks, but real isolation belongs to Docker/remote providers.
 - Pi's current `createGrepTool` is not fully provider-backed: even with custom `GrepOperations`, it still shells out to host `rg`. Keep grep disabled for sandbox-backed builtin tools until that path is replaced or upstreamed; grep-like capability remains available through policed bash.
 
 Scope:

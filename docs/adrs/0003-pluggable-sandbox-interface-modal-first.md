@@ -252,6 +252,7 @@ Findings:
 - **The custom-tool path streams.** Pi passed `onUpdate` into `ToolDefinition.execute(...)`, and the probe observed `tool_execution_update` before `tool_execution_end`.
 - **The cleaner route does not require owning Pi's bash semantics.** Pi already exports `createBashToolDefinition`, `createReadToolDefinition`, `createWriteToolDefinition`, `createEditToolDefinition`, `createFindToolDefinition`, and `createLsToolDefinition`. Register those definitions through `customTools` with provider Operations. That uses public APIs, preserves Pi's tool descriptions/rendering/execution semantics, and avoids internal `session.agent.state.tools` mutation.
 - **The bypass class is designed out, not merely detected.** Pi executes the registered `ToolDefinition`; the provider Operations live inside that execute body. Keep invocation accounting and gated release as defense in depth, but validate by `toolCallId` only when a real Operation runs inside that tool execution context. Dispatch alone is not proof of provider use.
+- **Host passthrough path containment is best-effort, not isolation.** E.1 realpath containment plus `O_NOFOLLOW` writes rejects existing symlink escapes and final-component write symlinks, but it cannot close every intermediate-component TOCTOU race against a concurrent host process. That is acceptable only because passthrough is explicitly unsafe and non-isolating; Docker/remote providers must rely on their OS isolation boundary.
 
 Updated implementation direction:
 
