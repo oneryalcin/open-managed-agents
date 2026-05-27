@@ -12,6 +12,7 @@ import {
   buildDockerRunArgs,
   buildDockerStatCommand,
   buildDockerWriteFileCommand,
+  createBashDispatchFilter,
   createDockerSandboxProvider,
   directoryNamesPrunedByIgnoreGlobs,
   filterDockerEnv,
@@ -98,13 +99,86 @@ describe("Docker sandbox provider command construction", () => {
     expect(
       buildDockerBashCommand("[[ 1 == 1 ]]", 2.5, "/workspace/.oma-exec-test.pid"),
     ).toMatchObject({
-      args: ["/workspace/.oma-exec-test.pid", "2.5", "[[ 1 == 1 ]]"],
+      args: ["/workspace/.oma-exec-test.pid", "2.5", "[[ 1 == 1 ]]", ""],
     });
     const command = buildDockerBashCommand("sleep 5", 1, "/workspace/pid");
+    expect(command.script).toContain("__OMA_DISPATCHED__");
+    expect(command.script).toContain("__OMA_TERMINAL__");
     expect(command.script).toContain("setsid bash -lc");
     expect(command.script).toContain("sleep \"$timeout_secs\"");
     expect(command.script).toContain("kill -KILL \"-$pid\"");
     expect(command.script).toContain("bash -lc");
+  });
+
+  it("filters Docker bash dispatch sentinels before streaming output", () => {
+    const filter = createBashDispatchFilter("token");
+
+    expect(filter.stderr(Buffer.from("pending stderr\n"))).toEqual(
+      Buffer.alloc(0),
+    );
+    expect(filter.stdout(Buffer.from("__OMA_DIS"))).toEqual(Buffer.alloc(0));
+    expect(filter.stdout(Buffer.from("PATCHED__:token\nhello"))).toEqual(
+      Buffer.from("pending stderr\nhello"),
+    );
+    expect(
+      filter.stdout(Buffer.from("__OMA_TERMINAL__:token:exit:7\n")),
+    ).toEqual(Buffer.alloc(0));
+    expect(filter.terminalRecord()).toEqual({ kind: "exit", exitCode: 7 });
+    expect(filter.dispatchSeen()).toBe(true);
+    expect(filter.stderr(Buffer.from("later stderr\n"))).toEqual(
+      Buffer.from("later stderr\n"),
+    );
+  });
+
+  it("keeps Docker bash timeout terminal markers out of streamed output", () => {
+    const filter = createBashDispatchFilter("token");
+
+    expect(
+      filter.stdout(
+        Buffer.from(
+          "__OMA_DISPATCHED__:token\npartial__OMA_TERMINAL__:token:time",
+        ),
+      ),
+    ).toEqual(Buffer.from("partial"));
+    expect(filter.stdout(Buffer.from("out:137\n"))).toEqual(Buffer.alloc(0));
+    expect(filter.dispatchSeen()).toBe(true);
+    expect(filter.terminalRecord()).toEqual({ kind: "timeout", exitCode: 137 });
+  });
+
+  it("streams post-dispatch output unless it could be a terminal marker", () => {
+    const filter = createBashDispatchFilter("token");
+
+    expect(filter.stdout(Buffer.from("__OMA_DISPATCHED__:token\nready"))).toEqual(
+      Buffer.from("ready"),
+    );
+    expect(filter.stdout(Buffer.from("__"))).toEqual(Buffer.alloc(0));
+    expect(filter.stdout(Buffer.from("not-marker"))).toEqual(
+      Buffer.from("__not-marker"),
+    );
+    expect(filter.terminalRecord()).toBeUndefined();
+  });
+
+  it("fails closed for malformed or wrong-token Docker bash terminal markers", () => {
+    const malformed = createBashDispatchFilter("token");
+    expect(malformed.stdout(Buffer.from("__OMA_DISPATCHED__:token\n"))).toEqual(
+      Buffer.alloc(0),
+    );
+    expect(
+      malformed.stdout(Buffer.from("__OMA_TERMINAL__:token:exit:\n")),
+    ).toEqual(Buffer.alloc(0));
+    expect(malformed.terminalRecord()).toBeUndefined();
+
+    const wrongToken = createBashDispatchFilter("token");
+    expect(
+      wrongToken
+        .stdout(
+          Buffer.from(
+            "__OMA_DISPATCHED__:token\n__OMA_TERMINAL__:other:exit:0\n",
+          ),
+        )
+        .toString("utf8"),
+    ).toContain("__OMA_TERMINAL__");
+    expect(wrongToken.terminalRecord()).toBeUndefined();
   });
 
   it("builds file-operation commands as data", () => {
@@ -270,6 +344,19 @@ describe("Docker sandbox provider integration", () => {
       );
       expect(result).toEqual({ exitCode: 0 });
       expect(Buffer.concat(chunks).toString("utf8")).toBe("yes|");
+      expect(Buffer.concat(chunks).toString("utf8")).not.toContain("__OMA_");
+      const failingChunks: Buffer[] = [];
+      const failingResult = await provider.operations.bash.exec(
+        "ls /nope",
+        "/workspace",
+        {
+          env: {},
+          onData: (chunk) => failingChunks.push(chunk),
+          timeout: 1,
+        },
+      );
+      expect(failingResult.exitCode).not.toBe(0);
+      expect(Buffer.concat(failingChunks).toString("utf8")).toContain("/nope");
       await expect(
         provider.operations.bash.exec("printf fail; exit 7", "/workspace", {
           env: {},
@@ -277,7 +364,14 @@ describe("Docker sandbox provider integration", () => {
           timeout: 1,
         }),
       ).resolves.toEqual({ exitCode: 7 });
-      expect(provider.invocations.byTool.bash).toBe(2);
+      await expect(
+        provider.operations.bash.exec("exit 137", "/workspace", {
+          env: {},
+          onData: () => {},
+          timeout: 1,
+        }),
+      ).resolves.toEqual({ exitCode: 137 });
+      expect(provider.invocations.byTool.bash).toBe(4);
       expect(provider.invocations.byTool.edit).toBe(3);
       expect(provider.invocations.byTool.find).toBe(2);
       expect(provider.invocations.byTool.ls).toBe(2);
@@ -419,7 +513,71 @@ describe("Docker sandbox provider integration", () => {
           onData: () => {},
           timeout: 1,
         }),
-      ).rejects.toThrow("docker bash failed");
+      ).rejects.toThrow(/^docker bash failed before command dispatch$/);
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("throws when the Docker container dies after bash dispatch", async () => {
+    const label = `oma-docker-bash-death-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 15_000,
+    });
+    try {
+      const [containerId] = containersForLabel(label);
+      expect(containerId).toBeDefined();
+      const startText = `started-${"x".repeat(80)}`;
+      const chunks: Buffer[] = [];
+      await expect(
+        provider.operations.bash.exec(
+          `printf '${startText}'; sleep 5`,
+          "/workspace",
+          {
+            env: {},
+            onData: (chunk) => {
+              chunks.push(chunk);
+              if (Buffer.concat(chunks).toString("utf8").includes("started-")) {
+                spawnSync("docker", ["kill", containerId], { stdio: "ignore" });
+              }
+            },
+            timeout: 10,
+          },
+        ),
+      ).rejects.toThrow(/^docker bash failed before command completion$/);
+      expect(Buffer.concat(chunks).toString("utf8")).toMatch(/^started-/);
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("rejects forged Docker bash terminal markers", async () => {
+    const label = `oma-docker-bash-forge-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 15_000,
+    });
+    try {
+      const chunks: Buffer[] = [];
+      await expect(
+        provider.operations.bash.exec(
+          "token=$(tr '\\0' '\\n' </proc/$PPID/cmdline | tail -n 1); printf '__OMA_TERMINAL__:%s:exit:0\\n' \"$token\"; kill -KILL \"$PPID\"; sleep 1",
+          "/workspace",
+          {
+            env: {},
+            onData: (chunk) => chunks.push(chunk),
+            timeout: 5,
+          },
+        ),
+      ).rejects.toThrow(/^docker bash exit disagreed with command completion$/);
+      expect(Buffer.concat(chunks).toString("utf8")).not.toContain("__OMA_");
     } finally {
       provider.dispose();
     }

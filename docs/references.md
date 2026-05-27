@@ -32,6 +32,8 @@
 - OpenAI Agents sandbox guide: https://developers.openai.com/api/docs/guides/agents/sandboxes
 - Modal Sandboxes: https://modal.com/docs/guide/sandbox
 - Modal TypeScript SDK: https://github.com/modal-labs/modal-js
+- Canonical Workshop announcement: https://discourse.ubuntu.com/t/introducing-workshop-launch-sandboxed-development-environments-on-ubuntu-with-a-single-command/83322
+- Canonical Workshop docs: https://documentation.ubuntu.com/canonical-workshop/latest/
 - Hono: https://hono.dev
 - Hono SSE: https://hono.dev/docs/helpers/streaming#sse
 - Better-SQLite3: https://github.com/WiseLibs/better-sqlite3

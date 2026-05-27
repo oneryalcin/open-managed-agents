@@ -30,6 +30,8 @@ const SANDBOX_LABEL_KEY = "open-managed-agents.sandbox";
 const SANDBOX_LABEL_VALUE = "docker-local";
 const OWNER_LABEL_KEY = "open-managed-agents.owner";
 const OWNER_LABEL_VALUE = "open-managed-agents";
+const BASH_DISPATCH_PREFIX = "__OMA_DISPATCHED__:";
+const BASH_TERMINAL_PREFIX = "__OMA_TERMINAL__:";
 
 export interface DockerSandboxOptions {
   image?: string;
@@ -70,6 +72,9 @@ interface DockerSandboxResolvedOptions {
 interface DockerExecOptions {
   input?: Buffer | string;
   onData?: (data: Buffer) => void;
+  // onData receives both streams; do not combine it with stream-specific callbacks.
+  onStderr?: (data: Buffer) => void;
+  onStdout?: (data: Buffer) => void;
   onAbort?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -80,6 +85,10 @@ interface DockerExecResult {
   stderr: Buffer;
   exitCode: number | null;
 }
+
+type BashTerminalRecord =
+  | { kind: "exit"; exitCode: number }
+  | { kind: "timeout"; exitCode: number };
 
 export interface DockerShellCommand {
   script: string;
@@ -300,15 +309,30 @@ export async function createDockerSandboxProvider(
           ? options.timeout
           : resolved.operationTimeoutMs / 1000;
       const execId = randomExecId();
-      const pidFile = posix.join(resolved.workspacePath, `.oma-exec-${execId}.pid`);
-      const shellCommand = buildDockerBashCommand(command, timeoutSeconds, pidFile);
+      const dispatchToken = randomExecId();
+      const pidFile = posix.join(
+        resolved.workspacePath,
+        `.oma-exec-${execId}.pid`,
+      );
+      const shellCommand = buildDockerBashCommand(
+        command,
+        timeoutSeconds,
+        pidFile,
+        dispatchToken,
+      );
+      const dispatchFilter = createBashDispatchFilter(dispatchToken);
       try {
         const result = await dockerExec(
           resolved.dockerCommand,
-          buildDockerExecShellArgs(containerName, shellCommand.script, shellCommand.args, {
-            workdir: path,
-            env: filterDockerEnv(options.env ?? {}, resolved.envAllowlist),
-          }),
+          buildDockerExecShellArgs(
+            containerName,
+            shellCommand.script,
+            shellCommand.args,
+            {
+              workdir: path,
+              env: filterDockerEnv(options.env ?? {}, resolved.envAllowlist),
+            },
+          ),
           {
             activePids: activeDockerExecPids,
             onAbort: () => {
@@ -318,16 +342,35 @@ export async function createDockerSandboxProvider(
                 pidFile,
               );
             },
-            onData: options.onData,
+            onStderr: (chunk) => {
+              const forwarded = dispatchFilter.stderr(chunk);
+              if (forwarded.length > 0) options.onData(forwarded);
+            },
+            onStdout: (chunk) => {
+              const forwarded = dispatchFilter.stdout(chunk);
+              if (forwarded.length > 0) options.onData(forwarded);
+            },
             signal: options.signal,
             timeoutMs: Math.ceil(timeoutSeconds * 1000) + 2_000,
           },
         );
-        throwIfDockerInfrastructureFailure(result, "docker bash");
-        if (result.exitCode === 137 && timeoutSeconds > 0) {
+        if (!dispatchFilter.dispatchSeen()) {
+          throw new Error("docker bash failed before command dispatch");
+        }
+        const terminal = dispatchFilter.terminalRecord();
+        if (terminal === undefined) {
+          throw new Error("docker bash failed before command completion");
+        }
+        if (
+          result.exitCode !==
+          (terminal.kind === "timeout" ? 137 : terminal.exitCode)
+        ) {
+          throw new Error("docker bash exit disagreed with command completion");
+        }
+        if (terminal.kind === "timeout") {
           throw new DockerTimeoutError();
         }
-        return { exitCode: result.exitCode };
+        return { exitCode: terminal.exitCode };
       } catch (error) {
         if (error instanceof DockerTimeoutError) {
           throw new Error(`timeout:${timeoutSeconds}`);
@@ -450,15 +493,19 @@ export function buildDockerBashCommand(
   command: string,
   timeoutSeconds: number,
   pidFile: string,
+  dispatchToken = "",
 ): DockerShellCommand {
   return {
     script: [
       "pidfile=\"$1\"",
       "timeout_secs=\"$2\"",
       "command=\"$3\"",
-      "timeout_file=\"${pidfile}.timeout\"",
+      "dispatch_token=\"$4\"",
+      "printf '%s\\n' \"__OMA_DISPATCHED__:${dispatch_token}\"",
+      "terminal_exit() { printf '%s\\n' \"__OMA_TERMINAL__:${dispatch_token}:exit:$1\"; }",
+      "terminal_timeout() { printf '%s\\n' \"__OMA_TERMINAL__:${dispatch_token}:timeout:137\"; }",
       "timer_file=\"${pidfile}.timer\"",
-      "rm -f \"$timeout_file\" \"$timer_file\"",
+      "rm -f \"$timer_file\"",
       "setsid bash -lc \"$command\" &",
       "pid=$!",
       "printf '%s' \"$pid\" > \"$pidfile\"",
@@ -468,18 +515,19 @@ export function buildDockerBashCommand(
       "wait -n -p completed \"$pid\" \"$timer\"",
       "status=$?",
       "if [ \"${completed:-}\" = \"$timer\" ]; then",
-      "  : > \"$timeout_file\"",
       "  kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
       "  wait \"$pid\" 2>/dev/null || true",
-      "  rm -f \"$pidfile\" \"$timeout_file\" \"$timer_file\"",
+      "  rm -f \"$pidfile\" \"$timer_file\"",
+      "  terminal_timeout",
       "  exit 137",
       "fi",
       "kill \"$timer\" 2>/dev/null || true",
       "wait \"$timer\" 2>/dev/null || true",
       "rm -f \"$pidfile\" \"$timer_file\"",
+      "terminal_exit \"$status\"",
       "exit \"$status\"",
     ].join("\n"),
-    args: [pidFile, String(timeoutSeconds), command],
+    args: [pidFile, String(timeoutSeconds), command, dispatchToken],
   };
 }
 
@@ -681,6 +729,140 @@ function randomExecId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function bashDispatchSentinel(token: string): Buffer {
+  return Buffer.from(`${BASH_DISPATCH_PREFIX}${token}\n`);
+}
+
+function bashTerminalPrefix(token: string): Buffer {
+  return Buffer.from(`${BASH_TERMINAL_PREFIX}${token}:`);
+}
+
+export function createBashDispatchFilter(token: string): {
+  dispatchSeen: () => boolean;
+  terminalRecord: () => BashTerminalRecord | undefined;
+  stderr: (chunk: Buffer) => Buffer;
+  stdout: (chunk: Buffer) => Buffer;
+} {
+  const dispatchSentinel = bashDispatchSentinel(token);
+  const terminalPrefix = bashTerminalPrefix(token);
+  let dispatchSeen = false;
+  let terminalRecord: BashTerminalRecord | undefined;
+  let terminalCandidate = Buffer.alloc(0);
+  let pendingStdout = Buffer.alloc(0);
+  let pendingStderr = Buffer.alloc(0);
+
+  const filterAfterDispatch = (chunk: Buffer): Buffer => {
+    pendingStdout = Buffer.concat([pendingStdout, chunk]);
+    const index = pendingStdout.indexOf(terminalPrefix);
+    if (index >= 0) {
+      const lineEnd = pendingStdout.indexOf("\n", index);
+      if (lineEnd < 0) {
+        const out = pendingStdout.subarray(0, index);
+        pendingStdout = pendingStdout.subarray(index);
+        return out;
+      }
+      const line = pendingStdout.subarray(index, lineEnd).toString("utf8");
+      terminalRecord = parseBashTerminalRecord(line, token);
+      const out = Buffer.concat([
+        pendingStdout.subarray(0, index),
+        pendingStdout.subarray(lineEnd + 1),
+      ]);
+      pendingStdout = Buffer.alloc(0);
+      return out;
+    }
+
+    if (terminalCandidate.length > 0) {
+      const combined = Buffer.concat([terminalCandidate, pendingStdout]);
+      if (isPrefixOf(combined, terminalPrefix)) {
+        terminalCandidate = combined;
+        pendingStdout = Buffer.alloc(0);
+        return Buffer.alloc(0);
+      }
+      const out = combined;
+      terminalCandidate = Buffer.alloc(0);
+      pendingStdout = Buffer.alloc(0);
+      return out;
+    }
+
+    const candidateStart = findTerminalPrefixCandidateStart(
+      pendingStdout,
+      terminalPrefix,
+    );
+    if (candidateStart < 0) {
+      const out = pendingStdout;
+      pendingStdout = Buffer.alloc(0);
+      return out;
+    }
+    const candidate = pendingStdout.subarray(candidateStart);
+    if (isPrefixOf(candidate, terminalPrefix)) {
+      const out = pendingStdout.subarray(0, candidateStart);
+      terminalCandidate = candidate;
+      pendingStdout = Buffer.alloc(0);
+      return out;
+    }
+    const out = pendingStdout;
+    pendingStdout = Buffer.alloc(0);
+    return out;
+  };
+
+  return {
+    dispatchSeen: () => dispatchSeen,
+    terminalRecord: () => terminalRecord,
+    stderr: (chunk) => {
+      if (dispatchSeen) return chunk;
+      pendingStderr = Buffer.concat([pendingStderr, chunk]);
+      return Buffer.alloc(0);
+    },
+    stdout: (chunk) => {
+      if (dispatchSeen) return filterAfterDispatch(chunk);
+      pendingStdout = Buffer.concat([pendingStdout, chunk]);
+      const index = pendingStdout.indexOf(dispatchSentinel);
+      if (index < 0) return Buffer.alloc(0);
+      dispatchSeen = true;
+      const afterDispatch = Buffer.concat([
+        pendingStdout.subarray(0, index),
+        pendingStderr,
+        pendingStdout.subarray(index + dispatchSentinel.length),
+      ]);
+      pendingStdout = Buffer.alloc(0);
+      pendingStderr = Buffer.alloc(0);
+      return filterAfterDispatch(afterDispatch);
+    },
+  };
+}
+
+function parseBashTerminalRecord(
+  line: string,
+  token: string,
+): BashTerminalRecord | undefined {
+  const prefix = `${BASH_TERMINAL_PREFIX}${token}:`;
+  if (!line.startsWith(prefix)) return undefined;
+  const payload = line.slice(prefix.length);
+  const [kind, exitCodeText, extra] = payload.split(":");
+  if (extra !== undefined || !/^(0|[1-9][0-9]*)$/.test(exitCodeText ?? "")) {
+    return undefined;
+  }
+  const exitCode = Number(exitCodeText);
+  if (kind === "exit") return { kind, exitCode };
+  if (kind === "timeout") return { kind, exitCode };
+  return undefined;
+}
+
+function findTerminalPrefixCandidateStart(
+  buffer: Buffer,
+  terminalPrefix: Buffer,
+): number {
+  for (let index = 0; index < buffer.length; index += 1) {
+    if (buffer[index] === terminalPrefix[0]) return index;
+  }
+  return -1;
+}
+
+function isPrefixOf(candidate: Buffer, value: Buffer): boolean {
+  if (candidate.length > value.length) return false;
+  return value.subarray(0, candidate.length).equals(candidate);
+}
+
 function filterDockerEnvObject(
   env: NodeJS.ProcessEnv | undefined,
 ): NodeJS.ProcessEnv {
@@ -705,20 +887,6 @@ async function dockerChecked(
     );
   }
   return result;
-}
-
-function throwIfDockerInfrastructureFailure(
-  result: DockerExecResult,
-  context: string,
-): void {
-  if (result.exitCode === 0) return;
-  const stderr = result.stderr.toString("utf8").trim();
-  if (
-    stderr.startsWith("Error response from daemon:") ||
-    stderr.startsWith("Cannot connect to the Docker daemon")
-  ) {
-    throw new Error(`${context} failed: ${stderr}`);
-  }
 }
 
 function throwIfUnexpectedBoundedExit(
@@ -778,10 +946,12 @@ async function dockerExec(
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout.push(chunk);
+      opts.onStdout?.(chunk);
       opts.onData?.(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr.push(chunk);
+      opts.onStderr?.(chunk);
       opts.onData?.(chunk);
     });
     child.on("error", (error) => settle(() => reject(error)));

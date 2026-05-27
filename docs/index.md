@@ -34,7 +34,7 @@ The decisions we've already made, with the alternatives we rejected and why:
 
 - [ADR 0001: Use Pi Agent SDK as engine](adrs/0001-use-pi-agent-sdk-as-engine.md)
 - [ADR 0002: TypeScript end-to-end](adrs/0002-typescript-end-to-end.md)
-- [ADR 0003: Pluggable sandbox providers, Modal first managed remote](adrs/0003-pluggable-sandbox-interface-modal-first.md)
+- [ADR 0003: Pluggable sandbox provider boundary](adrs/0003-pluggable-sandbox-provider-boundary.md)
 - [ADR 0004: Managed Agents REST/SSE surface as north star](adrs/0004-managed-agents-rest-sse-surface-as-north-star.md)
 - [ADR 0005: Custom tools as blocking async functions](adrs/0005-custom-tools-as-blocking-async-functions.md)
 - [ADR 0006: One-time supply-chain quarantine override for Pi 0.75.4](adrs/0006-one-time-supply-chain-override-pi-0.75.4.md)
