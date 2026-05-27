@@ -82,6 +82,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       customToolTimeoutMs?: number;
     } = {},
   ) {
+    this.resolveSandboxProviderFactory();
     this.idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
     this.now = opts.now ?? Date.now;
     this.sessionFactory = opts.sessionFactory;
@@ -414,6 +415,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
   }
 
   private resolveSandboxProviderFactory(): SandboxProviderFactory | undefined {
+    // Direct factories are trusted internal wiring for tests and already-built
+    // providers. Never derive this option from public request, agent, or prompt
+    // input; untrusted provider choice must go through sandboxProviderSelection.
     if (this.opts.sandboxProviderFactory) return this.opts.sandboxProviderFactory;
     return resolveSandboxProviderFactory(
       this.opts.sandboxProviderSelection,

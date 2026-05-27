@@ -234,14 +234,24 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   });
 
   it("hard-rejects docker-local while the wiring gate is closed", async () => {
-    const runner = new PiSessionRunner({
+    expect(() => new PiSessionRunner({
       sandboxProviderSelection: { type: "docker-local" },
       idleTtlMs: 0,
-    });
+    })).toThrow("unavailable until issue #22");
+  });
 
-    await expect(
-      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
-    ).rejects.toThrow("unavailable until issue #22");
+  it("eagerly validates pre-typed sandbox selection at construction", () => {
+    expect(
+      () =>
+        new PiSessionRunner({
+          sandboxProviderSelection: { type: "host-passthrough" } as never,
+          sandboxProviderSelectionOptions: {
+            allowUnsafeHostPassthrough: true,
+            hostPassthroughWorkspaceRoot: "/tmp",
+          },
+          idleTtlMs: 0,
+        }),
+    ).toThrow("`unsafeAllowHostPassthrough` must be true");
   });
 
   it("fails closed when Pi keeps an unexpected builtin tool active", async () => {

@@ -1,8 +1,4 @@
 import {
-  createDockerSandboxProviderFactory,
-  type DockerSandboxOptions,
-} from "./docker.ts";
-import {
   createHostPassthroughSandboxProvider,
   type SandboxProviderFactory,
 } from "./provider.ts";
@@ -23,8 +19,6 @@ export type SandboxProviderSelection =
 export interface SandboxProviderSelectionResolverOptions {
   allowUnsafeHostPassthrough?: boolean;
   hostPassthroughWorkspaceRoot?: string;
-  dockerLocalEnabled?: boolean;
-  docker?: Omit<DockerSandboxOptions, "envAllowlist" | "operationTimeoutMs">;
 }
 
 export function parseSandboxProviderSelection(
@@ -84,6 +78,11 @@ export function resolveSandboxProviderFactory(
 ): SandboxProviderFactory | undefined {
   if (selection === undefined || selection.type === "none") return undefined;
   if (selection.type === "host-passthrough") {
+    if (selection.unsafeAllowHostPassthrough !== true) {
+      throw new Error(
+        "`unsafeAllowHostPassthrough` must be true for host-passthrough",
+      );
+    }
     if (opts.allowUnsafeHostPassthrough !== true) {
       throw new Error(
         "Host passthrough provider is disabled by deployment configuration",
@@ -98,20 +97,17 @@ export function resolveSandboxProviderFactory(
     return async () =>
       createHostPassthroughSandboxProvider({
         workspaceRoot,
-        unsafeAllowHostPassthrough: true,
+        unsafeAllowHostPassthrough: selection.unsafeAllowHostPassthrough,
         envAllowlist: selection.envAllowlist,
       });
   }
-  if (opts.dockerLocalEnabled !== true) {
+  if (selection.type === "docker-local") {
     throw new Error(
       "Docker-local sandbox provider is unavailable until issue #22 is closed",
     );
   }
-  return createDockerSandboxProviderFactory({
-    ...(opts.docker ?? {}),
-    envAllowlist: selection.envAllowlist,
-    operationTimeoutMs: selection.operationTimeoutMs,
-  });
+  const _exhaustive: never = selection;
+  throw new Error(`Unsupported sandbox provider type: ${String(_exhaustive)}`);
 }
 
 function objectInput(input: unknown, label: string): Record<string, unknown> {

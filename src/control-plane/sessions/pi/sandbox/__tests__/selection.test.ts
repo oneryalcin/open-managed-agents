@@ -66,6 +66,18 @@ describe("sandbox provider selection (Cycle E.3)", () => {
     }
   });
 
+  it("rechecks the per-session host gate in the resolver", () => {
+    expect(() =>
+      resolveSandboxProviderFactory(
+        { type: "host-passthrough" } as never,
+        {
+          allowUnsafeHostPassthrough: true,
+          hostPassthroughWorkspaceRoot: "/tmp",
+        },
+      ),
+    ).toThrow("`unsafeAllowHostPassthrough` must be true");
+  });
+
   it("hard-rejects docker-local until the wiring gate is closed", () => {
     const selection = parseSandboxProviderSelection({
       type: "docker-local",
@@ -73,8 +85,10 @@ describe("sandbox provider selection (Cycle E.3)", () => {
       operationTimeoutMs: 1000,
     });
 
-    expect(() => resolveSandboxProviderFactory(selection)).toThrow(
-      "unavailable until issue #22 is closed",
-    );
+    expect(() =>
+      resolveSandboxProviderFactory(selection, {
+        dockerLocalEnabled: true,
+      } as never),
+    ).toThrow("unavailable until issue #22 is closed");
   });
 });
