@@ -170,7 +170,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(session.disposed).toBe(true);
   });
 
-  it("disposes a created session if sandbox provisioning fails", async () => {
+  it("does not create a Pi session if sandbox provisioning fails", async () => {
     const factory = new FakeSessionFactory();
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
@@ -183,7 +183,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     await expect(
       collect(runner.runUserMessage("wrk", "sesn_1", "one")),
     ).rejects.toThrow("sandbox provision failed");
-    expect(factory.sessions[0]?.disposed).toBe(true);
+    expect(factory.sessions).toHaveLength(0);
   });
 
   it("fails closed when Pi keeps an unexpected builtin tool active", async () => {
@@ -202,7 +202,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(sandbox.disposed).toBe(true);
   });
 
-  it("retains known custom tools while replacing sandboxed builtins", async () => {
+  it("accepts exactly the sandboxed builtins and known custom tools", async () => {
     const customTools: PiCustomToolsProvider = () => [
       {
         type: "custom",
@@ -224,9 +224,9 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
     await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
 
-    expect(factory.sessions[0]?.activeToolNames()).toEqual([
-      "custom_lookup",
+    expect(factory.sessions[0]?.getActiveToolNames()).toEqual([
       "bash",
+      "custom_lookup",
     ]);
   });
 
@@ -245,12 +245,44 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(sandbox.disposed).toBe(true);
   });
 
+  it("does not yield sandboxed builtin output before a bypass is detected", async () => {
+    const factory = new FakeSessionFactory({
+      emitSandboxedTool: "bash",
+      activeToolNames: ["bash"],
+    });
+    const sandbox = new FakeSandboxProvider(["bash"]);
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    const result = await collectUntilError(
+      runner.runUserMessage("wrk", "sesn_1", "one"),
+    );
+
+    expect(result.error).toBeInstanceOf(Error);
+    expect((result.error as Error).message).toContain(
+      "without invoking the sandbox provider",
+    );
+    expect(eventTypes(result.events)).toEqual(["agent_start"]);
+    expect(messageTexts(result.events)).toEqual([]);
+    expect(
+      result.events.some((event) => {
+        if (typeof event !== "object" || event === null) return false;
+        return (event as { type?: unknown }).type === "tool_execution_end";
+      }),
+    ).toBe(false);
+    expect(sandbox.disposed).toBe(true);
+  });
+
   it("fails closed when the wrong provider tool was invoked", async () => {
     const sandbox = new FakeSandboxProvider(["bash", "read"]);
     const factory = new FakeSessionFactory({
       activeToolNames: ["bash", "read"],
       emitSandboxedTool: "bash",
-      onSandboxedTool: () => sandbox.recordInvocation("read"),
+      onSandboxedTool: (_toolName, toolCallId) =>
+        sandbox.recordInvocation("read", toolCallId),
     });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
@@ -264,12 +296,40 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(sandbox.disposed).toBe(true);
   });
 
+  it("does not let low-level operation counts validate a later bypassed tool call", async () => {
+    const sandbox = new FakeSandboxProvider(["read"]);
+    const factory = new FakeSessionFactory({
+      activeToolNames: ["read"],
+      emitSandboxedTools: [
+        { toolName: "read", toolCallId: "toolu_legit" },
+        { toolName: "read", toolCallId: "toolu_bypass" },
+      ],
+      onSandboxedTool: (_toolName, toolCallId) => {
+        if (toolCallId !== "toolu_legit") return;
+        sandbox.recordLowLevelOperation("read");
+        sandbox.recordLowLevelOperation("read");
+        sandbox.recordToolCall("read", toolCallId);
+      },
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("builtin tool read");
+    expect(sandbox.disposed).toBe(true);
+  });
+
   it("accepts a sandboxed builtin tool when the matching provider tool was invoked", async () => {
     const sandbox = new FakeSandboxProvider(["bash"]);
     const factory = new FakeSessionFactory({
       activeToolNames: ["bash"],
       emitSandboxedTool: "bash",
-      onSandboxedTool: () => sandbox.recordInvocation("bash"),
+      onSandboxedTool: (_toolName, toolCallId) =>
+        sandbox.recordInvocation("bash", toolCallId),
     });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
@@ -313,7 +373,11 @@ interface FakeSessionOptions {
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
   emitSandboxedTool?: string;
-  onSandboxedTool?: () => void;
+  emitSandboxedTools?: Array<{
+    toolName: string;
+    toolCallId: string;
+  }>;
+  onSandboxedTool?: (toolName: string, toolCallId: string) => void;
   activeToolNames?: string[];
 }
 
@@ -361,18 +425,26 @@ class FakeSession implements PiRuntimeSession {
     }
     this.emit({ type: "agent_start" });
     if (this.opts.promptGate) await this.opts.promptGate;
-    if (this.opts.emitSandboxedTool) {
+    const sandboxedTools =
+      this.opts.emitSandboxedTools ??
+      (this.opts.emitSandboxedTool
+        ? [{ toolName: this.opts.emitSandboxedTool, toolCallId: "toolu_fake" }]
+        : []);
+    for (const sandboxedTool of sandboxedTools) {
       this.emit({
         type: "tool_execution_start",
-        toolCallId: "toolu_fake",
-        toolName: this.opts.emitSandboxedTool,
+        toolCallId: sandboxedTool.toolCallId,
+        toolName: sandboxedTool.toolName,
         args: {},
       });
-      this.opts.onSandboxedTool?.();
+      this.opts.onSandboxedTool?.(
+        sandboxedTool.toolName,
+        sandboxedTool.toolCallId,
+      );
       this.emit({
         type: "tool_execution_end",
-        toolCallId: "toolu_fake",
-        toolName: this.opts.emitSandboxedTool,
+        toolCallId: sandboxedTool.toolCallId,
+        toolName: sandboxedTool.toolName,
         result: { content: [{ type: "text", text: "tool ok" }] },
         isError: false,
       });
@@ -418,7 +490,7 @@ class FakeSession implements PiRuntimeSession {
     });
   }
 
-  activeToolNames(): string[] {
+  getActiveToolNames(): string[] {
     return this.agent.state.tools.map((tool) => tool.name);
   }
 }
@@ -427,6 +499,28 @@ async function collect(source: AsyncIterable<unknown>): Promise<unknown[]> {
   const out: unknown[] = [];
   for await (const event of source) out.push(event);
   return out;
+}
+
+async function collectUntilError(
+  source: AsyncIterable<unknown>,
+): Promise<{ events: unknown[]; error: unknown }> {
+  const events: unknown[] = [];
+  try {
+    for await (const event of source) events.push(event);
+  } catch (error) {
+    return { events, error };
+  }
+  throw new Error("expected source to throw");
+}
+
+function eventTypes(events: unknown[]): string[] {
+  return events
+    .map((event) => {
+      if (typeof event !== "object" || event === null) return undefined;
+      const type = (event as { type?: unknown }).type;
+      return typeof type === "string" ? type : undefined;
+    })
+    .filter((type): type is string => type !== undefined);
 }
 
 function messageTexts(events: unknown[]): string[] {
@@ -490,6 +584,14 @@ class FakeSandboxProvider implements SandboxProvider {
       find: 0,
       ls: 0,
     },
+    toolCallIds: {
+      bash: new Set<string>(),
+      read: new Set<string>(),
+      write: new Set<string>(),
+      edit: new Set<string>(),
+      find: new Set<string>(),
+      ls: new Set<string>(),
+    },
   };
   disposed = false;
 
@@ -501,9 +603,26 @@ class FakeSandboxProvider implements SandboxProvider {
     this.tools = toolInstances.map((name) => ({ name }) as SandboxProvider["tools"][number]);
   }
 
-  recordInvocation(toolName: "bash" | "read" | "write" | "edit" | "find" | "ls"): void {
+  recordInvocation(
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "ls",
+    toolCallId = "toolu_fake",
+  ): void {
+    this.recordLowLevelOperation(toolName);
+    this.recordToolCall(toolName, toolCallId);
+  }
+
+  recordLowLevelOperation(
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "ls",
+  ): void {
     this.invocations.total += 1;
     this.invocations.byTool[toolName] += 1;
+  }
+
+  recordToolCall(
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "ls",
+    toolCallId: string,
+  ): void {
+    this.invocations.toolCallIds[toolName].add(toolCallId);
   }
 
   dispose(): void {

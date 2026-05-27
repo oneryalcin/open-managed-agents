@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -51,6 +51,35 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
       ).rejects.toThrow("escapes workspace");
     } finally {
       await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects symlink traversal outside the workspace root", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
+    const outside = await mkdtemp(join(tmpdir(), "oma-sandbox-outside-"));
+    try {
+      const provider = createHostPassthroughSandboxProvider({
+        workspaceRoot: workspace,
+        unsafeAllowHostPassthrough: true,
+      });
+      await writeFile(join(outside, "secret.txt"), "secret");
+      await symlink(outside, join(workspace, "escape"));
+
+      expect(() =>
+        assertInsideWorkspace(join(workspace, "escape", "secret.txt"), workspace),
+      ).toThrow("escapes workspace");
+      await expect(
+        provider.operations.read.readFile(join(workspace, "escape", "secret.txt")),
+      ).rejects.toThrow("escapes workspace");
+      await expect(
+        provider.operations.write.writeFile(
+          join(workspace, "escape", "new.txt"),
+          "nope",
+        ),
+      ).rejects.toThrow("escapes workspace");
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
+      await rm(outside, { force: true, recursive: true });
     }
   });
 

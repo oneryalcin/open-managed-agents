@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import {
   access,
   mkdir,
@@ -18,12 +18,13 @@ import type {
   WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 import {
-  createBashTool,
-  createEditTool,
-  createFindTool,
-  createLsTool,
-  createReadTool,
-  createWriteTool,
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
 export type SandboxedBuiltinToolName =
@@ -34,17 +35,12 @@ export type SandboxedBuiltinToolName =
   | "find"
   | "ls";
 
-type PiAgentTool =
-  | ReturnType<typeof createBashTool>
-  | ReturnType<typeof createReadTool>
-  | ReturnType<typeof createWriteTool>
-  | ReturnType<typeof createEditTool>
-  | ReturnType<typeof createFindTool>
-  | ReturnType<typeof createLsTool>;
-
 export interface SandboxInvocationStats {
   readonly total: number;
   readonly byTool: Readonly<Record<SandboxedBuiltinToolName, number>>;
+  readonly toolCallIds: Readonly<
+    Record<SandboxedBuiltinToolName, ReadonlySet<string>>
+  >;
 }
 
 export interface SandboxOperations {
@@ -59,7 +55,7 @@ export interface SandboxOperations {
 export interface SandboxProvider {
   readonly cwd: string;
   readonly operations: SandboxOperations;
-  readonly tools: PiAgentTool[];
+  readonly tools: ToolDefinition<any, any, any>[];
   readonly toolNames: ReadonlySet<SandboxedBuiltinToolName>;
   readonly invocations: SandboxInvocationStats;
   dispose(): void;
@@ -79,6 +75,7 @@ export interface HostPassthroughSandboxOptions {
 interface MutableSandboxInvocationStats extends SandboxInvocationStats {
   total: number;
   byTool: Record<SandboxedBuiltinToolName, number>;
+  toolCallIds: Record<SandboxedBuiltinToolName, Set<string>>;
 }
 
 export function createHostPassthroughSandboxProvider(
@@ -92,6 +89,7 @@ export function createHostPassthroughSandboxProvider(
   const invocations: MutableSandboxInvocationStats = {
     total: 0,
     byTool: emptyToolCounts(),
+    toolCallIds: emptyToolCallIds(),
   };
   const disposed = { value: false };
 
@@ -183,12 +181,42 @@ export function createHostPassthroughSandboxProvider(
     },
     toolNames: new Set(["bash", "read", "write", "edit", "find", "ls"]),
     tools: [
-      createBashTool(workspaceRoot, { operations: bashOps }),
-      createReadTool(workspaceRoot, { operations: readOps }),
-      createWriteTool(workspaceRoot, { operations: writeOps }),
-      createEditTool(workspaceRoot, { operations: editOps }),
-      createFindTool(workspaceRoot, { operations: findOps }),
-      createLsTool(workspaceRoot, { operations: lsOps }),
+      withToolCallAccounting(
+        "bash",
+        createBashToolDefinition(workspaceRoot, { operations: bashOps }),
+        invocations,
+        disposed,
+      ),
+      withToolCallAccounting(
+        "read",
+        createReadToolDefinition(workspaceRoot, { operations: readOps }),
+        invocations,
+        disposed,
+      ),
+      withToolCallAccounting(
+        "write",
+        createWriteToolDefinition(workspaceRoot, { operations: writeOps }),
+        invocations,
+        disposed,
+      ),
+      withToolCallAccounting(
+        "edit",
+        createEditToolDefinition(workspaceRoot, { operations: editOps }),
+        invocations,
+        disposed,
+      ),
+      withToolCallAccounting(
+        "find",
+        createFindToolDefinition(workspaceRoot, { operations: findOps }),
+        invocations,
+        disposed,
+      ),
+      withToolCallAccounting(
+        "ls",
+        createLsToolDefinition(workspaceRoot, { operations: lsOps }),
+        invocations,
+        disposed,
+      ),
     ],
     dispose: () => {
       disposed.value = true;
@@ -203,13 +231,33 @@ export function assertInsideWorkspace(
   if (!isAbsolute(absolutePath)) {
     throw new Error(`Sandbox path must be absolute: ${absolutePath}`);
   }
-  const resolvedRoot = resolve(workspaceRoot);
+  const resolvedRoot = realpathSync(resolve(workspaceRoot));
   const resolvedPath = resolve(absolutePath);
-  const rel = relative(resolvedRoot, resolvedPath);
-  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+  const existingAncestor = nearestExistingAncestor(resolvedPath);
+  const realAncestor = realpathSync(existingAncestor);
+  const realCandidate = resolve(
+    realAncestor,
+    relative(existingAncestor, resolvedPath),
+  );
+  if (isInsideOrEqual(realCandidate, resolvedRoot)) {
     return resolvedPath;
   }
   throw new Error(`Sandbox path escapes workspace: ${absolutePath}`);
+}
+
+function nearestExistingAncestor(absolutePath: string): string {
+  let current = absolutePath;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
+}
+
+function isInsideOrEqual(absolutePath: string, root: string): boolean {
+  const rel = relative(root, absolutePath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 export function filterEnv(
@@ -235,6 +283,18 @@ function record(
   invocations.byTool[toolName] += 1;
 }
 
+function recordToolCall(
+  invocations: MutableSandboxInvocationStats,
+  disposed: { value: boolean },
+  toolName: SandboxedBuiltinToolName,
+  toolCallId: string,
+): void {
+  if (disposed.value) {
+    throw new Error("Sandbox provider is disposed");
+  }
+  invocations.toolCallIds[toolName].add(toolCallId);
+}
+
 function emptyToolCounts(): Record<SandboxedBuiltinToolName, number> {
   return {
     bash: 0,
@@ -243,6 +303,32 @@ function emptyToolCounts(): Record<SandboxedBuiltinToolName, number> {
     edit: 0,
     find: 0,
     ls: 0,
+  };
+}
+
+function emptyToolCallIds(): Record<SandboxedBuiltinToolName, Set<string>> {
+  return {
+    bash: new Set(),
+    read: new Set(),
+    write: new Set(),
+    edit: new Set(),
+    find: new Set(),
+    ls: new Set(),
+  };
+}
+
+function withToolCallAccounting<T extends ToolDefinition<any, any, any>>(
+  toolName: SandboxedBuiltinToolName,
+  tool: T,
+  invocations: MutableSandboxInvocationStats,
+  disposed: { value: boolean },
+): T {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+      recordToolCall(invocations, disposed, toolName, toolCallId);
+      return tool.execute(toolCallId, params, signal, onUpdate, ctx);
+    },
   };
 }
 

@@ -1,0 +1,173 @@
+{
+  "generated_at": "2026-05-27T13:07:20.026Z",
+  "model": "anthropic/claude-haiku-4-5",
+  "results": [
+    {
+      "scenario": "custom_tool_named_bash_no_builtin",
+      "toolName": "bash",
+      "activeBefore": [
+        "bash"
+      ],
+      "activeAfterSet": [
+        "bash"
+      ],
+      "allToolsBefore": [
+        {
+          "name": "bash"
+        }
+      ],
+      "hasDefinitionBefore": true,
+      "eventTypes": {
+        "agent_start": 1,
+        "turn_start": 2,
+        "message_start": 4,
+        "message_end": 4,
+        "message_update": 9,
+        "tool_execution_start": 1,
+        "tool_execution_update": 1,
+        "tool_execution_end": 1,
+        "turn_end": 2,
+        "agent_end": 1
+      },
+      "toolEvents": [
+        {
+          "type": "tool_execution_start",
+          "toolCallId": "toolu_0123gdP9wPLxdnKGrU56Nuhc",
+          "toolName": "bash"
+        },
+        {
+          "type": "tool_execution_update",
+          "toolCallId": "toolu_0123gdP9wPLxdnKGrU56Nuhc",
+          "toolName": "bash",
+          "partialResult": {
+            "content": [
+              {
+                "type": "text",
+                "text": "PROBE_21_PARTIAL_FROM_PROVIDER\n"
+              }
+            ],
+            "details": {
+              "phase": "partial"
+            }
+          }
+        },
+        {
+          "type": "tool_execution_end",
+          "toolCallId": "toolu_0123gdP9wPLxdnKGrU56Nuhc",
+          "toolName": "bash",
+          "isError": false,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "PROBE_21_FINAL_FROM_PROVIDER\n"
+              }
+            ],
+            "details": {
+              "phase": "final"
+            }
+          }
+        }
+      ],
+      "calls": [
+        {
+          "toolCallId": "toolu_0123gdP9wPLxdnKGrU56Nuhc",
+          "params": {
+            "command": "printf probe-21"
+          },
+          "signalPresent": true,
+          "onUpdatePresent": true
+        }
+      ],
+      "toolCalled": true,
+      "updateObserved": true,
+      "finalObserved": true,
+      "assistantText": "The final marker I saw is: **PROBE_21_FINAL_FROM_PROVIDER**",
+      "artifact": "/Users/mehmetoneryalcin/dev/personal/open-managed-agents/scratch/artifacts/pi-sandbox/custom_tool_named_bash_no_builtin.jsonl"
+    },
+    {
+      "scenario": "custom_tool_named_oma_bash_baseline",
+      "toolName": "oma_bash",
+      "activeBefore": [
+        "oma_bash"
+      ],
+      "activeAfterSet": [
+        "oma_bash"
+      ],
+      "allToolsBefore": [
+        {
+          "name": "oma_bash"
+        }
+      ],
+      "hasDefinitionBefore": true,
+      "eventTypes": {
+        "agent_start": 1,
+        "turn_start": 2,
+        "message_start": 4,
+        "message_end": 4,
+        "message_update": 9,
+        "tool_execution_start": 1,
+        "tool_execution_update": 1,
+        "tool_execution_end": 1,
+        "turn_end": 2,
+        "agent_end": 1
+      },
+      "toolEvents": [
+        {
+          "type": "tool_execution_start",
+          "toolCallId": "toolu_019LvTb1DE4mQ1tWxYR3mYDB",
+          "toolName": "oma_bash"
+        },
+        {
+          "type": "tool_execution_update",
+          "toolCallId": "toolu_019LvTb1DE4mQ1tWxYR3mYDB",
+          "toolName": "oma_bash",
+          "partialResult": {
+            "content": [
+              {
+                "type": "text",
+                "text": "PROBE_21_PARTIAL_FROM_PROVIDER\n"
+              }
+            ],
+            "details": {
+              "phase": "partial"
+            }
+          }
+        },
+        {
+          "type": "tool_execution_end",
+          "toolCallId": "toolu_019LvTb1DE4mQ1tWxYR3mYDB",
+          "toolName": "oma_bash",
+          "isError": false,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "PROBE_21_FINAL_FROM_PROVIDER\n"
+              }
+            ],
+            "details": {
+              "phase": "final"
+            }
+          }
+        }
+      ],
+      "calls": [
+        {
+          "toolCallId": "toolu_019LvTb1DE4mQ1tWxYR3mYDB",
+          "params": {
+            "command": "printf probe-21"
+          },
+          "signalPresent": true,
+          "onUpdatePresent": true
+        }
+      ],
+      "toolCalled": true,
+      "updateObserved": true,
+      "finalObserved": true,
+      "assistantText": "The final marker I saw is: **PROBE_21_FINAL_FROM_PROVIDER**",
+      "artifact": "/Users/mehmetoneryalcin/dev/personal/open-managed-agents/scratch/artifacts/pi-sandbox/custom_tool_named_oma_bash_baseline.jsonl"
+    }
+  ],
+  "verdict": "PASS"
+}
