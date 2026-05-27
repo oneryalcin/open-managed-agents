@@ -37,7 +37,7 @@ Use **Pi Agent SDK** (`@earendil-works/pi-coding-agent`) as the engine.
   - `compact()` → internal lever for context management
   - `fork()` / `newSession()` → session lifecycle ops
 - **Async-function tool model** — Pi's `AgentTool` is an async function the engine awaits. This makes the Managed Agents custom-tool round-trip fall out for free (see [ADR 0005](0005-custom-tools-as-blocking-async-functions.md)).
-- **Pi's typed Operations interfaces** give the clean hook for cwd-bound file/shell behavior — that's where sandbox-backed implementations attach (see [ADR 0003](0003-pluggable-sandbox-interface-modal-first.md)).
+- **Pi's typed Operations interfaces** give the clean hook for cwd-bound file/shell behavior — that's where sandbox-backed implementations attach (see [ADR 0003](0003-pluggable-sandbox-provider-boundary.md)).
 - **Reported as stable** with active community uptake (user assertion; not independently verified at decision time). **TODO before production:** independent maturity assessment — release cadence, contributor count, public issue/PR turnaround, security disclosure history, semver-compliance track record. Acceptable for MVP experiment; revisit before depending on it for anything load-bearing.
 
 ## Consequences

@@ -1,4 +1,4 @@
-# ADR 0003: Pluggable sandbox providers, Modal first managed remote
+# ADR 0003: Pluggable sandbox provider boundary
 
 **Status:** Accepted, 2026-05-21
 
@@ -224,6 +224,12 @@ Provider and resource vocabulary to carry forward from the OpenAI sandbox-agents
 - **Provider names.** OpenAI's sandbox-provider table names the same execution backends we expect to support over time: Unix-local, Docker, Modal, E2B, Cloudflare, Daytona, Runloop, Vercel, and Blaxel (`https://developers.openai.com/api/docs/guides/agents/sandboxes`). Use this as shared vocabulary for future provider IDs, but keep E.3 limited to selecting among providers we actually implement (`none`, guarded `host-passthrough`, and gated `docker-local`).
 - **Workspace state surfaces.** Manifest, live sandbox session, serialized session state, snapshots, mounts, and secrets are separate concepts. Do not fold them into the E.3 provider-selection config. They belong in later resource/session-management slices after provider selection is safe by default.
 - **Managed remote lifecycle.** Modal's sandbox docs expose the managed-provider concerns E.3 should not pre-design: sandbox `exec`, `terminate`, `detach`, `from_id`/resume handles, sandbox lifetime and idle timeout, readiness probes, secrets, volumes, image IDs, and snapshots (`https://modal.com/docs/guide/sandboxes`). These are Modal/managed-remote slice inputs, not generic provider-selection knobs.
+
+Canonical Workshop (`https://discourse.ubuntu.com/t/introducing-workshop-launch-sandboxed-development-environments-on-ubuntu-with-a-single-command/83322`, `https://documentation.ubuntu.com/canonical-workshop/latest/`) is useful prior art for future resource and lifecycle slices, not for the current Docker-local/provider-selection path:
+
+- **Resource grants, not per-provider flags.** Workshop's snap-style interface model generalizes the safety shape we have already reached for repeatedly: deny by default, validate the requested access, bind it from a trusted source, and map it through the provider. When OMA later adds mounts, network/egress, secrets, GPU, SSH-agent, ports/previews, or similar resource dimensions, model them as one uniform resource-grant primitive instead of ad hoc provider options.
+- **Generality stress-test.** Workshop is LXD/system-container-shaped: closer to a full Ubuntu environment with explicit resource interfaces and a different lifecycle than Docker-local's ephemeral app-container model. Use it as a test case when generalizing the provider boundary so Docker-local does not quietly ossify the interface around `docker exec` plus `docker rm -f`.
+- **Weight it skeptically.** Workshop is new, Ubuntu/LXD-specific, and operationally heavier than Docker-local. For this project it ranks below Docker as the first selectable local provider and below managed remote providers such as Modal/Cloudflare/Daytona for production relevance. Its durable value is the resource-grant principle and lifecycle stress-test; a future `lxd-local` or `workshop-local` provider is optional and distant.
 
 OpenClaw prior art (checked at `OpenClaw/OpenClaw@3e351b71`) adds useful sandbox-provider details, but not a framework to copy:
 

@@ -51,7 +51,7 @@ ManagedSandbox  (our wrapper — owns provisioning lifecycle)
 The `ManagedSandbox` wrapper owns lifecycle; the `*Operations` interfaces (Pi's types) handle per-call file/shell adaptation. Two layers, each doing one thing.
 
 - **Sources:** `packages/runtime/src/sandbox.ts:167`, `docs/sandbox-connector-spec.md:31`
-- **Updates [ADR 0003](0003-pluggable-sandbox-interface-modal-first.md)** — see its Findings (post code-review) section, which already pre-empted this with the same shape.
+- **Updates [ADR 0003](0003-pluggable-sandbox-provider-boundary.md)** — see its Findings (post code-review) section, which already pre-empted this with the same shape.
 
 ### 4. Structured error taxonomy (caller-safe vs developer-only)
 
