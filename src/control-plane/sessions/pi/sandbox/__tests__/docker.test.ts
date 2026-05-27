@@ -118,11 +118,11 @@ describe("Docker sandbox provider command construction", () => {
     );
     expect(filter.stdout(Buffer.from("__OMA_DIS"))).toEqual(Buffer.alloc(0));
     expect(filter.stdout(Buffer.from("PATCHED__:token\nhello"))).toEqual(
-      Buffer.alloc(0),
+      Buffer.from("pending stderr\nhello"),
     );
     expect(
       filter.stdout(Buffer.from("__OMA_TERMINAL__:token:exit:7\n")),
-    ).toEqual(Buffer.from("pending stderr\nhello"));
+    ).toEqual(Buffer.alloc(0));
     expect(filter.terminalRecord()).toEqual({ kind: "exit", exitCode: 7 });
     expect(filter.dispatchSeen()).toBe(true);
     expect(filter.stderr(Buffer.from("later stderr\n"))).toEqual(
@@ -143,6 +143,42 @@ describe("Docker sandbox provider command construction", () => {
     expect(filter.stdout(Buffer.from("out:137\n"))).toEqual(Buffer.alloc(0));
     expect(filter.dispatchSeen()).toBe(true);
     expect(filter.terminalRecord()).toEqual({ kind: "timeout", exitCode: 137 });
+  });
+
+  it("streams post-dispatch output unless it could be a terminal marker", () => {
+    const filter = createBashDispatchFilter("token");
+
+    expect(filter.stdout(Buffer.from("__OMA_DISPATCHED__:token\nready"))).toEqual(
+      Buffer.from("ready"),
+    );
+    expect(filter.stdout(Buffer.from("__"))).toEqual(Buffer.alloc(0));
+    expect(filter.stdout(Buffer.from("not-marker"))).toEqual(
+      Buffer.from("__not-marker"),
+    );
+    expect(filter.terminalRecord()).toBeUndefined();
+  });
+
+  it("fails closed for malformed or wrong-token Docker bash terminal markers", () => {
+    const malformed = createBashDispatchFilter("token");
+    expect(malformed.stdout(Buffer.from("__OMA_DISPATCHED__:token\n"))).toEqual(
+      Buffer.alloc(0),
+    );
+    expect(
+      malformed.stdout(Buffer.from("__OMA_TERMINAL__:token:exit:\n")),
+    ).toEqual(Buffer.alloc(0));
+    expect(malformed.terminalRecord()).toBeUndefined();
+
+    const wrongToken = createBashDispatchFilter("token");
+    expect(
+      wrongToken
+        .stdout(
+          Buffer.from(
+            "__OMA_DISPATCHED__:token\n__OMA_TERMINAL__:other:exit:0\n",
+          ),
+        )
+        .toString("utf8"),
+    ).toContain("__OMA_TERMINAL__");
+    expect(wrongToken.terminalRecord()).toBeUndefined();
   });
 
   it("builds file-operation commands as data", () => {
@@ -308,6 +344,7 @@ describe("Docker sandbox provider integration", () => {
       );
       expect(result).toEqual({ exitCode: 0 });
       expect(Buffer.concat(chunks).toString("utf8")).toBe("yes|");
+      expect(Buffer.concat(chunks).toString("utf8")).not.toContain("__OMA_");
       const failingChunks: Buffer[] = [];
       const failingResult = await provider.operations.bash.exec(
         "ls /nope",
@@ -513,6 +550,34 @@ describe("Docker sandbox provider integration", () => {
         ),
       ).rejects.toThrow(/^docker bash failed before command completion$/);
       expect(Buffer.concat(chunks).toString("utf8")).toMatch(/^started-/);
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("rejects forged Docker bash terminal markers", async () => {
+    const label = `oma-docker-bash-forge-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 15_000,
+    });
+    try {
+      const chunks: Buffer[] = [];
+      await expect(
+        provider.operations.bash.exec(
+          "token=$(tr '\\0' '\\n' </proc/$PPID/cmdline | tail -n 1); printf '__OMA_TERMINAL__:%s:exit:0\\n' \"$token\"; kill -KILL \"$PPID\"; sleep 1",
+          "/workspace",
+          {
+            env: {},
+            onData: (chunk) => chunks.push(chunk),
+            timeout: 5,
+          },
+        ),
+      ).rejects.toThrow(/^docker bash exit disagreed with command completion$/);
+      expect(Buffer.concat(chunks).toString("utf8")).not.toContain("__OMA_");
     } finally {
       provider.dispose();
     }

@@ -72,6 +72,7 @@ interface DockerSandboxResolvedOptions {
 interface DockerExecOptions {
   input?: Buffer | string;
   onData?: (data: Buffer) => void;
+  // onData receives both streams; do not combine it with stream-specific callbacks.
   onStderr?: (data: Buffer) => void;
   onStdout?: (data: Buffer) => void;
   onAbort?: () => void;
@@ -359,6 +360,12 @@ export async function createDockerSandboxProvider(
         const terminal = dispatchFilter.terminalRecord();
         if (terminal === undefined) {
           throw new Error("docker bash failed before command completion");
+        }
+        if (
+          result.exitCode !==
+          (terminal.kind === "timeout" ? 137 : terminal.exitCode)
+        ) {
+          throw new Error("docker bash exit disagreed with command completion");
         }
         if (terminal.kind === "timeout") {
           throw new DockerTimeoutError();
@@ -740,6 +747,7 @@ export function createBashDispatchFilter(token: string): {
   const terminalPrefix = bashTerminalPrefix(token);
   let dispatchSeen = false;
   let terminalRecord: BashTerminalRecord | undefined;
+  let terminalCandidate = Buffer.alloc(0);
   let pendingStdout = Buffer.alloc(0);
   let pendingStderr = Buffer.alloc(0);
 
@@ -763,10 +771,37 @@ export function createBashDispatchFilter(token: string): {
       return out;
     }
 
-    const keep = terminalPrefix.length - 1;
-    if (pendingStdout.length <= keep) return Buffer.alloc(0);
-    const out = pendingStdout.subarray(0, pendingStdout.length - keep);
-    pendingStdout = pendingStdout.subarray(pendingStdout.length - keep);
+    if (terminalCandidate.length > 0) {
+      const combined = Buffer.concat([terminalCandidate, pendingStdout]);
+      if (isPrefixOf(combined, terminalPrefix)) {
+        terminalCandidate = combined;
+        pendingStdout = Buffer.alloc(0);
+        return Buffer.alloc(0);
+      }
+      const out = combined;
+      terminalCandidate = Buffer.alloc(0);
+      pendingStdout = Buffer.alloc(0);
+      return out;
+    }
+
+    const candidateStart = findTerminalPrefixCandidateStart(
+      pendingStdout,
+      terminalPrefix,
+    );
+    if (candidateStart < 0) {
+      const out = pendingStdout;
+      pendingStdout = Buffer.alloc(0);
+      return out;
+    }
+    const candidate = pendingStdout.subarray(candidateStart);
+    if (isPrefixOf(candidate, terminalPrefix)) {
+      const out = pendingStdout.subarray(0, candidateStart);
+      terminalCandidate = candidate;
+      pendingStdout = Buffer.alloc(0);
+      return out;
+    }
+    const out = pendingStdout;
+    pendingStdout = Buffer.alloc(0);
     return out;
   };
 
@@ -803,12 +838,29 @@ function parseBashTerminalRecord(
   const prefix = `${BASH_TERMINAL_PREFIX}${token}:`;
   if (!line.startsWith(prefix)) return undefined;
   const payload = line.slice(prefix.length);
-  const [kind, exitCodeText] = payload.split(":");
+  const [kind, exitCodeText, extra] = payload.split(":");
+  if (extra !== undefined || !/^(0|[1-9][0-9]*)$/.test(exitCodeText ?? "")) {
+    return undefined;
+  }
   const exitCode = Number(exitCodeText);
-  if (!Number.isInteger(exitCode)) return undefined;
   if (kind === "exit") return { kind, exitCode };
   if (kind === "timeout") return { kind, exitCode };
   return undefined;
+}
+
+function findTerminalPrefixCandidateStart(
+  buffer: Buffer,
+  terminalPrefix: Buffer,
+): number {
+  for (let index = 0; index < buffer.length; index += 1) {
+    if (buffer[index] === terminalPrefix[0]) return index;
+  }
+  return -1;
+}
+
+function isPrefixOf(candidate: Buffer, value: Buffer): boolean {
+  if (candidate.length > value.length) return false;
+  return value.subarray(0, candidate.length).equals(candidate);
 }
 
 function filterDockerEnvObject(
