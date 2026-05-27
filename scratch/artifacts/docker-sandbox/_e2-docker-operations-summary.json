@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-05-27T16:55:51.339Z",
+  "image": "alpine:3.19",
+  "container_name": "oma-e2-probe-1779900941809-g7mz5g",
+  "docker_available": true,
+  "container_started": true,
+  "cleanup_removed_container": true,
+  "isolation_bar": {
+    "non_root_user": true,
+    "network_none": true,
+    "read_only_rootfs": true,
+    "workspace_tmpfs": true,
+    "no_docker_socket": true,
+    "cap_drop_all": true,
+    "no_new_privileges": true,
+    "pids_limit": 64,
+    "memory_limit_bytes": 134217728
+  },
+  "bash_exec": {
+    "streamed_stdout_chunks": 2,
+    "first_chunk_before_exit": true,
+    "stdout": "stream:one\nstream:two\n",
+    "exitCode": 0
+  },
+  "timeout": {
+    "command_exitCode": 137,
+    "durationMs": 3052,
+    "leftover_sleep_processes": ""
+  },
+  "abort": {
+    "docker_cli_signal": null,
+    "leftover_sleep_processes_after_cli_kill": "",
+    "provider_implication": "Docker CLI termination cleaned the exec process in this environment; provider should still keep an explicit cleanup path."
+  },
+  "file_ops": {
+    "exec_per_op": {
+      "write_read_ok": true,
+      "edit_ok": true,
+      "list_ok": true,
+      "find_ok": true,
+      "observed_files": [
+        "/workspace/probe.txt",
+        "/workspace/sub/nested.md"
+      ]
+    },
+    "bind_mount_assessment": "Rejected for E.2.1 default: it is simpler and faster, but file contents live on the host and file Operations become host-visible again. Keep bind mounts for explicit resource mounting later, not provider internals.",
+    "fs_bridge_assessment": "Best long-term boundary for performance and quoting, but more code. Defer until exec-per-op proves too slow or insufficient.",
+    "recommended_e2_1_boundary": "Use exec-per-op inside the container for the first Docker provider. It keeps bash and file Operations inside Docker, preserves the E.2 isolation claim, and is small enough to test."
+  },
+  "network": {
+    "wget_exitCode": 1,
+    "denied": true
+  },
+  "verdict": "PASS",
+  "notes": []
+}

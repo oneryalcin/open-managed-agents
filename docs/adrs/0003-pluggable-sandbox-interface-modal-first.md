@@ -274,3 +274,23 @@ const { session } = await createAgentSession({
 ```
 
 `grep` remains disabled. The current Pi `createGrepToolDefinition` still delegates part of its behavior to host `rg`, so grep-like capability stays routed through policed `bash` until we own or upstream a fully delegated grep implementation.
+
+## Findings (Cycle E.2.0 Docker Operations probe, 2026-05-27)
+
+Probe: `scratch/22-e2-docker-operations-probe.ts`.
+
+Findings:
+
+- **Docker-local is available and can meet the first isolation bar locally.** The probe started an `alpine:3.19` container with non-root user, `--network none`, read-only rootfs, tmpfs `/workspace`, no Docker socket, `--cap-drop ALL`, `no-new-privileges`, PID limit, memory limit, and successful cleanup.
+- **`docker exec` supports the needed bash shape.** Streaming stdout arrived before command exit, timeout killed the in-container process with no leftover `sleep`, and abort/CLI termination left no leftover process in this OrbStack environment. The provider still needs explicit abort cleanup because Docker CLI behavior is not the contract.
+- **File Operations can start as exec-per-op inside the container.** The probe wrote, read, edited, listed, and found files under `/workspace` without host-side file access. This keeps both bash and file Operations inside Docker for E.2.1.
+- **Do not use host bind mounts for provider-internal file Operations by default.** Bind mounts are useful later for explicit resource mounting, but using them as the provider-internal filesystem boundary would put file contents back on the host and weaken the Docker-local isolation claim.
+- **Defer fs-bridge.** OpenClaw's Docker prior art shows a richer fs bridge with canonical path checks, mount tables, read/write policy, and pinned mutation helpers. That is the better long-term shape if exec-per-op becomes too slow or too quoting-heavy, but it is too much surface for E.2.1.
+
+Updated Docker-local direction:
+
+- One long-lived Docker container per managed session/provider handle.
+- Operations delegation only: Pi stays in the control plane; Docker backs `bash/read/write/edit/find/ls`.
+- Use `docker exec` for bash and first-pass file Operations.
+- Default egress off; make network access an explicit provider option later.
+- No arbitrary Docker binds, no Docker socket mount, no silent fallback to host execution.
