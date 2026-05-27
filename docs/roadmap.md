@@ -688,6 +688,9 @@ Core decision:
 - Host passthrough remains explicit unsafe opt-in only, and requires two gates: a deployment-level "allow unsafe passthrough" setting plus the per-session `unsafeAllowHostPassthrough: true` literal. Either gate missing means reject.
 - Docker-local is selectable only after the Docker bash infrastructure-error follow-up is closed: [#22](https://github.com/oneryalcin/open-managed-agents/issues/22). #22 is now closed, so Docker-local may be enabled behind an explicit deployment-level gate.
 - Docker-local must remain default-closed. If the deployment does not allow Docker-local, normal runtime creation must reject `docker-local` with a clear configuration error. Do not silently disable it or substitute another provider.
+- Deployment runtime config is a server/operator boundary. The current product shape supports one sandbox provider selection per server deployment. Per-session, per-tenant, per-agent, and per-environment provider selection is explicitly out of scope for now because those shapes reopen the request-trust-boundary that the deployment-scoped model avoids by construction.
+- Absent deployment config is equivalent to no provider. Explicit `{ type: "none" }` also means no builtin execution provider; builtin-using agents fail at runtime/session construction instead of falling back to host execution.
+- Deployment config validation must dry-run the provider resolver at startup/config construction. Parse-only validation is insufficient because gated selections such as Docker-local are structurally valid but must still fail before the first request when their deployment gate is missing.
 
 Proposed config shape:
 
@@ -708,6 +711,7 @@ Implementation rules:
 6. If a session exposes builtin tools with `{type: "none"}` or no provider, return a caller-safe configuration error at session/runtime construction. Do not wait until the model first tries a builtin tool.
 7. Keep provider-specific options narrow: env allowlist and operation timeout only. Network, mounts, snapshots, durable state, and egress policy are later provider slices.
 8. Do not persist provider selection on the agent. If session persistence needs to remember it for continuity, persist it as session/runtime config, not agent config.
+9. Reject accepted-but-ignored deployment config. For example, `allowDockerLocal` without `provider: "docker-local"` should fail configuration validation instead of being silently ignored.
 
 Test plan:
 
