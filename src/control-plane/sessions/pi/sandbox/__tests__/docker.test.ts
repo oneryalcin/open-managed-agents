@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   assertInsideDockerWorkspace,
+  buildDockerBashCommand,
   buildDockerExecShellArgs,
   buildDockerFileAccessCommand,
   buildDockerGlobEnumerationCommand,
@@ -12,6 +13,7 @@ import {
   buildDockerStatCommand,
   buildDockerWriteFileCommand,
   createDockerSandboxProvider,
+  directoryNamesPrunedByIgnoreGlobs,
   filterDockerEnv,
   reapDockerSandboxContainers,
 } from "../docker.ts";
@@ -63,12 +65,46 @@ describe("Docker sandbox provider command construction", () => {
       "--env",
       "SAFE=yes",
       "container",
-      "sh",
+      "bash",
       "-lc",
       "cat \"$1\"",
-      "sh",
+      "bash",
       "/workspace/a file; rm -rf nope",
     ]);
+  });
+
+  it("can wrap file-operation shell commands with an in-container timeout", () => {
+    expect(
+      buildDockerExecShellArgs(
+        "container",
+        "cat \"$1\"",
+        ["/workspace/a.txt"],
+        { timeoutSeconds: 2 },
+      ),
+    ).toEqual([
+      "exec",
+      "container",
+      "bash",
+      "-lc",
+      "timeout -s KILL \"$1\" bash -lc \"$2\" bash \"${@:3}\"",
+      "bash",
+      "2",
+      "cat \"$1\"",
+      "/workspace/a.txt",
+    ]);
+  });
+
+  it("builds bash commands with in-container timeout and pid tracking", () => {
+    expect(
+      buildDockerBashCommand("[[ 1 == 1 ]]", 2.5, "/workspace/.oma-exec-test.pid"),
+    ).toMatchObject({
+      args: ["/workspace/.oma-exec-test.pid", "2.5", "[[ 1 == 1 ]]"],
+    });
+    const command = buildDockerBashCommand("sleep 5", 1, "/workspace/pid");
+    expect(command.script).toContain("setsid bash -lc");
+    expect(command.script).toContain("sleep \"$timeout_secs\"");
+    expect(command.script).toContain("kill -KILL \"-$pid\"");
+    expect(command.script).toContain("bash -lc");
   });
 
   it("builds file-operation commands as data", () => {
@@ -105,9 +141,31 @@ describe("Docker sandbox provider command construction", () => {
     });
     expect(buildDockerGlobEnumerationCommand("/workspace")).toEqual({
       script:
-        "cd \"$1\" && find . -type f | sed 's#^./##' | sort | head -n 10000",
+        "cd \"$1\"\nshift\nif [ \"$#\" -eq 0 ]; then\n  find . -type f | sed 's#^./##' | sort\nelse\n  find . \\( -type d \\( \"$@\" \\) -prune \\) -o -type f -print | sed 's#^./##' | sort\nfi",
       args: ["/workspace"],
     });
+    expect(
+      buildDockerGlobEnumerationCommand("/workspace", [
+        "**/node_modules/**",
+        "**/.git/**",
+      ]),
+    ).toMatchObject({
+      args: [
+        "/workspace",
+        "-name",
+        ".git",
+        "-o",
+        "-name",
+        "node_modules",
+      ],
+    });
+    expect(
+      directoryNamesPrunedByIgnoreGlobs([
+        "**/node_modules/**",
+        "dist/**",
+        "*.ts",
+      ]),
+    ).toEqual(["dist", "node_modules"]);
   });
 
   it("keeps Docker paths inside the workspace", () => {
@@ -170,6 +228,12 @@ describe("Docker sandbox provider integration", () => {
       );
 
       await expect(
+        provider.operations.find.exists("/workspace/missing.txt"),
+      ).resolves.toBe(false);
+      await expect(
+        provider.operations.ls.exists("/workspace/missing.txt"),
+      ).resolves.toBe(false);
+      await expect(
         provider.operations.read.readFile("/workspace/src/index.ts"),
       ).resolves.toEqual(Buffer.from("export const value = 1;\n"));
       await provider.operations.edit.access("/workspace/src/index.ts");
@@ -196,7 +260,7 @@ describe("Docker sandbox provider integration", () => {
 
       const chunks: Buffer[] = [];
       const result = await provider.operations.bash.exec(
-        "printf \"$SAFE_FLAG|$ANTHROPIC_API_KEY\"",
+        "[[ 1 == 1 ]] && printf \"$SAFE_FLAG|$ANTHROPIC_API_KEY\"",
         "/workspace",
         {
           env: { SAFE_FLAG: "yes", ANTHROPIC_API_KEY: "secret" },
@@ -215,7 +279,8 @@ describe("Docker sandbox provider integration", () => {
       ).resolves.toEqual({ exitCode: 7 });
       expect(provider.invocations.byTool.bash).toBe(2);
       expect(provider.invocations.byTool.edit).toBe(3);
-      expect(provider.invocations.byTool.find).toBe(1);
+      expect(provider.invocations.byTool.find).toBe(2);
+      expect(provider.invocations.byTool.ls).toBe(2);
     } finally {
       provider.dispose();
     }
@@ -228,7 +293,7 @@ describe("Docker sandbox provider integration", () => {
       .slice(2, 8)}`;
     const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
       extraLabels: { "open-managed-agents.test-id": label },
-      operationTimeoutMs: 15_000,
+      operationTimeoutMs: 500,
     });
     try {
       await expect(
@@ -240,6 +305,14 @@ describe("Docker sandbox provider integration", () => {
       ).rejects.toThrow("timeout:0.1");
       await expect(containerHasSleepProcess(label)).resolves.toBe(false);
 
+      await expect(
+        provider.operations.bash.exec("sleep 5", "/workspace", {
+          env: {},
+          onData: () => {},
+        }),
+      ).rejects.toThrow("timeout:0.5");
+      await expect(containerHasSleepProcess(label)).resolves.toBe(false);
+
       const abort = new AbortController();
       const aborted = provider.operations.bash.exec("sleep 5", "/workspace", {
         env: {},
@@ -249,6 +322,104 @@ describe("Docker sandbox provider integration", () => {
       setTimeout(() => abort.abort(), 100);
       await expect(aborted).rejects.toThrow("aborted");
       await expect(containerHasSleepProcess(label)).resolves.toBe(false);
+      expect(containersForLabel(label)).toHaveLength(1);
+      await expect(
+        provider.operations.bash.exec("printf after-abort", "/workspace", {
+          env: {},
+          onData: () => {},
+          timeout: 1,
+        }),
+      ).resolves.toEqual({ exitCode: 0 });
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("finds matches beyond a large raw Docker enumeration", async () => {
+    const label = `oma-docker-glob-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 30_000,
+    });
+    try {
+      await provider.operations.bash.exec(
+        "mkdir -p big && for i in $(seq -w 1 10020); do : > big/a-$i.txt; done; : > big/zzzz-target.txt",
+        "/workspace",
+        { env: {}, onData: () => {}, timeout: 20 },
+      );
+      await expect(
+        provider.operations.find.glob("big/zzzz-target.txt", "/workspace", {
+          ignore: [],
+          limit: 1,
+        }),
+      ).resolves.toEqual(["/workspace/big/zzzz-target.txt"]);
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("prunes ignored directories during Docker glob enumeration", async () => {
+    const label = `oma-docker-glob-prune-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 15_000,
+    });
+    try {
+      await provider.operations.bash.exec(
+        "mkdir -p node_modules && : > a.txt && : > node_modules/hidden.txt && chmod 000 node_modules",
+        "/workspace",
+        { env: {}, onData: () => {}, timeout: 5 },
+      );
+      await expect(
+        provider.operations.find.glob("*.txt", "/workspace", {
+          ignore: ["**/node_modules/**"],
+          limit: 10,
+        }),
+      ).resolves.toEqual(["/workspace/a.txt"]);
+    } finally {
+      await provider.operations.bash
+        .exec("chmod 700 /workspace/node_modules 2>/dev/null || true", "/workspace", {
+          env: {},
+          onData: () => {},
+          timeout: 1,
+        })
+        .catch(() => undefined);
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("throws when exists cannot reach the Docker container", async () => {
+    const label = `oma-docker-exists-fail-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 15_000,
+    });
+    try {
+      const [containerId] = containersForLabel(label);
+      expect(containerId).toBeDefined();
+      spawnSync("docker", ["stop", containerId], { stdio: "ignore" });
+      await expect(
+        provider.operations.find.exists("/workspace/missing.txt"),
+      ).rejects.toThrow("docker exists failed");
+      await expect(
+        provider.operations.ls.exists("/workspace/missing.txt"),
+      ).rejects.toThrow("docker exists failed");
+      await expect(
+        provider.operations.bash.exec("printf should-not-run", "/workspace", {
+          env: {},
+          onData: () => {},
+          timeout: 1,
+        }),
+      ).rejects.toThrow("docker bash failed");
     } finally {
       provider.dispose();
     }
@@ -355,11 +526,11 @@ function inspectContainerIsolation(containerId: string): {
 
 async function containerHasSleepProcess(label: string): Promise<boolean> {
   const [containerId] = containersForLabel(label);
-  expect(containerId).toBeDefined();
   await new Promise((resolve) => setTimeout(resolve, 150));
+  if (containerId === undefined) return false;
   const result = spawnSync(
     "docker",
-    ["exec", containerId, "sh", "-lc", "ps | grep '[s]leep' || true"],
+    ["exec", containerId, "bash", "-lc", "ps | grep '[s]leep' || true"],
     { encoding: "utf8" },
   );
   expect(result.status).toBe(0);

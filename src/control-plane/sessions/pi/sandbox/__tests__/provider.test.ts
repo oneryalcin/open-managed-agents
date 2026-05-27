@@ -1,4 +1,13 @@
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -238,6 +247,34 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
       expect(provider.invocations.byTool.find).toBe(1);
       expect(provider.invocations.byTool.write).toBe(1);
     } finally {
+      await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
+  it("prunes ignored directories before traversal", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
+    const ignored = join(workspace, "node_modules");
+    try {
+      const provider = createHostPassthroughSandboxProvider({
+        workspaceRoot: workspace,
+        unsafeAllowHostPassthrough: true,
+      });
+      await writeFile(join(workspace, "a.txt"), "a");
+      await mkdir(ignored);
+      await writeFile(join(ignored, "hidden.txt"), "hidden");
+      await chmod(ignored, 0);
+
+      const results = await provider.operations.find.glob("*.txt", workspace, {
+        ignore: ["**/node_modules/**"],
+        limit: 10,
+      });
+
+      const realWorkspace = await realpath(workspace);
+      expect(results.map((path) => path.replace(`${realWorkspace}/`, ""))).toEqual([
+        "a.txt",
+      ]);
+    } finally {
+      await chmod(ignored, 0o700).catch(() => undefined);
       await rm(workspace, { force: true, recursive: true });
     }
   });

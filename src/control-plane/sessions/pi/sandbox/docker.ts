@@ -19,7 +19,7 @@ import {
   type SandboxProviderFactory,
 } from "./provider.ts";
 
-const DEFAULT_IMAGE = "alpine:3.19";
+const DEFAULT_IMAGE = "bash:5.2";
 const DEFAULT_WORKSPACE = "/workspace";
 const DEFAULT_MEMORY = "128m";
 const DEFAULT_CPUS = "1";
@@ -70,6 +70,7 @@ interface DockerSandboxResolvedOptions {
 interface DockerExecOptions {
   input?: Buffer | string;
   onData?: (data: Buffer) => void;
+  onAbort?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -148,6 +149,8 @@ export async function createDockerSandboxProvider(
       resolved.dockerCommand,
       buildDockerExecShellArgs(containerName, command.script, command.args, {
         interactive: command.interactive ?? command.input !== undefined,
+        timeoutSeconds:
+          (execOpts.timeoutMs ?? resolved.operationTimeoutMs) / 1000,
         workdir: resolved.workspacePath,
       }),
       {
@@ -162,6 +165,7 @@ export async function createDockerSandboxProvider(
     const result = await dockerExec(
       resolved.dockerCommand,
       buildDockerExecShellArgs(containerName, command.script, command.args, {
+        timeoutSeconds: resolved.operationTimeoutMs / 1000,
         workdir: resolved.workspacePath,
       }),
       {
@@ -169,7 +173,9 @@ export async function createDockerSandboxProvider(
         timeoutMs: resolved.operationTimeoutMs,
       },
     );
-    return result.exitCode === 0;
+    if (result.exitCode === 0) return true;
+    throwIfUnexpectedBoundedExit(result, "docker exists", new Set([1]));
+    return false;
   };
 
   const readOps: ReadOperations = {
@@ -243,7 +249,9 @@ export async function createDockerSandboxProvider(
     glob: async (pattern, cwd, options) => {
       recordSandboxInvocation(invocations, disposed, "find");
       const root = assertInsideDockerWorkspace(cwd, resolved.workspacePath);
-      const result = await dockerShell(buildDockerGlobEnumerationCommand(root));
+      const result = await dockerShell(
+        buildDockerGlobEnumerationCommand(root, options.ignore),
+      );
       const files = result.stdout
         .toString("utf8")
         .split("\n")
@@ -287,27 +295,42 @@ export async function createDockerSandboxProvider(
     exec: async (command, cwd, options) => {
       recordSandboxInvocation(invocations, disposed, "bash");
       const path = assertInsideDockerWorkspace(cwd, resolved.workspacePath);
+      const timeoutSeconds =
+        options.timeout !== undefined && options.timeout > 0
+          ? options.timeout
+          : resolved.operationTimeoutMs / 1000;
+      const execId = randomExecId();
+      const pidFile = posix.join(resolved.workspacePath, `.oma-exec-${execId}.pid`);
+      const shellCommand = buildDockerBashCommand(command, timeoutSeconds, pidFile);
       try {
         const result = await dockerExec(
           resolved.dockerCommand,
-          buildDockerExecShellArgs(containerName, command, [], {
+          buildDockerExecShellArgs(containerName, shellCommand.script, shellCommand.args, {
             workdir: path,
             env: filterDockerEnv(options.env ?? {}, resolved.envAllowlist),
           }),
           {
             activePids: activeDockerExecPids,
+            onAbort: () => {
+              killInContainerProcessGroup(
+                resolved.dockerCommand,
+                containerName,
+                pidFile,
+              );
+            },
             onData: options.onData,
             signal: options.signal,
-            timeoutMs:
-              options.timeout !== undefined && options.timeout > 0
-                ? options.timeout * 1000
-                : undefined,
+            timeoutMs: Math.ceil(timeoutSeconds * 1000) + 2_000,
           },
         );
+        throwIfDockerInfrastructureFailure(result, "docker bash");
+        if (result.exitCode === 137 && timeoutSeconds > 0) {
+          throw new DockerTimeoutError();
+        }
         return { exitCode: result.exitCode };
       } catch (error) {
-        if (error instanceof DockerTimeoutError && options.timeout !== undefined) {
-          throw new Error(`timeout:${options.timeout}`);
+        if (error instanceof DockerTimeoutError) {
+          throw new Error(`timeout:${timeoutSeconds}`);
         }
         throw error;
       }
@@ -338,9 +361,7 @@ export async function createDockerSandboxProvider(
       for (const pid of activeDockerExecPids) {
         killProcessGroup(pid);
       }
-      spawnSync(resolved.dockerCommand, ["rm", "-f", containerName], {
-        stdio: "ignore",
-      });
+      forceRemoveDockerContainer(resolved.dockerCommand, containerName);
     },
   };
 }
@@ -399,6 +420,7 @@ export function buildDockerExecShellArgs(
     workdir?: string;
     env?: NodeJS.ProcessEnv;
     interactive?: boolean;
+    timeoutSeconds?: number;
   } = {},
 ): string[] {
   const out = ["exec"];
@@ -407,8 +429,58 @@ export function buildDockerExecShellArgs(
   for (const [key, value] of Object.entries(opts.env ?? {})) {
     if (value !== undefined) out.push("--env", `${key}=${value}`);
   }
-  out.push(containerName, "sh", "-lc", script, "sh", ...args);
+  if (opts.timeoutSeconds !== undefined && opts.timeoutSeconds > 0) {
+    out.push(
+      containerName,
+      "bash",
+      "-lc",
+      "timeout -s KILL \"$1\" bash -lc \"$2\" bash \"${@:3}\"",
+      "bash",
+      String(opts.timeoutSeconds),
+      script,
+      ...args,
+    );
+  } else {
+    out.push(containerName, "bash", "-lc", script, "bash", ...args);
+  }
   return out;
+}
+
+export function buildDockerBashCommand(
+  command: string,
+  timeoutSeconds: number,
+  pidFile: string,
+): DockerShellCommand {
+  return {
+    script: [
+      "pidfile=\"$1\"",
+      "timeout_secs=\"$2\"",
+      "command=\"$3\"",
+      "timeout_file=\"${pidfile}.timeout\"",
+      "timer_file=\"${pidfile}.timer\"",
+      "rm -f \"$timeout_file\" \"$timer_file\"",
+      "setsid bash -lc \"$command\" &",
+      "pid=$!",
+      "printf '%s' \"$pid\" > \"$pidfile\"",
+      "setsid sleep \"$timeout_secs\" &",
+      "timer=$!",
+      "printf '%s' \"$timer\" > \"$timer_file\"",
+      "wait -n -p completed \"$pid\" \"$timer\"",
+      "status=$?",
+      "if [ \"${completed:-}\" = \"$timer\" ]; then",
+      "  : > \"$timeout_file\"",
+      "  kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+      "  wait \"$pid\" 2>/dev/null || true",
+      "  rm -f \"$pidfile\" \"$timeout_file\" \"$timer_file\"",
+      "  exit 137",
+      "fi",
+      "kill \"$timer\" 2>/dev/null || true",
+      "wait \"$timer\" 2>/dev/null || true",
+      "rm -f \"$pidfile\" \"$timer_file\"",
+      "exit \"$status\"",
+    ].join("\n"),
+    args: [pidFile, String(timeoutSeconds), command],
+  };
 }
 
 export function buildDockerFileAccessCommand(
@@ -468,11 +540,38 @@ export function buildDockerReaddirCommand(
 
 export function buildDockerGlobEnumerationCommand(
   root: string,
+  ignore: readonly string[] = [],
 ): DockerShellCommand {
+  const prunedDirectoryNames = directoryNamesPrunedByIgnoreGlobs(ignore);
   return {
-    script: "cd \"$1\" && find . -type f | sed 's#^./##' | sort | head -n 10000",
-    args: [root],
+    script: [
+      "cd \"$1\"",
+      "shift",
+      "if [ \"$#\" -eq 0 ]; then",
+      "  find . -type f | sed 's#^./##' | sort",
+      "else",
+      "  find . \\( -type d \\( \"$@\" \\) -prune \\) -o -type f -print | sed 's#^./##' | sort",
+      "fi",
+    ].join("\n"),
+    args: [
+      root,
+      ...prunedDirectoryNames.flatMap((name, index) =>
+        index === 0 ? ["-name", name] : ["-o", "-name", name],
+      ),
+    ],
   };
+}
+
+export function directoryNamesPrunedByIgnoreGlobs(
+  ignore: readonly string[],
+): string[] {
+  const names = new Set<string>();
+  for (const pattern of ignore) {
+    const normalized = pattern.replaceAll("\\", "/");
+    const match = /(?:^|\/)([^/*?[\]{}!]+)\/\*\*$/.exec(normalized);
+    if (match?.[1]) names.add(match[1]);
+  }
+  return [...names].sort();
 }
 
 export function assertInsideDockerWorkspace(
@@ -506,7 +605,7 @@ export async function reapDockerSandboxContainers(
   opts: DockerSandboxReaperOptions,
 ): Promise<number> {
   const dockerCommand = opts.dockerCommand ?? "docker";
-  const listed = await dockerExec(dockerCommand, [
+  const listed = await dockerChecked(dockerCommand, [
     "ps",
     "-aq",
     "--filter",
@@ -521,7 +620,7 @@ export async function reapDockerSandboxContainers(
   const now = opts.now?.() ?? Date.now();
   const expired: string[] = [];
   for (const id of ids) {
-    const inspected = await dockerExec(dockerCommand, [
+    const inspected = await dockerChecked(dockerCommand, [
       "inspect",
       id,
       "--format",
@@ -533,7 +632,7 @@ export async function reapDockerSandboxContainers(
     }
   }
   if (expired.length === 0) return 0;
-  await dockerExec(dockerCommand, ["rm", "-f", ...expired]);
+  await dockerChecked(dockerCommand, ["rm", "-f", ...expired]);
   return expired.length;
 }
 
@@ -578,6 +677,10 @@ function sanitizeDockerNamePart(value: string): string {
     .slice(0, 48) || "x";
 }
 
+function randomExecId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function filterDockerEnvObject(
   env: NodeJS.ProcessEnv | undefined,
 ): NodeJS.ProcessEnv {
@@ -602,6 +705,39 @@ async function dockerChecked(
     );
   }
   return result;
+}
+
+function throwIfDockerInfrastructureFailure(
+  result: DockerExecResult,
+  context: string,
+): void {
+  if (result.exitCode === 0) return;
+  const stderr = result.stderr.toString("utf8").trim();
+  if (
+    stderr.startsWith("Error response from daemon:") ||
+    stderr.startsWith("Cannot connect to the Docker daemon")
+  ) {
+    throw new Error(`${context} failed: ${stderr}`);
+  }
+}
+
+function throwIfUnexpectedBoundedExit(
+  result: DockerExecResult,
+  context: string,
+  normalNonZeroExitCodes: ReadonlySet<number>,
+): void {
+  if (
+    result.exitCode !== null &&
+    normalNonZeroExitCodes.has(result.exitCode) &&
+    result.stderr.length === 0
+  ) {
+    return;
+  }
+  throw new Error(
+    `${context} failed with ${result.exitCode}: ${
+      result.stderr.toString("utf8") || result.stdout.toString("utf8")
+    }`,
+  );
 }
 
 async function dockerExec(
@@ -635,6 +771,7 @@ async function dockerExec(
       if (!child.killed) child.kill();
     };
     const onAbort = () => {
+      opts.onAbort?.();
       kill();
       settle(() => reject(new Error("aborted")));
     };
@@ -661,6 +798,7 @@ async function dockerExec(
     else opts.signal?.addEventListener("abort", onAbort, { once: true });
     if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
       timer = setTimeout(() => {
+        opts.onAbort?.();
         kill();
         settle(() => reject(new DockerTimeoutError()));
       }, opts.timeoutMs);
@@ -682,4 +820,47 @@ class DockerTimeoutError extends Error {
   constructor() {
     super("Docker operation timed out");
   }
+}
+
+function killInContainerProcessGroup(
+  dockerCommand: string,
+  containerName: string,
+  pidFile: string,
+): void {
+  spawnSync(
+    dockerCommand,
+    buildDockerExecShellArgs(
+      containerName,
+      [
+        "pidfile=\"$1\"",
+        "timerfile=\"${pidfile}.timer\"",
+        "for _ in $(seq 1 50); do",
+        "  [ -f \"$pidfile\" ] && break",
+        "  sleep 0.01",
+        "done",
+        "if [ -f \"$timerfile\" ]; then",
+        "  timer=$(cat \"$timerfile\")",
+        "  kill -KILL \"$timer\" 2>/dev/null || true",
+        "fi",
+        "if [ -f \"$pidfile\" ]; then",
+        "  pid=$(cat \"$pidfile\")",
+        "  kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+        "  for _ in $(seq 1 50); do",
+        "    kill -0 \"$pid\" 2>/dev/null || break",
+        "    sleep 0.02",
+        "  done",
+        "  rm -f \"$pidfile\" \"$timerfile\"",
+        "fi",
+      ].join("\n"),
+      [pidFile],
+    ),
+    { stdio: "ignore" },
+  );
+}
+
+function forceRemoveDockerContainer(
+  dockerCommand: string,
+  containerName: string,
+): void {
+  spawnSync(dockerCommand, ["rm", "-f", containerName], { stdio: "ignore" });
 }

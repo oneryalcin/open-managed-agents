@@ -27,7 +27,7 @@ import {
   createWriteToolDefinition,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { matchGlob, toPosix } from "./glob.ts";
+import { globMatcher, toPosix } from "./glob.ts";
 
 export type SandboxedBuiltinToolName =
   | "bash"
@@ -469,29 +469,31 @@ async function globInsideWorkspace(
     workspaceRoot: string;
   },
 ): Promise<string[]> {
-  const files: string[] = [];
-  const absoluteByRelativePath = new Map<string, string>();
+  const matcher = globMatcher(pattern);
+  const ignores = opts.ignore.map(globMatcher);
+  const out: string[] = [];
+  const isIgnored = (rel: string) =>
+    ignores.some((ignore) => ignore(rel) || ignore(`${rel}/`));
 
   async function visit(dir: string): Promise<void> {
+    if (out.length >= opts.limit) return;
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
+      if (out.length >= opts.limit) return;
       const fullPath = assertInsideWorkspace(
         `${dir}${sep}${entry.name}`,
         opts.workspaceRoot,
       );
       const rel = toPosix(relative(cwd, fullPath));
+      if (isIgnored(rel)) continue;
       if (entry.isDirectory()) {
         await visit(fullPath);
-      } else {
-        files.push(rel);
-        absoluteByRelativePath.set(rel, fullPath);
+      } else if (matcher(rel)) {
+        out.push(fullPath);
       }
     }
   }
 
   await visit(cwd);
-  return matchGlob(files, pattern, {
-    ignore: opts.ignore,
-    limit: opts.limit,
-  }).map((rel) => absoluteByRelativePath.get(rel)!);
+  return out;
 }
