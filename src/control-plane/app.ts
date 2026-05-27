@@ -12,7 +12,17 @@ import { sessionEventsRoutes } from "./events/routes.ts";
 import { DefaultSessionEventsService } from "./events/service.ts";
 import { SessionEventBroadcaster } from "./events/broadcaster.ts";
 import { EventStore } from "./events/store.ts";
-import type { SessionEventsService } from "./events/types.ts";
+import type {
+  RuntimeEventRunner,
+  RuntimeEventTranslator,
+  SessionEventsService,
+} from "./events/types.ts";
+import {
+  createDeploymentPiSessionRunner,
+  parseDeploymentRuntimeConfigFromEnv,
+  type DeploymentPiSessionRunnerOptions,
+  type DeploymentRuntimeEnv,
+} from "./deployment-runtime-config.ts";
 import {
   ApiError,
   type ApiErrorBody,
@@ -25,6 +35,7 @@ import { sessionsRoutes } from "./sessions/routes.ts";
 import { DefaultSessionService } from "./sessions/service.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
 import type { SessionService } from "./sessions/types.ts";
+import { translatePiEvent } from "./sessions/pi/translator.ts";
 
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
 export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
@@ -41,6 +52,17 @@ export interface ControlPlaneServices {
   environments: EnvironmentService;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
+}
+
+export interface InMemoryControlPlaneAppOptions {
+  runtime?: {
+    runner: RuntimeEventRunner;
+    translate: RuntimeEventTranslator;
+  };
+}
+
+export interface DeploymentControlPlaneAppOptions {
+  runner?: DeploymentPiSessionRunnerOptions;
 }
 
 export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppEnv> {
@@ -87,7 +109,22 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   return app;
 }
 
-export function createInMemoryControlPlaneApp(): Hono<AppEnv> {
+export function createDeploymentControlPlaneApp(
+  env: DeploymentRuntimeEnv = process.env,
+  opts: DeploymentControlPlaneAppOptions = {},
+): Hono<AppEnv> {
+  const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
+  return createInMemoryControlPlaneApp({
+    runtime: {
+      runner: createDeploymentPiSessionRunner(runtimeConfig, opts.runner),
+      translate: translatePiEvent,
+    },
+  });
+}
+
+export function createInMemoryControlPlaneApp(
+  opts: InMemoryControlPlaneAppOptions = {},
+): Hono<AppEnv> {
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
@@ -105,9 +142,7 @@ export function createInMemoryControlPlaneApp(): Hono<AppEnv> {
       eventStore,
       sessionStore,
       broadcaster,
-      // C.2 keeps runtime wiring explicit in dedicated constructors/tests.
-      // This default in-memory app stays runtime-dark unless a runner is
-      // intentionally injected by the caller.
+      opts.runtime,
     ),
   });
 }
