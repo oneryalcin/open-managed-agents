@@ -213,6 +213,26 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.disposed).toBe(true);
   });
 
+  it("does not cache a session that exposes builtins without a provider", async () => {
+    const factory = new FakeSessionFactory({ activeToolNames: ["bash"] });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderSelection: { type: "none" },
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("Unexpected active Pi tool");
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "two")),
+    ).rejects.toThrow("Unexpected active Pi tool");
+
+    expect(factory.sessions).toHaveLength(2);
+    expect(factory.sessions[0]?.disposed).toBe(true);
+    expect(factory.sessions[1]?.disposed).toBe(true);
+  });
+
   it("hard-rejects docker-local while the wiring gate is closed", async () => {
     const runner = new PiSessionRunner({
       sandboxProviderSelection: { type: "docker-local" },
