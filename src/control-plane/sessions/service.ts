@@ -1,5 +1,9 @@
 import type { ManagedAgentsListPage } from "../../types/common.ts";
-import type { CreateManagedSessionRequest, ManagedAgentsSession } from "../../types/sessions.ts";
+import type {
+  CreateManagedSessionRequest,
+  ManagedAgentsDeletedSession,
+  ManagedAgentsSession,
+} from "../../types/sessions.ts";
 import { isJsonObject } from "../../types/json.ts";
 import type { AgentStore } from "../agents/types.ts";
 import type { EnvironmentStore } from "../environments/types.ts";
@@ -66,11 +70,34 @@ export class DefaultSessionService implements SessionService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): ManagedAgentsSession {
-    const row = this.store.retrieve(workspaceId, sessionId);
+    const row = this.store.retrieveAny(workspaceId, sessionId);
     if (!row) {
       throw notFound(`Session ${sessionId} not found`);
     }
     return toManagedSession(row);
+  }
+
+  archive(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): ManagedAgentsSession {
+    const archivedAt = new Date().toISOString();
+    const row = this.store.archive(workspaceId, sessionId, archivedAt);
+    if (!row) {
+      throw notFound(`Session ${sessionId} not found`);
+    }
+    return toManagedSession(row);
+  }
+
+  delete(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): ManagedAgentsDeletedSession {
+    const row = this.store.delete(workspaceId, sessionId);
+    if (!row) {
+      throw notFound(`Session ${sessionId} not found`);
+    }
+    return { id: row.id, type: "session_deleted" };
   }
 
   list(

@@ -61,6 +61,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly modelRegistry = ModelRegistry.create(this.authStorage);
   private readonly sessions = new Map<string, RuntimeHandle>();
   private readonly pendingSessions = new Map<string, Promise<RuntimeHandle>>();
+  private readonly closedSessionIds = new Set<string>();
   private readonly customToolBridge: PiCustomToolBridge;
   private readonly idleTtlMs: number;
   private readonly now: () => number;
@@ -127,6 +128,27 @@ export class PiSessionRunner implements RuntimeEventRunner {
       } else {
         this.evict(sessionId, handle);
       }
+    }
+  }
+
+  async closeSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> {
+    this.closedSessionIds.add(sessionId);
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      await this.closeHandle(sessionId, existing);
+      return;
+    }
+
+    const pending = this.pendingSessions.get(sessionId);
+    if (!pending) return;
+    try {
+      const handle = await pending;
+      await this.closeHandle(sessionId, handle);
+    } catch {
+      // A close-requested pending session disposes itself during materialization.
     }
   }
 
@@ -313,6 +335,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
   ): Promise<RuntimeHandle> {
     if (this.closed) throw new Error("PiSessionRunner is closed");
+    if (this.closedSessionIds.has(sessionId)) {
+      throw new Error(`Runtime session ${sessionId} is closed`);
+    }
     const existing = this.sessions.get(sessionId);
     if (existing) return existing;
 
@@ -355,11 +380,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
           customToolNames,
           emitInternal: undefined,
         };
-        if (this.closed) {
+        if (this.closed || this.closedSessionIds.has(sessionId)) {
           sandbox?.dispose();
           session.dispose();
           this.pendingSessions.delete(sessionId);
-          throw new Error("PiSessionRunner is closed");
+          throw new Error(
+            this.closed
+              ? "PiSessionRunner is closed"
+              : `Runtime session ${sessionId} is closed`,
+          );
         }
         this.sessions.set(sessionId, handle);
         this.pendingSessions.delete(sessionId);
@@ -448,6 +477,21 @@ export class PiSessionRunner implements RuntimeEventRunner {
       }
       this.evict(sessionId, handle);
     }, this.idleTtlMs);
+  }
+
+  private async closeHandle(
+    sessionId: string,
+    handle: RuntimeHandle,
+  ): Promise<void> {
+    if (handle.running) {
+      handle.closeWhenIdle = true;
+    }
+    try {
+      await handle.session.abort();
+    } catch {
+      // Disposal below is the authoritative cleanup path.
+    }
+    this.evict(sessionId, handle);
   }
 
   private evict(sessionId: string, handle: RuntimeHandle): void {

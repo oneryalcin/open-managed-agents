@@ -52,6 +52,50 @@ describe("session service/store", () => {
       next_page: null,
     });
   });
+
+  it("archives sessions as terminated while keeping them retrievable by direct lookup", () => {
+    const fixture = createFixture();
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const session = fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+
+    const archived = fixture.sessions.archive(DEFAULT_WORKSPACE_ID, session.id);
+
+    expect(archived.id).toBe(session.id);
+    expect(archived.status).toBe("terminated");
+    expect(archived.archived_at).toEqual(expect.any(String));
+    expect(fixture.sessions.retrieve(DEFAULT_WORKSPACE_ID, session.id).id).toBe(
+      session.id,
+    );
+    expect(fixture.sessions.list(DEFAULT_WORKSPACE_ID).data).toEqual([]);
+    expect(
+      fixture.sessions.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data
+        .map((s) => s.id),
+    ).toEqual([session.id]);
+  });
+
+  it("permanently deletes sessions", () => {
+    const fixture = createFixture();
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const session = fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+
+    expect(fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id)).toEqual({
+      id: session.id,
+      type: "session_deleted",
+    });
+    expect(() => fixture.sessions.retrieve(DEFAULT_WORKSPACE_ID, session.id))
+      .toThrow("Session");
+    expect(
+      fixture.sessions.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data,
+    ).toEqual([]);
+  });
 });
 
 function createFixture(): {

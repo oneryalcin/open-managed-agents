@@ -93,7 +93,7 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
 
   app.route("/v1/agents", agentsRoutes(services.agents));
   app.route("/v1/environments", environmentsRoutes(services.environments));
-  app.route("/v1/sessions", sessionsRoutes(services.sessions));
+  app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route("/v1/sessions/:sessionId/events", sessionEventsRoutes(services.sessionEvents));
 
   app.notFound((c) => {
