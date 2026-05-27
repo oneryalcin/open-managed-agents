@@ -1,4 +1,4 @@
-# ADR 0003: Pluggable sandbox interface, Modal first
+# ADR 0003: Pluggable sandbox providers, Modal first managed remote
 
 **Status:** Accepted, 2026-05-21
 
@@ -16,10 +16,12 @@ Options:
 
 ## Decision
 
-1. **Define a `Sandbox` interface** in our codebase, owned by us.
-2. **First implementation: Modal Sandboxes.**
-3. **Pi's default tool implementations (`bash`, `read`, `write`, etc.) get rewired** to delegate to the active `Sandbox` impl instead of running on the host.
-4. **Future implementations** (Docker-local for offline dev, K8s pods for production self-hosting, Fly.io machines) implement the same interface.
+1. **Define a sandbox provider boundary** in our codebase, owned by us. The boundary owns lifecycle; Pi's `*Operations` interfaces own per-tool shell/file behavior.
+2. **First implementation for wiring/tests: guarded host passthrough.** This is not a sandbox and must never be selectable for untrusted/production prompts without an explicit unsafe opt-in. Its job is to prove `baseToolsOverride` wiring and lifecycle cleanup deterministically in local tests.
+3. **First managed remote provider: Modal Sandboxes.** Modal remains the first cloud sandbox provider we target for real remote execution.
+4. **First isolating provider is an explicit fork.** Choose Docker-local or Modal deliberately after the provider-neutral probe. Docker-local gives locally testable isolation without cloud credentials or cost; Modal gives the production remote shape and cost/teardown realities.
+5. **Pi's default tool implementations (`bash`, `read`, `write`, etc.) get rewired** to delegate to the active provider's Operations impl instead of running on the host by default.
+6. **Future implementations** (K8s pods, Fly.io machines, other remote sandbox providers) implement the same lifecycle boundary.
 
 ## Sandbox interface (sketch — to be refined when we write the first impl)
 
@@ -53,12 +55,34 @@ interface StartOpts {
 }
 ```
 
-## Why Modal first
+## Why Modal first managed remote
 
 - **No infra to host.** Crucial for an experiment — we're not running our own K8s cluster on day one.
 - **TypeScript SDK exists.** Matches [ADR 0002](0002-typescript-end-to-end.md).
 - **Fast cold start.** Per-session containers only matter if they spin up in seconds, not minutes.
 - **Pricing maps cleanly to per-session billing** — useful if anyone ever runs this as a service.
+
+This does **not** mean Modal must be the first code path we implement. A guarded passthrough provider and/or Docker-local provider can land first to prove the control-plane lifecycle and Pi Operations injection with deterministic tests. Modal is the first managed remote provider, not the only useful implementation target.
+
+## Why passthrough is guarded, not a sandbox
+
+Host passthrough binds agent-driven shell/file calls to the control-plane host. That is arbitrary code execution on the developer machine, test runner, or any host process that enables it. It is useful only for:
+
+- proving `baseToolsOverride` and Pi Operations wiring without cloud credentials,
+- deterministic lifecycle tests around provision/exec/teardown,
+- trusted local development where the operator explicitly accepts the risk.
+
+The provider name and config must make the lack of isolation impossible to miss. Production/untrusted use requires an explicit unsafe opt-in if passthrough is available at all.
+
+## Why Docker-local remains on the table
+
+Docker-local is a better first isolating provider than host passthrough and may be a better implementation step before Modal:
+
+- A developer can exercise a real isolation boundary locally without Modal credentials or cloud cost.
+- The lifecycle and teardown bugs that matter for Modal can be tested locally first.
+- It audits the provider boundary before we encode too many Modal-specific assumptions.
+
+The tradeoff is that Docker can bias the interface toward local container semantics. Keep the provider boundary minimal and Pi-Operations-shaped so Modal still gets to audit the design.
 
 ## Why not K8s on day one
 
@@ -113,9 +137,9 @@ export interface BashOperations {
 
 **Revised plan** (supersedes the `Sandbox interface (sketch)` section above):
 
-1. Implement Pi's `*Operations` interfaces against each backend — Modal first (`createModalBashOperations`, `createModalReadOperations`, etc.). Model on Pi's `createLocalBashOperations`.
-2. Provide a `createModalSandboxTools(cwd, modalSandbox)` factory that produces a full `Tool[]` array by passing our Operations impls into Pi's `create*Tool(cwd, {operations: ...})` factories.
-3. The single high-level `ManagedSandbox` value our codebase owns becomes a wrapper that handles the *lifecycle* (provision Modal sandbox, mount resources, stop on session end) and produces the per-tool Operations impls against it. It is *not* an alternative to Pi's Operations interfaces — it sits one level above them.
+1. Implement Pi's `*Operations` interfaces against each backend. Start with a guarded host-passthrough provider for wiring/tests, then the first isolating provider (Docker-local or Modal), then Modal as the managed remote.
+2. Provide provider-backed tool factories that produce `baseToolsOverride` records by passing our Operations impls into Pi's `create*Tool(cwd, {operations: ...})` factories.
+3. The single high-level `ManagedSandbox` value our codebase owns becomes a wrapper that handles the *lifecycle* (provision instance, mount resources, stop on session end) and produces the per-tool Operations impls against it. It is *not* an alternative to Pi's Operations interfaces — it sits one level above them.
 
 **Follow-up question (raised in scratch-pi-findings.md):** Can `createAgentSession({ tools })` accept a `Tool[]` array directly (constructed via `create*Tool(cwd, {operations})`)? Or only string-names? If only string-names, we'll need to inject our Operations through `ToolsOptions` (the per-tool options map on the SDK config). Verify in Task 1 smoke test.
 
@@ -176,4 +200,18 @@ const { session } = await createAgentSessionFromServices({
 });
 ```
 
-This supersedes the `createAgentSession({ tools: customTools })` approach mentioned in the original ADR text. The ADR direction (pluggable Operations, Modal first) is unchanged; the precise injection point is now pinned.
+This supersedes the `createAgentSession({ tools: customTools })` approach mentioned in the original ADR text. The ADR direction (pluggable Operations, Modal as first managed remote) is unchanged; the precise injection point is now pinned.
+
+## Findings (Cycle E planning, 2026-05-27)
+
+Flue and OpenAI Agents both support the revised sequencing:
+
+- Flue separates lightweight virtual/local execution from remote sandbox connectors. Its local provider is useful for trusted developer and automation workflows, while remote connectors are used when a real coding-agent environment is required.
+- OpenAI Agents JS exposes a similar progression for sandbox agents: local sandbox client for development, Docker for container isolation and image parity, hosted sandbox providers for managed remote execution.
+
+Adopt the same split:
+
+1. **Provider-neutral probe first.** Verify `createAgentSessionFromServices + baseToolsOverride` with one builtin tool and a swappable Operations implementation.
+2. **Guarded passthrough for deterministic lifecycle tests.** Name it as non-isolating and require explicit unsafe opt-in outside test/dev.
+3. **First isolation decision.** Choose Docker-local or Modal deliberately. Docker-local gives locally testable isolation; Modal gives the production remote target.
+4. **Modal remote hardening.** Measure cold start, forced sandbox death, teardown reliability, and orphan/cost behavior.
