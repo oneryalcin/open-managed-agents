@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-05-27T16:55:51.339Z",
+  "generated_at": "2026-05-27T17:08:39.284Z",
   "image": "alpine:3.19",
-  "container_name": "oma-e2-probe-1779900941809-g7mz5g",
+  "container_name": "oma-e2-probe-1779901707085-oqr9c1",
   "docker_available": true,
   "container_started": true,
   "cleanup_removed_container": true,
@@ -24,7 +24,7 @@
   },
   "timeout": {
     "command_exitCode": 137,
-    "durationMs": 3052,
+    "durationMs": 3067,
     "leftover_sleep_processes": ""
   },
   "abort": {
@@ -42,6 +42,135 @@
         "/workspace/probe.txt",
         "/workspace/sub/nested.md"
       ]
+    },
+    "glob_boundary": {
+      "corpus_file_count": 90,
+      "single_exec_find_ms": 56,
+      "host_orchestrated_dir_execs": 50,
+      "host_orchestrated_ms": 2406,
+      "list_parity": true,
+      "pattern_results": [
+        {
+          "pattern": "*.md",
+          "ignore": [
+            "docs/draft*"
+          ],
+          "limit": 100,
+          "matches": [
+            "README.md",
+            "docs/api/ref.md",
+            "docs/guide.md"
+          ]
+        },
+        {
+          "pattern": "**/*.ts",
+          "ignore": [],
+          "limit": 100,
+          "matches": [
+            "generated/dir1/file1.ts",
+            "generated/dir10/file10.ts",
+            "generated/dir11/file11.ts",
+            "generated/dir12/file12.ts",
+            "generated/dir13/file13.ts",
+            "generated/dir14/file14.ts",
+            "generated/dir15/file15.ts",
+            "generated/dir16/file16.ts",
+            "generated/dir17/file17.ts",
+            "generated/dir18/file18.ts",
+            "generated/dir19/file19.ts",
+            "generated/dir2/file2.ts",
+            "generated/dir20/file20.ts",
+            "generated/dir21/file21.ts",
+            "generated/dir22/file22.ts",
+            "generated/dir23/file23.ts",
+            "generated/dir24/file24.ts",
+            "generated/dir25/file25.ts",
+            "generated/dir26/file26.ts",
+            "generated/dir27/file27.ts",
+            "generated/dir28/file28.ts",
+            "generated/dir29/file29.ts",
+            "generated/dir3/file3.ts",
+            "generated/dir30/file30.ts",
+            "generated/dir31/file31.ts",
+            "generated/dir32/file32.ts",
+            "generated/dir33/file33.ts",
+            "generated/dir34/file34.ts",
+            "generated/dir35/file35.ts",
+            "generated/dir36/file36.ts",
+            "generated/dir37/file37.ts",
+            "generated/dir38/file38.ts",
+            "generated/dir39/file39.ts",
+            "generated/dir4/file4.ts",
+            "generated/dir40/file40.ts",
+            "generated/dir5/file5.ts",
+            "generated/dir6/file6.ts",
+            "generated/dir7/file7.ts",
+            "generated/dir8/file8.ts",
+            "generated/dir9/file9.ts",
+            "src/index.ts",
+            "src/nested/deep.ts",
+            "src/util.test.ts"
+          ]
+        },
+        {
+          "pattern": "src/*.ts",
+          "ignore": [
+            "**/*.test.ts"
+          ],
+          "limit": 100,
+          "matches": [
+            "src/index.ts"
+          ]
+        },
+        {
+          "pattern": "**/*",
+          "ignore": [
+            "node_modules/**",
+            "dist/**"
+          ],
+          "limit": 20,
+          "matches": [
+            "README.md",
+            "docs/api/ref.md",
+            "docs/draft-notes.md",
+            "docs/guide.md",
+            "generated/dir1/file1.ts",
+            "generated/dir1/file1.txt",
+            "generated/dir10/file10.ts",
+            "generated/dir10/file10.txt",
+            "generated/dir11/file11.ts",
+            "generated/dir11/file11.txt",
+            "generated/dir12/file12.ts",
+            "generated/dir12/file12.txt",
+            "generated/dir13/file13.ts",
+            "generated/dir13/file13.txt",
+            "generated/dir14/file14.ts",
+            "generated/dir14/file14.txt",
+            "generated/dir15/file15.ts",
+            "generated/dir15/file15.txt",
+            "generated/dir16/file16.ts",
+            "generated/dir16/file16.txt"
+          ]
+        },
+        {
+          "pattern": "generated/**/*.txt",
+          "ignore": [],
+          "limit": 10,
+          "matches": [
+            "generated/dir1/file1.txt",
+            "generated/dir10/file10.txt",
+            "generated/dir11/file11.txt",
+            "generated/dir12/file12.txt",
+            "generated/dir13/file13.txt",
+            "generated/dir14/file14.txt",
+            "generated/dir15/file15.txt",
+            "generated/dir16/file16.txt",
+            "generated/dir17/file17.txt",
+            "generated/dir18/file18.txt"
+          ]
+        }
+      ],
+      "recommendation": "Implement FindOperations.glob as one in-container enumeration plus the shared JS matcher. This preserves E.1 glob semantics without one docker exec per directory."
     },
     "bind_mount_assessment": "Rejected for E.2.1 default: it is simpler and faster, but file contents live on the host and file Operations become host-visible again. Keep bind mounts for explicit resource mounting later, not provider internals.",
     "fs_bridge_assessment": "Best long-term boundary for performance and quoting, but more code. Defer until exec-per-op proves too slow or insufficient.",

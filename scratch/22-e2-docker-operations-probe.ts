@@ -75,6 +75,20 @@ interface ProbeSummary {
       find_ok: boolean;
       observed_files: string[];
     };
+    glob_boundary: {
+      corpus_file_count: number;
+      single_exec_find_ms: number;
+      host_orchestrated_dir_execs: number;
+      host_orchestrated_ms: number;
+      list_parity: boolean;
+      pattern_results: Array<{
+        pattern: string;
+        ignore: string[];
+        limit: number;
+        matches: string[];
+      }>;
+      recommendation: string;
+    };
     bind_mount_assessment: string;
     fs_bridge_assessment: string;
     recommended_e2_1_boundary: string;
@@ -153,6 +167,7 @@ try {
   }
 
   const fileOps = await probeExecPerOpFileOperations();
+  const globBoundary = await probeGlobBoundary();
   const network = await dockerExec([
     "sh",
     "-lc",
@@ -208,6 +223,7 @@ try {
     },
     file_ops: {
       exec_per_op: fileOps,
+      glob_boundary: globBoundary,
       bind_mount_assessment:
         "Rejected for E.2.1 default: it is simpler and faster, but file contents live on the host and file Operations become host-visible again. Keep bind mounts for explicit resource mounting later, not provider internals.",
       fs_bridge_assessment:
@@ -271,6 +287,10 @@ async function startContainer(): Promise<void> {
     "-d",
     "--name",
     containerName,
+    "--label",
+    "open-managed-agents.probe=e2-docker-operations",
+    "--label",
+    `open-managed-agents.created-at=${new Date().toISOString()}`,
     "--network",
     "none",
     "--cpus",
@@ -336,6 +356,117 @@ async function probeExecPerOpFileOperations(): Promise<ProbeSummary["file_ops"][
       observedFiles.includes("/workspace/sub/nested.md"),
     observed_files: observedFiles,
   };
+}
+
+async function probeGlobBoundary(): Promise<ProbeSummary["file_ops"]["glob_boundary"]> {
+  await dockerExec([
+    "sh",
+    "-lc",
+    [
+      "set -eu",
+      "mkdir -p /workspace/corpus/src/nested /workspace/corpus/docs/api /workspace/corpus/node_modules/pkg /workspace/corpus/dist /workspace/corpus/notes",
+      "printf readme > /workspace/corpus/README.md",
+      "printf ts > /workspace/corpus/src/index.ts",
+      "printf test > /workspace/corpus/src/util.test.ts",
+      "printf deep > /workspace/corpus/src/nested/deep.ts",
+      "printf guide > /workspace/corpus/docs/guide.md",
+      "printf ref > /workspace/corpus/docs/api/ref.md",
+      "printf draft > /workspace/corpus/docs/draft-notes.md",
+      "printf pkg > /workspace/corpus/node_modules/pkg/index.js",
+      "printf dist > /workspace/corpus/dist/bundle.js",
+      "printf todo > /workspace/corpus/notes/todo.txt",
+      "for i in $(seq 1 40); do mkdir -p /workspace/corpus/generated/dir$i; printf txt > /workspace/corpus/generated/dir$i/file$i.txt; printf ts > /workspace/corpus/generated/dir$i/file$i.ts; done",
+    ].join("; "),
+  ]);
+
+  const singleStarted = Date.now();
+  const singleExecFiles = await listFilesSingleExec("/workspace/corpus");
+  const singleExecMs = Date.now() - singleStarted;
+
+  const hostStarted = Date.now();
+  const hostOrchestrated = await listFilesHostOrchestrated("/workspace/corpus");
+  const hostOrchestratedMs = Date.now() - hostStarted;
+
+  const patterns = [
+    { pattern: "*.md", ignore: ["docs/draft*"], limit: 100 },
+    { pattern: "**/*.ts", ignore: [], limit: 100 },
+    { pattern: "src/*.ts", ignore: ["**/*.test.ts"], limit: 100 },
+    { pattern: "**/*", ignore: ["node_modules/**", "dist/**"], limit: 20 },
+    { pattern: "generated/**/*.txt", ignore: [], limit: 10 },
+  ];
+  const patternResults = patterns.map((entry) => ({
+    ...entry,
+    matches: matchGlob(singleExecFiles, entry.pattern, entry.ignore).slice(
+      0,
+      entry.limit,
+    ),
+  }));
+
+  return {
+    corpus_file_count: singleExecFiles.length,
+    single_exec_find_ms: singleExecMs,
+    host_orchestrated_dir_execs: hostOrchestrated.dirExecs,
+    host_orchestrated_ms: hostOrchestratedMs,
+    list_parity:
+      JSON.stringify(singleExecFiles) ===
+      JSON.stringify(hostOrchestrated.files),
+    pattern_results: patternResults,
+    recommendation:
+      "Implement FindOperations.glob as one in-container enumeration plus the shared JS matcher. This preserves E.1 glob semantics without one docker exec per directory.",
+  };
+}
+
+async function listFilesSingleExec(root: string): Promise<string[]> {
+  const out = await dockerExec([
+    "sh",
+    "-lc",
+    `cd ${shellQuote(root)} && find . -type f | sed 's#^./##' | sort`,
+  ]);
+  return out.stdout.trim().split("\n").filter(Boolean);
+}
+
+async function listFilesHostOrchestrated(
+  root: string,
+): Promise<{ files: string[]; dirExecs: number }> {
+  const files: string[] = [];
+  const dirs = [root];
+  let dirExecs = 0;
+  while (dirs.length > 0) {
+    const dir = dirs.shift()!;
+    dirExecs += 1;
+    const listed = await dockerExec([
+      "sh",
+      "-lc",
+      [
+        `for p in ${shellQuote(dir)}/* ${shellQuote(dir)}/.[!.]* ${shellQuote(dir)}/..?*; do`,
+        "[ -e \"$p\" ] || continue;",
+        "if [ -d \"$p\" ]; then printf 'd:%s\\n' \"$p\";",
+        "elif [ -f \"$p\" ]; then printf 'f:%s\\n' \"$p\";",
+        "fi;",
+        "done",
+      ].join(" "),
+    ]);
+    for (const line of listed.stdout.trim().split("\n").filter(Boolean)) {
+      const kind = line.slice(0, 2);
+      const absolutePath = line.slice(2);
+      if (kind === "d:") dirs.push(absolutePath);
+      if (kind === "f:") files.push(absolutePath.slice(`${root}/`.length));
+    }
+  }
+  files.sort();
+  return { files, dirExecs };
+}
+
+function matchGlob(
+  files: string[],
+  pattern: string,
+  ignore: string[],
+): string[] {
+  const matcher = globMatcher(pattern);
+  const ignores = ignore.map(globMatcher);
+  return files
+    .filter((file) => !ignores.some((ignoreMatcher) => ignoreMatcher(file)))
+    .filter(matcher);
 }
 
 async function rawAbortProbe(): Promise<CommandResult> {
@@ -509,12 +640,47 @@ function summaryPasses(summary: ProbeSummary): boolean {
     summary.file_ops.exec_per_op.edit_ok &&
     summary.file_ops.exec_per_op.list_ok &&
     summary.file_ops.exec_per_op.find_ok &&
+    summary.file_ops.glob_boundary.list_parity &&
+    summary.file_ops.glob_boundary.corpus_file_count >= 80 &&
     summary.network.denied
   );
 }
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function globMatcher(pattern: string): (value: string) => boolean {
+  const normalized = toPosix(pattern);
+  const regex = globToRegexSource(normalized);
+  const exact = new RegExp(`^${regex}$`);
+  const basename = new RegExp(`(^|/)${regex}$`);
+  return (value) => exact.test(toPosix(value)) || basename.test(toPosix(value));
+}
+
+function globToRegexSource(pattern: string): string {
+  let out = "";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i];
+    const next = pattern[i + 1];
+    const afterNext = pattern[i + 2];
+    if (char === "*" && next === "*" && afterNext === "/") {
+      out += "(?:.*/)?";
+      i += 2;
+    } else if (char === "*" && next === "*") {
+      out += ".*";
+      i += 1;
+    } else if (char === "*") {
+      out += "[^/]*";
+    } else {
+      out += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return out;
+}
+
+function toPosix(value: string): string {
+  return value.split("\\").join("/");
 }
 
 function delay(ms: number): Promise<void> {

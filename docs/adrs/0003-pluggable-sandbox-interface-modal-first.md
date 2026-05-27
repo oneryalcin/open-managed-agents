@@ -284,6 +284,7 @@ Findings:
 - **Docker-local is available and can meet the first isolation bar locally.** The probe started an `alpine:3.19` container with non-root user, `--network none`, read-only rootfs, tmpfs `/workspace`, no Docker socket, `--cap-drop ALL`, `no-new-privileges`, PID limit, memory limit, and successful cleanup.
 - **`docker exec` supports the needed bash shape.** Streaming stdout arrived before command exit, timeout killed the in-container process with no leftover `sleep`, and abort/CLI termination left no leftover process in this OrbStack environment. The provider still needs explicit abort cleanup because Docker CLI behavior is not the contract.
 - **File Operations can start as exec-per-op inside the container.** The probe wrote, read, edited, listed, and found files under `/workspace` without host-side file access. This keeps both bash and file Operations inside Docker for E.2.1.
+- **`FindOperations.glob` should not be host-orchestrated per directory.** On a 90-file corpus, one in-container `find` enumeration plus the E.1 JS glob matcher took 56ms and preserved matcher semantics, while host-orchestrated per-directory listing took 50 Docker execs and 2406ms. E.2.1 should implement glob as one container-side enumeration followed by shared JS matching.
 - **Do not use host bind mounts for provider-internal file Operations by default.** Bind mounts are useful later for explicit resource mounting, but using them as the provider-internal filesystem boundary would put file contents back on the host and weaken the Docker-local isolation claim.
 - **Defer fs-bridge.** OpenClaw's Docker prior art shows a richer fs bridge with canonical path checks, mount tables, read/write policy, and pinned mutation helpers. That is the better long-term shape if exec-per-op becomes too slow or too quoting-heavy, but it is too much surface for E.2.1.
 
@@ -292,5 +293,6 @@ Updated Docker-local direction:
 - One long-lived Docker container per managed session/provider handle.
 - Operations delegation only: Pi stays in the control plane; Docker backs `bash/read/write/edit/find/ls`.
 - Use `docker exec` for bash and first-pass file Operations.
+- For `FindOperations.glob`, run one in-container file enumeration and apply the shared JS matcher outside the container; do not issue one Docker exec per directory.
 - Default egress off; make network access an explicit provider option later.
 - No arbitrary Docker binds, no Docker socket mount, no silent fallback to host execution.
