@@ -2,7 +2,11 @@
 
 Design-first home for an open-source clone of Anthropic's [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview), self-hostable on Modal / K8s / Docker.
 
-**Status:** Design + stored HTTP surface. The architecture docs are still the source of intent, and the repo now has working TypeScript for the EventStore/Broadcaster primitives plus Agents, Environments, and Sessions APIs. Events-over-HTTP, Pi, and Modal remain intentionally unwired.
+**Status:** MVP control plane with proven Docker-local execution. The repo has
+working TypeScript for persisted agents, environments, sessions, session
+events, SSE replay, Pi runtime wiring, custom tools, and a deployment-gated
+Docker-local sandbox provider. Full Anthropic Managed Agents tutorial parity is
+still tracked separately in the roadmap.
 
 ## Reading order
 
@@ -10,6 +14,12 @@ Design-first home for an open-source clone of Anthropic's [Managed Agents](https
 2. [Architecture](architecture.md) — the three-tier decomposition and how Pi's `AgentSession` primitives map to Managed Agents endpoints
 3. [Roadmap](roadmap.md) — current implementation state and the next cycles
 4. [References](references.md) — upstream docs, SDK docs, related projects we evaluated
+
+## Tutorials
+
+- [First Docker-local run](tutorials/docker-local-first-run.md) — run the
+  current MVP path with deployment config, Pi, Docker-local bash, translated
+  tool events, and cleanup verification.
 
 ## Working notes
 
@@ -26,6 +36,7 @@ npm run typecheck
 npx tsx scratch/05-event-store.ts
 npx tsx scratch/06-agents-api.ts
 npx tsx scratch/07-b1-api.ts
+npx tsx scratch/23-e3-deployment-docker-smoke.ts
 ```
 
 ## Architecture Decision Records
