@@ -186,6 +186,44 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions).toHaveLength(0);
   });
 
+  it("allows normal sessions without a sandbox when no builtin tools are active", async () => {
+    const factory = new FakeSessionFactory({ activeToolNames: [] });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderSelection: { type: "none" },
+      idleTtlMs: 0,
+    });
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+
+    expect(factory.sessions[0]?.getActiveToolNames()).toEqual([]);
+  });
+
+  it("fails at runtime construction when builtins are active without a provider", async () => {
+    const factory = new FakeSessionFactory({ activeToolNames: ["bash"] });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderSelection: { type: "none" },
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("Unexpected active Pi tool");
+    expect(factory.sessions[0]?.disposed).toBe(true);
+  });
+
+  it("hard-rejects docker-local while the wiring gate is closed", async () => {
+    const runner = new PiSessionRunner({
+      sandboxProviderSelection: { type: "docker-local" },
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("unavailable until issue #22");
+  });
+
   it("fails closed when Pi keeps an unexpected builtin tool active", async () => {
     const factory = new FakeSessionFactory({ activeToolNames: ["grep"] });
     const sandbox = new FakeSandboxProvider(["bash"]);

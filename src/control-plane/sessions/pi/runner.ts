@@ -20,6 +20,11 @@ import type {
   SandboxProvider,
   SandboxProviderFactory,
 } from "./sandbox/provider.ts";
+import {
+  resolveSandboxProviderFactory,
+  type SandboxProviderSelection,
+  type SandboxProviderSelectionResolverOptions,
+} from "./sandbox/selection.ts";
 
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000;
 const ALREADY_PROCESSING_MESSAGE = "Agent is already processing";
@@ -71,6 +76,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
       now?: () => number;
       sessionFactory?: PiRuntimeSessionFactory;
       sandboxProviderFactory?: SandboxProviderFactory;
+      sandboxProviderSelection?: SandboxProviderSelection;
+      sandboxProviderSelectionOptions?: SandboxProviderSelectionResolverOptions;
       customTools?: PiCustomToolsProvider;
       customToolTimeoutMs?: number;
     } = {},
@@ -317,10 +324,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
             (tool) => tool.name,
           ),
         );
+        const sandboxProviderFactory = this.resolveSandboxProviderFactory();
         let sandbox: SandboxProvider | undefined;
         let session: PiRuntimeSession | undefined;
         try {
-          sandbox = await this.opts.sandboxProviderFactory?.(
+          sandbox = await sandboxProviderFactory?.(
             workspaceId,
             sessionId,
           );
@@ -403,6 +411,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
       sessionManager: SessionManager.inMemory(),
     });
     return session;
+  }
+
+  private resolveSandboxProviderFactory(): SandboxProviderFactory | undefined {
+    if (this.opts.sandboxProviderFactory) return this.opts.sandboxProviderFactory;
+    return resolveSandboxProviderFactory(
+      this.opts.sandboxProviderSelection,
+      this.opts.sandboxProviderSelectionOptions,
+    );
   }
 
   private touch(sessionId: string, handle: RuntimeHandle): void {
