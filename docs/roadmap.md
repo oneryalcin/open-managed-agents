@@ -619,6 +619,7 @@ Design constraints coming out of E.0:
 - Provider failures must preserve ADR 0007's caller-safe/developer-only error split: public events/errors get safe messages; provider IDs, stack traces, and internal paths stay in logs.
 - Do not build a parallel sandbox file/shell abstraction over Pi's Operations interfaces. Our owned layer is lifecycle; Pi's typed Operations are the per-tool boundary.
 - Pi passes host environment data into `BashOperations.exec`; provider implementations must apply an explicit env allowlist/drop policy and must not blindly forward `options.env`.
+- The `session.agent.state.tools = [...]` injection path is internal coupling and must fail closed. E.1 must assert provider invocation for sandbox-backed builtin tool calls and treat a builtin tool execution that bypasses the provider as a runtime failure, not as a successful host fallback. Pi SDK bumps must re-run `scratch/19-e0-builtin-operations-injection.ts`.
 
 Scope:
 
