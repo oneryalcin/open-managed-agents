@@ -674,6 +674,61 @@ Out of scope:
 - Full env/policy DSL beyond an explicit key allowlist.
 - Reimplementing Pi tool semantics by hand. E.1 uses Pi's own `create*ToolDefinition` factories, not bespoke bash/read/write/edit/find/ls definitions.
 
+#### Cycle E.3 Plan — provider selection, fail-closed by default
+
+Goal: make sandbox provider choice an explicit run/session execution setting without making any unsafe provider reachable by accident.
+
+This slice is design-first rather than probe-first. E.0 through E.2 used probes because the unknowns were Pi and Docker capability. Provider selection is ordinary control-plane wiring; the risk is a bad default, not unknown SDK behavior.
+
+Core decision:
+
+- Provider selection is run/session execution config, not agent identity. A persisted agent definition should not encode "Docker vs Modal" unless a later product feature explicitly models environments that way.
+- Provider selection is trusted execution configuration. It must be supplied by the control plane, operator config, or an authenticated API boundary that is allowed to choose execution backends. It must never be derived from prompt/model content or from untrusted agent-definition fields.
+- Missing provider selection must fail closed. It must never silently route builtin tool execution to host passthrough.
+- Host passthrough remains explicit unsafe opt-in only, and requires two gates: a deployment-level "allow unsafe passthrough" setting plus the per-session `unsafeAllowHostPassthrough: true` literal. Either gate missing means reject.
+- Docker-local can become selectable only after the Docker bash infrastructure-error follow-up is closed: [#22](https://github.com/oneryalcin/open-managed-agents/issues/22).
+- Until #22 closes, provider selection may validate and store/parse the shape, but normal runtime creation must hard-reject `docker-local` with a clear "unavailable until #22" configuration error. Do not silently disable it or substitute another provider.
+
+Proposed config shape:
+
+```ts
+type SandboxProviderSelection =
+  | { type: "none" } // no builtin execution provider; builtin tools unavailable
+  | { type: "host-passthrough"; unsafeAllowHostPassthrough: true; envAllowlist?: string[] }
+  | { type: "docker-local"; envAllowlist?: string[]; operationTimeoutMs?: number };
+```
+
+Implementation rules:
+
+1. Parse and validate runtime JSON fail-closed before resolving. Unknown provider types, misspelled types, malformed fields, or extra unsafe flags in the wrong variant are configuration errors, never fallback inputs.
+2. Add a small resolver that maps a validated `SandboxProviderSelection` to a `SandboxProviderFactory | undefined`.
+3. Keep the resolver boring: no policy engine, provider negotiation, or capability matching.
+4. Reject `host-passthrough` unless the deployment allows unsafe passthrough and `unsafeAllowHostPassthrough: true` is present on the selection.
+5. Hard-reject `docker-local` while #22 is open. Do not make it the implicit default and do not silently disable it.
+6. If a session exposes builtin tools with `{type: "none"}` or no provider, return a caller-safe configuration error at session/runtime construction. Do not wait until the model first tries a builtin tool.
+7. Keep provider-specific options narrow: env allowlist and operation timeout only. Network, mounts, snapshots, durable state, and egress policy are later provider slices.
+8. Do not persist provider selection on the agent. If session persistence needs to remember it for continuity, persist it as session/runtime config, not agent config.
+
+Test plan:
+
+- No provider configured plus builtin tool use fails closed before host execution.
+- No provider configured plus user/custom-tool-only flow still works if no builtin tool is needed.
+- Unknown or malformed runtime JSON provider selection is rejected; it never falls back to passthrough, Docker, or `none`.
+- Host passthrough without unsafe opt-in is rejected.
+- Host passthrough with only the per-session flag but no deployment-level allowance is rejected.
+- Host passthrough with unsafe opt-in routes through the existing guarded provider.
+- Docker-local is hard-rejected while #22 is open.
+- The resolver never defaults to host passthrough.
+- Session/runtime config, not agent identity, owns the provider selection.
+
+Out of scope:
+
+- Modal, E2B, Daytona, Cloudflare, Kubernetes, or VM providers.
+- Provider UI/dashboard selection.
+- Mounts/resources/snapshots.
+- Production defaulting to Docker-local.
+- Closing #22 itself, unless the provider-selection implementation needs Docker-local to be selectable in the same PR.
+
 ## Canonical Tutorial Compatibility Backlog
 
 These items were found by tracing Anthropic's public Managed Agents workshop tutorials end to end. They are not all required for the first MVP platform-shape proof, but they are required before claiming that the canonical tutorials run unchanged against this server with only a base-URL swap.

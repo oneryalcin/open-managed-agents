@@ -256,6 +256,24 @@ describe("Cycle B.1 API", () => {
         body: JSON.stringify({
           agent: agent.id,
           environment_id: environment.id,
+          sandbox_provider: {
+            type: "host-passthrough",
+            unsafeAllowHostPassthrough: true,
+          },
+        }),
+      }),
+      400,
+      "invalid_request_error",
+      "Field `sandbox_provider` is not yet supported by this server.",
+    );
+
+    await expectError(
+      await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: agent.id,
+          environment_id: environment.id,
           resources: [],
         }),
       }),

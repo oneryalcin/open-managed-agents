@@ -88,6 +88,8 @@ export class DefaultSessionService implements SessionService {
 
 function parseCreateSession(input: unknown): CreateManagedSessionRequest {
   const obj = objectInput(input);
+  rejectUnsupportedField(obj, "sandbox");
+  rejectUnsupportedField(obj, "sandbox_provider");
   rejectUnsupportedField(obj, "resources");
   rejectUnsupportedField(obj, "vault_ids");
   return {
