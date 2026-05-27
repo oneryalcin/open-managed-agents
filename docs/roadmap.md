@@ -598,13 +598,13 @@ Cycle E is infrastructure lifecycle work, not just another event-mapping slice. 
 
 Anchor the probe in the already-recorded design:
 
-- ADR 0003: Pi's `baseToolsOverride` plus `createAgentSessionFromServices` is the documented injection point for sandbox-backed builtin tools.
+- ADR 0003: Pi's Operations interfaces are the typed per-tool boundary; Cycle E.0 verified the current public injection path after SDK drift.
 - ADR 0007: keep sandbox provisioning lifecycle separate from per-call Operations adapters. `ManagedSandbox` owns provision/teardown; Pi `*Operations` implementations own shell/file calls.
 - Cycle C.3a: one runtime session is cached per `sesn_*`; Cycle E sandboxes should follow the same lifecycle boundary.
 
 Probe outputs:
 
-1. **Injection path.** Verify a Pi bash call reaches our `BashOperations.exec` through `createAgentSessionFromServices(... baseToolsOverride: { bash })`. Update ADR 0003 if the current SDK has drifted.
+1. **Injection path (closed by `scratch/19-e0-builtin-operations-injection.ts`).** Pi 0.75.4 does not expose or forward `baseToolsOverride` through `createAgentSession(...)` or `createAgentSessionFromServices(...)`. The working public path is to create a session normally, then set `session.agent.state.tools = [createBashTool(cwd, { operations })]`. The live probe proved a bash call reached our `BashOperations.exec` once.
 2. **Guarded passthrough provider.** Implement or probe a host-passthrough provider only as a non-isolating dev/test tool. It must be named and guarded as unsafe, not described as a sandbox.
 3. **Deterministic lifecycle tests.** Use passthrough to prove provision/exec/teardown wiring, TTL eviction, hard runtime error cleanup, and runner close behavior without Modal credentials.
 4. **First-isolation decision.** Decide Docker-local vs Modal as the first real isolation provider. Docker-local gives locally testable isolation without cloud credentials or cost; Modal gives the first managed remote target and cost/teardown realities.
@@ -618,11 +618,12 @@ Design constraints coming out of E.0:
 - Teardown must run on every path that currently evicts or closes a Pi session: idle TTL, hard runtime error, runner close, and future `DELETE /v1/sessions` / `user.interrupt` cleanup.
 - Provider failures must preserve ADR 0007's caller-safe/developer-only error split: public events/errors get safe messages; provider IDs, stack traces, and internal paths stay in logs.
 - Do not build a parallel sandbox file/shell abstraction over Pi's Operations interfaces. Our owned layer is lifecycle; Pi's typed Operations are the per-tool boundary.
+- Pi passes host environment data into `BashOperations.exec`; provider implementations must apply an explicit env allowlist/drop policy and must not blindly forward `options.env`.
 
 Scope:
 
 - Implement the provider lifecycle wrapper from ADR 0003.
-- Use Pi's `baseToolsOverride` injection point for sandbox-backed operations.
+- Use Pi's current public Operations injection path (`session.agent.state.tools = [...]`) for sandbox-backed operations unless a future SDK re-exposes `baseToolsOverride` through helper APIs.
 - Add environment endpoints beyond the current default stub only as required by the sandbox lifecycle.
 - Add teardown and orphan-cleanup behavior before running untrusted prompts.
 

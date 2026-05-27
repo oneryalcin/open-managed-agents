@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-05-27T07:39:37.670Z",
+  "model": "anthropic/claude-haiku-4-5",
+  "marker": "E0_BASE_TOOLS_ZHSDS9",
+  "sdk_drift": {
+    "agent_session_config_has_baseToolsOverride": true,
+    "create_agent_session_options_has_baseToolsOverride": false,
+    "create_agent_session_from_services_options_has_baseToolsOverride": false,
+    "create_agent_session_from_services_js_forwards_baseToolsOverride": false,
+    "create_agent_session_js_forwards_baseToolsOverride": false
+  },
+  "injection_method": "session.agent.state.tools = [createBashTool(cwd, { operations })]",
+  "operations_exec_call_count": 1,
+  "operations_exec_calls": [
+    {
+      "command": "printf 'E0_BASE_TOOLS_ZHSDS9\\n'",
+      "cwd": "/workspace",
+      "envKeyCount": 124,
+      "includesSecretLikeEnvKeys": true
+    }
+  ],
+  "event_types": [
+    "agent_start",
+    "turn_start",
+    "message_start",
+    "message_end",
+    "message_start",
+    "message_update",
+    "message_update",
+    "message_update",
+    "message_update",
+    "message_update",
+    "message_end",
+    "tool_execution_start",
+    "tool_execution_update",
+    "tool_execution_update",
+    "tool_execution_end",
+    "message_start",
+    "message_end",
+    "turn_end",
+    "turn_start",
+    "message_start",
+    "message_update",
+    "message_update",
+    "message_update",
+    "message_update",
+    "message_end",
+    "turn_end",
+    "agent_end"
+  ],
+  "final_text": "E0_BASE_TOOLS_ZHSDS9",
+  "verdict": "PASS"
+}

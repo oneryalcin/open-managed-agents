@@ -17,7 +17,7 @@ Options:
 ## Decision
 
 1. **Define a sandbox provider boundary** in our codebase, owned by us. The boundary owns lifecycle; Pi's `*Operations` interfaces own per-tool shell/file behavior.
-2. **First implementation for wiring/tests: guarded host passthrough.** This is not a sandbox and must never be selectable for untrusted/production prompts without an explicit unsafe opt-in. Its job is to prove `baseToolsOverride` wiring and lifecycle cleanup deterministically in local tests.
+2. **First implementation for wiring/tests: guarded host passthrough.** This is not a sandbox and must never be selectable for untrusted/production prompts without an explicit unsafe opt-in. Its job is to prove Pi Operations wiring and lifecycle cleanup deterministically in local tests.
 3. **First managed remote provider: Modal Sandboxes.** Modal remains the first cloud sandbox provider we target for real remote execution.
 4. **First isolating provider is an explicit fork.** Choose Docker-local or Modal deliberately after the provider-neutral probe. Docker-local gives locally testable isolation without cloud credentials or cost; Modal gives the production remote shape and cost/teardown realities.
 5. **Pi's default tool implementations (`bash`, `read`, `write`, etc.) get rewired** to delegate to the active provider's Operations impl instead of running on the host by default.
@@ -68,7 +68,7 @@ This does **not** mean Modal must be the first code path we implement. A guarded
 
 Host passthrough binds agent-driven shell/file calls to the control-plane host. That is arbitrary code execution on the developer machine, test runner, or any host process that enables it. It is useful only for:
 
-- proving `baseToolsOverride` and Pi Operations wiring without cloud credentials,
+- proving Pi Operations wiring without cloud credentials,
 - deterministic lifecycle tests around provision/exec/teardown,
 - trusted local development where the operator explicitly accepts the risk.
 
@@ -138,18 +138,18 @@ export interface BashOperations {
 **Revised plan** (supersedes the `Sandbox interface (sketch)` section above):
 
 1. Implement Pi's `*Operations` interfaces against each backend. Start with a guarded host-passthrough provider for wiring/tests, then the first isolating provider (Docker-local or Modal), then Modal as the managed remote.
-2. Provide provider-backed tool factories that produce `baseToolsOverride` records by passing our Operations impls into Pi's `create*Tool(cwd, {operations: ...})` factories.
+2. Provide provider-backed tool factories that produce active `AgentTool` records by passing our Operations impls into Pi's `create*Tool(cwd, {operations: ...})` factories. In Pi 0.75.4, the public install path is `session.agent.state.tools = [...]`; `baseToolsOverride` remains an internal `AgentSessionConfig` field but is not exposed by the SDK helpers.
 3. The single high-level `ManagedSandbox` value our codebase owns becomes a wrapper that handles the *lifecycle* (provision instance, mount resources, stop on session end) and produces the per-tool Operations impls against it. It is *not* an alternative to Pi's Operations interfaces — it sits one level above them.
 
 **Follow-up question (raised in scratch-pi-findings.md):** Can `createAgentSession({ tools })` accept a `Tool[]` array directly (constructed via `create*Tool(cwd, {operations})`)? Or only string-names? If only string-names, we'll need to inject our Operations through `ToolsOptions` (the per-tool options map on the SDK config). Verify in Task 1 smoke test.
 
-## Findings (post code-review, 2026-05-21)
+## Historical findings (post code-review, 2026-05-21; superseded in part)
 
 Empirical verification via `scratch/04-tool-array.ts`:
 
 - **`tools: [Tool]` does NOT work.** `tools` is `string[]` only — an *allowlist* of built-in tool names. Pre-constructed `AgentTool` objects passed in `tools: [...]` are silently ignored. Confirmed via probe — `session.state.tools` was `[]`.
 
-- **The official Operations-injection API exists, just one layer down.** From `dist/core/agent-session.d.ts`:
+- **The Operations-injection field exists on `AgentSessionConfig`, but the public helper route changed.** From `dist/core/agent-session.d.ts`:
 
   ```ts
   export interface AgentSessionConfig {
@@ -165,42 +165,37 @@ Empirical verification via `scratch/04-tool-array.ts`:
   }
   ```
 
-  `baseToolsOverride` is **explicitly documented for the custom-runtime use case** — exactly what we need. The keys are built-in tool names (`"bash"`, `"read"`, `"write"`, etc.); the values are `AgentTool` instances constructed via `createBashTool(cwd, {operations: ourOps})` etc. The synthesis-into-ToolDefinitions happens internally.
+  `baseToolsOverride` is documented on `AgentSessionConfig`, but Cycle E.0 verified that Pi 0.75.4 does not expose or forward it through the exported session helper APIs. Treat it as an internal/low-level field unless a future SDK re-exposes it through helpers.
 
-- **`baseToolsOverride` is on `AgentSessionConfig`, not `CreateAgentSessionOptions`.** So we use the lower-level `createAgentSessionFromServices` (also exported from `pi-coding-agent`) rather than the top-level `createAgentSession`. This is a documented public API path, not a hack.
+- **`baseToolsOverride` is on `AgentSessionConfig`, not `CreateAgentSessionOptions` or `CreateAgentSessionFromServicesOptions`.** The current public path is to create a session normally and install Operations-backed `AgentTool` instances into the active tool list (`session.agent.state.tools = [...]`).
 
-- **Reviewer's "core integration risk" concern is therefore narrower than stated:** the API exists and is named for our use case. The residual unknowns are runtime behavior of `baseToolsOverride` end-to-end (does our `BashOperations.exec` actually get called when the model invokes bash?), and lifecycle plumbing (resource mounting, sandbox teardown) — both deferred to Modal-sandbox-impl work.
+- **Reviewer's "core integration risk" concern is narrower than stated, but the precise injection point moved:** Operations-backed tools are still the correct boundary; the public install path is `session.agent.state.tools`, not `createAgentSessionFromServices(... baseToolsOverride)`.
 
-**Revised consumer pattern** (will go in `src/engine/pi/sandbox/` when we implement):
+**Current consumer pattern** (Cycle E.0):
 
 ```ts
 import {
-  createAgentSessionFromServices,
-  createAgentSessionServices,
+  createAgentSession,
   createBashTool,
   createReadTool,
   // ... etc.
 } from "@earendil-works/pi-coding-agent";
 
-const services = await createAgentSessionServices({ cwd: sandboxCwd });
-const { session } = await createAgentSessionFromServices({
-  services,
+const { session } = await createAgentSession({
+  model,
   sessionManager,
-  sessionStartEvent: { /* ... */ },
-  baseToolsOverride: {
-    bash: createBashTool(sandboxCwd, { operations: ourModalBashOps }),
-    read: createReadTool(sandboxCwd, { operations: ourModalReadOps }),
-    write: createWriteTool(sandboxCwd, { operations: ourModalWriteOps }),
-    edit: createEditTool(sandboxCwd, { operations: ourModalEditOps }),
-    grep: createGrepTool(sandboxCwd, { operations: ourModalGrepOps }),
-    find: createFindTool(sandboxCwd, { operations: ourModalFindOps }),
-    ls: createLsTool(sandboxCwd, { operations: ourModalLsOps }),
-  },
-  // ... model, customTools, etc.
+  tools: ["bash", "read"],
+  // ... auth/model registry/custom tools/etc.
 });
+
+session.agent.state.tools = [
+  createBashTool(sandboxCwd, { operations: ourModalBashOps }),
+  createReadTool(sandboxCwd, { operations: ourModalReadOps }),
+  // ... write/edit/grep/find/ls.
+];
 ```
 
-This supersedes the `createAgentSession({ tools: customTools })` approach mentioned in the original ADR text. The ADR direction (pluggable Operations, Modal as first managed remote) is unchanged; the precise injection point is now pinned.
+This supersedes both the `createAgentSession({ tools: customTools })` approach mentioned in the original ADR text and the later `createAgentSessionFromServices(... baseToolsOverride)` plan. The ADR direction (pluggable Operations, Modal as first managed remote) is unchanged; the precise current public injection point is now pinned by Cycle E.0.
 
 ## Findings (Cycle E planning, 2026-05-27)
 
@@ -211,7 +206,35 @@ Flue and OpenAI Agents both support the revised sequencing:
 
 Adopt the same split:
 
-1. **Provider-neutral probe first.** Verify `createAgentSessionFromServices + baseToolsOverride` with one builtin tool and a swappable Operations implementation.
+1. **Provider-neutral probe first.** Verify the current public Pi Operations injection path with one builtin tool and a swappable Operations implementation.
 2. **Guarded passthrough for deterministic lifecycle tests.** Name it as non-isolating and require explicit unsafe opt-in outside test/dev.
 3. **First isolation decision.** Choose Docker-local or Modal deliberately. Docker-local gives locally testable isolation; Modal gives the production remote target.
 4. **Modal remote hardening.** Measure cold start, forced sandbox death, teardown reliability, and orphan/cost behavior.
+
+## Findings (Cycle E.0 probe, 2026-05-27)
+
+Probe: `scratch/19-e0-builtin-operations-injection.ts`.
+
+Findings:
+
+- **`baseToolsOverride` is not a public helper path in Pi 0.75.4.** `AgentSessionConfig` still has `baseToolsOverride`, but neither `CreateAgentSessionOptions` nor `CreateAgentSessionFromServicesOptions` exposes it, and neither exported helper forwards it at runtime.
+- **The current public injection path works:** create the session normally, then replace the active tool list with `session.agent.state.tools = [createBashTool(cwd, { operations })]`. A live Haiku run invoked `BashOperations.exec` exactly once and the model observed the returned tool output.
+- **Pi passes host environment data into `BashOperations.exec`.** The probe recorded 124 env keys and detected secret-like names. Provider implementations must not blindly forward `options.env` into passthrough, Docker, or Modal. Apply an allowlist/drop policy at the provider boundary.
+
+Updated implementation direction:
+
+```ts
+const { session } = await createAgentSession({
+  model,
+  tools: ["bash"],
+  sessionManager,
+});
+
+session.agent.state.tools = [
+  createBashTool("/workspace", {
+    operations: provider.bashOperations({ envPolicy: "allowlist" }),
+  }),
+];
+```
+
+If a future Pi SDK re-exposes `baseToolsOverride` through `createAgentSessionFromServices`, we can switch back without changing the provider boundary. The provider still owns lifecycle; Pi Operations still own per-tool calls.

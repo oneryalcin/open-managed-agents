@@ -43,7 +43,7 @@ ManagedSandbox  (our wrapper — owns provisioning lifecycle)
 ├── destroy()      → stops it
 ├── mount(r)       → file/repo mounts
 ├── outputs()      → reads /mnt/session/outputs/
-└── tools(cwd)     → returns Record<string, AgentTool> for baseToolsOverride,
+└── tools(cwd)     → returns AgentTool records for Pi's active tool list,
                      built by feeding OUR Operations impls into Pi's
                      create*Tool(cwd, {operations: ...}) factories
 ```
