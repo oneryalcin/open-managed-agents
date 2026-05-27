@@ -614,6 +614,8 @@ Probe outputs:
 Design constraints coming out of E.0:
 
 - One provider instance per `sesn_*`, coupled to the cached Pi runtime session unless a later latency probe proves a better lazy-start shape.
+- Cycle E.2 uses Operations delegation into Docker-local. Pi session orchestration, model calls, and tool dispatch remain in the control-plane process; Docker backs the provider Operations. Whole-agent-in-container is a larger architecture and is explicitly deferred.
+- Because E.2 delegates Operations rather than moving Pi itself into the container, the exact active-tool allowlist and fail-closed provider validator remain required. A sandboxed builtin that does not route through provider Operations must fail before output is published.
 - Host passthrough is not an isolation boundary and cannot be enabled for untrusted prompts without an explicit unsafe opt-in.
 - Teardown must run on every path that currently evicts or closes a Pi session: idle TTL, hard runtime error, runner close, and future `DELETE /v1/sessions` / `user.interrupt` cleanup.
 - Provider failures must preserve ADR 0007's caller-safe/developer-only error split: public events/errors get safe messages; provider IDs, stack traces, and internal paths stay in logs.
