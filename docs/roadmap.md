@@ -621,7 +621,7 @@ Design constraints coming out of E.0:
 - Pi passes host environment data into `BashOperations.exec`; provider implementations must apply an explicit env allowlist/drop policy and must not blindly forward `options.env`.
 - The `session.agent.state.tools = [...]` injection path is internal coupling and must fail closed. E.1 must assert provider invocation for sandbox-backed builtin tool calls and treat a builtin tool execution that bypasses the provider as a runtime failure, not as a successful host fallback. Pi SDK bumps must re-run `scratch/19-e0-builtin-operations-injection.ts`.
 - File Operations receive absolute paths after Pi resolves the model's input against `cwd`; that resolution is not a jail. E.1 providers must enforce workspace containment before read/write/list/search operations touch a backend.
-- Pi's current `createGrepTool` is not fully provider-backed: even with custom `GrepOperations`, it still shells out to host `rg`. Keep grep disabled for sandbox-backed builtin tools until that path is replaced or upstreamed.
+- Pi's current `createGrepTool` is not fully provider-backed: even with custom `GrepOperations`, it still shells out to host `rg`. Keep grep disabled for sandbox-backed builtin tools until that path is replaced or upstreamed; grep-like capability remains available through policed bash.
 
 Scope:
 
@@ -644,7 +644,7 @@ Goal: land the provider boundary without choosing Docker-local or Modal yet.
 Evidence:
 
 - `scratch/20-e1-passthrough-provider.ts` proves a real Pi bash turn routed through `PiSessionRunner` invokes the guarded host-passthrough provider.
-- Unit tests cover deny-by-default env filtering, workspace path containment, explicit unsafe opt-in, provider invocation accounting, dispose behavior, and the fail-closed runtime assertion.
+- Unit tests cover deny-by-default env filtering, workspace path containment, explicit unsafe opt-in, provider invocation accounting, dispose behavior, active-tool surface enforcement, and the fail-closed runtime assertion.
 
 Scope:
 

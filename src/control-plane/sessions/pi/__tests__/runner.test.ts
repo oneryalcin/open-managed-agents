@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PiCustomToolsProvider } from "../custom-tools.ts";
 import {
   PiSessionRunner,
   type PiRuntimeSession,
@@ -185,8 +186,52 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.disposed).toBe(true);
   });
 
+  it("fails closed when Pi keeps an unexpected builtin tool active", async () => {
+    const factory = new FakeSessionFactory({ activeToolNames: ["grep"] });
+    const sandbox = new FakeSandboxProvider(["bash"]);
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("Unexpected active Pi tool");
+    expect(factory.sessions[0]?.disposed).toBe(true);
+    expect(sandbox.disposed).toBe(true);
+  });
+
+  it("retains known custom tools while replacing sandboxed builtins", async () => {
+    const customTools: PiCustomToolsProvider = () => [
+      {
+        type: "custom",
+        name: "custom_lookup",
+        description: "custom",
+        input_schema: {},
+      },
+    ];
+    const factory = new FakeSessionFactory({
+      activeToolNames: ["bash", "custom_lookup"],
+    });
+    const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      customTools,
+      idleTtlMs: 0,
+    });
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+
+    expect(factory.sessions[0]?.activeToolNames()).toEqual([
+      "custom_lookup",
+      "bash",
+    ]);
+  });
+
   it("fails closed when a sandboxed builtin tool bypasses the provider", async () => {
-    const factory = new FakeSessionFactory({ emitSandboxedTool: "bash" });
+    const factory = new FakeSessionFactory({ emitSandboxedTool: "bash", activeToolNames: ["bash"] });
     const sandbox = new FakeSandboxProvider(["bash"]);
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
@@ -203,6 +248,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   it("fails closed when the wrong provider tool was invoked", async () => {
     const sandbox = new FakeSandboxProvider(["bash", "read"]);
     const factory = new FakeSessionFactory({
+      activeToolNames: ["bash", "read"],
       emitSandboxedTool: "bash",
       onSandboxedTool: () => sandbox.recordInvocation("read"),
     });
@@ -221,6 +267,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   it("accepts a sandboxed builtin tool when the matching provider tool was invoked", async () => {
     const sandbox = new FakeSandboxProvider(["bash"]);
     const factory = new FakeSessionFactory({
+      activeToolNames: ["bash"],
       emitSandboxedTool: "bash",
       onSandboxedTool: () => sandbox.recordInvocation("bash"),
     });
@@ -267,9 +314,11 @@ interface FakeSessionOptions {
   shouldThrowHardError?: () => boolean;
   emitSandboxedTool?: string;
   onSandboxedTool?: () => void;
+  activeToolNames?: string[];
 }
 
 class FakeSession implements PiRuntimeSession {
+  readonly agent: { state: { tools: Array<{ name: string }> } };
   readonly prompts: string[] = [];
   readonly followUps: string[] = [];
   private readonly listeners = new Set<(event: unknown) => void>();
@@ -277,7 +326,13 @@ class FakeSession implements PiRuntimeSession {
   disposed = false;
   private threwAlreadyProcessing = false;
 
-  constructor(private readonly opts: FakeSessionOptions = {}) {}
+  constructor(private readonly opts: FakeSessionOptions = {}) {
+    this.agent = {
+      state: {
+        tools: (opts.activeToolNames ?? []).map((name) => ({ name })),
+      },
+    };
+  }
 
   async prompt(
     text: string,
@@ -362,6 +417,10 @@ class FakeSession implements PiRuntimeSession {
       },
     });
   }
+
+  activeToolNames(): string[] {
+    return this.agent.state.tools.map((tool) => tool.name);
+  }
 }
 
 async function collect(source: AsyncIterable<unknown>): Promise<unknown[]> {
@@ -419,7 +478,7 @@ function delay(ms: number): Promise<void> {
 class FakeSandboxProvider implements SandboxProvider {
   readonly cwd = "/workspace";
   readonly operations = {} as SandboxProvider["operations"];
-  readonly tools = [];
+  readonly tools: SandboxProvider["tools"] = [];
   readonly toolNames: ReadonlySet<"bash" | "read" | "write" | "edit" | "find" | "ls">;
   readonly invocations = {
     total: 0,
@@ -434,8 +493,12 @@ class FakeSandboxProvider implements SandboxProvider {
   };
   disposed = false;
 
-  constructor(toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "ls">) {
+  constructor(
+    toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "ls">,
+    toolInstances: string[] = [],
+  ) {
     this.toolNames = new Set(toolNames);
+    this.tools = toolInstances.map((name) => ({ name }) as SandboxProvider["tools"][number]);
   }
 
   recordInvocation(toolName: "bash" | "read" | "write" | "edit" | "find" | "ls"): void {

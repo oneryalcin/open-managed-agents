@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-05-27T12:15:43.079Z",
-  "marker": "E1_PASSTHROUGH_QV1ETK",
+  "generated_at": "2026-05-27T12:19:37.279Z",
+  "marker": "E1_PASSTHROUGH_Z699W4",
   "workspace_root_removed": true,
   "provider": "host-passthrough",
   "provider_is_isolating": false,
@@ -27,6 +27,11 @@
     "message_update",
     "message_update",
     "message_update",
+    "message_update",
+    "message_update",
+    "message_update",
+    "message_update",
+    "message_update",
     "message_end",
     "tool_execution_start",
     "tool_execution_update",
@@ -45,6 +50,6 @@
     "turn_end",
     "agent_end"
   ],
-  "final_text": "E1_PASSTHROUGH_QV1ETK",
+  "final_text": "I'll run that exact command for you.\nE1_PASSTHROUGH_Z699W4",
   "verdict": "PASS"
 }

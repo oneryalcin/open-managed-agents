@@ -256,29 +256,25 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     const created = this.sessionFactory(workspaceId, sessionId)
       .then(async (session) => {
+        const customToolNames = new Set(
+          (this.opts.customTools?.(workspaceId, sessionId) ?? []).map(
+            (tool) => tool.name,
+          ),
+        );
         let sandbox: SandboxProvider | undefined;
         try {
           sandbox = await this.opts.sandboxProviderFactory?.(
             workspaceId,
             sessionId,
           );
+          if (sandbox) {
+            installSandboxTools(session, sandbox, customToolNames);
+          }
         } catch (error) {
+          sandbox?.dispose();
           session.dispose();
           throw error;
         }
-        if (sandbox) {
-          const installed = installSandboxToolsIfSupported(session, sandbox);
-          if (!installed && !this.opts.sessionFactory) {
-            sandbox.dispose();
-            session.dispose();
-            throw new Error("Pi session does not expose an active tool list");
-          }
-        }
-        const customToolNames = new Set(
-          (this.opts.customTools?.(workspaceId, sessionId) ?? []).map(
-            (tool) => tool.name,
-          ),
-        );
         const handle: RuntimeHandle = {
           session,
           sandbox,
@@ -386,25 +382,36 @@ export class PiSessionRunner implements RuntimeEventRunner {
   }
 }
 
-function installSandboxToolsIfSupported(
+function installSandboxTools(
   session: PiRuntimeSession,
   sandbox: SandboxProvider,
-): boolean {
+  customToolNames: ReadonlySet<string>,
+): void {
   const actual = session as PiRuntimeSession & {
     agent?: { state?: { tools?: unknown[] } };
   };
   const tools = actual.agent?.state?.tools;
   if (!Array.isArray(tools)) {
-    return false;
+    throw new Error("Pi session does not expose an active tool list");
   }
   const sandboxToolNames = sandbox.toolNames;
-  const retainedTools = tools.filter((tool) => {
-    if (typeof tool !== "object" || tool === null) return true;
+  const retainedTools = [];
+  for (const tool of tools) {
+    if (typeof tool !== "object" || tool === null) {
+      throw new Error("Unexpected Pi tool without a name");
+    }
     const name = (tool as { name?: unknown }).name;
-    return typeof name !== "string" || !sandboxToolNames.has(name as never);
-  });
+    if (typeof name !== "string") {
+      throw new Error("Unexpected Pi tool without a name");
+    }
+    if (sandboxToolNames.has(name as never)) continue;
+    if (customToolNames.has(name)) {
+      retainedTools.push(tool);
+      continue;
+    }
+    throw new Error(`Unexpected active Pi tool after sandbox install: ${name}`);
+  }
   actual.agent!.state!.tools = [...retainedTools, ...sandbox.tools];
-  return true;
 }
 
 function updateRunning(handle: RuntimeHandle, event: unknown): void {
