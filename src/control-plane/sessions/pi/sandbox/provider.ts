@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { constants, existsSync, realpathSync } from "node:fs";
 import {
   access,
   mkdir,
+  open,
   readdir,
   readFile,
   stat,
-  writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type {
@@ -78,6 +79,13 @@ interface MutableSandboxInvocationStats extends SandboxInvocationStats {
   toolCallIds: Record<SandboxedBuiltinToolName, Set<string>>;
 }
 
+interface ToolExecutionContext {
+  toolName: SandboxedBuiltinToolName;
+  toolCallId: string;
+}
+
+const toolExecutionContext = new AsyncLocalStorage<ToolExecutionContext>();
+
 export function createHostPassthroughSandboxProvider(
   opts: HostPassthroughSandboxOptions,
 ): SandboxProvider {
@@ -92,6 +100,7 @@ export function createHostPassthroughSandboxProvider(
     toolCallIds: emptyToolCallIds(),
   };
   const disposed = { value: false };
+  const activeProcessGroups = new Set<number>();
 
   const readOps: ReadOperations = {
     access: async (absolutePath) => {
@@ -110,7 +119,7 @@ export function createHostPassthroughSandboxProvider(
     },
     writeFile: async (absolutePath, content) => {
       record(invocations, disposed, "write");
-      await writeFile(assertInsideWorkspace(absolutePath, workspaceRoot), content, "utf8");
+      await writeFileNoFollow(assertInsideWorkspace(absolutePath, workspaceRoot), content);
     },
   };
   const editOps: EditOperations = {
@@ -124,7 +133,7 @@ export function createHostPassthroughSandboxProvider(
     },
     writeFile: async (absolutePath, content) => {
       record(invocations, disposed, "edit");
-      await writeFile(assertInsideWorkspace(absolutePath, workspaceRoot), content, "utf8");
+      await writeFileNoFollow(assertInsideWorkspace(absolutePath, workspaceRoot), content);
     },
   };
   const findOps: FindOperations = {
@@ -160,6 +169,7 @@ export function createHostPassthroughSandboxProvider(
     exec: (command, cwd, options) => {
       record(invocations, disposed, "bash");
       return execHostCommand(command, assertInsideWorkspace(cwd, workspaceRoot), {
+        activeProcessGroups,
         env: filterEnv(options.env ?? {}, envAllowlist),
         onData: options.onData,
         signal: options.signal,
@@ -220,6 +230,9 @@ export function createHostPassthroughSandboxProvider(
     ],
     dispose: () => {
       disposed.value = true;
+      for (const pid of activeProcessGroups) {
+        killProcessGroup(pid);
+      }
     },
   };
 }
@@ -240,7 +253,7 @@ export function assertInsideWorkspace(
     relative(existingAncestor, resolvedPath),
   );
   if (isInsideOrEqual(realCandidate, resolvedRoot)) {
-    return resolvedPath;
+    return realCandidate;
   }
   throw new Error(`Sandbox path escapes workspace: ${absolutePath}`);
 }
@@ -281,18 +294,10 @@ function record(
   }
   invocations.total += 1;
   invocations.byTool[toolName] += 1;
-}
-
-function recordToolCall(
-  invocations: MutableSandboxInvocationStats,
-  disposed: { value: boolean },
-  toolName: SandboxedBuiltinToolName,
-  toolCallId: string,
-): void {
-  if (disposed.value) {
-    throw new Error("Sandbox provider is disposed");
+  const context = toolExecutionContext.getStore();
+  if (context?.toolName === toolName) {
+    invocations.toolCallIds[toolName].add(context.toolCallId);
   }
-  invocations.toolCallIds[toolName].add(toolCallId);
 }
 
 function emptyToolCounts(): Record<SandboxedBuiltinToolName, number> {
@@ -326,10 +331,30 @@ function withToolCallAccounting<T extends ToolDefinition<any, any, any>>(
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate, ctx) => {
-      recordToolCall(invocations, disposed, toolName, toolCallId);
-      return tool.execute(toolCallId, params, signal, onUpdate, ctx);
+      if (disposed.value) {
+        throw new Error("Sandbox provider is disposed");
+      }
+      return toolExecutionContext.run({ toolName, toolCallId }, () =>
+        tool.execute(toolCallId, params, signal, onUpdate, ctx),
+      );
     },
   };
+}
+
+async function writeFileNoFollow(path: string, content: string): Promise<void> {
+  const handle = await open(
+    path,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_TRUNC |
+      constants.O_NOFOLLOW,
+    0o666,
+  );
+  try {
+    await handle.writeFile(content, "utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 async function execHostCommand(
@@ -337,6 +362,7 @@ async function execHostCommand(
   cwd: string,
   opts: {
     env: NodeJS.ProcessEnv;
+    activeProcessGroups: Set<number>;
     onData: (data: Buffer) => void;
     signal?: AbortSignal;
     timeout?: number;
@@ -346,9 +372,13 @@ async function execHostCommand(
     const child = spawn(command, {
       cwd,
       env: opts.env,
+      detached: true,
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    if (child.pid !== undefined) {
+      opts.activeProcessGroups.add(child.pid);
+    }
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -356,10 +386,13 @@ async function execHostCommand(
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (child.pid !== undefined) opts.activeProcessGroups.delete(child.pid);
       opts.signal?.removeEventListener("abort", onAbort);
       fn();
     };
     const kill = () => {
+      if (child.pid === undefined) return;
+      killProcessGroup(child.pid);
       if (!child.killed) child.kill();
     };
     const onAbort = () => {
@@ -372,7 +405,7 @@ async function execHostCommand(
       timer = setTimeout(() => {
         kill();
         settle(() => resolvePromise({ exitCode: null }));
-      }, opts.timeout);
+      }, opts.timeout * 1000);
     }
     child.stdout?.on("data", (chunk: Buffer) => opts.onData(chunk));
     child.stderr?.on("data", (chunk: Buffer) => opts.onData(chunk));
@@ -381,6 +414,15 @@ async function execHostCommand(
       settle(() => resolvePromise({ exitCode: code })),
     );
   });
+}
+
+function killProcessGroup(pid: number): void {
+  try {
+    process.kill(-pid);
+  } catch {
+    // The process may already have exited. Callers may also kill the direct
+    // child as a fallback when they own the ChildProcess object.
+  }
 }
 
 async function globInsideWorkspace(

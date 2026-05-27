@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-05-27T13:30:17.259Z",
-  "marker": "E1_PASSTHROUGH_5NBPSO",
+  "generated_at": "2026-05-27T14:30:41.038Z",
+  "marker": "E1_PASSTHROUGH_RAV3TV",
   "workspace_root_removed": true,
   "provider": "host-passthrough",
   "provider_is_isolating": false,
@@ -45,6 +45,6 @@
     "turn_end",
     "agent_end"
   ],
-  "final_text": "E1_PASSTHROUGH_5NBPSO",
+  "final_text": "E1_PASSTHROUGH_RAV3TV",
   "verdict": "PASS"
 }

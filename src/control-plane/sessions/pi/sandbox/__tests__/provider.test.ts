@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -115,6 +115,52 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
     }
   });
 
+  it("records provider-backed Pi tool calls only when operations run", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
+    try {
+      const provider = createHostPassthroughSandboxProvider({
+        workspaceRoot: workspace,
+        unsafeAllowHostPassthrough: true,
+        envAllowlist: ["PATH"],
+      });
+      const bash = provider.tools.find((tool) => tool.name === "bash");
+      expect(bash).toBeDefined();
+
+      await bash?.execute(
+        "toolu_provider_bash",
+        { command: "printf ok", timeout: 1 },
+        new AbortController().signal,
+        undefined,
+        {} as never,
+      );
+
+      expect(provider.invocations.byTool.bash).toBe(1);
+      expect(provider.invocations.toolCallIds.bash.has("toolu_provider_bash")).toBe(true);
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
+  it("treats bash timeout values as seconds", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
+    try {
+      const provider = createHostPassthroughSandboxProvider({
+        workspaceRoot: workspace,
+        unsafeAllowHostPassthrough: true,
+        envAllowlist: ["PATH"],
+      });
+      const result = await provider.operations.bash.exec("sleep 0.05", workspace, {
+        env: { PATH: "/bin:/usr/bin" },
+        onData: () => {},
+        timeout: 1,
+      });
+
+      expect(result).toEqual({ exitCode: 0 });
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
   it("rejects operations after dispose", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
     try {
@@ -149,7 +195,8 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
         limit: 10,
       });
 
-      expect(results.map((path) => path.replace(`${workspace}/`, ""))).toEqual([
+      const realWorkspace = await realpath(workspace);
+      expect(results.map((path) => path.replace(`${realWorkspace}/`, ""))).toEqual([
         "a.txt",
       ]);
       expect(provider.invocations.byTool.find).toBe(1);

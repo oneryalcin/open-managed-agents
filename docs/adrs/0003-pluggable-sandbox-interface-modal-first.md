@@ -251,7 +251,7 @@ Findings:
 - **A custom tool can occupy the public builtin name.** `createAgentSession({ noTools: "builtin", tools: ["bash"], customTools: [defineTool({ name: "bash", ... })] })` activated exactly `["bash"]`, exposed a tool definition for `bash`, and emitted Pi events with `toolName: "bash"`.
 - **The custom-tool path streams.** Pi passed `onUpdate` into `ToolDefinition.execute(...)`, and the probe observed `tool_execution_update` before `tool_execution_end`.
 - **The cleaner route does not require owning Pi's bash semantics.** Pi already exports `createBashToolDefinition`, `createReadToolDefinition`, `createWriteToolDefinition`, `createEditToolDefinition`, `createFindToolDefinition`, and `createLsToolDefinition`. Register those definitions through `customTools` with provider Operations. That uses public APIs, preserves Pi's tool descriptions/rendering/execution semantics, and avoids internal `session.agent.state.tools` mutation.
-- **The bypass class is designed out, not merely detected.** Pi executes the registered `ToolDefinition`; the provider Operations live inside that execute body. Keep invocation accounting and gated release as defense in depth, but they are no longer the primary containment mechanism.
+- **The bypass class is designed out, not merely detected.** Pi executes the registered `ToolDefinition`; the provider Operations live inside that execute body. Keep invocation accounting and gated release as defense in depth, but validate by `toolCallId` only when a real Operation runs inside that tool execution context. Dispatch alone is not proof of provider use.
 
 Updated implementation direction:
 

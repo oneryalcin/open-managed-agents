@@ -202,6 +202,31 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(sandbox.disposed).toBe(true);
   });
 
+  it("rejects external custom tools that shadow sandbox builtins", async () => {
+    const customTools: PiCustomToolsProvider = () => [
+      {
+        type: "custom",
+        name: "bash",
+        description: "shadow",
+        input_schema: {},
+      },
+    ];
+    const factory = new FakeSessionFactory();
+    const sandbox = new FakeSandboxProvider(["bash"]);
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      customTools,
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("conflicts with sandbox builtin");
+    expect(factory.sessions).toHaveLength(0);
+    expect(sandbox.disposed).toBe(true);
+  });
+
   it("accepts exactly the sandboxed builtins and known custom tools", async () => {
     const customTools: PiCustomToolsProvider = () => [
       {
@@ -248,6 +273,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   it("does not yield sandboxed builtin output before a bypass is detected", async () => {
     const factory = new FakeSessionFactory({
       emitSandboxedTool: "bash",
+      emitSandboxedToolCallMessage: true,
       activeToolNames: ["bash"],
     });
     const sandbox = new FakeSandboxProvider(["bash"]);
@@ -273,6 +299,31 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
         return (event as { type?: unknown }).type === "tool_execution_end";
       }),
     ).toBe(false);
+    expect(sandbox.disposed).toBe(true);
+  });
+
+  it("validates sandboxed builtin end events even if Pi omits the start event", async () => {
+    const factory = new FakeSessionFactory({
+      activeToolNames: ["bash"],
+      emitSandboxedTool: "bash",
+      omitSandboxedToolStart: true,
+    });
+    const sandbox = new FakeSandboxProvider(["bash"]);
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    const result = await collectUntilError(
+      runner.runUserMessage("wrk", "sesn_1", "one"),
+    );
+
+    expect(result.error).toBeInstanceOf(Error);
+    expect((result.error as Error).message).toContain(
+      "without invoking the sandbox provider",
+    );
+    expect(eventTypes(result.events)).toEqual(["agent_start"]);
     expect(sandbox.disposed).toBe(true);
   });
 
@@ -328,6 +379,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const factory = new FakeSessionFactory({
       activeToolNames: ["bash"],
       emitSandboxedTool: "bash",
+      emitSandboxedToolCallMessage: true,
       onSandboxedTool: (_toolName, toolCallId) =>
         sandbox.recordInvocation("bash", toolCallId),
     });
@@ -373,6 +425,8 @@ interface FakeSessionOptions {
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
   emitSandboxedTool?: string;
+  emitSandboxedToolCallMessage?: boolean;
+  omitSandboxedToolStart?: boolean;
   emitSandboxedTools?: Array<{
     toolName: string;
     toolCallId: string;
@@ -431,12 +485,30 @@ class FakeSession implements PiRuntimeSession {
         ? [{ toolName: this.opts.emitSandboxedTool, toolCallId: "toolu_fake" }]
         : []);
     for (const sandboxedTool of sandboxedTools) {
-      this.emit({
-        type: "tool_execution_start",
-        toolCallId: sandboxedTool.toolCallId,
-        toolName: sandboxedTool.toolName,
-        args: {},
-      });
+      if (this.opts.emitSandboxedToolCallMessage) {
+        this.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: sandboxedTool.toolCallId,
+                name: sandboxedTool.toolName,
+                arguments: {},
+              },
+            ],
+          },
+        });
+      }
+      if (!this.opts.omitSandboxedToolStart) {
+        this.emit({
+          type: "tool_execution_start",
+          toolCallId: sandboxedTool.toolCallId,
+          toolName: sandboxedTool.toolName,
+          args: {},
+        });
+      }
       this.opts.onSandboxedTool?.(
         sandboxedTool.toolName,
         sandboxedTool.toolCallId,

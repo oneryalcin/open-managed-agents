@@ -148,7 +148,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     const queue: unknown[] = [];
     const gatedEvents: unknown[] = [];
-    let activeSandboxedToolCalls = 0;
+    const activeSandboxedToolCalls = new Map<
+      string,
+      SandboxedBuiltinToolName
+    >();
     let done = false;
     let failure: unknown;
     let becameFollowUp = false;
@@ -210,32 +213,47 @@ export class PiSessionRunner implements RuntimeEventRunner {
           continue;
         }
         const event = queue.shift();
+        const sandboxedToolCalls = sandboxedToolCallsInMessage(
+          handle.sandbox,
+          event,
+        );
+        if (sandboxedToolCalls.length > 0) {
+          for (const call of sandboxedToolCalls) {
+            activeSandboxedToolCalls.set(call.toolCallId, call.toolName);
+          }
+          gatedEvents.push(event);
+          continue;
+        }
+
         const sandboxedStart = sandboxedToolEvent(
           handle.sandbox,
           event,
           "tool_execution_start",
         );
         if (sandboxedStart) {
-          activeSandboxedToolCalls += 1;
+          activeSandboxedToolCalls.set(
+            sandboxedStart.toolCallId,
+            sandboxedStart.toolName,
+          );
           gatedEvents.push(event);
           continue;
         }
 
-        if (activeSandboxedToolCalls > 0) {
+        const sandboxedEnd = sandboxedToolEvent(
+          handle.sandbox,
+          event,
+          "tool_execution_end",
+        );
+        if (activeSandboxedToolCalls.size > 0) {
           gatedEvents.push(event);
-          const sandboxedEnd = sandboxedToolEvent(
-            handle.sandbox,
-            event,
-            "tool_execution_end",
-          );
           if (sandboxedEnd) {
             assertSandboxProviderHandledToolCall({
               sandbox: handle.sandbox,
               toolName: sandboxedEnd.toolName,
               toolCallId: sandboxedEnd.toolCallId,
             });
-            activeSandboxedToolCalls -= 1;
-            if (activeSandboxedToolCalls === 0) {
+            activeSandboxedToolCalls.delete(sandboxedEnd.toolCallId);
+            if (activeSandboxedToolCalls.size === 0) {
               const releasableEvents = gatedEvents.splice(0);
               for (const releasableEvent of releasableEvents) {
                 yield releasableEvent;
@@ -245,12 +263,22 @@ export class PiSessionRunner implements RuntimeEventRunner {
           continue;
         }
 
+        if (sandboxedEnd) {
+          assertSandboxProviderHandledToolCall({
+            sandbox: handle.sandbox,
+            toolName: sandboxedEnd.toolName,
+            toolCallId: sandboxedEnd.toolCallId,
+          });
+          yield event;
+          continue;
+        }
+
         yield event;
       }
 
       await run;
       if (failure) throw failure;
-      if (activeSandboxedToolCalls > 0 || gatedEvents.length > 0) {
+      if (activeSandboxedToolCalls.size > 0 || gatedEvents.length > 0) {
         throw new Error(
           "Sandboxed builtin tool execution ended without validation",
         );
@@ -296,6 +324,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
             workspaceId,
             sessionId,
           );
+          assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
           session =
             this.sessionFactory === undefined
               ? await this.createPiSession(workspaceId, sessionId, sandbox)
@@ -430,6 +459,17 @@ function assertActiveToolSurface(
   }
 }
 
+function assertNoSandboxCustomToolNameCollision(
+  sandbox: SandboxProvider | undefined,
+  customToolNames: ReadonlySet<string>,
+): void {
+  if (!sandbox) return;
+  for (const name of customToolNames) {
+    if (!sandbox.toolNames.has(name as SandboxedBuiltinToolName)) continue;
+    throw new Error(`Custom tool name conflicts with sandbox builtin: ${name}`);
+  }
+}
+
 function updateRunning(handle: RuntimeHandle, event: unknown): void {
   if (typeof event !== "object" || event === null) return;
   const type = (event as { type?: unknown }).type;
@@ -463,6 +503,33 @@ function sandboxedToolEvent(
     toolName: typed.toolName as SandboxedBuiltinToolName,
     toolCallId: typed.toolCallId,
   };
+}
+
+function sandboxedToolCallsInMessage(
+  sandbox: SandboxProvider | undefined,
+  event: unknown,
+): Array<{ toolName: SandboxedBuiltinToolName; toolCallId: string }> {
+  if (!sandbox || typeof event !== "object" || event === null) return [];
+  const typed = event as { type?: unknown; message?: unknown };
+  if (typed.type !== "message_end") return [];
+  if (typeof typed.message !== "object" || typed.message === null) return [];
+  const message = typed.message as { role?: unknown; content?: unknown };
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
+  const out: Array<{ toolName: SandboxedBuiltinToolName; toolCallId: string }> = [];
+  for (const block of message.content) {
+    if (typeof block !== "object" || block === null) continue;
+    const toolCall = block as { type?: unknown; id?: unknown; name?: unknown };
+    if (toolCall.type !== "toolCall") continue;
+    if (typeof toolCall.id !== "string" || typeof toolCall.name !== "string") {
+      continue;
+    }
+    if (!sandbox.toolNames.has(toolCall.name as never)) continue;
+    out.push({
+      toolName: toolCall.name as SandboxedBuiltinToolName,
+      toolCallId: toolCall.id,
+    });
+  }
+  return out;
 }
 
 function assertSandboxProviderHandledToolCall(opts: {
