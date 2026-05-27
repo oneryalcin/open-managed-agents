@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   assertInsideDockerWorkspace,
   buildDockerExecShellArgs,
+  buildDockerFileAccessCommand,
+  buildDockerGlobEnumerationCommand,
+  buildDockerMkdirCommand,
+  buildDockerReadFileCommand,
+  buildDockerReaddirCommand,
   buildDockerRunArgs,
+  buildDockerStatCommand,
+  buildDockerWriteFileCommand,
   createDockerSandboxProvider,
   filterDockerEnv,
   reapDockerSandboxContainers,
@@ -64,6 +71,45 @@ describe("Docker sandbox provider command construction", () => {
     ]);
   });
 
+  it("builds file-operation commands as data", () => {
+    expect(buildDockerFileAccessCommand("/workspace/a.txt", "read")).toEqual({
+      script: "test -r \"$1\" -a -f \"$1\"",
+      args: ["/workspace/a.txt"],
+    });
+    expect(buildDockerFileAccessCommand("/workspace/a.txt", "edit")).toEqual({
+      script: "test -r \"$1\" -a -w \"$1\" -a -f \"$1\"",
+      args: ["/workspace/a.txt"],
+    });
+    expect(buildDockerReadFileCommand("/workspace/a.txt")).toEqual({
+      script: "cat \"$1\"",
+      args: ["/workspace/a.txt"],
+    });
+    expect(buildDockerWriteFileCommand("/workspace/a.txt", "hello")).toEqual({
+      script: "cat > \"$1\"",
+      args: ["/workspace/a.txt"],
+      input: "hello",
+      interactive: true,
+    });
+    expect(buildDockerMkdirCommand("/workspace/src")).toEqual({
+      script: "mkdir -p \"$1\"",
+      args: ["/workspace/src"],
+    });
+    expect(buildDockerStatCommand("/workspace/src")).toEqual({
+      script:
+        "if [ -d \"$1\" ]; then printf directory; elif [ -e \"$1\" ]; then printf file; else exit 1; fi",
+      args: ["/workspace/src"],
+    });
+    expect(buildDockerReaddirCommand("/workspace/src")).toEqual({
+      script: "ls -1A \"$1\"",
+      args: ["/workspace/src"],
+    });
+    expect(buildDockerGlobEnumerationCommand("/workspace")).toEqual({
+      script:
+        "cd \"$1\" && find . -type f | sed 's#^./##' | sort | head -n 10000",
+      args: ["/workspace"],
+    });
+  });
+
   it("keeps Docker paths inside the workspace", () => {
     expect(assertInsideDockerWorkspace("/workspace/src/../a.txt")).toBe(
       "/workspace/a.txt",
@@ -99,7 +145,19 @@ describe("Docker sandbox provider integration", () => {
       operationTimeoutMs: 15_000,
     });
     try {
-      expect(containersForLabel(label)).toHaveLength(1);
+      const [containerId] = containersForLabel(label);
+      expect(containerId).toBeDefined();
+      expect(inspectContainerIsolation(containerId)).toMatchObject({
+        networkMode: "none",
+        readOnlyRootfs: true,
+        capDrop: ["ALL"],
+        noNewPrivileges: true,
+        user: "65534:65534",
+        hasDockerSocketBind: false,
+        workspaceTmpfs: true,
+        pidsLimit: 64,
+        memory: 134217728,
+      });
 
       await provider.operations.write.mkdir("/workspace/src");
       await provider.operations.write.writeFile(
@@ -114,6 +172,17 @@ describe("Docker sandbox provider integration", () => {
       await expect(
         provider.operations.read.readFile("/workspace/src/index.ts"),
       ).resolves.toEqual(Buffer.from("export const value = 1;\n"));
+      await provider.operations.edit.access("/workspace/src/index.ts");
+      await expect(
+        provider.operations.edit.readFile("/workspace/src/index.ts"),
+      ).resolves.toEqual(Buffer.from("export const value = 1;\n"));
+      await provider.operations.edit.writeFile(
+        "/workspace/src/index.ts",
+        "export const value = 2;\n",
+      );
+      await expect(
+        provider.operations.read.readFile("/workspace/src/index.ts"),
+      ).resolves.toEqual(Buffer.from("export const value = 2;\n"));
       await expect(provider.operations.ls.readdir("/workspace")).resolves.toEqual([
         "README.md",
         "src",
@@ -145,6 +214,7 @@ describe("Docker sandbox provider integration", () => {
         }),
       ).resolves.toEqual({ exitCode: 7 });
       expect(provider.invocations.byTool.bash).toBe(2);
+      expect(provider.invocations.byTool.edit).toBe(3);
       expect(provider.invocations.byTool.find).toBe(1);
     } finally {
       provider.dispose();
@@ -232,6 +302,55 @@ function containersForLabel(label: string): string[] {
   );
   if (result.status !== 0) return [];
   return result.stdout.split("\n").filter(Boolean);
+}
+
+function inspectContainerIsolation(containerId: string): {
+  networkMode: string | undefined;
+  readOnlyRootfs: boolean | undefined;
+  capDrop: string[] | undefined;
+  noNewPrivileges: boolean;
+  user: string | undefined;
+  hasDockerSocketBind: boolean;
+  workspaceTmpfs: boolean;
+  pidsLimit: number | undefined;
+  memory: number | undefined;
+} {
+  const result = spawnSync(
+    "docker",
+    ["inspect", containerId, "--format", "{{json .}}"],
+    { encoding: "utf8" },
+  );
+  expect(result.status).toBe(0);
+  const inspect = JSON.parse(result.stdout) as {
+    Config?: { User?: string };
+    HostConfig?: {
+      NetworkMode?: string;
+      ReadonlyRootfs?: boolean;
+      CapDrop?: string[];
+      SecurityOpt?: string[];
+      Binds?: string[] | null;
+      Tmpfs?: Record<string, string>;
+      PidsLimit?: number;
+      Memory?: number;
+    };
+  };
+  return {
+    networkMode: inspect.HostConfig?.NetworkMode,
+    readOnlyRootfs: inspect.HostConfig?.ReadonlyRootfs,
+    capDrop: inspect.HostConfig?.CapDrop,
+    noNewPrivileges:
+      inspect.HostConfig?.SecurityOpt?.includes("no-new-privileges") ?? false,
+    user: inspect.Config?.User,
+    hasDockerSocketBind:
+      inspect.HostConfig?.Binds?.some((bind) =>
+        bind.includes("/var/run/docker.sock"),
+      ) ?? false,
+    workspaceTmpfs: Object.keys(inspect.HostConfig?.Tmpfs ?? {}).includes(
+      "/workspace",
+    ),
+    pidsLimit: inspect.HostConfig?.PidsLimit,
+    memory: inspect.HostConfig?.Memory,
+  };
 }
 
 async function containerHasSleepProcess(label: string): Promise<boolean> {

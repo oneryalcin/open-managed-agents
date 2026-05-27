@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-05-27T17:24:08.459Z",
+  "generated_at": "2026-05-27T17:48:39.884Z",
   "image": "alpine:3.19",
-  "container_name": "oma-e2-probe-1779902636373-hq79lv",
+  "container_name": "oma-e2-probe-1779904107307-s5ctnk",
   "docker_available": true,
   "container_started": true,
   "cleanup_removed_container": true,
@@ -24,7 +24,7 @@
   },
   "timeout": {
     "command_exitCode": 137,
-    "durationMs": 3069,
+    "durationMs": 3046,
     "leftover_sleep_processes": ""
   },
   "abort": {
@@ -45,9 +45,9 @@
     },
     "glob_boundary": {
       "corpus_file_count": 90,
-      "single_exec_find_ms": 58,
+      "single_exec_find_ms": 56,
       "host_orchestrated_dir_execs": 50,
-      "host_orchestrated_ms": 2391,
+      "host_orchestrated_ms": 2480,
       "list_parity": true,
       "pattern_results": [
         {

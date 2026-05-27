@@ -43,6 +43,7 @@ export interface DockerSandboxOptions {
   pidsLimit?: string;
   tmpfsSize?: string;
   extraLabels?: Record<string, string>;
+  reapStaleContainersOlderThanMs?: number;
 }
 
 export interface DockerSandboxReaperOptions {
@@ -79,11 +80,27 @@ interface DockerExecResult {
   exitCode: number | null;
 }
 
+export interface DockerShellCommand {
+  script: string;
+  args: string[];
+  input?: Buffer | string;
+  interactive?: boolean;
+}
+
 export function createDockerSandboxProviderFactory(
   opts: DockerSandboxOptions = {},
 ): SandboxProviderFactory {
-  return async (workspaceId, sessionId) =>
-    createDockerSandboxProvider(workspaceId, sessionId, opts);
+  let swept = false;
+  return async (workspaceId, sessionId) => {
+    if (!swept && opts.reapStaleContainersOlderThanMs !== undefined) {
+      swept = true;
+      await reapDockerSandboxContainers({
+        dockerCommand: opts.dockerCommand,
+        olderThanMs: opts.reapStaleContainersOlderThanMs,
+      });
+    }
+    return createDockerSandboxProvider(workspaceId, sessionId, opts);
+  };
 }
 
 export async function createDockerSandboxProvider(
@@ -124,84 +141,109 @@ export async function createDockerSandboxProvider(
   const activeDockerExecPids = new Set<number>();
 
   const dockerShell = (
-    script: string,
-    args: string[],
+    command: DockerShellCommand,
     execOpts: DockerExecOptions = {},
   ) =>
     dockerChecked(
       resolved.dockerCommand,
-      buildDockerExecShellArgs(containerName, script, args, {
-        interactive: execOpts.input !== undefined,
+      buildDockerExecShellArgs(containerName, command.script, command.args, {
+        interactive: command.interactive ?? command.input !== undefined,
         workdir: resolved.workspacePath,
       }),
       {
         ...execOpts,
+        input: execOpts.input ?? command.input,
         activePids: activeDockerExecPids,
         timeoutMs: execOpts.timeoutMs ?? resolved.operationTimeoutMs,
       },
     );
+  const dockerExists = async (absolutePath: string): Promise<boolean> => {
+    const command = buildDockerExistsCommand(absolutePath);
+    const result = await dockerExec(
+      resolved.dockerCommand,
+      buildDockerExecShellArgs(containerName, command.script, command.args, {
+        workdir: resolved.workspacePath,
+      }),
+      {
+        activePids: activeDockerExecPids,
+        timeoutMs: resolved.operationTimeoutMs,
+      },
+    );
+    return result.exitCode === 0;
+  };
 
   const readOps: ReadOperations = {
     access: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "read");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      await dockerShell("test -r \"$1\" -a -f \"$1\"", [path]);
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
+      );
+      await dockerShell(buildDockerFileAccessCommand(path, "read"));
     },
     readFile: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "read");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      return (await dockerShell("cat \"$1\"", [path])).stdout;
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
+      );
+      return (await dockerShell(buildDockerReadFileCommand(path))).stdout;
     },
   };
   const writeOps: WriteOperations = {
     mkdir: async (dir) => {
       recordSandboxInvocation(invocations, disposed, "write");
       const path = assertInsideDockerWorkspace(dir, resolved.workspacePath);
-      await dockerShell("mkdir -p \"$1\"", [path]);
+      await dockerShell(buildDockerMkdirCommand(path));
     },
     writeFile: async (absolutePath, content) => {
       recordSandboxInvocation(invocations, disposed, "write");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      await dockerShell("cat > \"$1\"", [path], { input: content });
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
+      );
+      await dockerShell(buildDockerWriteFileCommand(path, content));
     },
   };
   const editOps: EditOperations = {
     access: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "edit");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      await dockerShell("test -r \"$1\" -a -w \"$1\" -a -f \"$1\"", [path]);
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
+      );
+      await dockerShell(buildDockerFileAccessCommand(path, "edit"));
     },
     readFile: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "edit");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      return (await dockerShell("cat \"$1\"", [path])).stdout;
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
+      );
+      return (await dockerShell(buildDockerReadFileCommand(path))).stdout;
     },
     writeFile: async (absolutePath, content) => {
       recordSandboxInvocation(invocations, disposed, "edit");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      await dockerShell("cat > \"$1\"", [path], { input: content });
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
+      );
+      await dockerShell(buildDockerWriteFileCommand(path, content));
     },
   };
   const findOps: FindOperations = {
     exists: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "find");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      const result = await dockerExec(
-        resolved.dockerCommand,
-        buildDockerExecShellArgs(containerName, "test -e \"$1\"", [path], {
-          workdir: resolved.workspacePath,
-        }),
-        { activePids: activeDockerExecPids, timeoutMs: resolved.operationTimeoutMs },
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
       );
-      return result.exitCode === 0;
+      return dockerExists(path);
     },
     glob: async (pattern, cwd, options) => {
       recordSandboxInvocation(invocations, disposed, "find");
       const root = assertInsideDockerWorkspace(cwd, resolved.workspacePath);
-      const result = await dockerShell(
-        "cd \"$1\" && find . -type f | sed 's#^./##' | sort | head -n 10000",
-        [root],
-      );
+      const result = await dockerShell(buildDockerGlobEnumerationCommand(root));
       const files = result.stdout
         .toString("utf8")
         .split("\n")
@@ -215,30 +257,29 @@ export async function createDockerSandboxProvider(
   const lsOps: LsOperations = {
     exists: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "ls");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      const result = await dockerExec(
-        resolved.dockerCommand,
-        buildDockerExecShellArgs(containerName, "test -e \"$1\"", [path], {
-          workdir: resolved.workspacePath,
-        }),
-        { activePids: activeDockerExecPids, timeoutMs: resolved.operationTimeoutMs },
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
       );
-      return result.exitCode === 0;
+      return dockerExists(path);
     },
     stat: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "ls");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      const result = await dockerShell(
-        "if [ -d \"$1\" ]; then printf directory; elif [ -e \"$1\" ]; then printf file; else exit 1; fi",
-        [path],
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
       );
+      const result = await dockerShell(buildDockerStatCommand(path));
       const kind = result.stdout.toString("utf8");
       return { isDirectory: () => kind === "directory" };
     },
     readdir: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "ls");
-      const path = assertInsideDockerWorkspace(absolutePath, resolved.workspacePath);
-      const result = await dockerShell("ls -1A \"$1\"", [path]);
+      const path = assertInsideDockerWorkspace(
+        absolutePath,
+        resolved.workspacePath,
+      );
+      const result = await dockerShell(buildDockerReaddirCommand(path));
       return result.stdout.toString("utf8").split("\n").filter(Boolean);
     },
   };
@@ -368,6 +409,70 @@ export function buildDockerExecShellArgs(
   }
   out.push(containerName, "sh", "-lc", script, "sh", ...args);
   return out;
+}
+
+export function buildDockerFileAccessCommand(
+  absolutePath: string,
+  mode: "read" | "edit",
+): DockerShellCommand {
+  return {
+    script:
+      mode === "read"
+        ? "test -r \"$1\" -a -f \"$1\""
+        : "test -r \"$1\" -a -w \"$1\" -a -f \"$1\"",
+    args: [absolutePath],
+  };
+}
+
+export function buildDockerReadFileCommand(
+  absolutePath: string,
+): DockerShellCommand {
+  return { script: "cat \"$1\"", args: [absolutePath] };
+}
+
+export function buildDockerWriteFileCommand(
+  absolutePath: string,
+  content: Buffer | string,
+): DockerShellCommand {
+  return {
+    script: "cat > \"$1\"",
+    args: [absolutePath],
+    input: content,
+    interactive: true,
+  };
+}
+
+export function buildDockerMkdirCommand(dir: string): DockerShellCommand {
+  return { script: "mkdir -p \"$1\"", args: [dir] };
+}
+
+export function buildDockerExistsCommand(
+  absolutePath: string,
+): DockerShellCommand {
+  return { script: "test -e \"$1\"", args: [absolutePath] };
+}
+
+export function buildDockerStatCommand(absolutePath: string): DockerShellCommand {
+  return {
+    script:
+      "if [ -d \"$1\" ]; then printf directory; elif [ -e \"$1\" ]; then printf file; else exit 1; fi",
+    args: [absolutePath],
+  };
+}
+
+export function buildDockerReaddirCommand(
+  absolutePath: string,
+): DockerShellCommand {
+  return { script: "ls -1A \"$1\"", args: [absolutePath] };
+}
+
+export function buildDockerGlobEnumerationCommand(
+  root: string,
+): DockerShellCommand {
+  return {
+    script: "cd \"$1\" && find . -type f | sed 's#^./##' | sort | head -n 10000",
+    args: [root],
+  };
 }
 
 export function assertInsideDockerWorkspace(

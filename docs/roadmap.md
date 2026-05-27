@@ -621,6 +621,8 @@ Design constraints coming out of E.0:
 - Docker-local uses one long-lived container per session/provider handle and `docker exec` per Operation. Do not create a container per tool call.
 - Docker-local starts with exec-per-op file Operations inside the container. For `FindOperations.glob`, use one in-container enumeration and shared JS matching, not one Docker exec per directory. Defer a persistent fs bridge until we have evidence that exec-per-op is too slow or too limited.
 - Docker-local must not mount the host Docker socket, expose arbitrary bind mounts, inherit host env, or fall back to host execution.
+- Docker-local command construction must stay testable without Docker. Keep container args, exec args, and per-file-operation shell snippets as pure builders with unit coverage; use Docker-gated tests only for daemon behavior.
+- Docker-local providers may run a one-time startup sweep for stale labelled `open-managed-agents` containers. Do not sweep on every session creation; an age-based sweep during normal operation can kill older active sessions.
 - Host passthrough is not an isolation boundary and cannot be enabled for untrusted prompts without an explicit unsafe opt-in.
 - Teardown must run on every path that currently evicts or closes a Pi session: idle TTL, hard runtime error, runner close, and future `DELETE /v1/sessions` / `user.interrupt` cleanup.
 - Provider failures must preserve ADR 0007's caller-safe/developer-only error split: public events/errors get safe messages; provider IDs, stack traces, and internal paths stay in logs.
