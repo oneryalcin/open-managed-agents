@@ -19,8 +19,11 @@ OMA_* deployment config
 ```
 
 It does not prove full Anthropic Managed Agents tutorial parity yet. File
-resources, permission prompts, durable custom-tool recovery, and managed
-remote providers are still tracked separately.
+resources are supported on the Docker-local path, but this smoke does not
+exercise uploads or `/mnt/session/uploads` materialization; use
+`scratch/27-file-resource-docker-materialization.ts` for that path. Permission
+prompts, durable custom-tool recovery, and managed remote providers are still
+tracked separately.
 
 ## Prerequisites
 
