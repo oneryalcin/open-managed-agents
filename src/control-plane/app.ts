@@ -12,6 +12,10 @@ import { sessionEventsRoutes } from "./events/routes.ts";
 import { DefaultSessionEventsService } from "./events/service.ts";
 import { SessionEventBroadcaster } from "./events/broadcaster.ts";
 import { EventStore } from "./events/store.ts";
+import { filesRoutes } from "./files/routes.ts";
+import { DefaultFileService } from "./files/service.ts";
+import { InMemoryFileStorage } from "./files/store.ts";
+import type { FileService } from "./files/types.ts";
 import type {
   RuntimeEventRunner,
   RuntimeEventTranslator,
@@ -50,6 +54,7 @@ interface AppEnv {
 export interface ControlPlaneServices {
   agents: AgentService;
   environments: EnvironmentService;
+  files?: FileService;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
 }
@@ -67,6 +72,13 @@ export interface DeploymentControlPlaneAppOptions {
 
 export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const defaultBodyLimit = bodyLimit({
+    maxSize: MAX_REQUEST_BODY_BYTES,
+    onError: (c) => {
+      const err = requestTooLarge();
+      return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+    },
+  });
 
   app.use("*", async (c, next) => {
     const reqId = requestId();
@@ -75,16 +87,13 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     await next();
   });
 
-  app.use(
-    "*",
-    bodyLimit({
-      maxSize: MAX_REQUEST_BODY_BYTES,
-      onError: (c) => {
-        const err = requestTooLarge();
-        return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
-      },
-    }),
-  );
+  app.use("*", async (c, next) => {
+    if (c.req.method === "POST" && c.req.path === "/v1/files") {
+      await next();
+      return;
+    }
+    return defaultBodyLimit(c, next);
+  });
 
   app.use("*", async (c, next) => {
     c.set("betaFeatures", parseBetaFeatures(c.req.header("anthropic-beta")));
@@ -93,6 +102,10 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
 
   app.route("/v1/agents", agentsRoutes(services.agents));
   app.route("/v1/environments", environmentsRoutes(services.environments));
+  app.route(
+    "/v1/files",
+    filesRoutes(services.files ?? new DefaultFileService(new InMemoryFileStorage())),
+  );
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route("/v1/sessions/:sessionId/events", sessionEventsRoutes(services.sessionEvents));
 
@@ -129,10 +142,12 @@ export function createInMemoryControlPlaneApp(
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
+  const fileStorage = new InMemoryFileStorage();
   const broadcaster = new SessionEventBroadcaster(eventStore);
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore),
     environments: new DefaultEnvironmentService(environmentStore),
+    files: new DefaultFileService(fileStorage),
     sessions: new DefaultSessionService(
       sessionStore,
       agentStore,
