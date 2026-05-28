@@ -698,7 +698,12 @@ Proposed config shape:
 type SandboxProviderSelection =
   | { type: "none" } // no builtin execution provider; builtin tools unavailable
   | { type: "host-passthrough"; unsafeAllowHostPassthrough: true; envAllowlist?: string[] }
-  | { type: "docker-local"; envAllowlist?: string[]; operationTimeoutMs?: number };
+  | {
+      type: "docker-local";
+      envAllowlist?: string[];
+      operationTimeoutMs?: number;
+      reapStaleContainersOlderThanMs?: number;
+    };
 ```
 
 Implementation rules:
@@ -709,7 +714,7 @@ Implementation rules:
 4. Reject `host-passthrough` unless the deployment allows unsafe passthrough and `unsafeAllowHostPassthrough: true` is present on the selection.
 5. Reject `docker-local` unless the deployment explicitly enables it. Do not make it the implicit default and do not silently disable it.
 6. If a session exposes builtin tools with `{type: "none"}` or no provider, return a caller-safe configuration error at session/runtime construction. Do not wait until the model first tries a builtin tool.
-7. Keep provider-specific options narrow: env allowlist and operation timeout only. Network, mounts, snapshots, durable state, and egress policy are later provider slices.
+7. Keep provider-specific options narrow: env allowlist, operation timeout, and Docker-local stale-container reaping only. Network, mounts, snapshots, durable state, and egress policy are later provider slices.
 8. Do not persist provider selection on the agent. If session persistence needs to remember it for continuity, persist it as session/runtime config, not agent config.
 9. Reject accepted-but-ignored deployment config. For example, `allowDockerLocal` without `provider: "docker-local"` should fail configuration validation instead of being silently ignored.
 

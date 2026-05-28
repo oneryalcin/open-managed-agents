@@ -46,7 +46,7 @@ Working today:
 
 Still missing before claiming Anthropic tutorial parity:
 
-- `DELETE /v1/sessions`, archive, and interrupt cleanup;
+- interrupt cleanup;
 - file resources and session `resources`;
 - permission/evaluated tool confirmations;
 - durable recovery for pending custom-tool waits;

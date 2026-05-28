@@ -15,6 +15,7 @@ export type SandboxProviderSelection =
       type: "docker-local";
       envAllowlist?: string[];
       operationTimeoutMs?: number;
+      reapStaleContainersOlderThanMs?: number;
     };
 
 export interface SandboxProviderSelectionResolverOptions {
@@ -56,6 +57,7 @@ export function parseSandboxProviderSelection(
         "type",
         "envAllowlist",
         "operationTimeoutMs",
+        "reapStaleContainersOlderThanMs",
         "unsafeAllowHostPassthrough",
       ]);
       if (obj.unsafeAllowHostPassthrough !== undefined) {
@@ -67,6 +69,7 @@ export function parseSandboxProviderSelection(
         type,
         ...optionalEnvAllowlist(obj),
         ...optionalOperationTimeoutMs(obj),
+        ...optionalReapStaleContainersOlderThanMs(obj),
       };
     }
     default:
@@ -112,6 +115,8 @@ export function resolveSandboxProviderFactory(
     return createDockerSandboxProviderFactory({
       envAllowlist: selection.envAllowlist,
       operationTimeoutMs: selection.operationTimeoutMs,
+      reapStaleContainersOlderThanMs:
+        selection.reapStaleContainersOlderThanMs,
     });
   }
   const _exhaustive: never = selection;
@@ -150,15 +155,29 @@ function optionalEnvAllowlist(
 function optionalOperationTimeoutMs(
   obj: Record<string, unknown>,
 ): { operationTimeoutMs?: number } {
-  if (obj.operationTimeoutMs === undefined) return {};
+  return optionalPositiveIntegerField(obj, "operationTimeoutMs");
+}
+
+function optionalReapStaleContainersOlderThanMs(
+  obj: Record<string, unknown>,
+): { reapStaleContainersOlderThanMs?: number } {
+  return optionalPositiveIntegerField(obj, "reapStaleContainersOlderThanMs");
+}
+
+function optionalPositiveIntegerField<T extends string>(
+  obj: Record<string, unknown>,
+  field: T,
+): { [K in T]?: number } {
+  if (obj[field] === undefined) return {};
+  const value = obj[field];
   if (
-    typeof obj.operationTimeoutMs !== "number" ||
-    !Number.isSafeInteger(obj.operationTimeoutMs) ||
-    obj.operationTimeoutMs <= 0
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0
   ) {
-    throw new Error("`operationTimeoutMs` must be a positive integer");
+    throw new Error(`\`${field}\` must be a positive integer`);
   }
-  return { operationTimeoutMs: obj.operationTimeoutMs };
+  return { [field]: value } as { [K in T]?: number };
 }
 
 function rejectUnknownFields(

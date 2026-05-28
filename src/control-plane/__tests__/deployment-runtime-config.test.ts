@@ -59,6 +59,7 @@ describe("deployment runtime config", () => {
       OMA_ALLOW_DOCKER_LOCAL: "true",
       OMA_SANDBOX_ENV_ALLOWLIST: "PATH,HOME",
       OMA_SANDBOX_OPERATION_TIMEOUT_MS: "2500",
+      OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS: "60000",
     });
 
     expect(config).toEqual({
@@ -66,12 +67,25 @@ describe("deployment runtime config", () => {
         type: "docker-local",
         envAllowlist: ["PATH", "HOME"],
         operationTimeoutMs: 2500,
+        reapStaleContainersOlderThanMs: 60000,
       },
       sandboxProviderSelectionOptions: {
         allowDockerLocal: true,
       },
     });
     expect(() => createDeploymentPiSessionRunner(config)).not.toThrow();
+  });
+
+  it("enables the Docker-local orphan reaper by default", () => {
+    const config = parseDeploymentRuntimeConfigFromEnv({
+      OMA_SANDBOX_PROVIDER: "docker-local",
+      OMA_ALLOW_DOCKER_LOCAL: "true",
+    });
+
+    expect(config.sandboxProviderSelection).toEqual({
+      type: "docker-local",
+      reapStaleContainersOlderThanMs: 86_400_000,
+    });
   });
 
   it("does not let runner construction options replace deployment provider config", () => {
@@ -122,6 +136,12 @@ describe("deployment runtime config", () => {
 
     expect(() =>
       parseDeploymentRuntimeConfigFromEnv({
+        OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS: "60000",
+      }),
+    ).toThrow("OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS is ignored");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
         OMA_SANDBOX_PROVIDER: "none",
         OMA_SANDBOX_ENV_ALLOWLIST: "PATH",
       }),
@@ -134,6 +154,16 @@ describe("deployment runtime config", () => {
         OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT: "/tmp",
       }),
     ).toThrow("OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT is ignored");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "host-passthrough",
+        OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH: "true",
+        OMA_ALLOW_UNSAFE_HOST_PASSTHROUGH: "true",
+        OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT: "/tmp",
+        OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS: "60000",
+      }),
+    ).toThrow("OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS is ignored");
 
     expect(() =>
       validateDeploymentRuntimeConfig({
@@ -167,6 +197,16 @@ describe("deployment runtime config", () => {
         OMA_SANDBOX_OPERATION_TIMEOUT_MS: "2.5",
       }),
     ).toThrow("OMA_SANDBOX_OPERATION_TIMEOUT_MS must be a positive integer");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "docker-local",
+        OMA_ALLOW_DOCKER_LOCAL: "true",
+        OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS: "0",
+      }),
+    ).toThrow(
+      "OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS must be a positive integer",
+    );
   });
 
   it("deployment app fails provider gates at construction", () => {
