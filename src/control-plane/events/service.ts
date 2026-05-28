@@ -51,6 +51,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
   >();
   private readonly closedSessions = new Set<string>();
   private readonly deletedSessions = new Set<string>();
+  private readonly activeRuntimeTasks = new Map<string, number>();
 
   constructor(
     private readonly events: SessionEventStore,
@@ -120,6 +121,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ]);
     }
     await this.closeRuntimeBestEffort(workspaceId, sessionId);
+    this.retireLifecycleGuardsIfIdle(sessionId);
   }
 
   async deleteSession(
@@ -135,6 +137,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     this.deletedSessions.add(sessionId);
     await this.closeRuntimeBestEffort(workspaceId, sessionId);
     this.events.deleteForSession(sessionId);
+    this.retireLifecycleGuardsIfIdle(sessionId);
   }
 
   private async closeRuntimeBestEffort(
@@ -237,7 +240,34 @@ export class DefaultSessionEventsService implements SessionEventsService {
       .filter((text): text is string => text !== undefined);
     if (prompts.length === 0) return;
 
-    void this.runRuntimePrompts(workspaceId, sessionId, prompts, signal);
+    this.beginRuntimeTask(sessionId);
+    void this.runRuntimePrompts(workspaceId, sessionId, prompts, signal)
+      .finally(() => {
+        this.finishRuntimeTask(sessionId);
+      });
+  }
+
+  private beginRuntimeTask(sessionId: string): void {
+    this.activeRuntimeTasks.set(
+      sessionId,
+      (this.activeRuntimeTasks.get(sessionId) ?? 0) + 1,
+    );
+  }
+
+  private finishRuntimeTask(sessionId: string): void {
+    const remaining = (this.activeRuntimeTasks.get(sessionId) ?? 1) - 1;
+    if (remaining > 0) {
+      this.activeRuntimeTasks.set(sessionId, remaining);
+      return;
+    }
+    this.activeRuntimeTasks.delete(sessionId);
+    this.retireLifecycleGuardsIfIdle(sessionId);
+  }
+
+  private retireLifecycleGuardsIfIdle(sessionId: string): void {
+    if ((this.activeRuntimeTasks.get(sessionId) ?? 0) > 0) return;
+    this.closedSessions.delete(sessionId);
+    this.deletedSessions.delete(sessionId);
   }
 
   private async runRuntimePrompts(

@@ -187,9 +187,10 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.disposed).toBe(true);
     gate.resolve();
     await run;
-    await expect(
-      collect(runner.runUserMessage("wrk", "sesn_1", "two")),
-    ).rejects.toThrow("Runtime session sesn_1 is closed");
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    expect(factory.sessions).toHaveLength(2);
+    expect(factory.sessions[1]?.prompts).toEqual(["two"]);
   });
 
   it("closeSession disposes a pending managed session once it materializes", async () => {

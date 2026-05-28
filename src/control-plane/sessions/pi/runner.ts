@@ -136,19 +136,23 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
   ): Promise<void> {
     this.closedSessionIds.add(sessionId);
-    const existing = this.sessions.get(sessionId);
-    if (existing) {
-      await this.closeHandle(sessionId, existing);
-      return;
-    }
-
-    const pending = this.pendingSessions.get(sessionId);
-    if (!pending) return;
     try {
-      const handle = await pending;
-      await this.closeHandle(sessionId, handle);
-    } catch {
-      // A close-requested pending session disposes itself during materialization.
+      const existing = this.sessions.get(sessionId);
+      if (existing) {
+        await this.closeHandle(sessionId, existing);
+        return;
+      }
+
+      const pending = this.pendingSessions.get(sessionId);
+      if (!pending) return;
+      try {
+        const handle = await pending;
+        await this.closeHandle(sessionId, handle);
+      } catch {
+        // A close-requested pending session disposes itself during materialization.
+      }
+    } finally {
+      this.closedSessionIds.delete(sessionId);
     }
   }
 

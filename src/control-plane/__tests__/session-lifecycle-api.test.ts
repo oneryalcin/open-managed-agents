@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryControlPlaneApp } from "../app.ts";
+import { SessionEventBroadcaster } from "../events/broadcaster.ts";
+import { DefaultSessionEventsService } from "../events/service.ts";
+import { EventStore } from "../events/store.ts";
 import type { RuntimeEventRunner } from "../events/types.ts";
+import { SqliteSessionStore } from "../sessions/store.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type {
@@ -207,7 +211,117 @@ describe("session lifecycle API", () => {
       "session.status_terminated",
     ]);
   });
+
+  it("retires archive lifecycle guards after in-flight runtime settles", async () => {
+    const { eventStore, runner, service, sessionId } = createGuardHarness();
+
+    service.send("wrk_default", sessionId, {
+      events: [
+        { type: "user.message", content: [{ type: "text", text: "start" }] },
+      ],
+    });
+    await runner.started;
+
+    await service.archiveSession("wrk_default", sessionId);
+    expect(guardState(service).closedSessions.has(sessionId)).toBe(true);
+    expect(guardState(service).activeRuntimeTasks.get(sessionId)).toBe(1);
+
+    runner.release();
+    await waitFor(() => !guardState(service).activeRuntimeTasks.has(sessionId));
+
+    expect(guardState(service).closedSessions.has(sessionId)).toBe(false);
+    expect(guardState(service).deletedSessions.has(sessionId)).toBe(false);
+    expect(eventStore.list(sessionId).map((event) => event.type)).toEqual([
+      "user.message",
+      "session.status_terminated",
+    ]);
+  });
+
+  it("retires delete lifecycle guards after in-flight runtime settles", async () => {
+    const { eventStore, runner, service, sessionId } = createGuardHarness();
+
+    service.send("wrk_default", sessionId, {
+      events: [
+        { type: "user.message", content: [{ type: "text", text: "start" }] },
+      ],
+    });
+    await runner.started;
+
+    await service.deleteSession("wrk_default", sessionId);
+    expect(guardState(service).closedSessions.has(sessionId)).toBe(true);
+    expect(guardState(service).deletedSessions.has(sessionId)).toBe(true);
+    expect(guardState(service).activeRuntimeTasks.get(sessionId)).toBe(1);
+    expect(eventStore.list(sessionId)).toEqual([]);
+
+    runner.release();
+    await waitFor(() => !guardState(service).activeRuntimeTasks.has(sessionId));
+
+    expect(guardState(service).closedSessions.has(sessionId)).toBe(false);
+    expect(guardState(service).deletedSessions.has(sessionId)).toBe(false);
+    expect(eventStore.list(sessionId)).toEqual([]);
+  });
 });
+
+interface GuardHarness {
+  eventStore: EventStore;
+  runner: DelayedRunner;
+  service: DefaultSessionEventsService;
+  sessionId: string;
+}
+
+interface GuardState {
+  closedSessions: Set<string>;
+  deletedSessions: Set<string>;
+  activeRuntimeTasks: Map<string, number>;
+}
+
+function createGuardHarness(): GuardHarness {
+  const sessionId = `sesn_${Math.random().toString(16).slice(2)}`;
+  const eventStore = EventStore.open(":memory:");
+  const sessionStore = SqliteSessionStore.open(":memory:");
+  const runner = new DelayedRunner();
+  const service = new DefaultSessionEventsService(
+    eventStore,
+    sessionStore,
+    new SessionEventBroadcaster(eventStore),
+    {
+      runner,
+      translate: (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        (event as { type?: unknown }).type === "late_output"
+          ? [
+              {
+                type: "agent.message",
+                payload: { content: [{ type: "text", text: "late" }] },
+              },
+            ]
+          : [],
+    },
+  );
+  const now = new Date().toISOString();
+  sessionStore.create({
+    row: {
+      id: sessionId,
+      workspace_id: "wrk_default",
+      type: "session",
+      agent: { type: "agent", id: "agent_guard", version: 1 },
+      environment_id: "env_guard",
+      status: "idle",
+      title: null,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+      archived_at: null,
+      usage: null,
+    },
+  });
+  return { eventStore, runner, service, sessionId };
+}
+
+function guardState(service: DefaultSessionEventsService): GuardState {
+  return service as unknown as GuardState;
+}
 
 class CloseTrackingRunner implements RuntimeEventRunner {
   readonly closed: string[] = [];
@@ -257,6 +371,16 @@ class DelayedRunner implements RuntimeEventRunner {
 
 async function delay(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > 1_000) {
+      throw new Error("timed out waiting for lifecycle guards to retire");
+    }
+    await delay(0);
+  }
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
