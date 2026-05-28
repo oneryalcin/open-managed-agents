@@ -1,0 +1,382 @@
+## probe_target
+{
+  "agent_<redacted>": "agent_<redacted>",
+  "environment_id": "env_<redacted>"
+}
+## files.upload
+{
+  "created_at": "datetime.datetime(2026, 5, 28, 14, 46, 56, 274000, tzinfo=datetime.timezone.utc)",
+  "downloadable": false,
+  "filename": "oma-resource-probe.txt",
+  "id": "file_<redacted>",
+  "mime_type": "text/plain",
+  "scope": null,
+  "size_bytes": 22,
+  "type": "file"
+}
+## files.retrieve_metadata
+{
+  "created_at": "datetime.datetime(2026, 5, 28, 14, 46, 56, 274000, tzinfo=datetime.timezone.utc)",
+  "downloadable": false,
+  "filename": "oma-resource-probe.txt",
+  "id": "file_<redacted>",
+  "mime_type": "text/plain",
+  "scope": null,
+  "size_bytes": 22,
+  "type": "file"
+}
+## files.download.error
+{
+  "body": {
+    "error": {
+      "message": "File 'file_<redacted>' is not downloadable",
+      "type": "invalid_request_error"
+    },
+    "request_id": "req_<redacted>",
+    "type": "error"
+  },
+  "message": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': \"File 'file_<redacted>' is not downloadable\"}, 'request_id': 'req_<redacted>'}",
+  "status_code": 400,
+  "type": "BadRequestError"
+}
+## sessions.create.relative_mount
+{
+  "agent": {
+    "description": null,
+    "id": "agent_<redacted>",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-opus-4-7",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "cwc-agent",
+    "skills": [],
+    "system": "You help me navigate Code w/ Claude 2026 \u2014 sessions, schedule, venue, and where to find resources.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_<redacted>_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 1
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 28, 14, 46, 57, 823369, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_<redacted>",
+  "id": "sesn_<redacted>",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [
+    {
+      "created_at": "datetime.datetime(2026, 5, 28, 14, 46, 57, 821636, tzinfo=TzInfo(0))",
+      "file_<redacted>": "file_<redacted>",
+      "id": "sesrsc_<redacted>",
+      "mount_path": "/mnt/session/uploads/probe.txt",
+      "type": "file",
+      "updated_at": "datetime.datetime(2026, 5, 28, 14, 46, 57, 821636, tzinfo=TzInfo(0))"
+    }
+  ],
+  "stats": {
+    "active_seconds": 0.0,
+    "duration_seconds": 0.0
+  },
+  "status": "idle",
+  "title": "oma-resource-probe-relative_mount",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 28, 14, 46, 57, 823369, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "vault_ids": []
+}
+## sessions.resources.list.relative_mount
+[
+  {
+    "created_at": "datetime.datetime(2026, 5, 28, 14, 46, 57, 821636, tzinfo=TzInfo(0))",
+    "file_<redacted>": "file_<redacted>",
+    "id": "sesrsc_<redacted>",
+    "mount_path": "/mnt/session/uploads/probe.txt",
+    "type": "file",
+    "updated_at": "datetime.datetime(2026, 5, 28, 14, 46, 57, 821636, tzinfo=TzInfo(0))"
+  }
+]
+## sessions.create.nested_relative_mount
+{
+  "agent": {
+    "description": null,
+    "id": "agent_<redacted>",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-opus-4-7",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "cwc-agent",
+    "skills": [],
+    "system": "You help me navigate Code w/ Claude 2026 \u2014 sessions, schedule, venue, and where to find resources.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_<redacted>_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 1
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 28, 14, 46, 59, 148171, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_<redacted>",
+  "id": "sesn_<redacted>",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [
+    {
+      "created_at": "datetime.datetime(2026, 5, 28, 14, 46, 59, 146812, tzinfo=TzInfo(0))",
+      "file_<redacted>": "file_<redacted>",
+      "id": "sesrsc_<redacted>",
+      "mount_path": "/mnt/session/uploads/data/probe.txt",
+      "type": "file",
+      "updated_at": "datetime.datetime(2026, 5, 28, 14, 46, 59, 146812, tzinfo=TzInfo(0))"
+    }
+  ],
+  "stats": {
+    "active_seconds": 0.0,
+    "duration_seconds": 0.0
+  },
+  "status": "idle",
+  "title": "oma-resource-probe-nested_relative_mount",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 28, 14, 46, 59, 148171, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "vault_ids": []
+}
+## sessions.resources.list.nested_relative_mount
+[
+  {
+    "created_at": "datetime.datetime(2026, 5, 28, 14, 46, 59, 146812, tzinfo=TzInfo(0))",
+    "file_<redacted>": "file_<redacted>",
+    "id": "sesrsc_<redacted>",
+    "mount_path": "/mnt/session/uploads/data/probe.txt",
+    "type": "file",
+    "updated_at": "datetime.datetime(2026, 5, 28, 14, 46, 59, 146812, tzinfo=TzInfo(0))"
+  }
+]
+## sessions.create.omitted_mount_path
+{
+  "agent": {
+    "description": null,
+    "id": "agent_<redacted>",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-opus-4-7",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "cwc-agent",
+    "skills": [],
+    "system": "You help me navigate Code w/ Claude 2026 \u2014 sessions, schedule, venue, and where to find resources.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_<redacted>_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 1
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 28, 14, 47, 0, 601646, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_<redacted>",
+  "id": "sesn_<redacted>",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [
+    {
+      "created_at": "datetime.datetime(2026, 5, 28, 14, 47, 0, 600469, tzinfo=TzInfo(0))",
+      "file_<redacted>": "file_<redacted>",
+      "id": "sesrsc_<redacted>",
+      "mount_path": "/mnt/session/uploads/file_<redacted>",
+      "type": "file",
+      "updated_at": "datetime.datetime(2026, 5, 28, 14, 47, 0, 600469, tzinfo=TzInfo(0))"
+    }
+  ],
+  "stats": {
+    "active_seconds": 0.0,
+    "duration_seconds": 0.0
+  },
+  "status": "idle",
+  "title": "oma-resource-probe-omitted_mount_path",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 28, 14, 47, 0, 601646, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "vault_ids": []
+}
+## sessions.resources.list.omitted_mount_path
+[
+  {
+    "created_at": "datetime.datetime(2026, 5, 28, 14, 47, 0, 600469, tzinfo=TzInfo(0))",
+    "file_<redacted>": "file_<redacted>",
+    "id": "sesrsc_<redacted>",
+    "mount_path": "/mnt/session/uploads/file_<redacted>",
+    "type": "file",
+    "updated_at": "datetime.datetime(2026, 5, 28, 14, 47, 0, 600469, tzinfo=TzInfo(0))"
+  }
+]
+## sessions.create.absolute_mount_path
+{
+  "agent": {
+    "description": null,
+    "id": "agent_<redacted>",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-opus-4-7",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "cwc-agent",
+    "skills": [],
+    "system": "You help me navigate Code w/ Claude 2026 \u2014 sessions, schedule, venue, and where to find resources.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_<redacted>_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 1
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 28, 14, 47, 2, 32852, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_<redacted>",
+  "id": "sesn_<redacted>",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [
+    {
+      "created_at": "datetime.datetime(2026, 5, 28, 14, 47, 2, 31568, tzinfo=TzInfo(0))",
+      "file_<redacted>": "file_<redacted>",
+      "id": "sesrsc_<redacted>",
+      "mount_path": "/mnt/session/uploads/tmp/probe.txt",
+      "type": "file",
+      "updated_at": "datetime.datetime(2026, 5, 28, 14, 47, 2, 31568, tzinfo=TzInfo(0))"
+    }
+  ],
+  "stats": {
+    "active_seconds": 0.0,
+    "duration_seconds": 0.0
+  },
+  "status": "idle",
+  "title": "oma-resource-probe-absolute_mount_path",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 28, 14, 47, 2, 32852, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "vault_ids": []
+}
+## sessions.resources.list.absolute_mount_path
+[
+  {
+    "created_at": "datetime.datetime(2026, 5, 28, 14, 47, 2, 31568, tzinfo=TzInfo(0))",
+    "file_<redacted>": "file_<redacted>",
+    "id": "sesrsc_<redacted>",
+    "mount_path": "/mnt/session/uploads/tmp/probe.txt",
+    "type": "file",
+    "updated_at": "datetime.datetime(2026, 5, 28, 14, 47, 2, 31568, tzinfo=TzInfo(0))"
+  }
+]
+## sessions.create.path_traversal_mount_path.error
+{
+  "body": {
+    "error": {
+      "message": "Invalid file resource: mount path \"../probe.txt\" escapes /uploads/",
+      "type": "invalid_request_error"
+    },
+    "request_id": "req_<redacted>",
+    "type": "error"
+  },
+  "message": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Invalid file resource: mount path \"../probe.txt\" escapes /uploads/'}, 'request_id': 'req_<redacted>'}",
+  "status_code": 400,
+  "type": "BadRequestError"
+}
+## sessions.create.duplicate_mount_path.error
+{
+  "body": {
+    "error": {
+      "message": "Invalid file resource: `mount_path` overlaps another resource: /uploads/dupe.txt",
+      "type": "invalid_request_error"
+    },
+    "request_id": "req_<redacted>",
+    "type": "error"
+  },
+  "message": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Invalid file resource: `mount_path` overlaps another resource: /uploads/dupe.txt'}, 'request_id': 'req_<redacted>'}",
+  "status_code": 400,
+  "type": "BadRequestError"
+}
+## sessions.delete.sesn_<redacted>
+{
+  "id": "sesn_<redacted>",
+  "type": "session_deleted"
+}
+## sessions.delete.sesn_<redacted>
+{
+  "id": "sesn_<redacted>",
+  "type": "session_deleted"
+}
+## sessions.delete.sesn_<redacted>
+{
+  "id": "sesn_<redacted>",
+  "type": "session_deleted"
+}
+## sessions.delete.sesn_<redacted>
+{
+  "id": "sesn_<redacted>",
+  "type": "session_deleted"
+}
+## files.delete
+{
+  "id": "file_<redacted>",
+  "type": "file_<redacted>"
+}

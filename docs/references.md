@@ -15,6 +15,7 @@
 - Memory stores: https://platform.claude.com/docs/en/managed-agents/memory
 - Vaults: https://platform.claude.com/docs/en/managed-agents/vaults
 - Define outcomes: https://platform.claude.com/docs/en/managed-agents/define-outcomes
+- Resources live-probe notes: [managed-agents-resources-notes.md](references/managed-agents-resources-notes.md)
 
 ## Anthropic SDK source (for endpoint shapes and types)
 
