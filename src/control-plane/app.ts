@@ -12,6 +12,10 @@ import { sessionEventsRoutes } from "./events/routes.ts";
 import { DefaultSessionEventsService } from "./events/service.ts";
 import { SessionEventBroadcaster } from "./events/broadcaster.ts";
 import { EventStore } from "./events/store.ts";
+import { filesRoutes } from "./files/routes.ts";
+import { DefaultFileService } from "./files/service.ts";
+import { InMemoryFileStorage } from "./files/store.ts";
+import type { FileService } from "./files/types.ts";
 import type {
   RuntimeEventRunner,
   RuntimeEventTranslator,
@@ -37,7 +41,7 @@ import { SqliteSessionStore } from "./sessions/store.ts";
 import type { SessionService } from "./sessions/types.ts";
 import { translatePiEvent } from "./sessions/pi/translator.ts";
 
-export const MAX_REQUEST_BODY_BYTES = 1_048_576;
+export const MAX_REQUEST_BODY_BYTES = 12 * 1024 * 1024;
 export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 
 interface AppEnv {
@@ -50,6 +54,7 @@ interface AppEnv {
 export interface ControlPlaneServices {
   agents: AgentService;
   environments: EnvironmentService;
+  files?: FileService;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
 }
@@ -93,6 +98,10 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
 
   app.route("/v1/agents", agentsRoutes(services.agents));
   app.route("/v1/environments", environmentsRoutes(services.environments));
+  app.route(
+    "/v1/files",
+    filesRoutes(services.files ?? new DefaultFileService(new InMemoryFileStorage())),
+  );
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route("/v1/sessions/:sessionId/events", sessionEventsRoutes(services.sessionEvents));
 
@@ -129,10 +138,12 @@ export function createInMemoryControlPlaneApp(
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
+  const fileStorage = new InMemoryFileStorage();
   const broadcaster = new SessionEventBroadcaster(eventStore);
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore),
     environments: new DefaultEnvironmentService(environmentStore),
+    files: new DefaultFileService(fileStorage),
     sessions: new DefaultSessionService(
       sessionStore,
       agentStore,

@@ -8,6 +8,10 @@ export function newEnvironmentId(): string {
   return `env_${uuidv7()}`;
 }
 
+export function newFileId(): string {
+  return `file_${uuidv7()}`;
+}
+
 export function newRequestId(): string {
   return `req_${uuidv7()}`;
 }
