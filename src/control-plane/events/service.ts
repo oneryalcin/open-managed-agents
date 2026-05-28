@@ -131,7 +131,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
   assertSessionArchivable(workspaceId: WorkspaceId, sessionId: string): void {
     const session = requireExistingSession(this.sessions, workspaceId, sessionId);
     if (session.archived_at !== null || session.status === "terminated") return;
-    if ((this.activeRuntimeTasks.get(sessionId) ?? 0) > 0) {
+    if (
+      (this.activeRuntimeTasks.get(sessionId) ?? 0) > 0 &&
+      !this.hasPendingCustomToolActions(sessionId)
+    ) {
       throw sessionNotArchivable(sessionId, "running");
     }
     if (session.status === "running" || session.status === "rescheduling") {
@@ -472,6 +475,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (pending.timer) clearTimeout(pending.timer);
     this.pendingCustomToolActions.delete(sessionId);
     return [...pending.ids];
+  }
+
+  private hasPendingCustomToolActions(sessionId: string): boolean {
+    return (this.pendingCustomToolActions.get(sessionId)?.ids.length ?? 0) > 0;
   }
 
   private blockInterruptedCustomToolActions(

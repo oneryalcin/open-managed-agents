@@ -3,7 +3,10 @@ import { createInMemoryControlPlaneApp } from "../app.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
-import type { RuntimeEventRunner } from "../events/types.ts";
+import type {
+  RuntimeCustomToolUseEvent,
+  RuntimeEventRunner,
+} from "../events/types.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
@@ -249,6 +252,43 @@ describe("session lifecycle API", () => {
     ]);
   });
 
+  it("archives a session paused on custom-tool requires_action", async () => {
+    const runner = new PausedCustomToolRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: () => [] },
+    });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "ask external");
+    await waitFor(() => runner.boundCustomToolUseId !== undefined);
+    await waitFor(async () => {
+      const events = await listEvents(app, session.id);
+      return events.data.some(
+        (event) =>
+          event.type === "session.status_idle" &&
+          (event.stop_reason as { type?: unknown } | undefined)?.type ===
+            "requires_action",
+      );
+    });
+
+    const archiveRes = await app.request(`/v1/sessions/${session.id}/archive`, {
+      method: "POST",
+    });
+
+    expect(archiveRes.status).toBe(200);
+    expect(runner.closed).toEqual([session.id]);
+    const archived = (await archiveRes.json()) as ManagedAgentsSession;
+    expect(archived.status).toBe("terminated");
+    expect(archived.archived_at).toEqual(expect.any(String));
+
+    const events = await listEvents(app, session.id);
+    expect(events.data.map((event) => event.type)).toEqual([
+      "user.message",
+      "agent.custom_tool_use",
+      "session.status_idle",
+      "session.status_terminated",
+    ]);
+  });
+
   it("retires archive lifecycle guards after in-flight runtime settles", async () => {
     const { eventStore, runner, service, sessionId } = createGuardHarness();
 
@@ -314,6 +354,11 @@ describe("session lifecycle API", () => {
         rescheduling.sessionId,
       ),
     ).toThrow(archiveRunningMessage(rescheduling.sessionId, "rescheduling"));
+
+    const running = createGuardHarness({ status: "running" });
+    expect(() =>
+      running.service.assertSessionArchivable("wrk_default", running.sessionId),
+    ).toThrow(archiveRunningMessage(running.sessionId, "running"));
   });
 });
 
@@ -441,6 +486,40 @@ class DelayedRunner implements RuntimeEventRunner {
   }
 }
 
+class PausedCustomToolRunner implements RuntimeEventRunner {
+  readonly closed: string[] = [];
+  boundCustomToolUseId: string | undefined;
+  private resolveResult: (() => void) | undefined;
+
+  async *runUserMessage(): AsyncIterable<unknown> {
+    const result = new Promise<void>((resolve) => {
+      this.resolveResult = resolve;
+    });
+    yield {
+      type: "oma.custom_tool_use",
+      piToolCallId: "toolu_archive_pause",
+      name: "ask_user",
+      input: { question: "continue?" },
+      bindCustomToolUseId: (id) => {
+        this.boundCustomToolUseId = id;
+      },
+      rejectCustomToolUse: () => {
+        this.resolveResult?.();
+      },
+    } satisfies RuntimeCustomToolUseEvent;
+    await result;
+  }
+
+  async closeSession(_workspaceId: string, sessionId: string): Promise<void> {
+    this.closed.push(sessionId);
+    this.resolveResult?.();
+  }
+
+  customToolNames(): ReadonlySet<string> {
+    return new Set(["ask_user"]);
+  }
+}
+
 function archiveRunningMessage(
   sessionId: string,
   status: "running" | "rescheduling",
@@ -452,9 +531,9 @@ async function delay(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const started = Date.now();
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() - started > 1_000) {
       throw new Error("timed out waiting for lifecycle guards to retire");
     }

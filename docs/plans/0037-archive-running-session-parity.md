@@ -36,6 +36,27 @@ Observed hosted behavior:
   `session.status_idle`.
 - This means hosted archive does **not** implicitly interrupt a running session.
 
+Follow-up hosted probe after adversarial review found a paused custom-tool
+ambiguity:
+
+```bash
+uv run --with anthropic python scratch/29-managed-agents-archive-requires-action-probe.py
+```
+
+Evidence is saved at:
+
+- `scratch/artifacts/29-managed-agents-archive-requires-action-probe-output.txt`
+
+Observed hosted behavior:
+
+- After `agent.custom_tool_use`, hosted emits `session.status_idle` with
+  `stop_reason.type: "requires_action"`.
+- `sessions.archive(session_id)` at that point succeeds with `status:
+  "terminated"` and `archived_at` set.
+- This means a paused custom-tool wait is archivable even though the underlying
+  runtime operation is not fully complete. OMA must not equate raw runtime task
+  liveness with "running" for this state.
+
 ## Current State
 
 - `src/control-plane/sessions/routes.ts:45-49` mutates the session row first via
@@ -100,11 +121,16 @@ the row is archived.
 ### 2. Define "Running" From The Control Plane, Not From Stale Row State Only
 
 `DefaultSessionEventsService` already maintains `activeRuntimeTasks`. Use that
-as the source for "running in this process":
+as the source for "running in this process", except when the runtime task is
+parked on pending custom-tool input:
 
 ```ts
-if ((this.activeRuntimeTasks.get(sessionId) ?? 0) > 0) reject;
+if ((this.activeRuntimeTasks.get(sessionId) ?? 0) > 0 && !hasPendingCustomToolActions(sessionId)) reject;
 ```
+
+The pending-custom-tool exception matches the hosted `requires_action` probe:
+the session is publicly idle and waiting for caller input, and archive is
+allowed.
 
 Also treat a persisted active session row with `status === "running"` as not
 archivable if the process can observe that status. This protects future
@@ -140,6 +166,8 @@ different client-visible string.
 For idle sessions, keep current public behavior:
 
 - archive returns 200 with `status: "terminated"` and `archived_at` set,
+- archive also succeeds while the session is idle on
+  `stop_reason.type: "requires_action"` before `user.custom_tool_result`,
 - event history remains readable,
 - exactly one `session.status_terminated` is appended,
 - re-archive is idempotent and does not duplicate terminal events,
@@ -174,6 +202,8 @@ best-effort cleanup behavior is acceptable and already covered by tests.
 
 3. Existing idle archive behavior stays green:
    - Archive idle session succeeds.
+   - Archive succeeds while the session is idle on
+     `stop_reason.type: "requires_action"` before `user.custom_tool_result`.
    - Re-archive remains idempotent.
    - The preflight explicitly allows an already terminated/archived session.
    - Archived session events remain readable and streams replay closed history.
@@ -197,7 +227,10 @@ best-effort cleanup behavior is acceptable and already covered by tests.
    `src/control-plane/events/types.ts`.
 2. Implement it in `src/control-plane/events/service.ts`:
    - require existing session,
-   - reject when `activeRuntimeTasks` says running,
+   - reject when `activeRuntimeTasks` says running and there is no pending
+     custom-tool action,
+   - allow active runtime tasks parked on pending custom-tool
+     `requires_action`,
    - reject when the retrieved row status is `"running"` or `"rescheduling"`,
    - allow idle and already terminated/archive-idempotent sessions.
 3. Reorder `src/control-plane/sessions/routes.ts` archive route so synchronous
@@ -207,6 +240,7 @@ best-effort cleanup behavior is acceptable and already covered by tests.
    - replace the current "archive mid-runtime succeeds" expectation with
      "archive mid-runtime rejects without mutation/cleanup",
    - add the "interrupt then archive" success path,
+   - add the "requires_action then archive" success path,
    - keep the delete-mid-runtime coverage unchanged.
 5. Add or update docs/reference notes only if they still describe archive as
    best-effort-close parity behavior after the code changes.
