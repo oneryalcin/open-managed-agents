@@ -221,6 +221,25 @@ describe("files API", () => {
       last_id: c!.id,
     });
   });
+
+  it("returns no uploaded input files for scoped file lists", async () => {
+    const app = createInMemoryControlPlaneApp();
+    await uploadFile(app, {
+      filename: "uploaded-input.txt",
+      mimeType: "text/plain",
+      content: "input",
+    });
+
+    const res = await app.request("/v1/files?scope_id=sesn_future&limit=10");
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      data: [],
+      has_more: false,
+      first_id: null,
+      last_id: null,
+    });
+  });
 });
 
 async function uploadFile(
