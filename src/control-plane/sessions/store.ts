@@ -47,6 +47,9 @@ export class SqliteSessionStore implements SessionStore {
   private readonly db: DatabaseSync;
   private readonly insertStmt: StatementSync;
   private readonly retrieveActiveStmt: StatementSync;
+  private readonly retrieveAnyStmt: StatementSync;
+  private readonly archiveStmt: StatementSync;
+  private readonly deleteStmt: StatementSync;
   private readonly listStmts: Map<string, StatementSync> = new Map();
 
   constructor(db: DatabaseSync) {
@@ -61,6 +64,19 @@ export class SqliteSessionStore implements SessionStore {
     this.retrieveActiveStmt = this.db.prepare(
       `SELECT * FROM sessions
        WHERE workspace_id = ? AND id = ? AND archived_at IS NULL`,
+    );
+    this.retrieveAnyStmt = this.db.prepare(
+      `SELECT * FROM sessions
+       WHERE workspace_id = ? AND id = ?`,
+    );
+    this.archiveStmt = this.db.prepare(
+      `UPDATE sessions
+       SET status = 'terminated', updated_at = ?, archived_at = COALESCE(archived_at, ?)
+       WHERE workspace_id = ? AND id = ?`,
+    );
+    this.deleteStmt = this.db.prepare(
+      `DELETE FROM sessions
+       WHERE workspace_id = ? AND id = ?`,
     );
   }
 
@@ -94,6 +110,30 @@ export class SqliteSessionStore implements SessionStore {
       sessionId,
     ) as unknown as SessionDbRow | undefined;
     return row ? deserialize(row) : undefined;
+  }
+
+  retrieveAny(workspaceId: string, sessionId: string): SessionRow | undefined {
+    const row = this.retrieveAnyStmt.get(
+      workspaceId,
+      sessionId,
+    ) as unknown as SessionDbRow | undefined;
+    return row ? deserialize(row) : undefined;
+  }
+
+  archive(
+    workspaceId: string,
+    sessionId: string,
+    archivedAt: string,
+  ): SessionRow | undefined {
+    this.archiveStmt.run(archivedAt, archivedAt, workspaceId, sessionId);
+    return this.retrieveAny(workspaceId, sessionId);
+  }
+
+  delete(workspaceId: string, sessionId: string): SessionRow | undefined {
+    const existing = this.retrieveAny(workspaceId, sessionId);
+    if (!existing) return undefined;
+    this.deleteStmt.run(workspaceId, sessionId);
+    return existing;
   }
 
   list(

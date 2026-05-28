@@ -61,6 +61,7 @@ export interface ListOptions {
 export class EventStore implements SessionEventStore {
   private readonly db: DatabaseSync;
   private readonly appendStmt: StatementSync;
+  private readonly deleteForSessionStmt: StatementSync;
   private readonly retrieveStmt: StatementSync;
   private readonly listStmts = new Map<string, StatementSync>();
 
@@ -70,6 +71,9 @@ export class EventStore implements SessionEventStore {
     this.appendStmt = this.db.prepare(
       `INSERT INTO events (id, session_id, type, processed_at, payload, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    this.deleteForSessionStmt = this.db.prepare(
+      `DELETE FROM events WHERE session_id = ?`,
     );
     this.retrieveStmt = this.db.prepare(
       `SELECT id, session_id, type, processed_at, payload, created_at
@@ -111,6 +115,10 @@ export class EventStore implements SessionEventStore {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  deleteForSession(sessionId: string): void {
+    this.deleteForSessionStmt.run(sessionId);
   }
 
   list(sessionId: string, opts: ListOptions = {}): PersistedSessionEvent[] {

@@ -44,6 +44,7 @@ export interface SessionEventRecordPage {
 export interface SessionEventStore {
   append(event: PersistedSessionEvent): void;
   appendBatch(events: readonly PersistedSessionEvent[]): void;
+  deleteForSession(sessionId: string): void;
   list(
     sessionId: string,
     opts?: ListSessionEventRecordsOptions,
@@ -70,6 +71,7 @@ export interface StreamSessionEventsOptions {
 
 export interface SessionEventBroadcaster {
   publishPersisted(events: readonly PersistedSessionEvent[]): void;
+  closeSession(sessionId: string): void;
   subscribe(
     sessionId: string,
     opts?: { lastSeenId?: string; signal?: AbortSignal },
@@ -83,6 +85,14 @@ export interface SessionEventsService {
     input: unknown,
     opts?: { signal?: AbortSignal },
   ): ManagedAgentsEvent[];
+  archiveSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void>;
+  deleteSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void>;
   list(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -107,6 +117,10 @@ export interface RuntimeEventRunner {
     sessionId: string,
     event: ManagedAgentsUserCustomToolResultEventInput,
   ): (() => void) | undefined;
+  closeSession?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> | void;
   customToolNames?(
     workspaceId: WorkspaceId,
     sessionId: string,

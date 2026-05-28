@@ -27,7 +27,10 @@
 import type { EventStore } from "./store.ts";
 import type { PersistedSessionEvent } from "./types.ts";
 
-type Subscriber = (event: PersistedSessionEvent) => void;
+interface Subscriber {
+  push(event: PersistedSessionEvent): void;
+  close(): void;
+}
 
 export interface SubscribeOptions {
   /** Resume cursor. If set, replay starts from events with `id > lastSeenId`. */
@@ -59,8 +62,16 @@ export class SessionEventBroadcaster {
       const subs = this.subscribers.get(event.session_id);
       if (!subs) continue;
       for (const sub of subs) {
-        sub(event);
+        sub.push(event);
       }
+    }
+  }
+
+  closeSession(sessionId: string): void {
+    const subs = this.subscribers.get(sessionId);
+    if (!subs) return;
+    for (const sub of subs) {
+      sub.close();
     }
   }
 
@@ -84,25 +95,35 @@ export class SessionEventBroadcaster {
 
     const liveQueue: PersistedSessionEvent[] = [];
     let overflowed = false;
+    let closed = false;
     let wake: (() => void) | null = null;
 
-    const sub: Subscriber = (event) => {
-      if (overflowed) {
-        // Already overflowed; drop. Will recover via store-drain.
-        return;
-      }
-      liveQueue.push(event);
-      if (liveQueue.length > maxBuffer) {
-        // Drop the entire buffer; we'll refetch from the store using the
-        // last-yielded ID as the cursor. This bounds memory at maxBuffer.
-        overflowed = true;
-        liveQueue.length = 0;
-      }
-      if (wake) {
-        const w = wake;
-        wake = null;
-        w();
-      }
+    const wakeSubscriber = () => {
+      if (!wake) return;
+      const w = wake;
+      wake = null;
+      w();
+    };
+
+    const sub: Subscriber = {
+      push(event) {
+        if (overflowed) {
+          // Already overflowed; drop. Will recover via store-drain.
+          return;
+        }
+        liveQueue.push(event);
+        if (liveQueue.length > maxBuffer) {
+          // Drop the entire buffer; we'll refetch from the store using the
+          // last-yielded ID as the cursor. This bounds memory at maxBuffer.
+          overflowed = true;
+          liveQueue.length = 0;
+        }
+        wakeSubscriber();
+      },
+      close() {
+        closed = true;
+        wakeSubscriber();
+      },
     };
 
     // CRITICAL: register live listener BEFORE replaying. Any event published
@@ -111,11 +132,7 @@ export class SessionEventBroadcaster {
     this.addSubscriber(sessionId, sub);
 
     const onAbort = () => {
-      if (wake) {
-        const w = wake;
-        wake = null;
-        w();
-      }
+      wakeSubscriber();
     };
     opts.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -184,6 +201,7 @@ export class SessionEventBroadcaster {
 
         if (overflowed) continue; // re-enter overflow handler
         if (aborted()) return;
+        if (closed) return;
 
         // Sleep until next event or abort.
         await new Promise<void>((resolve) => {

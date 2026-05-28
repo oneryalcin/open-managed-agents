@@ -17,3 +17,4 @@ coverage/
 
 # Generated smoke-probe output
 scratch/artifacts/deployment-docker-smoke/
+scratch/artifacts/session-lifecycle-smoke/

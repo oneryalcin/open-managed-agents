@@ -170,6 +170,46 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(session.disposed).toBe(true);
   });
 
+  it("closeSession aborts and disposes one active managed session", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const run = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    await runner.closeSession("wrk", "sesn_1");
+
+    expect(factory.sessions[0]?.aborts).toBe(1);
+    expect(factory.sessions[0]?.disposed).toBe(true);
+    gate.resolve();
+    await run;
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "two")),
+    ).rejects.toThrow("Runtime session sesn_1 is closed");
+  });
+
+  it("closeSession disposes a pending managed session once it materializes", async () => {
+    const created = deferred<PiRuntimeSession>();
+    const runner = new PiSessionRunner({
+      sessionFactory: () => created.promise,
+      idleTtlMs: 0,
+    });
+    const run = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await delay(10);
+
+    const close = runner.closeSession("wrk", "sesn_1");
+    const session = new FakeSession();
+    created.resolve(session);
+
+    await close;
+    await expect(run).rejects.toThrow("Runtime session sesn_1 is closed");
+    expect(session.disposed).toBe(true);
+  });
+
   it("does not create a Pi session if sandbox provisioning fails", async () => {
     const factory = new FakeSessionFactory();
     const runner = new PiSessionRunner({
@@ -519,6 +559,7 @@ class FakeSession implements PiRuntimeSession {
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
+  aborts = 0;
   private threwAlreadyProcessing = false;
 
   constructor(private readonly opts: FakeSessionOptions = {}) {
@@ -609,7 +650,9 @@ class FakeSession implements PiRuntimeSession {
     this.followUps.push(text);
   }
 
-  async abort(): Promise<void> {}
+  async abort(): Promise<void> {
+    this.aborts += 1;
+  }
 
   dispose(): void {
     this.disposed = true;

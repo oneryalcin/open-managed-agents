@@ -1,6 +1,7 @@
 import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type {
   CreateManagedSessionRequest,
+  ManagedAgentsDeletedSession,
   ManagedAgentsSession,
   ManagedAgentsSessionAgentRef,
   ManagedAgentsSessionStatus,
@@ -40,6 +41,19 @@ export interface SessionStore {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): SessionRow | undefined;
+  retrieveAny(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): SessionRow | undefined;
+  archive(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    archivedAt: string,
+  ): SessionRow | undefined;
+  delete(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): SessionRow | undefined;
   list(
     workspaceId: WorkspaceId,
     opts?: ListSessionsOptions,
@@ -56,10 +70,22 @@ export interface SessionService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): ManagedAgentsSession;
+  archive(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): ManagedAgentsSession;
+  delete(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): ManagedAgentsDeletedSession;
   list(
     workspaceId: WorkspaceId,
     opts?: ListSessionsOptions,
   ): ManagedAgentsListPage<ManagedAgentsSession>;
 }
 
-export type { CreateManagedSessionRequest, ManagedAgentsSession };
+export type {
+  CreateManagedSessionRequest,
+  ManagedAgentsDeletedSession,
+  ManagedAgentsSession,
+};

@@ -40,3 +40,8 @@ export interface ManagedAgentsSession {
   archived_at: string | null;
   usage: null;
 }
+
+export interface ManagedAgentsDeletedSession {
+  id: string;
+  type: "session_deleted";
+}

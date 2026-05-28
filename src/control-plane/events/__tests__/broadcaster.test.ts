@@ -104,6 +104,29 @@ describe("session event broadcaster", () => {
     broadcaster.publishPersisted([event]);
     expect(store.retrieve(event.id)).toBeUndefined();
   });
+
+  it("closeSession ends live subscribers after queued events drain", async () => {
+    const store = EventStore.open(":memory:");
+    const broadcaster = new SessionEventBroadcaster(store);
+    const sessionId = "sesn_broadcaster_close";
+    const event = makeEvent(sessionId, "deleted");
+    store.append(event);
+
+    const seen: string[] = [];
+    const consume = (async () => {
+      for await (const item of broadcaster.subscribe(sessionId)) {
+        seen.push(item.id);
+      }
+    })();
+
+    await until(() => seen.length === 1);
+    expect(broadcaster.subscriberCount(sessionId)).toBe(1);
+    broadcaster.closeSession(sessionId);
+    await consume;
+
+    expect(seen).toEqual([event.id]);
+    expect(broadcaster.subscriberCount(sessionId)).toBe(0);
+  });
 });
 
 function makeEvent(sessionId: string, text: string): PersistedSessionEvent {

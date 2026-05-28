@@ -13,7 +13,7 @@ import {
   type JsonValue,
 } from "../../types/json.ts";
 import { invalidRequest, notFound } from "../errors.ts";
-import type { SessionStore } from "../sessions/types.ts";
+import type { SessionRow, SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { MAX_EVENTS_PER_REQUEST } from "./constants.ts";
 import {
@@ -49,6 +49,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
       timer: ReturnType<typeof setTimeout> | undefined;
     }
   >();
+  private readonly closedSessions = new Set<string>();
+  private readonly deletedSessions = new Set<string>();
 
   constructor(
     private readonly events: SessionEventStore,
@@ -69,7 +71,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     input: unknown,
     opts: { signal?: AbortSignal } = {},
   ): ManagedAgentsEvent[] {
-    requireSession(this.sessions, workspaceId, sessionId);
+    requireActiveSession(this.sessions, workspaceId, sessionId);
     const req = parseSendRequest(input);
     const customToolResultClaims = this.claimCustomToolResults(
       workspaceId,
@@ -105,12 +107,57 @@ export class DefaultSessionEventsService implements SessionEventsService {
     return rows.map(toManagedAgentsEvent);
   }
 
+  async archiveSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> {
+    requireExistingSession(this.sessions, workspaceId, sessionId);
+    this.closedSessions.add(sessionId);
+    this.clearPendingCustomToolActions(sessionId);
+    if (!this.hasSessionEvent(sessionId, "session.status_terminated")) {
+      this.persistLifecycleDrafts(sessionId, [
+        { type: "session.status_terminated", payload: {} },
+      ]);
+    }
+    await this.closeRuntimeBestEffort(workspaceId, sessionId);
+  }
+
+  async deleteSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> {
+    this.closedSessions.add(sessionId);
+    this.clearPendingCustomToolActions(sessionId);
+    this.persistLifecycleDrafts(sessionId, [
+      { type: "session.deleted", payload: {} },
+    ]);
+    this.broadcaster.closeSession(sessionId);
+    this.deletedSessions.add(sessionId);
+    await this.closeRuntimeBestEffort(workspaceId, sessionId);
+    this.events.deleteForSession(sessionId);
+  }
+
+  private async closeRuntimeBestEffort(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      await this.runtimeRunner?.closeSession?.(workspaceId, sessionId);
+    } catch (error) {
+      console.error("runtime session cleanup failed", { sessionId, error });
+    }
+  }
+
+  private hasSessionEvent(sessionId: string, type: string): boolean {
+    return this.events.list(sessionId, { limit: 1, types: [type] }).length > 0;
+  }
+
   list(
     workspaceId: WorkspaceId,
     sessionId: string,
     opts: ListSessionEventsOptions = {},
   ): ListSessionEventsResponse {
-    requireSession(this.sessions, workspaceId, sessionId);
+    requireExistingSession(this.sessions, workspaceId, sessionId);
     const page = this.events.listPage(sessionId, opts);
     return {
       data: page.data.map(toManagedAgentsEvent),
@@ -123,8 +170,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     opts: StreamSessionEventsOptions = {},
   ): AsyncIterable<ManagedAgentsEvent> {
-    requireSession(this.sessions, workspaceId, sessionId);
+    const session = requireExistingSession(this.sessions, workspaceId, sessionId);
     const lastSeenId = this.resolveResumeCursor(sessionId, opts.lastEventId);
+    if (session.archived_at !== null || session.status === "terminated") {
+      return this.replayClosedSession(sessionId, lastSeenId, opts.signal);
+    }
     const source = this.broadcaster.subscribe(sessionId, {
       lastSeenId,
       signal: opts.signal,
@@ -132,6 +182,30 @@ export class DefaultSessionEventsService implements SessionEventsService {
     return (async function* () {
       for await (const event of source) {
         yield toManagedAgentsEvent(event);
+      }
+    })();
+  }
+
+  private replayClosedSession(
+    sessionId: string,
+    lastSeenId: string | undefined,
+    signal: AbortSignal | undefined,
+  ): AsyncIterable<ManagedAgentsEvent> {
+    const events = this.events;
+    return (async function* () {
+      let cursor = lastSeenId;
+      while (!(signal?.aborted ?? false)) {
+        const rows = events.list(sessionId, {
+          afterId: cursor,
+          limit: 500,
+        });
+        if (rows.length === 0) return;
+        for (const row of rows) {
+          if (signal?.aborted ?? false) return;
+          cursor = row.id;
+          yield toManagedAgentsEvent(row);
+        }
+        if (rows.length < 500) return;
       }
     })();
   }
@@ -193,6 +267,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
             ),
           });
           if (drafts.length === 0) continue;
+          if (this.closedSessions.has(sessionId)) return;
+          if (this.deletedSessions.has(sessionId)) return;
           const now = new Date().toISOString();
           const rows = materializePersistedEvents(sessionId, drafts, now);
           persistAndPublish(this.events, this.broadcaster, rows);
@@ -208,6 +284,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     drafts: readonly EventDraft[],
   ): void {
+    if (this.closedSessions.has(sessionId)) return;
+    if (this.deletedSessions.has(sessionId)) return;
+    this.persistLifecycleDrafts(sessionId, drafts);
+  }
+
+  private persistLifecycleDrafts(
+    sessionId: string,
+    drafts: readonly EventDraft[],
+  ): void {
+    if (this.deletedSessions.has(sessionId)) return;
     const now = new Date().toISOString();
     const rows = materializePersistedEvents(sessionId, drafts, now);
     persistAndPublish(this.events, this.broadcaster, rows);
@@ -217,6 +303,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     event: RuntimeCustomToolUseEvent,
   ): void {
+    if (this.closedSessions.has(sessionId)) return;
+    if (this.deletedSessions.has(sessionId)) return;
     const now = new Date().toISOString();
     const useRows = materializePersistedEvents(
       sessionId,
@@ -301,6 +389,13 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
   }
 
+  private clearPendingCustomToolActions(sessionId: string): void {
+    const pending = this.pendingCustomToolActions.get(sessionId);
+    if (!pending) return;
+    if (pending.timer) clearTimeout(pending.timer);
+    this.pendingCustomToolActions.delete(sessionId);
+  }
+
   private flushPendingCustomToolActions(sessionId: string): void {
     const pending = this.pendingCustomToolActions.get(sessionId);
     if (!pending) return;
@@ -326,7 +421,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
   }
 }
 
-function requireSession(
+function requireActiveSession(
   store: SessionStore,
   workspaceId: WorkspaceId,
   sessionId: string,
@@ -335,6 +430,19 @@ function requireSession(
     throw notFound(`Session ${sessionId} not found`);
   }
 }
+
+function requireExistingSession(
+  store: SessionStore,
+  workspaceId: WorkspaceId,
+  sessionId: string,
+): SessionRow {
+  const session = store.retrieveAny(workspaceId, sessionId);
+  if (!session) {
+    throw notFound(`Session ${sessionId} not found`);
+  }
+  return session;
+}
+
 
 function parseSendRequest(input: unknown): SendSessionEventsRequest {
   const obj = objectInput(input);
