@@ -40,6 +40,8 @@ Upstream/probe-grounded contract:
 - ADR 0013 requires internal session-scoped mount snapshots so deleting the
   original uploaded file after session creation does not break future
   materialization.
+- The SDK session type treats `resources` as non-optional, so resource-free
+  sessions should return `resources: []`, not omit the field.
 
 ## Non-Goals
 
@@ -70,7 +72,8 @@ interface ManagedAgentsSessionFileResource {
 ```
 
 Then add `resources: ManagedAgentsSessionFileResource[]` to
-`ManagedAgentsSession`.
+`ManagedAgentsSession`. This field is always present. Resource-free sessions
+return `resources: []`.
 
 Add `newSessionResourceId()` in `src/control-plane/ids.ts` using the
 `sesrsc_` prefix.
@@ -96,6 +99,9 @@ Extend `CreateManagedSessionRequest` with optional `resources`.
   ```
 
 - Keep rejecting `vault_ids` and sandbox/provider fields.
+- Allow the same `file_id` to be mounted more than once when each mount uses a
+  distinct canonical `mount_path`.
+- Preserve input order in the echoed `resources[]` array.
 
 ### File Resolution And Quotas
 
@@ -110,6 +116,11 @@ For each file resource:
 4. Enforce ADR 0013 session quotas before persisting the session:
    - max 10 file resources,
    - max 50 MiB aggregate mounted bytes.
+5. Drain and validate all resource bytes before opening any SQLite transaction.
+   Do not `await` while a transaction is open on the shared `DatabaseSync`
+   handle.
+6. Recompute SHA-256 while draining bytes and assert it matches the source
+   `FileStorageRecord.sha256`.
 
 This is a trust-boundary check. Do not allow request bodies, agent definitions,
 or model output to choose another storage backend or workspace.
@@ -130,8 +141,15 @@ Rules from ADR 0013:
 - Reject empty segments, `.`, and `..` lexically before any normalization.
 - Reject NUL bytes and backslashes.
 - Restrict each segment to `[A-Za-z0-9._-]+`.
+- Restrict each segment to at most 255 characters and the final canonical
+  `mount_path` to at most 1024 characters.
 - Reject duplicate canonical paths.
 - Reject overlaps where one segment list is a prefix of another.
+
+The segment character set and length limits are intentional OMA v1
+conservatism. They may reject mount paths that Anthropic accepts; keep that
+divergence explicit in tests and error messages rather than accidentally
+weakening the lexical boundary.
 
 Live fixtures to pin:
 
@@ -155,8 +173,9 @@ interface SessionFileMountSnapshot {
   resource_id: string;
   file_id: string;          // original uploaded file id
   mount_path: string;       // canonical path
-  bytes: Uint8Array;        // copied at sessions.create time
-  sha256?: string;          // internal integrity aid if readily available
+  snapshot_file_id: string; // internal-only storage id, never public
+  sha256: string;           // recomputed and verified at create time
+  size_bytes: number;
 }
 ```
 
@@ -166,21 +185,41 @@ Keep this as an internal runtime artifact:
 - It does not change `ManagedAgentsFileMetadata.scope`.
 - It does not make uploaded inputs downloadable.
 - It can be removed when a session is hard-deleted.
+- A client calling `files.retrieve_metadata(resource.file_id)` sees the
+  original uploaded file, not a session clone. That is an intentional OMA v1
+  divergence from Anthropic's observed session-scoped clone behavior.
 
 Implementation choice for PR-A:
 
 - Persist public session resources in a dedicated `session_resources` table,
   not as JSON on the session row. Use columns for `workspace_id`, `session_id`,
   `id`, `type`, `file_id`, `mount_path`, `created_at`, and `updated_at`.
-- Persist internal snapshots in a dedicated `session_file_mount_snapshots`
-  table keyed by `(workspace_id, session_id, resource_id)`, with `file_id`,
-  `mount_path`, `bytes`, and optional `sha256`.
-- Insert the session row, public resource rows, and snapshot rows in one store
-  transaction. A session with file resources must not become visible without its
-  resource echo and snapshots.
+- Persist internal snapshot bytes through the file-storage byte boundary under
+  an internal, unlistable session-mount scope. Do not store snapshot bytes as
+  SQLite BLOBs. PR-B needs a streamable byte source, and workspace quota
+  accounting must include public uploads plus internal session snapshots.
+- Extend the storage boundary with an internal snapshot write/open/delete path
+  rather than routing through the public `FileService` upload/list/download
+  API. Internal snapshot records must not appear in `GET /v1/files`,
+  `GET /v1/files?scope_id=...`, public errors, or logs.
+- Persist internal snapshot metadata in a dedicated
+  `session_file_mount_snapshots` table keyed by
+  `(workspace_id, session_id, resource_id)`, with `file_id`, `mount_path`,
+  `snapshot_file_id`, `sha256`, and `size_bytes`.
+- Before opening the session-store transaction, resolve source files, drain
+  bytes, enforce quotas, verify SHA-256, and create the internal snapshot byte
+  records. Then open a fully synchronous session-store transaction and insert
+  the session row, public resource rows, and snapshot metadata rows with no
+  `await` inside `BEGIN` -> inserts -> `COMMIT`/`ROLLBACK`.
+- If the synchronous session-store transaction fails after internal snapshot
+  byte records were created, delete those internal snapshots best-effort and
+  return the session-create error. Add a failure-path test that proves no
+  session is visible and no quota-accounting orphan remains after an injected
+  transaction failure.
 - Hydrate `create`, `retrieve`, and `list` session objects from
   `session_resources`. `archive` should preserve public resource rows.
-  Hard-delete should remove public resource rows and snapshots with the session.
+  Hard-delete should remove public resource rows, snapshot metadata rows, and
+  internal snapshot byte records with the session.
 - Expose a small store/helper method for PR-B to retrieve snapshots by
   `(workspaceId, sessionId)`. Do not expose snapshots through public Files API
   routes or `sessions.resources.*` routes in PR-A.
@@ -202,16 +241,25 @@ Contract tests:
 
 - `sessions.create` with one file resource succeeds and returns a session whose
   `resources` array is echoed inline.
+- `sessions.create` without resources returns `resources: []`; retrieve, list,
+  and archive do the same for resource-free sessions.
 - Echoed resource has `id` matching `^sesrsc_`, `type: "file"`, original
   uploaded `file_id`, canonical `mount_path`, `created_at`, and `updated_at`.
+- For newly created resource rows, `created_at === updated_at`.
 - `sessions.retrieve` and `sessions.list` include the same resource echo.
 - `sessions.archive` preserves the public resource echo for readable archived
   sessions.
+- Multiple resource inputs preserve input order in the echoed `resources[]`.
+- The same uploaded `file_id` can be mounted at two distinct canonical
+  `mount_path` values, producing two distinct `sesrsc_*` rows and two internal
+  snapshots.
 - Omitted mount path canonicalizes to
   `/mnt/session/uploads/<original_file_id>`.
 - Relative, nested-relative, and leading-slash mount paths canonicalize to the
   live-probe fixtures above.
 - Unknown resource fields are rejected.
+- `resources: null`, non-array `resources`, and non-object resource entries are
+  rejected with `invalid_request_error`.
 - Missing `file_id` and nonexistent `file_id` are rejected with
   `invalid_request_error`.
 - Unsupported `memory_store`, `github_repository`, and `vault` resources return
@@ -219,6 +267,8 @@ Contract tests:
 - Path validation rejects empty paths, `.` segments, `..` segments, nested
   `..`, duplicate paths, overlapping paths, NUL bytes, backslashes, and
   non-portable segments.
+- Path validation rejects segments longer than 255 characters and canonical
+  mount paths longer than 1024 characters.
 - Overlap tests include:
   - `data` + `data/probe.txt` rejected,
   - duplicate `data/probe.txt` rejected,
@@ -227,12 +277,18 @@ Contract tests:
 - More than 50 MiB aggregate mounted bytes is rejected. Use injected small test
   limits or small fake records where possible; do not allocate 50 MiB just to
   prove arithmetic.
+- Internal snapshot bytes count against the workspace storage meter; hard-delete
+  of a session releases those internal bytes.
 - A file uploaded in workspace A cannot be mounted by a session in workspace B.
 - `GET /v1/files?scope_id=<session_id>` remains empty after session creation.
+- Public files list/retrieve/download responses never expose internal snapshot
+  ids or storage keys.
 - Deleting the original uploaded file after `sessions.create` does not mutate
   the session resource echo and does not remove the internal snapshot.
 - Deleting the original uploaded file before `sessions.create` makes validation
   fail.
+- Injected session-store failure after snapshot byte creation leaves no visible
+  session and no snapshot quota orphan.
 
 Non-acceptance in PR-A:
 
@@ -252,13 +308,17 @@ Non-acceptance in PR-A:
 
 - Risk: Treating snapshots as top-level files accidentally populates `scope` or
   creates a second public file identity.
-  Mitigation: Keep snapshots in session/resource storage only; add a test that
-  `GET /v1/files?scope_id=<session_id>` remains empty after session creation.
+  Mitigation: Use internal-only file-storage snapshot APIs, not the public
+  Files API; add a test that `GET /v1/files?scope_id=<session_id>` remains
+  empty after session creation.
 
 - Risk: Session row is visible without resources/snapshots if persistence is
   split across partial writes.
-  Mitigation: make session create atomic at the service/store boundary; tests
-  should force a snapshot failure and assert no session is visible.
+  Mitigation: drain and validate bytes before `BEGIN`, create internal snapshot
+  byte records before `BEGIN`, then use one synchronous transaction for session
+  row/resource/snapshot metadata inserts; tests should force both snapshot
+  failure and session-store transaction failure and assert no session is visible
+  and no quota orphan remains.
 
 - Risk: Normalization drifts toward provider/filesystem behavior.
   Mitigation: keep the normalizer lexical and table-driven; do not use
