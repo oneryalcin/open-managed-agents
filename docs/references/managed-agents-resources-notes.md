@@ -63,7 +63,8 @@ Purpose: collect parity notes from Anthropic Managed Agents docs, the
 - Exact `files.upload` returned fields.
 - Exact accepted file argument forms and metadata names.
 - Whether `sessions.create(... resources=[file mount])` echoes resources in the
-  returned session.
+  returned session. Answered: yes; see `sessions.create.relative_mount` in
+  `scratch/25-managed-agents-resource-probe-output.txt`.
 - Default `mount_path` behavior if omitted.
 - Error behavior for invalid/path traversal/absolute mount paths.
 - Whether mounted relative path is read from sandbox current directory, and
@@ -262,4 +263,3 @@ Read:
    - assert `agent.tool_use` is `bash` and result/assistant text contains exact
      file bytes;
    - delete session and assert container cleanup still works.
-
