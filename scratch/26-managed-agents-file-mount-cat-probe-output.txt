@@ -1,0 +1,68 @@
+## agent.created
+{
+  "id": "agent_<redacted>",
+  "model": "claude-sonnet-4-6"
+}
+## file.uploaded
+{
+  "created_at": "datetime.datetime(2026, 5, 28, 14, 48, 27, 953000, tzinfo=datetime.timezone.utc)",
+  "downloadable": false,
+  "filename": "oma-resource-probe.txt",
+  "id": "file_<redacted>",
+  "mime_type": "text/plain",
+  "scope": null,
+  "size_bytes": 22,
+  "type": "file"
+}
+## session.created
+{
+  "id": "sesn_<redacted>",
+  "resources": [
+    {
+      "created_at": "datetime.datetime(2026, 5, 28, 14, 48, 28, 898898, tzinfo=TzInfo(0))",
+      "file_<redacted>": "file_<redacted>",
+      "id": "sesrsc_<redacted>",
+      "mount_path": "/mnt/session/uploads/probe.txt",
+      "type": "file",
+      "updated_at": "datetime.datetime(2026, 5, 28, 14, 48, 28, 898898, tzinfo=TzInfo(0))"
+    }
+  ]
+}
+## verdict
+{
+  "assistant_text": "OMA_RESOURCE_PROBE=ok",
+  "content_matches": true,
+  "event_types": [
+    "session.status_running",
+    "session.thread_status_running",
+    "user.message",
+    "span.model_request_start",
+    "agent.thinking",
+    "agent.tool_use",
+    "span.model_request_end",
+    "agent.tool_result",
+    "span.model_request_start",
+    "agent.message",
+    "span.model_request_end",
+    "session.thread_status_idle",
+    "session.status_idle"
+  ],
+  "tool_uses": [
+    "bash"
+  ]
+}
+## session.deleted
+{
+  "id": "sesn_<redacted>",
+  "type": "session_deleted"
+}
+## agent.archived
+{
+  "archived_at": "datetime.datetime(2026, 5, 28, 14, 48, 46, 906861, tzinfo=TzInfo(0))",
+  "id": "agent_<redacted>"
+}
+## file.deleted
+{
+  "id": "file_<redacted>",
+  "type": "file_<redacted>"
+}
