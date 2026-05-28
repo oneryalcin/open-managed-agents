@@ -39,6 +39,7 @@ export interface PiRuntimeSession {
   ): Promise<void>;
   followUp(text: string): Promise<void>;
   abort(): Promise<void>;
+  clearQueue?(): { steering: string[]; followUp: string[] };
   dispose(): void;
   subscribe(listener: (event: unknown) => void): () => void;
   getActiveToolNames(): string[];
@@ -132,6 +133,26 @@ export class PiSessionRunner implements RuntimeEventRunner {
     event: ManagedAgentsUserCustomToolResultEventInput,
   ): (() => void) | undefined {
     return this.customToolBridge.claimResult(workspaceId, sessionId, event);
+  }
+
+  async interruptSession(
+    _workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> {
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      await this.interruptHandle(sessionId, existing);
+      return;
+    }
+
+    const pending = this.pendingSessions.get(sessionId);
+    if (!pending) return;
+    try {
+      const handle = await pending;
+      await this.interruptHandle(sessionId, handle);
+    } catch {
+      // Interrupting a failed/closed pending session is a no-op for callers.
+    }
   }
 
   customToolNames(
@@ -531,6 +552,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
       // Disposal below is the authoritative cleanup path.
     }
     this.evict(sessionId, handle);
+  }
+
+  private async interruptHandle(
+    sessionId: string,
+    handle: RuntimeHandle,
+  ): Promise<void> {
+    handle.session.clearQueue?.();
+    await handle.session.abort();
+    this.touch(sessionId, handle);
   }
 
   private evict(sessionId: string, handle: RuntimeHandle): void {

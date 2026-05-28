@@ -466,8 +466,7 @@ Goal: make one Managed Agents session ID (`sesn_*`) map to one reusable Pi
 2. Use Pi's native queueing instead of a control-plane mutex:
    - idle `user.message` -> `prompt(text)`
    - running `user.message` -> `followUp(text)`
-   - `user.interrupt` stays out of C.3a, but the observed target is
-     `steer(text)`/`abort()` once that event is wired.
+   - `user.interrupt` maps to Pi `abort()` once wired.
 3. Track a per-session running flag from Pi events (`agent_start`/`agent_end`) so
    the runner can choose `prompt` vs. `followUp`.
 4. Add idle-TTL eviction and `dispose()` to bound memory.
@@ -481,7 +480,7 @@ Goal: make one Managed Agents session ID (`sesn_*`) map to one reusable Pi
 
 **C.3a scope (out):**
 
-- `user.interrupt` route semantics beyond preserving the future mapping target.
+- `user.interrupt` route semantics, which later landed as an explicit event.
 - Full custom-tool blocking round trip (Cycle D).
 - Modal sandbox execution (Cycle E).
 - Idempotency hardening for duplicate `user.message`.
@@ -751,7 +750,7 @@ Current checkpoint:
 This is enough to call the project an MVP control plane with proven Docker-local execution.
 It is not enough to claim full Anthropic Managed Agents compatibility or canonical tutorial parity.
 
-Remaining parity gaps include lifecycle cleanup (`DELETE /v1/sessions`, archive, interrupt), file resources and session `resources`, evaluated permissions/tool confirmations, durable custom-tool recovery, request idempotency, agent update/versioning, span/model request events, managed remote sandbox providers, and production auth/RBAC/tenancy.
+Remaining parity gaps include archive-running-session behavior, evaluated permissions/tool confirmations, durable custom-tool recovery, request idempotency, agent update/versioning, span/model request events, managed remote sandbox providers, and production auth/RBAC/tenancy.
 
 ## Canonical Tutorial Compatibility Backlog
 
@@ -763,9 +762,8 @@ These items were found by tracing Anthropic's public Managed Agents workshop tut
 | `title` and `metadata` on `POST /v1/sessions` | Tutorials name sessions and preserve UI flags on session metadata. | Cycle B.1 |
 | `user.tool_confirmation` parsing and persistence | Permission-gated builtin/MCP tools use `tool_use_id`, separate from custom-tool `custom_tool_use_id`. | Cycle B.2 |
 | `order` on `events.list` | Tutorial UIs replay conversation history in ascending order. | Cycle B.2 |
-| `DELETE /v1/sessions/{id}`, archive, and `user.interrupt` cleanup semantics | Workshop UIs clean up sessions; long-running agents need an explicit stop path. | Cycle B.4 |
-| `POST /v1/files` and file metadata | File resources are uploaded before they can be mounted into a session. | MVP+1 resources |
-| Session `resources` with file mounts | File and memory resources are session-create inputs; real mounting belongs with sandbox lifecycle. | MVP+1 resources / Cycle E |
+| Archive-running-session parity | Upstream expects clients to interrupt running sessions before archive; OMA still best-effort-closes on archive. | Lifecycle follow-up |
+| Memory-store resources | File resources are mounted today; memory resources remain unsupported. | Resources follow-up |
 | Agent update/versioning | Tutorials update agents with optimistic version checks and rely on sessions using latest-version semantics. | MVP+1 agent lifecycle |
 | `evaluated_permission` on tool-use events | UIs show confirmation controls when a tool call evaluates to ask. | Runtime tool gating |
 | `span.model_request_start` / `span.model_request_end` | Some UIs use span boundaries for transcript grouping and usage display. | Cycle C translation or explicit deferral |

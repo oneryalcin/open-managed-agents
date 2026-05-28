@@ -35,6 +35,7 @@ import { toManagedAgentsEvent } from "./types.ts";
 
 const SUPPORTED_USER_EVENT_TYPES = new Set([
   "user.message",
+  "user.interrupt",
   "user.custom_tool_result",
   "user.tool_confirmation",
 ] as const);
@@ -52,6 +53,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly closedSessions = new Set<string>();
   private readonly deletedSessions = new Set<string>();
   private readonly activeRuntimeTasks = new Map<string, number>();
+  private readonly interruptedCustomToolActions = new Map<string, Set<string>>();
 
   constructor(
     private readonly events: SessionEventStore,
@@ -105,7 +107,25 @@ export class DefaultSessionEventsService implements SessionEventsService {
       req.events,
       opts.signal,
     );
+    this.maybeInterruptRuntime(workspaceId, sessionId, req.events);
     return rows.map(toManagedAgentsEvent);
+  }
+
+  private maybeInterruptRuntime(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    events: SendSessionEventsRequest["events"],
+  ): void {
+    if (!events.some((event) => event.type === "user.interrupt")) return;
+    this.blockInterruptedCustomToolActions(
+      sessionId,
+      this.clearPendingCustomToolActions(sessionId),
+    );
+    void Promise.resolve(
+      this.runtimeRunner?.interruptSession?.(workspaceId, sessionId),
+    ).catch((error) => {
+      console.error("runtime session interrupt failed", { sessionId, error });
+    });
   }
 
   async archiveSession(
@@ -115,6 +135,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     requireExistingSession(this.sessions, workspaceId, sessionId);
     this.closedSessions.add(sessionId);
     this.clearPendingCustomToolActions(sessionId);
+    this.interruptedCustomToolActions.delete(sessionId);
     if (!this.hasSessionEvent(sessionId, "session.status_terminated")) {
       this.persistLifecycleDrafts(sessionId, [
         { type: "session.status_terminated", payload: {} },
@@ -130,6 +151,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): Promise<void> {
     this.closedSessions.add(sessionId);
     this.clearPendingCustomToolActions(sessionId);
+    this.interruptedCustomToolActions.delete(sessionId);
     this.persistLifecycleDrafts(sessionId, [
       { type: "session.deleted", payload: {} },
     ]);
@@ -261,6 +283,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       return;
     }
     this.activeRuntimeTasks.delete(sessionId);
+    this.interruptedCustomToolActions.delete(sessionId);
     this.retireLifecycleGuardsIfIdle(sessionId);
   }
 
@@ -367,8 +390,21 @@ export class DefaultSessionEventsService implements SessionEventsService {
     events: SendSessionEventsRequest["events"],
   ): Array<{ customToolUseId: string; commit: () => void }> {
     const commits: Array<{ customToolUseId: string; commit: () => void }> = [];
+    let interruptedInBatch = false;
     for (const event of events) {
+      if (event.type === "user.interrupt") {
+        interruptedInBatch = true;
+        continue;
+      }
       if (event.type !== "user.custom_tool_result") continue;
+      if (
+        interruptedInBatch ||
+        this.interruptedCustomToolActions
+          .get(sessionId)
+          ?.has(event.custom_tool_use_id) === true
+      ) {
+        throw notFound(`No pending custom tool call: ${event.custom_tool_use_id}`);
+      }
       const commit = this.runtimeRunner?.claimCustomToolResult?.(
         workspaceId,
         sessionId,
@@ -419,11 +455,25 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
   }
 
-  private clearPendingCustomToolActions(sessionId: string): void {
+  private clearPendingCustomToolActions(sessionId: string): string[] {
     const pending = this.pendingCustomToolActions.get(sessionId);
-    if (!pending) return;
+    if (!pending) return [];
     if (pending.timer) clearTimeout(pending.timer);
     this.pendingCustomToolActions.delete(sessionId);
+    return [...pending.ids];
+  }
+
+  private blockInterruptedCustomToolActions(
+    sessionId: string,
+    customToolUseIds: readonly string[],
+  ): void {
+    if (customToolUseIds.length === 0) return;
+    let blocked = this.interruptedCustomToolActions.get(sessionId);
+    if (!blocked) {
+      blocked = new Set<string>();
+      this.interruptedCustomToolActions.set(sessionId, blocked);
+    }
+    for (const id of customToolUseIds) blocked.add(id);
   }
 
   private flushPendingCustomToolActions(sessionId: string): void {
@@ -489,7 +539,20 @@ function parseSendRequest(input: unknown): SendSessionEventsRequest {
     );
   }
   const events = value.map((item, index) => parseUserEvent(item, index));
+  rejectMixedInterruptAndMessage(events);
   return { events };
+}
+
+function rejectMixedInterruptAndMessage(
+  events: readonly SendSessionEventsRequest["events"][number][],
+): void {
+  const hasInterrupt = events.some((event) => event.type === "user.interrupt");
+  if (!hasInterrupt) return;
+  const hasMessage = events.some((event) => event.type === "user.message");
+  if (!hasMessage) return;
+  throw invalidRequest(
+    "`events` cannot mix user.interrupt and user.message in one request",
+  );
 }
 
 function parseUserEvent(
@@ -505,7 +568,7 @@ function parseUserEvent(
   const type = nonEmptyString(event.type, `events[${index}].type`);
   if (!SUPPORTED_USER_EVENT_TYPES.has(type as never)) {
     throw invalidRequest(
-      `\`events[${index}].type\` must be one of user.message, user.custom_tool_result, user.tool_confirmation`,
+      `\`events[${index}].type\` must be one of user.message, user.interrupt, user.custom_tool_result, user.tool_confirmation`,
     );
   }
   if (!isJsonValue(event)) {
@@ -514,6 +577,9 @@ function parseUserEvent(
   if (type === "user.message") {
     const content = parseContentArray(event.content, `events[${index}].content`);
     return { type: "user.message", content };
+  }
+  if (type === "user.interrupt") {
+    return { type: "user.interrupt" };
   }
   if (type === "user.custom_tool_result") {
     const customToolUseId = nonEmptyString(

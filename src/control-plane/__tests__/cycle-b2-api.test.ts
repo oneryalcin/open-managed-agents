@@ -80,6 +80,22 @@ describe("Cycle B.2 API", () => {
       expect(event).not.toHaveProperty("created_at");
     }
 
+    const interruptRes = await app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.interrupt" }],
+      }),
+    });
+    expect(interruptRes.status).toBe(200);
+    const interruptBody = (await interruptRes.json()) as {
+      data: Array<Record<string, unknown>>;
+    };
+    expect(interruptBody.data.map((event) => event.type)).toEqual([
+      "user.interrupt",
+    ]);
+    const persistedEvents = [...sendBody.data, ...interruptBody.data];
+
     const listRes = await app.request(`/v1/sessions/${session.id}/events?order=asc`);
     expect(listRes.status).toBe(200);
     expect(listRes.headers.get("request-id")).toEqual(
@@ -91,10 +107,10 @@ describe("Cycle B.2 API", () => {
     };
     expect(listBody.next_page).toBe(null);
     expect(listBody.data.map((event) => event.id)).toEqual(
-      sendBody.data.map((event) => event.id),
+      persistedEvents.map((event) => event.id),
     );
     expect(listBody.data.map((event) => event.processed_at)).toEqual(
-      sendBody.data.map((event) => event.processed_at),
+      persistedEvents.map((event) => event.processed_at),
     );
     expect((listBody.data[0].content as Array<Record<string, unknown>>)[1]).toEqual({
       type: "image",
@@ -242,7 +258,7 @@ describe("Cycle B.2 API", () => {
       }),
       400,
       "invalid_request_error",
-      "`events[0].type` must be one of user.message, user.custom_tool_result, user.tool_confirmation",
+      "`events[0].type` must be one of user.message, user.interrupt, user.custom_tool_result, user.tool_confirmation",
     );
 
     await expectError(
