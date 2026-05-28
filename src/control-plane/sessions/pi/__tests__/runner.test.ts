@@ -253,6 +253,29 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.disposed).toBe(true);
   });
 
+  it("fails closed when the runtime omits active-tool surface introspection", async () => {
+    const factory = new FakeSessionFactory();
+    const runner = new PiSessionRunner({
+      sessionFactory: async () => {
+        const session = await factory.create();
+        return {
+          prompt: session.prompt.bind(session),
+          followUp: session.followUp.bind(session),
+          abort: session.abort.bind(session),
+          dispose: session.dispose.bind(session),
+          subscribe: session.subscribe.bind(session),
+        } as unknown as PiRuntimeSession;
+      },
+      sandboxProviderSelection: { type: "none" },
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_1", "one")),
+    ).rejects.toThrow("does not expose active tool names");
+    expect(factory.sessions[0]?.disposed).toBe(true);
+  });
+
   it("does not cache a session that exposes builtins without a provider", async () => {
     const factory = new FakeSessionFactory({ activeToolNames: ["bash"] });
     const runner = new PiSessionRunner({

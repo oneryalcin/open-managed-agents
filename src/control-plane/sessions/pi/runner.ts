@@ -38,7 +38,7 @@ export interface PiRuntimeSession {
   abort(): Promise<void>;
   dispose(): void;
   subscribe(listener: (event: unknown) => void): () => void;
-  getActiveToolNames?(): string[];
+  getActiveToolNames(): string[];
 }
 
 export type PiRuntimeSessionFactory = (
@@ -513,8 +513,10 @@ function assertActiveToolSurface(
   sandbox: SandboxProvider | undefined,
   customToolNames: ReadonlySet<string>,
 ): void {
-  const activeToolNames = session.getActiveToolNames?.();
-  if (activeToolNames === undefined) return;
+  if (typeof session.getActiveToolNames !== "function") {
+    throw new Error("Pi runtime session does not expose active tool names");
+  }
+  const activeToolNames = session.getActiveToolNames();
   const expectedToolNames = new Set<string>(customToolNames);
   for (const name of sandbox?.toolNames ?? []) expectedToolNames.add(name);
   for (const name of activeToolNames) {

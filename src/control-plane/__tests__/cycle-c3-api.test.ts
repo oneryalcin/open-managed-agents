@@ -173,6 +173,10 @@ class FakeQueuedSession {
     return () => this.listeners.delete(listener);
   }
 
+  getActiveToolNames(): string[] {
+    return [];
+  }
+
   private emit(event: unknown): void {
     const type = (event as { type?: unknown }).type;
     if (type === "agent_start") this.running = true;
