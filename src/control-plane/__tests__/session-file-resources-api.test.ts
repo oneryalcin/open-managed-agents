@@ -87,9 +87,9 @@ describe("session file resources API", () => {
       first_id: null,
       last_id: null,
     });
-    expect(JSON.stringify(await jsonFrom(app.request("/v1/files?limit=10")))).not.toContain(
-      "session-mount",
-    );
+    const publicFiles = JSON.stringify(await jsonFrom(app.request("/v1/files?limit=10")));
+    expect(publicFiles).not.toContain("snapshot_file_id");
+    expect(publicFiles).not.toContain("internal");
   });
 
   it("returns resources: [] on resource-free sessions", async () => {
@@ -113,18 +113,21 @@ describe("session file resources API", () => {
     const agent = await createAgent(app);
     const environment = await createEnvironment(app);
     const file = await uploadFile(app, "probe.txt", "contents");
+    const nullDefaultFile = await uploadFile(app, "null-default.txt", "contents");
 
     const created = await createSession(app, {
       agent: agent.id,
       environment_id: environment.id,
       resources: [
         { type: "file", file_id: file.id },
+        { type: "file", file_id: nullDefaultFile.id, mount_path: null },
         { type: "file", file_id: file.id, mount_path: "data/probe.txt" },
       ],
     });
 
     expect(resourcePaths(created.resources)).toEqual([
       `/mnt/session/uploads/${file.id}`,
+      `/mnt/session/uploads/${nullDefaultFile.id}`,
       "/mnt/session/uploads/data/probe.txt",
     ]);
   });
@@ -136,6 +139,22 @@ describe("session file resources API", () => {
     [
       { resources: [{ type: "memory_store", memory_store_id: "mem_1" }] },
       "Unsupported session resource type: memory_store.",
+    ],
+    [
+      { resources: [{ type: "github_repository", url: "https://github.com/a/b" }] },
+      "Unsupported session resource type: github_repository.",
+    ],
+    [
+      { resources: [{ type: "vault", vault_id: "vlt_1" }] },
+      "Unsupported session resource type: vault.",
+    ],
+    [
+      {
+        resources: [
+          { type: "file", file_id: "file_missing", mount_path: "x", extra: true },
+        ],
+      },
+      "Unsupported session create field: `extra`.",
     ],
     [
       { resources: [{ type: "file", file_id: "file_missing", mount_path: "x" }] },
@@ -187,6 +206,31 @@ describe("session file resources API", () => {
     });
 
     await expectError(res, 400, "invalid_request_error", message);
+  });
+
+  it("rejects cross-workspace file mounts", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+
+    const res = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [
+          { type: "file", file_id: "file_looks_real_but_other_workspace" },
+        ],
+      }),
+    });
+
+    await expectError(
+      res,
+      400,
+      "invalid_request_error",
+      "File file_looks_real_but_other_workspace not found",
+    );
   });
 });
 

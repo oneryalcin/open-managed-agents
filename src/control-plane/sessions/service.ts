@@ -29,13 +29,25 @@ import type {
 const MAX_SESSION_FILE_RESOURCES = 10;
 const MAX_SESSION_MOUNTED_BYTES = 50 * 1024 * 1024;
 
+export interface DefaultSessionServiceOptions {
+  maxFileResources?: number;
+  maxMountedBytes?: number;
+}
+
 export class DefaultSessionService implements SessionService {
+  private readonly maxFileResources: number;
+  private readonly maxMountedBytes: number;
+
   constructor(
     private readonly store: SessionStore,
     private readonly agents: AgentStore,
     private readonly environments: EnvironmentStore,
     private readonly files?: FileStorage,
-  ) {}
+    opts: DefaultSessionServiceOptions = {},
+  ) {
+    this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
+    this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
+  }
 
   async create(
     workspaceId: WorkspaceId,
@@ -154,8 +166,10 @@ export class DefaultSessionService implements SessionService {
     if (!this.files) {
       throw invalidRequest("File resources are not supported by this server.");
     }
-    if (resources.length > MAX_SESSION_FILE_RESOURCES) {
-      throw invalidRequest("Session file resources exceed the 10 file limit");
+    if (resources.length > this.maxFileResources) {
+      throw invalidRequest(
+        `Session file resources exceed the ${this.maxFileResources} file limit`,
+      );
     }
 
     const normalized = normalizeSessionFileResources(
@@ -188,8 +202,10 @@ export class DefaultSessionService implements SessionService {
         throw invalidRequest(`File ${resource.fileId} failed integrity validation`);
       }
       totalBytes += bytes.byteLength;
-      if (totalBytes > MAX_SESSION_MOUNTED_BYTES) {
-        throw invalidRequest("Session file resources exceed the 50 MiB mounted byte limit");
+      if (totalBytes > this.maxMountedBytes) {
+        throw invalidRequest(
+          `Session file resources exceed the ${limitLabel(this.maxMountedBytes)} mounted byte limit`,
+        );
       }
       prepared.push({
         source,
@@ -424,13 +440,10 @@ function resourceField(
   }
   rejectUnknownFields(value, ["type", "file_id", "mount_path"]);
   const mountPath = nullableStringField(value, "mount_path");
-  if (mountPath === null) {
-    throw invalidRequest(`\`resources[${index}].mount_path\` must be a string`);
-  }
   return {
     type,
     file_id: resourceStringField(value, "file_id", index),
-    ...(mountPath === undefined ? {} : { mount_path: mountPath }),
+    ...(mountPath === undefined || mountPath === null ? {} : { mount_path: mountPath }),
   };
 }
 
@@ -462,4 +475,9 @@ async function consumeBytes(stream: AsyncIterable<Uint8Array>): Promise<Uint8Arr
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function limitLabel(bytes: number): string {
+  if (bytes % (1024 * 1024) === 0) return `${bytes / (1024 * 1024)} MiB`;
+  return `${bytes} bytes`;
 }

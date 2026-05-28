@@ -142,10 +142,77 @@ describe("session service/store", () => {
       .toEqual([]);
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
   });
+
+  it("enforces injectable session resource count and mounted-byte limits", async () => {
+    const fixture = createFixture({
+      fileStorage: true,
+      maxFileResources: 2,
+      maxMountedBytes: 6,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const files = [];
+    for (const name of ["a", "b", "c"]) {
+      files.push(
+        await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+          filename: `${name}.txt`,
+          mimeType: "text/plain",
+          body: bytes("xxx"),
+        }),
+      );
+    }
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: files.map((file, index) => ({
+          type: "file",
+          file_id: file.metadata.id,
+          mount_path: `${index}.txt`,
+        })),
+      }),
+    ).rejects.toThrow("2 file limit");
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: files.slice(0, 2).map((file, index) => ({
+          type: "file",
+          file_id: file.metadata.id,
+          mount_path: `${index}.txt`,
+        })),
+      }),
+    ).resolves.toMatchObject({
+      resources: expect.arrayContaining([
+        expect.objectContaining({ file_id: files[0]!.metadata.id }),
+        expect.objectContaining({ file_id: files[1]!.metadata.id }),
+      ]),
+    });
+
+    const tooLarge = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "large.txt",
+      mimeType: "text/plain",
+      body: bytes("xxxxxxx"),
+    });
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: tooLarge.metadata.id }],
+      }),
+    ).rejects.toThrow("6 bytes mounted byte limit");
+  });
 });
 
 function createFixture(
-  opts: { fileStorage?: boolean; failSessionCreate?: boolean } = {},
+  opts: {
+    fileStorage?: boolean;
+    failSessionCreate?: boolean;
+    maxFileResources?: number;
+    maxMountedBytes?: number;
+  } = {},
 ): {
   sessions: DefaultSessionService;
   sessionStore: SqliteSessionStore;
@@ -167,6 +234,14 @@ function createFixture(
     agentStore,
     environmentStore,
     fileStorage,
+    {
+      ...(opts.maxFileResources === undefined
+        ? {}
+        : { maxFileResources: opts.maxFileResources }),
+      ...(opts.maxMountedBytes === undefined
+        ? {}
+        : { maxMountedBytes: opts.maxMountedBytes }),
+    },
   );
 
   return {
