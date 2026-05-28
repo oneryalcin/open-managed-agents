@@ -56,14 +56,6 @@ export class DefaultFileService implements FileService {
     workspaceId: WorkspaceId,
     opts: FileListOptions = {},
   ): Promise<ManagedAgentsFileListPage> {
-    if (!this.storage.list) {
-      return {
-        data: [],
-        has_more: false,
-        first_id: null,
-        last_id: null,
-      };
-    }
     const page = await this.storage.list(workspaceId, opts);
     return {
       data: page.data.map((record) => record.metadata),

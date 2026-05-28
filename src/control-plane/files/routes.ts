@@ -48,10 +48,10 @@ export function filesRoutes(service: FileService): Hono {
     const scopeId = c.req.query("scope_id") || undefined;
     return c.json(
       await service.list(DEFAULT_WORKSPACE_ID, {
-        ...(limit === undefined ? {} : { limit }),
-        ...(afterId === undefined ? {} : { afterId }),
-        ...(beforeId === undefined ? {} : { beforeId }),
-        ...(scopeId === undefined ? {} : { scopeId }),
+        limit,
+        afterId,
+        beforeId,
+        scopeId,
       }),
       200,
     );

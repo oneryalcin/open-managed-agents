@@ -60,7 +60,7 @@ export interface FileStorage {
     fileId: string,
   ): Promise<AsyncIterable<Uint8Array> | undefined>;
   delete(workspaceId: WorkspaceId, fileId: string): Promise<boolean>;
-  list?(
+  list(
     workspaceId: WorkspaceId,
     opts?: FileListOptions,
   ): Promise<FileStoragePage>;
