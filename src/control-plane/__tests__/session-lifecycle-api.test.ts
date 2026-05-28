@@ -127,6 +127,7 @@ describe("session lifecycle API", () => {
         { method: "POST" },
       );
       expect(archiveRes.status).toBe(200);
+      expect(runner.closed).toContain(archivedSession.id);
       const archiveEvents = await listEvents(app, archivedSession.id);
       expect(archiveEvents.data.map((event) => event.type)).toEqual([
         "user.message",
@@ -138,6 +139,7 @@ describe("session lifecycle API", () => {
         method: "DELETE",
       });
       expect(deleteRes.status).toBe(200);
+      expect(runner.closed).toContain(deletedSession.id);
       expect((await app.request(`/v1/sessions/${deletedSession.id}`)).status)
         .toBe(404);
       expect((await app.request(`/v1/sessions/${deletedSession.id}/events`)).status)
@@ -163,10 +165,11 @@ describe("session lifecycle API", () => {
       method: "DELETE",
     });
     expect(deleteRes.status).toBe(200);
-    const text = await streamText;
+    const text = await withTimeout(streamText, 1_000);
 
-    expect(text).toContain("event: user.message");
-    expect(text).toContain("event: session.deleted");
+    const events = text.match(/^event: .+$/gm) ?? [];
+    expect(events.at(0)).toBe("event: user.message");
+    expect(events.at(-1)).toBe("event: session.deleted");
   });
 
   it("does not append late runtime output after archive closes the session", async () => {
@@ -254,6 +257,23 @@ class DelayedRunner implements RuntimeEventRunner {
 
 async function delay(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`timed out after ${ms}ms`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function viSpyConsoleError(): { restore(): void } {
