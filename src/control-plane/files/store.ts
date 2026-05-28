@@ -122,7 +122,10 @@ export class InMemoryFileStorage implements FileStorage {
         : opts.afterId !== undefined
           ? rows.filter((row) => row.metadata.id > opts.afterId!)
           : rows;
-    const pageRows = cursorRows.slice(0, limit);
+    const pageRows =
+      opts.beforeId === undefined
+        ? cursorRows.slice(0, limit)
+        : cursorRows.slice(-limit);
     return {
       data: pageRows,
       has_more: cursorRows.length > limit,

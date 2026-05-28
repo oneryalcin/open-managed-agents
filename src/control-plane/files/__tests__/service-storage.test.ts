@@ -67,6 +67,39 @@ describe("FileService + InMemoryFileStorage", () => {
     expect(one.id).not.toBe(two.id);
   });
 
+  it("returns the page adjacent to before_id when paginating backward", async () => {
+    const service = new DefaultFileService(new InMemoryFileStorage());
+    const files = [];
+    for (const name of ["a", "b", "c", "d", "e"]) {
+      files.push(
+        await service.upload(WORKSPACE_A, {
+          filename: `${name}.txt`,
+          mimeType: "text/plain",
+          body: bytes(name),
+        }),
+      );
+    }
+    files.sort((a, b) => a.id.localeCompare(b.id));
+    const [a, b, c, d] = files;
+
+    await expect(
+      service.list(WORKSPACE_A, { beforeId: d!.id, limit: 2 }),
+    ).resolves.toMatchObject({
+      data: [b, c],
+      has_more: true,
+      first_id: b!.id,
+      last_id: c!.id,
+    });
+    await expect(
+      service.list(WORKSPACE_A, { afterId: a!.id, limit: 2 }),
+    ).resolves.toMatchObject({
+      data: [b, c],
+      has_more: true,
+      first_id: b!.id,
+      last_id: c!.id,
+    });
+  });
+
   it("scopes metadata, bytes, lists, and deletes by workspace", async () => {
     const storage = new InMemoryFileStorage();
     const service = new DefaultFileService(storage);
