@@ -71,6 +71,7 @@ export interface StreamSessionEventsOptions {
 
 export interface SessionEventBroadcaster {
   publishPersisted(events: readonly PersistedSessionEvent[]): void;
+  closeSession(sessionId: string): void;
   subscribe(
     sessionId: string,
     opts?: { lastSeenId?: string; signal?: AbortSignal },
@@ -87,7 +88,6 @@ export interface SessionEventsService {
   archiveSession(
     workspaceId: WorkspaceId,
     sessionId: string,
-    opts?: { emitTerminalEvent?: boolean },
   ): Promise<void>;
   deleteSession(
     workspaceId: WorkspaceId,

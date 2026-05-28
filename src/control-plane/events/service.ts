@@ -110,17 +110,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
   async archiveSession(
     workspaceId: WorkspaceId,
     sessionId: string,
-    opts: { emitTerminalEvent?: boolean } = {},
   ): Promise<void> {
     requireExistingSession(this.sessions, workspaceId, sessionId);
     this.closedSessions.add(sessionId);
     this.clearPendingCustomToolActions(sessionId);
-    await this.runtimeRunner?.closeSession?.(workspaceId, sessionId);
-    if (opts.emitTerminalEvent ?? true) {
+    if (!this.hasSessionEvent(sessionId, "session.status_terminated")) {
       this.persistLifecycleDrafts(sessionId, [
         { type: "session.status_terminated", payload: {} },
       ]);
     }
+    await this.closeRuntimeBestEffort(workspaceId, sessionId);
   }
 
   async deleteSession(
@@ -128,10 +127,29 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
   ): Promise<void> {
     this.closedSessions.add(sessionId);
-    this.deletedSessions.add(sessionId);
     this.clearPendingCustomToolActions(sessionId);
-    await this.runtimeRunner?.closeSession?.(workspaceId, sessionId);
+    this.persistLifecycleDrafts(sessionId, [
+      { type: "session.deleted", payload: {} },
+    ]);
+    this.broadcaster.closeSession(sessionId);
+    this.deletedSessions.add(sessionId);
+    await this.closeRuntimeBestEffort(workspaceId, sessionId);
     this.events.deleteForSession(sessionId);
+  }
+
+  private async closeRuntimeBestEffort(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      await this.runtimeRunner?.closeSession?.(workspaceId, sessionId);
+    } catch (error) {
+      console.error("runtime session cleanup failed", { sessionId, error });
+    }
+  }
+
+  private hasSessionEvent(sessionId: string, type: string): boolean {
+    return this.events.list(sessionId, { limit: 1, types: [type] }).length > 0;
   }
 
   list(

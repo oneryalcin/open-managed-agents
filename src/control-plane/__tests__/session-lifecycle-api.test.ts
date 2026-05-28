@@ -112,6 +112,63 @@ describe("session lifecycle API", () => {
     expect(archivedList.data.map((s) => s.id)).not.toContain(session.id);
   });
 
+  it("treats runtime cleanup failures as best-effort during archive/delete", async () => {
+    const errorSpy = viSpyConsoleError();
+    try {
+      const runner = new ThrowingCloseRunner();
+      const app = createInMemoryControlPlaneApp({
+        runtime: { runner, translate: () => [] },
+      });
+      const archivedSession = await setupSession(app);
+      await sendMessage(app, archivedSession.id, "before archive");
+
+      const archiveRes = await app.request(
+        `/v1/sessions/${archivedSession.id}/archive`,
+        { method: "POST" },
+      );
+      expect(archiveRes.status).toBe(200);
+      const archiveEvents = await listEvents(app, archivedSession.id);
+      expect(archiveEvents.data.map((event) => event.type)).toEqual([
+        "user.message",
+        "session.status_terminated",
+      ]);
+
+      const deletedSession = await setupSession(app);
+      const deleteRes = await app.request(`/v1/sessions/${deletedSession.id}`, {
+        method: "DELETE",
+      });
+      expect(deleteRes.status).toBe(200);
+      expect((await app.request(`/v1/sessions/${deletedSession.id}`)).status)
+        .toBe(404);
+      expect((await app.request(`/v1/sessions/${deletedSession.id}/events`)).status)
+        .toBe(404);
+    } finally {
+      errorSpy.restore();
+    }
+  });
+
+  it("sends a terminal deletion event to live streams before closing them", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "before stream delete");
+
+    const streamRes = await app.request(
+      `/v1/sessions/${session.id}/events/stream`,
+    );
+    expect(streamRes.status).toBe(200);
+    const streamText = streamRes.text();
+    await delay(10);
+
+    const deleteRes = await app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(deleteRes.status).toBe(200);
+    const text = await streamText;
+
+    expect(text).toContain("event: user.message");
+    expect(text).toContain("event: session.deleted");
+  });
+
   it("does not append late runtime output after archive closes the session", async () => {
     const runner = new DelayedRunner();
     const app = createInMemoryControlPlaneApp({
@@ -159,6 +216,16 @@ class CloseTrackingRunner implements RuntimeEventRunner {
   }
 }
 
+class ThrowingCloseRunner extends CloseTrackingRunner {
+  override async closeSession(
+    workspaceId: string,
+    sessionId: string,
+  ): Promise<void> {
+    await super.closeSession(workspaceId, sessionId);
+    throw new Error("runtime cleanup failed");
+  }
+}
+
 class DelayedRunner implements RuntimeEventRunner {
   private resume: (() => void) | undefined;
   readonly started: Promise<void>;
@@ -187,6 +254,16 @@ class DelayedRunner implements RuntimeEventRunner {
 
 async function delay(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function viSpyConsoleError(): { restore(): void } {
+  const original = console.error;
+  console.error = () => {};
+  return {
+    restore() {
+      console.error = original;
+    },
+  };
 }
 
 async function setupSession(

@@ -44,12 +44,8 @@ export function sessionsRoutes(
 
   app.post("/:id/archive", async (c) => {
     const sessionId = c.req.param("id");
-    const before = service.retrieve(DEFAULT_WORKSPACE_ID, sessionId);
     const session = service.archive(DEFAULT_WORKSPACE_ID, sessionId);
-    await events.archiveSession(DEFAULT_WORKSPACE_ID, sessionId, {
-      emitTerminalEvent:
-        before.archived_at === null && before.status !== "terminated",
-    });
+    await events.archiveSession(DEFAULT_WORKSPACE_ID, sessionId);
     return c.json(session, 200);
   });
 
