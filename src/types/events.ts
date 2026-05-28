@@ -86,8 +86,13 @@ export interface ManagedAgentsUserToolConfirmationEventInput {
   deny_message?: string | null;
 }
 
+export interface ManagedAgentsUserInterruptEventInput {
+  type: "user.interrupt";
+}
+
 export type ManagedAgentsUserEventInput =
   | ManagedAgentsUserMessageEventInput
+  | ManagedAgentsUserInterruptEventInput
   | ManagedAgentsUserCustomToolResultEventInput
   | ManagedAgentsUserToolConfirmationEventInput;
 

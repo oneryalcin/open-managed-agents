@@ -37,6 +37,8 @@ Working today:
 - event listing and SSE streaming with reconnect support;
 - explicit Pi runtime wiring for agent execution;
 - public custom-tool pause/resume round trips;
+- `user.interrupt` aborts active Pi turns without disposing reusable sessions;
+- file upload resources and Docker-local session file mounts;
 - guarded local passthrough provider for development tests;
 - Docker-local sandbox provider as the first real isolation provider;
 - fail-closed provider selection;
@@ -44,10 +46,9 @@ Working today:
 - live proof that a served session can execute `bash` inside Docker and record
   the expected `agent.tool_use` / `agent.tool_result` events.
 
-Still missing before claiming Anthropic tutorial parity:
+Still missing before claiming broad Anthropic Managed Agents parity:
 
-- interrupt cleanup;
-- file resources and session `resources`;
+- archive-running-session parity;
 - permission/evaluated tool confirmations;
 - durable recovery for pending custom-tool waits;
 - request-level idempotency;

@@ -122,6 +122,10 @@ export interface RuntimeEventRunner {
     sessionId: string,
     event: ManagedAgentsUserCustomToolResultEventInput,
   ): (() => void) | undefined;
+  interruptSession?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> | void;
   closeSession?(
     workspaceId: WorkspaceId,
     sessionId: string,

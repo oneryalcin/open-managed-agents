@@ -212,6 +212,137 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(session.disposed).toBe(true);
   });
 
+  it("interruptSession aborts and clears queued follow-ups without disposing the active session", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    const second = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    expect(second).toEqual([]);
+    expect(factory.sessions[0]?.followUps).toEqual(["two"]);
+
+    await runner.interruptSession("wrk", "sesn_1");
+
+    expect(factory.sessions[0]?.aborts).toBe(1);
+    expect(factory.sessions[0]?.clearQueues).toBe(1);
+    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.disposed).toBe(false);
+
+    gate.resolve();
+    const firstEvents = await first;
+    expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "three"));
+    expect(factory.sessions).toHaveLength(1);
+    expect(factory.sessions[0]?.prompts).toEqual(["one", "three"]);
+  });
+
+  it("interruptSession clears follow-ups queued by the prompt-race fallback", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({
+      promptGate: gate.promise,
+      throwAlreadyProcessingAfterFirstPrompt: true,
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await until(() => factory.sessions[0]?.followUps.length === 1);
+
+    await runner.interruptSession("wrk", "sesn_1");
+    gate.resolve();
+
+    const firstEvents = await first;
+    const secondEvents = await second;
+    expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
+    expect(secondEvents).toEqual([]);
+    expect(factory.sessions[0]?.clearQueues).toBe(1);
+  });
+
+  it("interruptSession is idempotent and harmless for idle or missing sessions", async () => {
+    const factory = new FakeSessionFactory();
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    await runner.interruptSession("wrk", "sesn_missing");
+    await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    expect(factory.sessions[0]?.running).toBe(false);
+
+    await runner.interruptSession("wrk", "sesn_1");
+    await runner.interruptSession("wrk", "sesn_1");
+
+    expect(factory.sessions[0]?.aborts).toBe(2);
+    expect(factory.sessions[0]?.clearQueues).toBe(2);
+    expect(factory.sessions[0]?.disposed).toBe(false);
+  });
+
+  it("interruptSession does not surface failed pending session creation", async () => {
+    const created = deferred<PiRuntimeSession>();
+    const runner = new PiSessionRunner({
+      sessionFactory: () => created.promise,
+      idleTtlMs: 0,
+    });
+    const run = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await delay(10);
+
+    const interrupt = runner.interruptSession("wrk", "sesn_1");
+    created.reject(new Error("session creation failed"));
+
+    await expect(interrupt).resolves.toBeUndefined();
+    await expect(run).rejects.toThrow("session creation failed");
+  });
+
+  it("interruptSession aborts a pending session once it materializes", async () => {
+    const created = deferred<PiRuntimeSession>();
+    const runner = new PiSessionRunner({
+      sessionFactory: () => created.promise,
+      idleTtlMs: 0,
+    });
+    const run = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await delay(10);
+
+    const interrupt = runner.interruptSession("wrk", "sesn_1");
+    const session = new FakeSession();
+    created.resolve(session);
+
+    await interrupt;
+    expect(session.aborts).toBe(1);
+    expect(session.clearQueues).toBe(1);
+    expect(session.disposed).toBe(false);
+    await run;
+  });
+
+  it("closeSession still disposes after a prior interrupt", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const run = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    await runner.interruptSession("wrk", "sesn_1");
+    await runner.closeSession("wrk", "sesn_1");
+
+    expect(factory.sessions[0]?.aborts).toBe(2);
+    expect(factory.sessions[0]?.disposed).toBe(true);
+    gate.resolve();
+    await run;
+  });
+
   it("prepareSession materializes file mounts and reuses the prepared session", async () => {
     const factory = new FakeSessionFactory();
     const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
@@ -731,6 +862,7 @@ class FakeSession implements PiRuntimeSession {
   running = false;
   disposed = false;
   aborts = 0;
+  clearQueues = 0;
   private threwAlreadyProcessing = false;
 
   constructor(private readonly opts: FakeSessionOptions = {}) {
@@ -825,6 +957,13 @@ class FakeSession implements PiRuntimeSession {
     this.aborts += 1;
   }
 
+  clearQueue(): { steering: string[]; followUp: string[] } {
+    this.clearQueues += 1;
+    const followUp = [...this.followUps];
+    this.followUps.length = 0;
+    return { steering: [], followUp };
+  }
+
   dispose(): void {
     this.disposed = true;
     this.listeners.clear();
@@ -910,12 +1049,15 @@ function messageTexts(events: unknown[]): string[] {
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((r, j) => {
     resolve = r;
+    reject = j;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function until(predicate: () => boolean): Promise<void> {

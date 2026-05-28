@@ -329,7 +329,7 @@ The probe should use the cheapest model that reliably exercises `bash`. It shoul
 
 ## Follow-ups
 
-- Implement `user.interrupt` and align archive-running-session semantics with upstream ([#37](https://github.com/oneryalcin/open-managed-agents/issues/37)).
+- Align archive-running-session semantics with upstream's reject-then-interrupt-first pattern (the `user.interrupt` event itself is implemented; [#37](https://github.com/oneryalcin/open-managed-agents/issues/37)).
 - Extend `requires_action` semantics to builtin permission confirmations ([#38](https://github.com/oneryalcin/open-managed-agents/issues/38)).
 - Add `agents.archive` parity endpoint ([#39](https://github.com/oneryalcin/open-managed-agents/issues/39)).
 - Add output artifact support under `/mnt/session/outputs`.

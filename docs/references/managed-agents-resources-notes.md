@@ -36,8 +36,8 @@ Purpose: collect parity notes from Anthropic Managed Agents docs, the
   `user.tool_confirmation` for gated tool calls. This confirms resources are
   only one parity layer, not the whole next milestone.
 - `agent-battle` sends `user.interrupt` before `sessions.archive()` because
-  archiving a running session can reject. OMA currently archives by closing
-  runtime best-effort; parity may need explicit interrupt semantics later.
+  archiving a running session can reject. OMA now has explicit interrupt
+  semantics; archive-running-session parity remains a separate lifecycle gap.
 - Stream reconnect is a real pattern: `agent-battle` loops on
   `sessions.events.stream(session.id)` reconnect after transport errors while
   the cloud session keeps running.
@@ -224,8 +224,8 @@ Read:
 - **Session cleanup patterns differ by verb.** Agent-battle sends
   `user.interrupt` before `sessions.archive()` because archiving a running
   cloud session can reject. `ship-your-first-managed-agent` uses
-  `sessions.delete()` for cleanup. OMA currently best-effort-closes on archive;
-  interrupt semantics are still a parity gap.
+  `sessions.delete()` for cleanup. OMA now supports `user.interrupt`; archive
+  still best-effort-closes instead of rejecting running sessions first.
 - **Do not overfit resource design to one tutorial.** Resources support files,
   memory stores, and eventually vault/MCP access. First PR can be file-only,
   but parser/storage types should leave room for a discriminated union without
