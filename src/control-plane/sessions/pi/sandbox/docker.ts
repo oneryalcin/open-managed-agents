@@ -101,13 +101,22 @@ export function createDockerSandboxProviderFactory(
   opts: DockerSandboxOptions = {},
 ): SandboxProviderFactory {
   let swept = false;
+  let sweepPromise: Promise<void> | undefined;
   return async (workspaceId, sessionId) => {
     if (!swept && opts.reapStaleContainersOlderThanMs !== undefined) {
-      swept = true;
-      await reapDockerSandboxContainers({
+      sweepPromise ??= reapDockerSandboxContainers({
         dockerCommand: opts.dockerCommand,
         olderThanMs: opts.reapStaleContainersOlderThanMs,
-      });
+      }).then(
+        () => {
+          swept = true;
+        },
+        (error: unknown) => {
+          sweepPromise = undefined;
+          throw error;
+        },
+      );
+      await sweepPromise;
     }
     return createDockerSandboxProvider(workspaceId, sessionId, opts);
   };
@@ -658,6 +667,8 @@ export async function reapDockerSandboxContainers(
     "-aq",
     "--filter",
     `label=${SANDBOX_LABEL_KEY}=${SANDBOX_LABEL_VALUE}`,
+    "--filter",
+    `label=${OWNER_LABEL_KEY}=${OWNER_LABEL_VALUE}`,
     ...(opts.labelFilters?.flatMap((label) => [
       "--filter",
       `label=${label}`,

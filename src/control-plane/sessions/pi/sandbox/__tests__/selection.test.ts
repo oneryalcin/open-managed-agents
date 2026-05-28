@@ -33,6 +33,12 @@ describe("sandbox provider selection (Cycle E.3)", () => {
     ).toThrow("`unsafeAllowHostPassthrough` is only valid");
     expect(() =>
       parseSandboxProviderSelection({
+        type: "docker-local",
+        reapStaleContainersOlderThanMs: 0,
+      }),
+    ).toThrow("`reapStaleContainersOlderThanMs` must be a positive integer");
+    expect(() =>
+      parseSandboxProviderSelection({
         type: "none",
         unsafeAllowHostPassthrough: true,
       }),
@@ -83,6 +89,7 @@ describe("sandbox provider selection (Cycle E.3)", () => {
       type: "docker-local",
       envAllowlist: ["PATH"],
       operationTimeoutMs: 1000,
+      reapStaleContainersOlderThanMs: 60_000,
     });
 
     expect(() => resolveSandboxProviderFactory(selection)).toThrow(

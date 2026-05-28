@@ -19,8 +19,8 @@ OMA_* deployment config
 ```
 
 It does not prove full Anthropic Managed Agents tutorial parity yet. File
-resources, `DELETE /v1/sessions`, permission prompts, durable custom-tool
-recovery, and managed remote providers are still tracked separately.
+resources, permission prompts, durable custom-tool recovery, and managed
+remote providers are still tracked separately.
 
 ## Prerequisites
 
@@ -126,6 +126,15 @@ npx tsx server.ts
 Docker-local is default-closed. If `OMA_ALLOW_DOCKER_LOCAL=true` is missing,
 the app fails during construction instead of silently running tools on the
 host.
+
+Docker-local also enables a label-scoped orphan-container reaper by default.
+It removes stale Open Managed Agents Docker-local containers older than 24
+hours before the first Docker-local session starts in the process. Override
+that age only when you need a different local durability posture:
+
+```bash
+OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS=86400000
+```
 
 ## Troubleshooting
 

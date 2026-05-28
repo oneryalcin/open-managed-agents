@@ -10,11 +10,15 @@ export const DEPLOYMENT_RUNTIME_ENV_KEYS = [
   "OMA_SANDBOX_PROVIDER",
   "OMA_SANDBOX_ENV_ALLOWLIST",
   "OMA_SANDBOX_OPERATION_TIMEOUT_MS",
+  "OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS",
   "OMA_ALLOW_DOCKER_LOCAL",
   "OMA_ALLOW_UNSAFE_HOST_PASSTHROUGH",
   "OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH",
   "OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT",
 ] as const;
+
+export const DEFAULT_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS =
+  24 * 60 * 60 * 1000;
 
 export type DeploymentRuntimeEnvKey =
   (typeof DEPLOYMENT_RUNTIME_ENV_KEYS)[number];
@@ -59,6 +63,8 @@ export function parseDeploymentRuntimeConfigFromEnv(
       type: "docker-local",
       ...envAllowlist(env),
       ...operationTimeoutMs(env),
+      reapStaleContainersOlderThanMs:
+        dockerReapStaleContainersOlderThanMs(env),
     });
     return validateDeploymentRuntimeConfig({
       sandboxProviderSelection: selection,
@@ -168,11 +174,34 @@ function operationTimeoutMs(
 ): { operationTimeoutMs?: number } {
   const raw = optionalString(env.OMA_SANDBOX_OPERATION_TIMEOUT_MS);
   if (raw === undefined) return {};
+  const value = parsePositiveInteger(
+    raw,
+    "OMA_SANDBOX_OPERATION_TIMEOUT_MS",
+  );
+  return { operationTimeoutMs: value };
+}
+
+function dockerReapStaleContainersOlderThanMs(
+  env: DeploymentRuntimeEnv,
+): number {
+  const raw = optionalString(env.OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS);
+  return raw === undefined
+    ? DEFAULT_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS
+    : parsePositiveInteger(
+        raw,
+        "OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS",
+      );
+}
+
+function parsePositiveInteger(
+  raw: string,
+  name: DeploymentRuntimeEnvKey,
+): number {
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0 || String(value) !== raw) {
-    throw new Error("OMA_SANDBOX_OPERATION_TIMEOUT_MS must be a positive integer");
+    throw new Error(`${name} must be a positive integer`);
   }
-  return { operationTimeoutMs: value };
+  return value;
 }
 
 function rejectProviderSpecificEnv(
@@ -237,6 +266,11 @@ function rejectDockerEnv(env: DeploymentRuntimeEnv, context: string): void {
   }
   if (env.OMA_SANDBOX_OPERATION_TIMEOUT_MS !== undefined) {
     throw new Error(`OMA_SANDBOX_OPERATION_TIMEOUT_MS is ignored by ${context}`);
+  }
+  if (env.OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS !== undefined) {
+    throw new Error(
+      `OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS is ignored by ${context}`,
+    );
   }
 }
 

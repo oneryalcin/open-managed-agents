@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertInsideDockerWorkspace,
@@ -13,6 +16,7 @@ import {
   buildDockerStatCommand,
   buildDockerWriteFileCommand,
   createBashDispatchFilter,
+  createDockerSandboxProviderFactory,
   createDockerSandboxProvider,
   directoryNamesPrunedByIgnoreGlobs,
   filterDockerEnv,
@@ -261,6 +265,160 @@ describe("Docker sandbox provider command construction", () => {
         new Set(["PATH"]),
       ),
     ).toEqual({ PATH: "/usr/bin" });
+  });
+});
+
+describe("Docker sandbox provider factory", () => {
+  it("shares the one-time stale container sweep across concurrent first sessions", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oma-docker-reaper-"));
+    const logPath = join(dir, "docker.log");
+    const dockerPath = join(dir, "docker");
+    await writeFile(
+      dockerPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${logPath}"
+case "$1" in
+  ps)
+    printf 'stale-container\\n'
+    ;;
+  inspect)
+    printf '"2000-01-01T00:00:00.000000000Z"\\n'
+    ;;
+  rm)
+    ;;
+  run)
+    ;;
+  *)
+    printf 'unexpected docker command: %s\\n' "$1" >&2
+    exit 1
+    ;;
+esac
+`,
+    );
+    await chmod(dockerPath, 0o755);
+    const factory = createDockerSandboxProviderFactory({
+      dockerCommand: dockerPath,
+      reapStaleContainersOlderThanMs: 1,
+    });
+
+    try {
+      const providers = await Promise.all([
+        factory("wrk", "sesn_a"),
+        factory("wrk", "sesn_b"),
+      ]);
+      providers.forEach((provider) => provider.dispose());
+
+      const calls = (await readFile(logPath, "utf8")).trim().split("\n");
+      expect(calls.filter((call) => call.startsWith("ps "))).toHaveLength(1);
+      expect(calls.filter((call) => call.startsWith("inspect "))).toHaveLength(
+        1,
+      );
+      expect(calls.filter((call) => call.startsWith("run "))).toHaveLength(2);
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
+  it("retries the one-time stale container sweep after a failed attempt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oma-docker-reaper-retry-"));
+    const logPath = join(dir, "docker.log");
+    const statePath = join(dir, "failed-once");
+    const dockerPath = join(dir, "docker");
+    await writeFile(
+      dockerPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${logPath}"
+case "$1" in
+  ps)
+    if [[ ! -f "${statePath}" ]]; then
+      : > "${statePath}"
+      printf 'transient docker failure\\n' >&2
+      exit 1
+    fi
+    ;;
+  run)
+    ;;
+  rm)
+    ;;
+  *)
+    printf 'unexpected docker command: %s\\n' "$1" >&2
+    exit 1
+    ;;
+esac
+`,
+    );
+    await chmod(dockerPath, 0o755);
+    const factory = createDockerSandboxProviderFactory({
+      dockerCommand: dockerPath,
+      reapStaleContainersOlderThanMs: 1,
+    });
+
+    try {
+      await expect(factory("wrk", "sesn_first")).rejects.toThrow(
+        "transient docker failure",
+      );
+      const provider = await factory("wrk", "sesn_retry");
+      provider.dispose();
+
+      const calls = (await readFile(logPath, "utf8")).trim().split("\n");
+      expect(calls.filter((call) => call.startsWith("ps "))).toHaveLength(2);
+      expect(calls.filter((call) => call.startsWith("run "))).toHaveLength(1);
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
+  it("reaps only containers older than the configured threshold", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oma-docker-reaper-threshold-"));
+    const logPath = join(dir, "docker.log");
+    const dockerPath = join(dir, "docker");
+    await writeFile(
+      dockerPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${logPath}"
+case "$1" in
+  ps)
+    printf 'old-container\\nyoung-container\\n'
+    ;;
+  inspect)
+    if [[ "$2" == "old-container" ]]; then
+      printf '"2026-05-28T10:00:00.000000000Z"\\n'
+    else
+      printf '"2026-05-28T10:59:00.000000000Z"\\n'
+    fi
+    ;;
+  rm)
+    ;;
+  *)
+    printf 'unexpected docker command: %s\\n' "$1" >&2
+    exit 1
+    ;;
+esac
+`,
+    );
+    await chmod(dockerPath, 0o755);
+
+    try {
+      await expect(
+        reapDockerSandboxContainers({
+          dockerCommand: dockerPath,
+          olderThanMs: 30 * 60 * 1000,
+          now: () => new Date("2026-05-28T11:00:00.000Z").getTime(),
+        }),
+      ).resolves.toBe(1);
+
+      const calls = (await readFile(logPath, "utf8")).trim().split("\n");
+      expect(calls.filter((call) => call.startsWith("inspect "))).toHaveLength(
+        2,
+      );
+      expect(calls).toContain("rm -f old-container");
+      expect(calls).not.toContain("rm -f young-container");
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
   });
 });
 
@@ -610,6 +768,41 @@ describe("Docker sandbox provider integration", () => {
       expect(containersForLabel(label)).toEqual([]);
     } finally {
       provider.dispose();
+    }
+  }, 60_000);
+
+  dockerIt("does not reap containers missing the Open Managed Agents owner label", async () => {
+    const label = `oma-docker-reap-owner-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const result = spawnSync(
+      "docker",
+      [
+        "run",
+        "-d",
+        "--label",
+        "open-managed-agents.sandbox=docker-local",
+        "--label",
+        `open-managed-agents.test-id=${label}`,
+        "bash:5.2",
+        "sleep",
+        "600",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+    const containerId = result.stdout.trim();
+    try {
+      expect(containersForLabel(label)).toContain(containerId.slice(0, 12));
+      await expect(
+        reapDockerSandboxContainers({
+          olderThanMs: 0,
+          labelFilters: [`open-managed-agents.test-id=${label}`],
+        }),
+      ).resolves.toBe(0);
+      expect(containersForLabel(label)).toContain(containerId.slice(0, 12));
+    } finally {
+      spawnSync("docker", ["rm", "-f", containerId], { stdio: "ignore" });
     }
   }, 60_000);
 });
