@@ -23,8 +23,6 @@ export interface CreateManagedSessionRequest {
   environment_id: string;
   title?: string | null;
   metadata?: Record<string, string>;
-  resources?: unknown;
-  vault_ids?: unknown;
 }
 
 export interface ManagedAgentsSession {

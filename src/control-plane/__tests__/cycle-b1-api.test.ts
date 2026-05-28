@@ -298,6 +298,51 @@ describe("Cycle B.1 API", () => {
     );
   });
 
+  it("rejects unknown session-create fields instead of silently ignoring them", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+
+    await expectError(
+      await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: agent.id,
+          environment_id: environment.id,
+          future_runtime_field: { enabled: true },
+        }),
+      }),
+      400,
+      "invalid_request_error",
+      "Unsupported session create field: `future_runtime_field`.",
+    );
+  });
+
+  it("keeps sandbox provider selection out of public session create", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+
+    await expectError(
+      await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: agent.id,
+          environment_id: environment.id,
+          sandboxProviderSelection: {
+            type: "host-passthrough",
+            unsafeAllowHostPassthrough: true,
+          },
+        }),
+      }),
+      400,
+      "invalid_request_error",
+      "Field `sandboxProviderSelection` is not yet supported by this server.",
+    );
+  });
+
   it("rejects non-finite JSON values and non-string metadata values", async () => {
     const app = createInMemoryControlPlaneApp();
     const agent = await createAgent(app);

@@ -117,8 +117,12 @@ function parseCreateSession(input: unknown): CreateManagedSessionRequest {
   const obj = objectInput(input);
   rejectUnsupportedField(obj, "sandbox");
   rejectUnsupportedField(obj, "sandbox_provider");
+  rejectUnsupportedField(obj, "sandboxProviderSelection");
+  rejectUnsupportedField(obj, "sandboxProviderSelectionOptions");
+  rejectUnsupportedField(obj, "sandboxProviderFactory");
   rejectUnsupportedField(obj, "resources");
   rejectUnsupportedField(obj, "vault_ids");
+  rejectUnknownFields(obj, ["agent", "environment_id", "title", "metadata"]);
   return {
     agent: agentField(obj),
     environment_id: stringField(obj, "environment_id", { required: true }),
@@ -156,6 +160,17 @@ function toManagedSession(row: SessionRow): ManagedAgentsSession {
 function rejectUnsupportedField(obj: Record<string, unknown>, field: string): void {
   if (obj[field] !== undefined) {
     throw invalidRequest(`Field \`${field}\` is not yet supported by this server.`);
+  }
+}
+
+function rejectUnknownFields(
+  obj: Record<string, unknown>,
+  allowedFields: string[],
+): void {
+  const allowed = new Set(allowedFields);
+  for (const field of Object.keys(obj)) {
+    if (allowed.has(field)) continue;
+    throw invalidRequest(`Unsupported session create field: \`${field}\`.`);
   }
 }
 
