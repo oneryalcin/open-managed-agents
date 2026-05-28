@@ -8,17 +8,19 @@
  *   session whose Pi turn is mid-flight actually tears down the real Docker
  *   container. This probe closes exactly that gap, through the real HTTP app.
  *
- *   For both archive and delete it:
+ *   For archive it:
  *     1. creates a session and kicks off a turn whose bash command sleeps, so
  *        the labelled container is genuinely alive,
  *     2. waits until the container is observed (turn is mid-run),
- *     3. issues the lifecycle call, and
- *     4. asserts the real container is gone plus the gating contract:
+ *     3. issues the archive call, and
+ *     4. asserts archive rejects while running and does not tear down runtime.
  *
- *   ARCHIVE (soft): status=terminated + archived_at set, container removed,
- *     GET /sessions/:id still 200, GET /events still readable and ends with a
- *     single session.status_terminated, POST /events rejected, re-archive
- *     idempotent (no duplicate terminal event).
+ *   ARCHIVE (soft): HTTP 400 invalid_request_error while running,
+ *     archived_at remains null, and the container remains alive. The probe then
+ *     deletes the session for cleanup.
+ *
+ *   For delete it follows the same mid-run setup and asserts the real
+ *   container is gone plus the hard cleanup contract:
  *
  *   DELETE (hard): returns {id, type:"session_deleted"}, container removed,
  *     GET /sessions/:id -> 404, GET /events -> 404, POST /events -> 404,
@@ -82,43 +84,39 @@ async function runArchiveCase(): Promise<Record<string, unknown>> {
   const containerSeen = await waitForContainer(sessionId, true, 30_000);
 
   const archive = await req("POST", `/v1/sessions/${sessionId}/archive`);
-  const archived = archive.body as Record<string, unknown>;
-  const containerGone = (await waitForContainer(sessionId, false, 15_000)) === false;
-
+  const archiveError = archive.body as {
+    error?: { type?: unknown; message?: unknown };
+  };
+  const containerStillPresent =
+    (await waitForContainer(sessionId, true, 1_000)) === true;
   const getAfter = await req("GET", `/v1/sessions/${sessionId}`);
-  const eventsAfter = await req("GET", `/v1/sessions/${sessionId}/events`);
-  const sendAfter = await req("POST", `/v1/sessions/${sessionId}/events`, {
-    events: [{ type: "user.message", content: [{ type: "text", text: "again" }] }],
-  });
-  const reArchive = await req("POST", `/v1/sessions/${sessionId}/archive`);
-  const eventsFinal = await req("GET", `/v1/sessions/${sessionId}/events`);
-  const terminalCount = countType(eventsFinal.body, "session.status_terminated");
+  const active = getAfter.body as Record<string, unknown>;
+  const cleanupDelete = await req("DELETE", `/v1/sessions/${sessionId}`);
+  const containerGoneAfterCleanup =
+    (await waitForContainer(sessionId, false, 15_000)) === false;
+  const expectedMessage = `Session ${sessionId} cannot be archived while its status is "running". Only pending or idle sessions may be archived.`;
 
   return {
     session_id: sessionId,
     container_observed_midrun: containerSeen,
     archive_status: archive.status,
-    session_status: archived?.status ?? null,
-    archived_at_set: typeof archived?.archived_at === "string",
-    container_removed: containerGone,
+    archive_error_type: archiveError.error?.type ?? null,
+    archive_error_message: archiveError.error?.message ?? null,
+    archived_at_after_reject: active?.archived_at ?? null,
+    container_still_present_after_reject: containerStillPresent,
     get_after_status: getAfter.status, // expect 200
-    events_after_status: eventsAfter.status, // expect 200 (readable)
-    events_after_count: dataLen(eventsAfter.body),
-    send_after_status: sendAfter.status, // expect 404 (not active)
-    rearchive_status: reArchive.status, // expect 200 idempotent
-    terminal_event_count: terminalCount, // expect exactly 1
+    cleanup_delete_status: cleanupDelete.status,
+    container_removed_after_cleanup: containerGoneAfterCleanup,
     pass:
       containerSeen &&
-      archive.status === 200 &&
-      archived?.status === "terminated" &&
-      typeof archived?.archived_at === "string" &&
-      containerGone &&
+      archive.status === 400 &&
+      archiveError.error?.type === "invalid_request_error" &&
+      archiveError.error?.message === expectedMessage &&
       getAfter.status === 200 &&
-      eventsAfter.status === 200 &&
-      dataLen(eventsAfter.body) > 0 &&
-      sendAfter.status === 404 &&
-      reArchive.status === 200 &&
-      terminalCount === 1,
+      active?.archived_at === null &&
+      containerStillPresent &&
+      cleanupDelete.status === 200 &&
+      containerGoneAfterCleanup,
   };
 }
 
@@ -279,16 +277,6 @@ async function mustCreate(path: string, body: unknown): Promise<unknown> {
     throw new Error(`create ${path} failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
   return res.body;
-}
-
-function dataLen(body: unknown): number {
-  if (isRecord(body) && Array.isArray(body.data)) return body.data.length;
-  return -1;
-}
-
-function countType(body: unknown, type: string): number {
-  if (!isRecord(body) || !Array.isArray(body.data)) return -1;
-  return body.data.filter((e) => isRecord(e) && e.type === type).length;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

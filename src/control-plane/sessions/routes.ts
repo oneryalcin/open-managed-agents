@@ -44,6 +44,7 @@ export function sessionsRoutes(
 
   app.post("/:id/archive", async (c) => {
     const sessionId = c.req.param("id");
+    events.assertSessionArchivable(DEFAULT_WORKSPACE_ID, sessionId);
     const session = service.archive(DEFAULT_WORKSPACE_ID, sessionId);
     await events.archiveSession(DEFAULT_WORKSPACE_ID, sessionId);
     return c.json(session, 200);
