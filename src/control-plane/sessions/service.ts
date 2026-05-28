@@ -11,6 +11,11 @@ import { isJsonObject } from "../../types/json.ts";
 import type { AgentStore } from "../agents/types.ts";
 import type { EnvironmentStore } from "../environments/types.ts";
 import { invalidRequest, notFound } from "../errors.ts";
+import type {
+  RuntimeEventRunner,
+  RuntimeSessionFileMount,
+} from "../events/types.ts";
+import { RuntimeUnsupportedSessionFileResourcesError } from "../events/types.ts";
 import type { FileStorage, FileStorageRecord } from "../files/types.ts";
 import { newSessionId, newSessionResourceId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
@@ -32,11 +37,15 @@ const MAX_SESSION_MOUNTED_BYTES = 50 * 1024 * 1024;
 export interface DefaultSessionServiceOptions {
   maxFileResources?: number;
   maxMountedBytes?: number;
+  runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
 }
 
 export class DefaultSessionService implements SessionService {
   private readonly maxFileResources: number;
   private readonly maxMountedBytes: number;
+  private readonly runtime:
+    | Pick<RuntimeEventRunner, "prepareSession" | "closeSession">
+    | undefined;
 
   constructor(
     private readonly store: SessionStore,
@@ -47,6 +56,7 @@ export class DefaultSessionService implements SessionService {
   ) {
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
+    this.runtime = opts.runtime;
   }
 
   async create(
@@ -70,7 +80,7 @@ export class DefaultSessionService implements SessionService {
     }
 
     const now = new Date().toISOString();
-    const { resources, snapshots } = await this.prepareFileResources(
+    const { resources, snapshots, mounts } = await this.prepareFileResources(
       workspaceId,
       req.resources ?? [],
       now,
@@ -98,10 +108,25 @@ export class DefaultSessionService implements SessionService {
       ...snapshot,
       session_id: row.id,
     }));
+    let runtimePrepared = false;
     try {
+      if (mounts.length > 0 && this.runtime?.prepareSession) {
+        await this.runtime.prepareSession(workspaceId, row.id, {
+          fileMounts: mounts,
+        });
+        runtimePrepared = true;
+      }
       return toManagedSession(this.store.create({ row, snapshots: sessionSnapshots }));
     } catch (error) {
+      if (runtimePrepared || mounts.length > 0) {
+        await this.closeRuntimeBestEffort(workspaceId, row.id);
+      }
       await this.deleteSnapshotsBestEffort(workspaceId, sessionSnapshots);
+      if (isUnsupportedFileResourceRuntime(error)) {
+        throw invalidRequest(
+          "Session file resources are not supported by the configured runtime.",
+        );
+      }
       throw error;
     }
   }
@@ -161,8 +186,11 @@ export class DefaultSessionService implements SessionService {
   ): Promise<{
     resources: ManagedAgentsSessionFileResource[];
     snapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">>;
+    mounts: RuntimeSessionFileMount[];
   }> {
-    if (resources.length === 0) return { resources: [], snapshots: [] };
+    if (resources.length === 0) {
+      return { resources: [], snapshots: [], mounts: [] };
+    }
     if (!this.files) {
       throw invalidRequest("File resources are not supported by this server.");
     }
@@ -249,7 +277,26 @@ export class DefaultSessionService implements SessionService {
         updated_at: now,
       })),
       snapshots: createdSnapshots,
+      mounts: createdSnapshots.map((snapshot, index) => ({
+        mountPath: snapshot.mount_path,
+        snapshotFileId: snapshot.snapshot_file_id,
+        sha256: snapshot.sha256,
+        sizeBytes: snapshot.size_bytes,
+        bytes: prepared[index]!.bytes,
+      })),
     };
+  }
+
+  private async closeRuntimeBestEffort(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      await this.runtime?.closeSession?.(workspaceId, sessionId);
+    } catch {
+      // The row has not committed yet; snapshot cleanup below is the
+      // authoritative control-plane rollback path for this create.
+    }
   }
 
   private async deleteSnapshotsBestEffort(
@@ -480,4 +527,8 @@ function sha256Hex(bytes: Uint8Array): string {
 function limitLabel(bytes: number): string {
   if (bytes % (1024 * 1024) === 0) return `${bytes / (1024 * 1024)} MiB`;
   return `${bytes} bytes`;
+}
+
+function isUnsupportedFileResourceRuntime(error: unknown): boolean {
+  return error instanceof RuntimeUnsupportedSessionFileResourcesError;
 }

@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, open, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { posix } from "node:path";
+import { join as joinHostPath } from "node:path";
 import type {
   BashOperations,
   EditOperations,
@@ -18,10 +22,12 @@ import {
   type SandboxProvider,
   type SandboxProviderFactory,
 } from "./provider.ts";
+import type { RuntimeSessionFileMount } from "../../../events/types.ts";
 
 const DEFAULT_IMAGE = "bash:5.2";
 const DEFAULT_WORKSPACE = "/workspace";
-const DEFAULT_MEMORY = "128m";
+const DEFAULT_UPLOADS_PATH = "/mnt/session/uploads";
+const DEFAULT_MEMORY = "256m";
 const DEFAULT_CPUS = "1";
 const DEFAULT_PIDS_LIMIT = "64";
 const DEFAULT_TMPFS_SIZE = "64m";
@@ -59,6 +65,7 @@ interface DockerSandboxResolvedOptions {
   image: string;
   dockerCommand: string;
   workspacePath: string;
+  uploadsPath: string;
   envAllowlist: Set<string>;
   operationTimeoutMs: number;
   containerNamePrefix: string;
@@ -138,6 +145,7 @@ export async function createDockerSandboxProvider(
     buildDockerRunArgs({
       containerName,
       workspacePath: resolved.workspacePath,
+      uploadsPath: resolved.uploadsPath,
       image: resolved.image,
       memory: resolved.memory,
       cpus: resolved.cpus,
@@ -194,6 +202,40 @@ export async function createDockerSandboxProvider(
     if (result.exitCode === 0) return true;
     throwIfUnexpectedBoundedExit(result, "docker exists", new Set([1]));
     return false;
+  };
+  const materializeFileResources = async (
+    mounts: readonly RuntimeSessionFileMount[],
+  ): Promise<void> => {
+    if (mounts.length === 0) return;
+    recordSandboxNotDisposed(disposed);
+    const tempRoot = await mkdtemp(joinHostPath(tmpdir(), "oma-session-mounts-"));
+    try {
+      for (const mount of mounts) {
+        const relativePath = assertInsideUploadsPath(
+          mount.mountPath,
+          resolved.uploadsPath,
+        );
+        await writeMountFile(tempRoot, relativePath, mount);
+      }
+      // Docker exec timeout only owns the local Docker CLI process; the
+      // caller must dispose the container on materialization failure so any
+      // in-container tar/chown work cannot leak a half-mounted sandbox.
+      await dockerChecked(
+        resolved.dockerCommand,
+        buildDockerExtractIntoContainerArgs(containerName, resolved.uploadsPath),
+        {
+          input: createTarArchive(tempRoot),
+          timeoutMs: resolved.operationTimeoutMs,
+        },
+      );
+      await dockerChecked(
+        resolved.dockerCommand,
+        buildDockerNormalizeUploadsArgs(containerName, resolved.uploadsPath),
+        { timeoutMs: resolved.operationTimeoutMs },
+      );
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
   };
 
   const readOps: ReadOperations = {
@@ -400,6 +442,7 @@ export async function createDockerSandboxProvider(
   return {
     cwd: resolved.workspacePath,
     invocations,
+    materializeFileResources,
     operations,
     toolNames: new Set(["bash", "read", "write", "edit", "find", "ls"]),
     tools: createSandboxToolDefinitions(
@@ -421,6 +464,7 @@ export async function createDockerSandboxProvider(
 export function buildDockerRunArgs(opts: {
   containerName: string;
   workspacePath: string;
+  uploadsPath?: string;
   image: string;
   memory: string;
   cpus: string;
@@ -428,10 +472,12 @@ export function buildDockerRunArgs(opts: {
   tmpfsSize: string;
   labels?: Record<string, string>;
 }): string[] {
+  assertTmpfsMemoryHeadroom(opts.memory, opts.tmpfsSize);
   const labels = Object.entries(opts.labels ?? {}).flatMap(([key, value]) => [
     "--label",
     `${key}=${value}`,
   ]);
+  const uploadsPath = opts.uploadsPath ?? DEFAULT_UPLOADS_PATH;
   return [
     "run",
     "-d",
@@ -453,6 +499,8 @@ export function buildDockerRunArgs(opts: {
     "--read-only",
     "--tmpfs",
     `${opts.workspacePath}:rw,exec,nosuid,nodev,uid=65534,gid=65534,mode=700,size=${opts.tmpfsSize}`,
+    "--tmpfs",
+    `${uploadsPath}:rw,nosuid,nodev,noexec,mode=755,size=${opts.tmpfsSize}`,
     "--workdir",
     opts.workspacePath,
     "--user",
@@ -461,6 +509,42 @@ export function buildDockerRunArgs(opts: {
     "tail",
     "-f",
     "/dev/null",
+  ];
+}
+
+export function buildDockerExtractIntoContainerArgs(
+  containerName: string,
+  destinationDirectory: string,
+): string[] {
+  return [
+    "exec",
+    "-i",
+    "--user",
+    "0:0",
+    containerName,
+    "tar",
+    "--no-same-owner",
+    "-C",
+    destinationDirectory,
+    "-xf",
+    "-",
+  ];
+}
+
+export function buildDockerNormalizeUploadsArgs(
+  containerName: string,
+  uploadsPath: string,
+): string[] {
+  return [
+    "exec",
+    "--user",
+    "0:0",
+    containerName,
+    "sh",
+    "-c",
+    "chown -R 0:0 \"$1\" && find \"$1\" -type d -exec chmod 755 {} + && find \"$1\" -type f -exec chmod 644 {} +",
+    "sh",
+    uploadsPath,
   ];
 }
 
@@ -647,6 +731,82 @@ export function assertInsideDockerWorkspace(
   throw new Error(`Sandbox path escapes workspace: ${absolutePath}`);
 }
 
+export function assertInsideUploadsPath(
+  absolutePath: string,
+  uploadsPath = DEFAULT_UPLOADS_PATH,
+): string {
+  if (!posix.isAbsolute(absolutePath)) {
+    throw new Error(`Session file mount path must be absolute: ${absolutePath}`);
+  }
+  const root = posix.resolve(uploadsPath);
+  const path = posix.resolve(absolutePath);
+  const rel = posix.relative(root, path);
+  if (rel !== "" && !rel.startsWith("..") && !posix.isAbsolute(rel)) {
+    return rel;
+  }
+  throw new Error(`Session file mount path escapes uploads root: ${absolutePath}`);
+}
+
+async function writeMountFile(
+  tempRoot: string,
+  relativePath: string,
+  mount: RuntimeSessionFileMount,
+): Promise<void> {
+  const segments = relativePath.split("/");
+  const filePath = joinHostPath(tempRoot, ...segments);
+  await mkdir(joinHostPath(tempRoot, ...segments.slice(0, -1)), {
+    recursive: true,
+    mode: 0o755,
+  });
+  const handle = await open(filePath, "w", 0o644);
+  const hash = createHash("sha256");
+  let size = 0;
+  try {
+    for await (const chunk of chunksForMount(mount.bytes)) {
+      const buffer = Buffer.from(chunk);
+      size += buffer.byteLength;
+      hash.update(buffer);
+      await handle.write(buffer);
+    }
+  } finally {
+    await handle.close();
+  }
+  const sha256 = hash.digest("hex");
+  if (size !== mount.sizeBytes) {
+    throw new Error(
+      `Session file mount ${mount.snapshotFileId} size mismatch: expected ${mount.sizeBytes}, got ${size}`,
+    );
+  }
+  if (sha256 !== mount.sha256) {
+    throw new Error(
+      `Session file mount ${mount.snapshotFileId} failed integrity validation`,
+    );
+  }
+}
+
+async function* chunksForMount(
+  bytes: RuntimeSessionFileMount["bytes"],
+): AsyncIterable<Uint8Array> {
+  if (bytes instanceof Uint8Array) {
+    yield bytes;
+    return;
+  }
+  yield* bytes;
+}
+
+function createTarArchive(sourceDirectory: string): Buffer {
+  const result = spawnSync("tar", ["-C", sourceDirectory, "-cf", "-", "."], {
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `tar archive failed with ${result.status}: ${result.stderr.toString("utf8")}`,
+    );
+  }
+  return result.stdout;
+}
+
 export function filterDockerEnv(
   source: NodeJS.ProcessEnv,
   allowlist: ReadonlySet<string>,
@@ -702,6 +862,7 @@ function resolveDockerOptions(
     image: opts.image ?? DEFAULT_IMAGE,
     dockerCommand: opts.dockerCommand ?? "docker",
     workspacePath: opts.workspacePath ?? DEFAULT_WORKSPACE,
+    uploadsPath: DEFAULT_UPLOADS_PATH,
     envAllowlist: new Set(opts.envAllowlist ?? []),
     operationTimeoutMs: opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
     containerNamePrefix: opts.containerNamePrefix ?? "oma-sandbox",
@@ -711,6 +872,35 @@ function resolveDockerOptions(
     tmpfsSize: opts.tmpfsSize ?? DEFAULT_TMPFS_SIZE,
     extraLabels: opts.extraLabels ?? {},
   };
+}
+
+function assertTmpfsMemoryHeadroom(memory: string, tmpfsSize: string): void {
+  const memoryBytes = parseDockerByteSize(memory, "memory");
+  const tmpfsBytes = parseDockerByteSize(tmpfsSize, "tmpfsSize");
+  if (tmpfsBytes * 2 < memoryBytes) return;
+  throw new Error(
+    "Docker sandbox memory must exceed workspace tmpfs plus uploads tmpfs",
+  );
+}
+
+function parseDockerByteSize(value: string, label: string): number {
+  const match = /^([1-9][0-9]*)([bkmg])?$/i.exec(value);
+  if (!match) {
+    throw new Error(
+      `Docker sandbox ${label} must use bytes or a k/m/g suffix: ${value}`,
+    );
+  }
+  const amount = Number(match[1]);
+  const unit = (match[2] ?? "b").toLowerCase();
+  const multiplier =
+    unit === "g"
+      ? 1024 * 1024 * 1024
+      : unit === "m"
+        ? 1024 * 1024
+        : unit === "k"
+          ? 1024
+          : 1;
+  return amount * multiplier;
 }
 
 function dockerContainerName(
@@ -738,6 +928,10 @@ function sanitizeDockerNamePart(value: string): string {
 
 function randomExecId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function recordSandboxNotDisposed(disposed: SandboxDisposedFlag): void {
+  if (disposed.value) throw new Error("Sandbox provider is disposed");
 }
 
 function bashDispatchSentinel(token: string): Buffer {

@@ -28,6 +28,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { globMatcher, toPosix } from "./glob.ts";
+import type { RuntimeSessionFileMount } from "../../../events/types.ts";
 
 export type SandboxedBuiltinToolName =
   | "bash"
@@ -60,6 +61,9 @@ export interface SandboxProvider {
   readonly tools: ToolDefinition<any, any, any>[];
   readonly toolNames: ReadonlySet<SandboxedBuiltinToolName>;
   readonly invocations: SandboxInvocationStats;
+  materializeFileResources?(
+    mounts: readonly RuntimeSessionFileMount[],
+  ): Promise<void> | void;
   dispose(): void;
 }
 

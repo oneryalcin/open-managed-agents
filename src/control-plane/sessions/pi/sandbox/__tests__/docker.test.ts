@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertInsideUploadsPath,
   assertInsideDockerWorkspace,
   buildDockerBashCommand,
+  buildDockerExtractIntoContainerArgs,
   buildDockerExecShellArgs,
   buildDockerFileAccessCommand,
   buildDockerGlobEnumerationCommand,
   buildDockerMkdirCommand,
+  buildDockerNormalizeUploadsArgs,
   buildDockerReadFileCommand,
   buildDockerReaddirCommand,
   buildDockerRunArgs,
@@ -29,7 +32,7 @@ describe("Docker sandbox provider command construction", () => {
       containerName: "oma-test",
       workspacePath: "/workspace",
       image: "alpine:3.19",
-      memory: "128m",
+      memory: "256m",
       cpus: "1",
       pidsLimit: "64",
       tmpfsSize: "64m",
@@ -46,12 +49,40 @@ describe("Docker sandbox provider command construction", () => {
     expect(args).toContain("--pids-limit");
     expect(args).toContain("64");
     expect(args).toContain("--memory");
-    expect(args).toContain("128m");
+    expect(args).toContain("256m");
     expect(args).toContain("--tmpfs");
     expect(args).toContain(
       "/workspace:rw,exec,nosuid,nodev,uid=65534,gid=65534,mode=700,size=64m",
     );
+    expect(args).toContain(
+      "/mnt/session/uploads:rw,nosuid,nodev,noexec,mode=755,size=64m",
+    );
     expect(args).not.toContain("/var/run/docker.sock");
+  });
+
+  it("rejects Docker tmpfs sizing that leaves no process memory headroom", () => {
+    expect(() =>
+      buildDockerRunArgs({
+        containerName: "oma-test",
+        workspacePath: "/workspace",
+        image: "alpine:3.19",
+        memory: "128m",
+        cpus: "1",
+        pidsLimit: "64",
+        tmpfsSize: "64m",
+      }),
+    ).toThrow("memory must exceed workspace tmpfs plus uploads tmpfs");
+    expect(() =>
+      buildDockerRunArgs({
+        containerName: "oma-test",
+        workspacePath: "/workspace",
+        image: "alpine:3.19",
+        memory: "256MiB",
+        cpus: "1",
+        pidsLimit: "64",
+        tmpfsSize: "64m",
+      }),
+    ).toThrow("must use bytes or a k/m/g suffix");
   });
 
   it("passes shell script arguments separately from the script body", () => {
@@ -96,6 +127,40 @@ describe("Docker sandbox provider command construction", () => {
       "2",
       "cat \"$1\"",
       "/workspace/a.txt",
+    ]);
+  });
+
+  it("builds root-owned upload materialization commands explicitly", () => {
+    expect(
+      buildDockerExtractIntoContainerArgs(
+        "container",
+        "/mnt/session/uploads",
+      ),
+    ).toEqual([
+      "exec",
+      "-i",
+      "--user",
+      "0:0",
+      "container",
+      "tar",
+      "--no-same-owner",
+      "-C",
+      "/mnt/session/uploads",
+      "-xf",
+      "-",
+    ]);
+    expect(
+      buildDockerNormalizeUploadsArgs("container", "/mnt/session/uploads"),
+    ).toEqual([
+      "exec",
+      "--user",
+      "0:0",
+      "container",
+      "sh",
+      "-c",
+      "chown -R 0:0 \"$1\" && find \"$1\" -type d -exec chmod 755 {} + && find \"$1\" -type f -exec chmod 644 {} +",
+      "sh",
+      "/mnt/session/uploads",
     ]);
   });
 
@@ -255,6 +320,21 @@ describe("Docker sandbox provider command construction", () => {
     );
     expect(() => assertInsideDockerWorkspace("/etc/passwd")).toThrow(
       "escapes workspace",
+    );
+  });
+
+  it("keeps materialized upload paths inside the uploads root", () => {
+    expect(assertInsideUploadsPath("/mnt/session/uploads/data/probe.txt")).toBe(
+      "data/probe.txt",
+    );
+    expect(() => assertInsideUploadsPath("/mnt/session/uploads")).toThrow(
+      "escapes uploads root",
+    );
+    expect(() => assertInsideUploadsPath("relative.txt")).toThrow(
+      "must be absolute",
+    );
+    expect(() => assertInsideUploadsPath("/mnt/session/other.txt")).toThrow(
+      "escapes uploads root",
     );
   });
 
@@ -445,8 +525,9 @@ describe("Docker sandbox provider integration", () => {
         user: "65534:65534",
         hasDockerSocketBind: false,
         workspaceTmpfs: true,
+        uploadsTmpfs: true,
         pidsLimit: 64,
-        memory: 134217728,
+        memory: 268435456,
       });
 
       await provider.operations.write.mkdir("/workspace/src");
@@ -533,6 +614,47 @@ describe("Docker sandbox provider integration", () => {
       expect(provider.invocations.byTool.edit).toBe(3);
       expect(provider.invocations.byTool.find).toBe(2);
       expect(provider.invocations.byTool.ls).toBe(2);
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("materializes session file resources into the uploads tmpfs", async () => {
+    const label = `oma-docker-uploads-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 15_000,
+    });
+    try {
+      await expect(
+        provider.materializeFileResources?.([
+          {
+            mountPath: "/mnt/session/uploads/data/probe.txt",
+            snapshotFileId: "file_snapshot",
+            sha256:
+              "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+            sizeBytes: 6,
+            bytes: Buffer.from("hello\n"),
+          },
+        ]),
+      ).resolves.toBeUndefined();
+
+      const chunks: Buffer[] = [];
+      await expect(
+        provider.operations.bash.exec(
+          "cat /mnt/session/uploads/data/probe.txt && test ! -w /mnt/session/uploads/data/probe.txt && test ! -x /mnt/session/uploads/data/probe.txt",
+          "/workspace",
+          {
+            env: {},
+            onData: (chunk) => chunks.push(chunk),
+            timeout: 1,
+          },
+        ),
+      ).resolves.toEqual({ exitCode: 0 });
+      expect(Buffer.concat(chunks).toString("utf8")).toBe("hello\n");
     } finally {
       provider.dispose();
     }
@@ -834,6 +956,7 @@ function inspectContainerIsolation(containerId: string): {
   user: string | undefined;
   hasDockerSocketBind: boolean;
   workspaceTmpfs: boolean;
+  uploadsTmpfs: boolean;
   pidsLimit: number | undefined;
   memory: number | undefined;
 } {
@@ -869,6 +992,9 @@ function inspectContainerIsolation(containerId: string): {
       ) ?? false,
     workspaceTmpfs: Object.keys(inspect.HostConfig?.Tmpfs ?? {}).includes(
       "/workspace",
+    ),
+    uploadsTmpfs: Object.keys(inspect.HostConfig?.Tmpfs ?? {}).includes(
+      "/mnt/session/uploads",
     ),
     pidsLimit: inspect.HostConfig?.PidsLimit,
     memory: inspect.HostConfig?.Memory,

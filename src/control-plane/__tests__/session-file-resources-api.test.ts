@@ -1,6 +1,12 @@
 import { File } from "node:buffer";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createInMemoryControlPlaneApp } from "../app.ts";
+import {
+  createDeploymentControlPlaneApp,
+  createInMemoryControlPlaneApp,
+} from "../app.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
@@ -9,6 +15,8 @@ import type {
   ManagedAgentsSessionFileResource,
 } from "../../types/sessions.ts";
 import type { ManagedAgentsFileMetadata } from "../../types/files.ts";
+import type { RuntimeEventRunner } from "../events/types.ts";
+import { RuntimeUnsupportedSessionFileResourcesError } from "../events/types.ts";
 
 const VALID_AGENT = {
   name: "Resource Agent",
@@ -232,6 +240,76 @@ describe("session file resources API", () => {
       "File file_looks_real_but_other_workspace not found",
     );
   });
+
+  it("returns caller-safe rejection when the configured runtime cannot mount files", async () => {
+    const app = createInMemoryControlPlaneApp({
+      runtime: {
+        runner: new UnsupportedFileResourceRuntime(),
+        translate: () => [],
+      },
+    });
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+    const file = await uploadFile(app, "probe.txt", "contents");
+
+    const res = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: file.id }],
+      }),
+    });
+
+    await expectError(
+      res,
+      400,
+      "invalid_request_error",
+      "Session file resources are not supported by the configured runtime.",
+    );
+  });
+
+  it("rejects file resources through the real host-passthrough provider", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "oma-host-files-"));
+    try {
+      const app = createDeploymentControlPlaneApp(
+        {
+          OMA_SANDBOX_PROVIDER: "host-passthrough",
+          OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH: "true",
+          OMA_ALLOW_UNSAFE_HOST_PASSTHROUGH: "true",
+          OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT: workspaceRoot,
+        },
+        {
+          runner: {
+            sessionFactory: async () => new UnsupportedFileResourceSession(),
+          },
+        },
+      );
+      const agent = await createAgent(app);
+      const environment = await createEnvironment(app);
+      const file = await uploadFile(app, "probe.txt", "contents");
+
+      const res = await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: agent.id,
+          environment_id: environment.id,
+          resources: [{ type: "file", file_id: file.id }],
+        }),
+      });
+
+      await expectError(
+        res,
+        400,
+        "invalid_request_error",
+        "Session file resources are not supported by the configured runtime.",
+      );
+    } finally {
+      await rm(workspaceRoot, { force: true, recursive: true });
+    }
+  });
 });
 
 async function createAgent(
@@ -313,4 +391,25 @@ async function expectError(
   expect(res.status).toBe(status);
   const body = (await res.json()) as ApiErrorBody;
   expect(body.error).toEqual({ type, message });
+}
+
+class UnsupportedFileResourceRuntime implements RuntimeEventRunner {
+  prepareSession(): void {
+    throw new RuntimeUnsupportedSessionFileResourcesError();
+  }
+
+  async *runUserMessage(): AsyncIterable<unknown> {}
+}
+
+class UnsupportedFileResourceSession {
+  async prompt(): Promise<void> {}
+  async followUp(): Promise<void> {}
+  async abort(): Promise<void> {}
+  dispose(): void {}
+  subscribe(): () => void {
+    return () => undefined;
+  }
+  getActiveToolNames(): string[] {
+    return [];
+  }
 }
