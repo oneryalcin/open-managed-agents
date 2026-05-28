@@ -182,6 +182,62 @@ describe("FileService + InMemoryFileStorage", () => {
     ).rejects.toThrow("10 bytes in-memory limit");
     expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(10);
   });
+
+  it("stores internal session snapshots against quota without public metadata leakage", async () => {
+    const storage = new InMemoryFileStorage({
+      maxWorkspaceFileBytes: 10,
+    });
+    const service = new DefaultFileService(storage);
+    const uploaded = await service.upload(WORKSPACE_A, {
+      filename: "input.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    const snapshot = await storage.createInternalSnapshot(WORKSPACE_A, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      scopeId: "sesn_123",
+      body: bytes("snap"),
+    });
+
+    expect(snapshot.metadata.scope).toBe("sesn_123");
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(9);
+    await expect(service.list(WORKSPACE_A)).resolves.toMatchObject({
+      data: [uploaded],
+    });
+    await expect(service.list(WORKSPACE_A, { scopeId: "sesn_123" })).resolves.toMatchObject({
+      data: [],
+    });
+    await expect(service.retrieveMetadata(WORKSPACE_A, snapshot.metadata.id)).rejects.toThrow(
+      `File ${snapshot.metadata.id} not found`,
+    );
+
+    const chunks = [];
+    const stream = await storage.openInternalSnapshotBytes(
+      WORKSPACE_A,
+      snapshot.metadata.id,
+    );
+    for await (const chunk of stream ?? []) {
+      chunks.push(chunk);
+    }
+    expect(new TextDecoder().decode(concat(chunks))).toBe("snap");
+
+    await expect(
+      storage.createInternalSnapshot(WORKSPACE_A, {
+        filename: "overflow.txt",
+        mimeType: "text/plain",
+        scopeId: "sesn_123",
+        body: bytes("xx"),
+      }),
+    ).rejects.toThrow("10 bytes in-memory limit");
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(9);
+
+    await expect(
+      storage.deleteInternalSnapshot(WORKSPACE_A, snapshot.metadata.id),
+    ).resolves.toBe(true);
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(5);
+  });
 });
 
 function bytes(value: string): Uint8Array {
@@ -191,4 +247,15 @@ function bytes(value: string): Uint8Array {
 async function* interruptedBody(): AsyncIterable<Uint8Array> {
   yield bytes("partial");
   throw new Error("stream interrupted");
+}
+
+function concat(chunks: Uint8Array[]): Uint8Array {
+  const length = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const out = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }

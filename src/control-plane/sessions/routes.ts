@@ -13,7 +13,7 @@ export function sessionsRoutes(
 
   app.post("/", async (c) => {
     const body = await parseJsonBody(c.req);
-    const session = service.create(DEFAULT_WORKSPACE_ID, body);
+    const session = await service.create(DEFAULT_WORKSPACE_ID, body);
     return c.json(session, 200);
   });
 
@@ -51,7 +51,7 @@ export function sessionsRoutes(
 
   app.delete("/:id", async (c) => {
     const sessionId = c.req.param("id");
-    const deleted = service.delete(DEFAULT_WORKSPACE_ID, sessionId);
+    const deleted = await service.delete(DEFAULT_WORKSPACE_ID, sessionId);
     await events.deleteSession(DEFAULT_WORKSPACE_ID, sessionId);
     return c.json(deleted, 200);
   });

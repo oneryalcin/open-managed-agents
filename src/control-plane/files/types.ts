@@ -21,6 +21,10 @@ export interface UploadedFileInput {
   body: AsyncIterable<Uint8Array> | Uint8Array;
 }
 
+export interface InternalFileSnapshotInput extends UploadedFileInput {
+  scopeId: string;
+}
+
 export interface FileStorageRecord {
   metadata: ManagedAgentsFileMetadata;
   workspace_id: WorkspaceId;
@@ -30,6 +34,7 @@ export interface FileStorageRecord {
 
 export interface StoredFile extends FileStorageRecord {
   bytes: Uint8Array;
+  visibility: "public" | "internal";
 }
 
 export interface FileListOptions {
@@ -64,6 +69,18 @@ export interface FileStorage {
     workspaceId: WorkspaceId,
     fileId: string,
   ): Promise<AsyncIterable<Uint8Array> | undefined>;
+  createInternalSnapshot(
+    workspaceId: WorkspaceId,
+    input: InternalFileSnapshotInput,
+  ): Promise<FileStorageRecord>;
+  openInternalSnapshotBytes(
+    workspaceId: WorkspaceId,
+    fileId: string,
+  ): Promise<AsyncIterable<Uint8Array> | undefined>;
+  deleteInternalSnapshot(
+    workspaceId: WorkspaceId,
+    fileId: string,
+  ): Promise<boolean>;
   delete(workspaceId: WorkspaceId, fileId: string): Promise<boolean>;
   list(
     workspaceId: WorkspaceId,

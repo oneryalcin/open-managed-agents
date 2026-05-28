@@ -314,6 +314,7 @@ function createGuardHarness(): GuardHarness {
       updated_at: now,
       archived_at: null,
       usage: null,
+      resources: [],
     },
   });
   return { eventStore, runner, service, sessionId };

@@ -1,33 +1,46 @@
+import { createHash } from "node:crypto";
 import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type {
   CreateManagedSessionRequest,
+  CreateManagedSessionResourceInput,
   ManagedAgentsDeletedSession,
   ManagedAgentsSession,
+  ManagedAgentsSessionFileResource,
 } from "../../types/sessions.ts";
 import { isJsonObject } from "../../types/json.ts";
 import type { AgentStore } from "../agents/types.ts";
 import type { EnvironmentStore } from "../environments/types.ts";
 import { invalidRequest, notFound } from "../errors.ts";
-import { newSessionId } from "../ids.ts";
+import type { FileStorage, FileStorageRecord } from "../files/types.ts";
+import { newSessionId, newSessionResourceId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
+import {
+  normalizeSessionFileResources,
+  type SessionFileResourceMountInput,
+} from "./resources.ts";
 import type {
   ListSessionsOptions,
+  SessionFileMountSnapshotRow,
   SessionRow,
   SessionService,
   SessionStore,
 } from "./types.ts";
+
+const MAX_SESSION_FILE_RESOURCES = 10;
+const MAX_SESSION_MOUNTED_BYTES = 50 * 1024 * 1024;
 
 export class DefaultSessionService implements SessionService {
   constructor(
     private readonly store: SessionStore,
     private readonly agents: AgentStore,
     private readonly environments: EnvironmentStore,
+    private readonly files?: FileStorage,
   ) {}
 
-  create(
+  async create(
     workspaceId: WorkspaceId,
     input: unknown,
-  ): ManagedAgentsSession {
+  ): Promise<ManagedAgentsSession> {
     const req = parseCreateSession(input);
     const agentRef = parseAgentRef(req.agent);
     const agent = this.agents.retrieve(workspaceId, agentRef.id);
@@ -45,6 +58,11 @@ export class DefaultSessionService implements SessionService {
     }
 
     const now = new Date().toISOString();
+    const { resources, snapshots } = await this.prepareFileResources(
+      workspaceId,
+      req.resources ?? [],
+      now,
+    );
     const row: SessionRow = {
       id: newSessionId(),
       workspace_id: workspaceId,
@@ -62,8 +80,18 @@ export class DefaultSessionService implements SessionService {
       updated_at: now,
       archived_at: null,
       usage: null,
+      resources,
     };
-    return toManagedSession(this.store.create({ row }));
+    const sessionSnapshots = snapshots.map((snapshot) => ({
+      ...snapshot,
+      session_id: row.id,
+    }));
+    try {
+      return toManagedSession(this.store.create({ row, snapshots: sessionSnapshots }));
+    } catch (error) {
+      await this.deleteSnapshotsBestEffort(workspaceId, sessionSnapshots);
+      throw error;
+    }
   }
 
   retrieve(
@@ -89,14 +117,16 @@ export class DefaultSessionService implements SessionService {
     return toManagedSession(row);
   }
 
-  delete(
+  async delete(
     workspaceId: WorkspaceId,
     sessionId: string,
-  ): ManagedAgentsDeletedSession {
+  ): Promise<ManagedAgentsDeletedSession> {
+    const snapshots = this.store.getFileMountSnapshots(workspaceId, sessionId);
     const row = this.store.delete(workspaceId, sessionId);
     if (!row) {
       throw notFound(`Session ${sessionId} not found`);
     }
+    await this.deleteSnapshotsBestEffort(workspaceId, snapshots);
     return { id: row.id, type: "session_deleted" };
   }
 
@@ -111,6 +141,116 @@ export class DefaultSessionService implements SessionService {
       next_page: page.next_page,
     };
   }
+
+  private async prepareFileResources(
+    workspaceId: WorkspaceId,
+    resources: CreateManagedSessionResourceInput[],
+    now: string,
+  ): Promise<{
+    resources: ManagedAgentsSessionFileResource[];
+    snapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">>;
+  }> {
+    if (resources.length === 0) return { resources: [], snapshots: [] };
+    if (!this.files) {
+      throw invalidRequest("File resources are not supported by this server.");
+    }
+    if (resources.length > MAX_SESSION_FILE_RESOURCES) {
+      throw invalidRequest("Session file resources exceed the 10 file limit");
+    }
+
+    const normalized = normalizeSessionFileResources(
+      resources.map(
+        (resource): SessionFileResourceMountInput => ({
+          fileId: resource.file_id,
+          mountPath: resource.mount_path,
+        }),
+      ),
+    );
+    const prepared: Array<{
+      source: FileStorageRecord;
+      bytes: Uint8Array;
+      resourceId: string;
+      mountPath: string;
+    }> = [];
+    let totalBytes = 0;
+    for (const resource of normalized) {
+      const source = await this.files.retrieveMetadata(workspaceId, resource.fileId);
+      if (!source) {
+        throw invalidRequest(`File ${resource.fileId} not found`);
+      }
+      const stream = await this.files.openBytes(workspaceId, resource.fileId);
+      if (!stream) {
+        throw invalidRequest(`File ${resource.fileId} not found`);
+      }
+      const bytes = await consumeBytes(stream);
+      const sha256 = sha256Hex(bytes);
+      if (sha256 !== source.sha256) {
+        throw invalidRequest(`File ${resource.fileId} failed integrity validation`);
+      }
+      totalBytes += bytes.byteLength;
+      if (totalBytes > MAX_SESSION_MOUNTED_BYTES) {
+        throw invalidRequest("Session file resources exceed the 50 MiB mounted byte limit");
+      }
+      prepared.push({
+        source,
+        bytes,
+        resourceId: newSessionResourceId(),
+        mountPath: resource.mountPath,
+      });
+    }
+
+    const createdSnapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">> = [];
+    try {
+      for (const item of prepared) {
+        const snapshot = await this.files.createInternalSnapshot(workspaceId, {
+          filename: item.source.metadata.filename,
+          mimeType: item.source.metadata.mime_type,
+          scopeId: item.resourceId,
+          body: item.bytes,
+        });
+        createdSnapshots.push({
+          workspace_id: workspaceId,
+          resource_id: item.resourceId,
+          file_id: item.source.metadata.id,
+          mount_path: item.mountPath,
+          snapshot_file_id: snapshot.metadata.id,
+          sha256: snapshot.sha256,
+          size_bytes: snapshot.metadata.size_bytes,
+        });
+      }
+    } catch (error) {
+      await this.deleteSnapshotsBestEffort(workspaceId, createdSnapshots);
+      throw error;
+    }
+
+    return {
+      resources: prepared.map((item) => ({
+        id: item.resourceId,
+        type: "file",
+        file_id: item.source.metadata.id,
+        mount_path: item.mountPath,
+        created_at: now,
+        updated_at: now,
+      })),
+      snapshots: createdSnapshots,
+    };
+  }
+
+  private async deleteSnapshotsBestEffort(
+    workspaceId: WorkspaceId,
+    snapshots: Array<Pick<SessionFileMountSnapshotRow, "snapshot_file_id">>,
+  ): Promise<void> {
+    if (!this.files) return;
+    await Promise.all(
+      snapshots.map(async (snapshot) => {
+        try {
+          await this.files?.deleteInternalSnapshot(workspaceId, snapshot.snapshot_file_id);
+        } catch {
+          // Best-effort cleanup; a durable backend can add orphan sweeping.
+        }
+      }),
+    );
+  }
 }
 
 function parseCreateSession(input: unknown): CreateManagedSessionRequest {
@@ -120,14 +260,14 @@ function parseCreateSession(input: unknown): CreateManagedSessionRequest {
   rejectUnsupportedField(obj, "sandboxProviderSelection");
   rejectUnsupportedField(obj, "sandboxProviderSelectionOptions");
   rejectUnsupportedField(obj, "sandboxProviderFactory");
-  rejectUnsupportedField(obj, "resources");
   rejectUnsupportedField(obj, "vault_ids");
-  rejectUnknownFields(obj, ["agent", "environment_id", "title", "metadata"]);
+  rejectUnknownFields(obj, ["agent", "environment_id", "title", "metadata", "resources"]);
   return {
     agent: agentField(obj),
     environment_id: stringField(obj, "environment_id", { required: true }),
     title: nullableStringField(obj, "title") ?? undefined,
     metadata: metadataField(obj) ?? undefined,
+    resources: resourcesField(obj),
   };
 }
 
@@ -154,6 +294,14 @@ function toManagedSession(row: SessionRow): ManagedAgentsSession {
     updated_at: row.updated_at,
     archived_at: row.archived_at,
     usage: row.usage,
+    resources: row.resources.map((resource) => ({
+      id: resource.id,
+      type: resource.type,
+      file_id: resource.file_id,
+      mount_path: resource.mount_path,
+      created_at: resource.created_at,
+      updated_at: resource.updated_at,
+    })),
   };
 }
 
@@ -250,4 +398,68 @@ function metadataField(
     metadata[k] = v;
   }
   return metadata;
+}
+
+function resourcesField(
+  obj: Record<string, unknown>,
+): CreateManagedSessionResourceInput[] | undefined {
+  const value = obj.resources;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw invalidRequest("`resources` must be an array");
+  }
+  return value.map((entry, index) => resourceField(entry, index));
+}
+
+function resourceField(
+  value: unknown,
+  index: number,
+): CreateManagedSessionResourceInput {
+  if (!isJsonObject(value)) {
+    throw invalidRequest(`\`resources[${index}]\` must be an object`);
+  }
+  const type = stringField(value, "type", { required: true });
+  if (type !== "file") {
+    throw invalidRequest(`Unsupported session resource type: ${type}.`);
+  }
+  rejectUnknownFields(value, ["type", "file_id", "mount_path"]);
+  const mountPath = nullableStringField(value, "mount_path");
+  if (mountPath === null) {
+    throw invalidRequest(`\`resources[${index}].mount_path\` must be a string`);
+  }
+  return {
+    type,
+    file_id: resourceStringField(value, "file_id", index),
+    ...(mountPath === undefined ? {} : { mount_path: mountPath }),
+  };
+}
+
+function resourceStringField(
+  obj: Record<string, unknown>,
+  field: string,
+  index: number,
+): string {
+  const value = obj[field];
+  if (typeof value === "string" && value.length > 0) return value;
+  throw invalidRequest(`\`resources[${index}].${field}\` must be a non-empty string`);
+}
+
+async function consumeBytes(stream: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+    totalLength += chunk.byteLength;
+  }
+  const out = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }

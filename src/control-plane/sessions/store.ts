@@ -3,6 +3,7 @@ import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type {
   CreateSessionRecord,
   ListSessionsOptions,
+  SessionFileMountSnapshotRow,
   SessionRow,
   SessionStore,
 } from "./types.ts";
@@ -25,6 +26,34 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_by_workspace ON sessions (workspace_id, id);
 CREATE INDEX IF NOT EXISTS sessions_by_workspace_agent ON sessions (workspace_id, agent_id, id);
+
+CREATE TABLE IF NOT EXISTS session_resources (
+  id          TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  type        TEXT NOT NULL,
+  file_id     TEXT NOT NULL,
+  mount_path  TEXT NOT NULL,
+  position    INTEGER NOT NULL,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS session_resources_by_session
+ON session_resources (workspace_id, session_id, id);
+
+CREATE TABLE IF NOT EXISTS session_file_mount_snapshots (
+  workspace_id      TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  resource_id       TEXT NOT NULL,
+  file_id           TEXT NOT NULL,
+  mount_path        TEXT NOT NULL,
+  snapshot_file_id  TEXT NOT NULL,
+  sha256            TEXT NOT NULL,
+  size_bytes        INTEGER NOT NULL,
+  PRIMARY KEY (workspace_id, session_id, resource_id)
+);
+CREATE INDEX IF NOT EXISTS session_file_mount_snapshots_by_session
+ON session_file_mount_snapshots (workspace_id, session_id);
 `;
 
 interface SessionDbRow {
@@ -46,10 +75,16 @@ interface SessionDbRow {
 export class SqliteSessionStore implements SessionStore {
   private readonly db: DatabaseSync;
   private readonly insertStmt: StatementSync;
+  private readonly insertResourceStmt: StatementSync;
+  private readonly insertSnapshotStmt: StatementSync;
   private readonly retrieveActiveStmt: StatementSync;
   private readonly retrieveAnyStmt: StatementSync;
   private readonly archiveStmt: StatementSync;
   private readonly deleteStmt: StatementSync;
+  private readonly deleteResourcesStmt: StatementSync;
+  private readonly deleteSnapshotsStmt: StatementSync;
+  private readonly resourcesBySessionStmt: StatementSync;
+  private readonly snapshotsBySessionStmt: StatementSync;
   private readonly listStmts: Map<string, StatementSync> = new Map();
 
   constructor(db: DatabaseSync) {
@@ -60,6 +95,17 @@ export class SqliteSessionStore implements SessionStore {
         id, workspace_id, type, agent_id, agent_version, environment_id,
         status, title, metadata, created_at, updated_at, archived_at, usage
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.insertResourceStmt = this.db.prepare(
+      `INSERT INTO session_resources (
+        id, workspace_id, session_id, type, file_id, mount_path, position, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.insertSnapshotStmt = this.db.prepare(
+      `INSERT INTO session_file_mount_snapshots (
+        workspace_id, session_id, resource_id, file_id, mount_path,
+        snapshot_file_id, sha256, size_bytes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.retrieveActiveStmt = this.db.prepare(
       `SELECT * FROM sessions
@@ -78,6 +124,24 @@ export class SqliteSessionStore implements SessionStore {
       `DELETE FROM sessions
        WHERE workspace_id = ? AND id = ?`,
     );
+    this.deleteResourcesStmt = this.db.prepare(
+      `DELETE FROM session_resources
+       WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.deleteSnapshotsStmt = this.db.prepare(
+      `DELETE FROM session_file_mount_snapshots
+       WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.resourcesBySessionStmt = this.db.prepare(
+      `SELECT * FROM session_resources
+       WHERE workspace_id = ? AND session_id = ?
+       ORDER BY position ASC, id ASC`,
+    );
+    this.snapshotsBySessionStmt = this.db.prepare(
+      `SELECT * FROM session_file_mount_snapshots
+       WHERE workspace_id = ? AND session_id = ?
+       ORDER BY resource_id ASC`,
+    );
   }
 
   static open(path = ":memory:"): SqliteSessionStore {
@@ -86,22 +150,54 @@ export class SqliteSessionStore implements SessionStore {
 
   create(record: CreateSessionRecord): SessionRow {
     const s = record.row;
-    this.insertStmt.run(
-      s.id,
-      s.workspace_id,
-      s.type,
-      s.agent.id,
-      s.agent.version,
-      s.environment_id,
-      s.status,
-      s.title,
-      JSON.stringify(s.metadata),
-      s.created_at,
-      s.updated_at,
-      s.archived_at,
-      s.usage,
-    );
-    return s;
+    this.db.exec("BEGIN");
+    try {
+      this.insertStmt.run(
+        s.id,
+        s.workspace_id,
+        s.type,
+        s.agent.id,
+        s.agent.version,
+        s.environment_id,
+        s.status,
+        s.title,
+        JSON.stringify(s.metadata),
+        s.created_at,
+        s.updated_at,
+        s.archived_at,
+        s.usage,
+      );
+      for (const [position, resource] of s.resources.entries()) {
+        this.insertResourceStmt.run(
+          resource.id,
+          s.workspace_id,
+          s.id,
+          resource.type,
+          resource.file_id,
+          resource.mount_path,
+          position,
+          resource.created_at,
+          resource.updated_at,
+        );
+      }
+      for (const snapshot of record.snapshots ?? []) {
+        this.insertSnapshotStmt.run(
+          snapshot.workspace_id,
+          snapshot.session_id,
+          snapshot.resource_id,
+          snapshot.file_id,
+          snapshot.mount_path,
+          snapshot.snapshot_file_id,
+          snapshot.sha256,
+          snapshot.size_bytes,
+        );
+      }
+      this.db.exec("COMMIT");
+      return s;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   retrieve(workspaceId: string, sessionId: string): SessionRow | undefined {
@@ -109,7 +205,7 @@ export class SqliteSessionStore implements SessionStore {
       workspaceId,
       sessionId,
     ) as unknown as SessionDbRow | undefined;
-    return row ? deserialize(row) : undefined;
+    return row ? this.deserialize(row) : undefined;
   }
 
   retrieveAny(workspaceId: string, sessionId: string): SessionRow | undefined {
@@ -117,7 +213,7 @@ export class SqliteSessionStore implements SessionStore {
       workspaceId,
       sessionId,
     ) as unknown as SessionDbRow | undefined;
-    return row ? deserialize(row) : undefined;
+    return row ? this.deserialize(row) : undefined;
   }
 
   archive(
@@ -132,8 +228,27 @@ export class SqliteSessionStore implements SessionStore {
   delete(workspaceId: string, sessionId: string): SessionRow | undefined {
     const existing = this.retrieveAny(workspaceId, sessionId);
     if (!existing) return undefined;
-    this.deleteStmt.run(workspaceId, sessionId);
-    return existing;
+    this.db.exec("BEGIN");
+    try {
+      this.deleteSnapshotsStmt.run(workspaceId, sessionId);
+      this.deleteResourcesStmt.run(workspaceId, sessionId);
+      this.deleteStmt.run(workspaceId, sessionId);
+      this.db.exec("COMMIT");
+      return existing;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getFileMountSnapshots(
+    workspaceId: string,
+    sessionId: string,
+  ): SessionFileMountSnapshotRow[] {
+    return this.snapshotsBySessionStmt.all(
+      workspaceId,
+      sessionId,
+    ) as unknown as SessionFileMountSnapshotRow[];
   }
 
   list(
@@ -156,7 +271,7 @@ export class SqliteSessionStore implements SessionStore {
       ...selectListArgs(workspaceId, queryLimit, opts.agentId, opts.page),
     ) as unknown as SessionDbRow[];
     const pageRows = rows.slice(0, limit);
-    const data = pageRows.map(deserialize);
+    const data = pageRows.map((row) => this.deserialize(row));
     return {
       data,
       has_more: rows.length > limit,
@@ -192,6 +307,32 @@ export class SqliteSessionStore implements SessionStore {
     this.listStmts.set(key, stmt);
     return stmt;
   }
+
+  private deserialize(row: SessionDbRow): SessionRow {
+    return {
+      id: row.id,
+      workspace_id: row.workspace_id,
+      type: "session",
+      agent: {
+        type: "agent",
+        id: row.agent_id,
+        version: row.agent_version,
+      },
+      environment_id: row.environment_id,
+      status: row.status,
+      title: row.title,
+      metadata: JSON.parse(row.metadata) as Record<string, string>,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      archived_at: row.archived_at,
+      // B.1 has no runtime usage source yet; Cycle C/D should deserialize this column.
+      usage: null,
+      resources: this.resourcesBySessionStmt.all(
+        row.workspace_id,
+        row.id,
+      ) as unknown as SessionRow["resources"],
+    };
+  }
 }
 
 function selectListArgs(
@@ -214,26 +355,4 @@ function normalizeLimit(limit: number | undefined): number {
   if (limit === undefined) return 20;
   if (!Number.isSafeInteger(limit) || limit <= 0) return 20;
   return Math.min(limit, 100);
-}
-
-function deserialize(row: SessionDbRow): SessionRow {
-  return {
-    id: row.id,
-    workspace_id: row.workspace_id,
-    type: "session",
-    agent: {
-      type: "agent",
-      id: row.agent_id,
-      version: row.agent_version,
-    },
-    environment_id: row.environment_id,
-    status: row.status,
-    title: row.title,
-    metadata: JSON.parse(row.metadata) as Record<string, string>,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    archived_at: row.archived_at,
-    // B.1 has no runtime usage source yet; Cycle C/D should deserialize this column.
-    usage: null,
-  };
 }

@@ -6,22 +6,24 @@ import { DefaultEnvironmentService } from "../../environments/service.ts";
 import { DEFAULT_WORKSPACE_ID } from "../../workspace.ts";
 import { DefaultSessionService } from "../service.ts";
 import { SqliteSessionStore } from "../store.ts";
+import { InMemoryFileStorage } from "../../files/store.ts";
+import type { SessionStore } from "../types.ts";
 
 const OTHER_WORKSPACE_ID = "wrk_other";
 
 describe("session service/store", () => {
-  it("keeps workspace rows isolated and does not leak workspace_id to wire responses", () => {
+  it("keeps workspace rows isolated and does not leak workspace_id to wire responses", async () => {
     const fixture = createFixture();
     const firstAgent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
     const firstEnv = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
     const secondAgent = fixture.createAgent(OTHER_WORKSPACE_ID, "Other Agent");
     const secondEnv = fixture.createEnvironment(OTHER_WORKSPACE_ID, "Other Env");
 
-    const first = fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+    const first = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
       agent: firstAgent.id,
       environment_id: firstEnv.id,
     });
-    const second = fixture.sessions.create(OTHER_WORKSPACE_ID, {
+    const second = await fixture.sessions.create(OTHER_WORKSPACE_ID, {
       agent: secondAgent.id,
       environment_id: secondEnv.id,
     });
@@ -36,12 +38,12 @@ describe("session service/store", () => {
     ]);
   });
 
-  it("treats an empty page cursor as an invalid direct store cursor", () => {
+  it("treats an empty page cursor as an invalid direct store cursor", async () => {
     const fixture = createFixture();
     const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
     const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
 
-    fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+    await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
       agent: agent.id,
       environment_id: environment.id,
     });
@@ -53,11 +55,11 @@ describe("session service/store", () => {
     });
   });
 
-  it("archives sessions as terminated while keeping them retrievable by direct lookup", () => {
+  it("archives sessions as terminated while keeping them retrievable by direct lookup", async () => {
     const fixture = createFixture();
     const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
     const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
-    const session = fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
       agent: agent.id,
       environment_id: environment.id,
     });
@@ -77,16 +79,16 @@ describe("session service/store", () => {
     ).toEqual([session.id]);
   });
 
-  it("permanently deletes sessions", () => {
+  it("permanently deletes sessions", async () => {
     const fixture = createFixture();
     const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
     const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
-    const session = fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
       agent: agent.id,
       environment_id: environment.id,
     });
 
-    expect(fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id)).toEqual({
+    await expect(fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id)).resolves.toEqual({
       id: session.id,
       type: "session_deleted",
     });
@@ -96,11 +98,58 @@ describe("session service/store", () => {
       fixture.sessions.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data,
     ).toEqual([]);
   });
+
+  it("releases internal snapshot quota when deleting a session", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    await fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("cleans internal snapshots if session persistence fails", async () => {
+    const fixture = createFixture({ fileStorage: true, failSessionCreate: true });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow("injected session create failure");
+
+    expect(fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data)
+      .toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
 });
 
-function createFixture(): {
+function createFixture(
+  opts: { fileStorage?: boolean; failSessionCreate?: boolean } = {},
+): {
   sessions: DefaultSessionService;
   sessionStore: SqliteSessionStore;
+  fileStorage?: InMemoryFileStorage;
   createAgent(workspaceId: string, name: string): { id: string };
   createEnvironment(workspaceId: string, name: string): { id: string };
 } {
@@ -109,15 +158,21 @@ function createFixture(): {
   const sessionStore = SqliteSessionStore.open(":memory:");
   const agents = new DefaultAgentService(agentStore);
   const environments = new DefaultEnvironmentService(environmentStore);
+  const fileStorage = opts.fileStorage ? new InMemoryFileStorage() : undefined;
+  const serviceStore = opts.failSessionCreate
+    ? failCreateStore(sessionStore)
+    : sessionStore;
   const sessions = new DefaultSessionService(
-    sessionStore,
+    serviceStore,
     agentStore,
     environmentStore,
+    fileStorage,
   );
 
   return {
     sessions,
     sessionStore,
+    ...(fileStorage === undefined ? {} : { fileStorage }),
     createAgent(workspaceId: string, name: string): { id: string } {
       return agents.create(workspaceId, {
         name,
@@ -132,4 +187,23 @@ function createFixture(): {
       });
     },
   };
+}
+
+function failCreateStore(delegate: SqliteSessionStore): SessionStore {
+  return {
+    create(): never {
+      throw new Error("injected session create failure");
+    },
+    retrieve: delegate.retrieve.bind(delegate),
+    retrieveAny: delegate.retrieveAny.bind(delegate),
+    archive: delegate.archive.bind(delegate),
+    delete: delegate.delete.bind(delegate),
+    getFileMountSnapshots: delegate.getFileMountSnapshots.bind(delegate),
+    list: delegate.list.bind(delegate),
+    close: delegate.close.bind(delegate),
+  };
+}
+
+function bytes(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
 }

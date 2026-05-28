@@ -37,6 +37,33 @@ export class InMemoryFileStorage implements FileStorage {
     workspaceId: WorkspaceId,
     input: UploadedFileInput,
   ): Promise<FileStorageRecord> {
+    return this.createStored(workspaceId, input, {
+      visibility: "public",
+      scope: null,
+      storageKeySegment: "",
+    });
+  }
+
+  async createInternalSnapshot(
+    workspaceId: WorkspaceId,
+    input: UploadedFileInput & { scopeId: string },
+  ): Promise<FileStorageRecord> {
+    return this.createStored(workspaceId, input, {
+      visibility: "internal",
+      scope: input.scopeId,
+      storageKeySegment: "internal/",
+    });
+  }
+
+  private async createStored(
+    workspaceId: WorkspaceId,
+    input: UploadedFileInput,
+    opts: {
+      visibility: StoredFile["visibility"];
+      scope: string | null;
+      storageKeySegment: string;
+    },
+  ): Promise<FileStorageRecord> {
     const { bytes, sizeBytes, sha256 } = await consumeUploadBody(
       input.body,
       this.maxUploadedFileBytes,
@@ -51,8 +78,9 @@ export class InMemoryFileStorage implements FileStorage {
     const id = newFileId();
     const now = new Date().toISOString();
     const stored: StoredFile = {
+      visibility: opts.visibility,
       workspace_id: workspaceId,
-      storage_key: `memory://${workspaceId}/${id}/${randomUUID()}`,
+      storage_key: `memory://${workspaceId}/${opts.storageKeySegment}${id}/${randomUUID()}`,
       sha256,
       bytes,
       metadata: {
@@ -63,7 +91,7 @@ export class InMemoryFileStorage implements FileStorage {
         size_bytes: sizeBytes,
         created_at: now,
         downloadable: false,
-        scope: null,
+        scope: opts.scope,
       },
     };
     this.files.set(id, stored);
@@ -76,7 +104,13 @@ export class InMemoryFileStorage implements FileStorage {
     fileId: string,
   ): Promise<FileStorageRecord | undefined> {
     const stored = this.files.get(fileId);
-    if (!stored || stored.workspace_id !== workspaceId) return undefined;
+    if (
+      !stored ||
+      stored.workspace_id !== workspaceId ||
+      stored.visibility !== "public"
+    ) {
+      return undefined;
+    }
     return toRecord(stored);
   }
 
@@ -85,13 +119,65 @@ export class InMemoryFileStorage implements FileStorage {
     fileId: string,
   ): Promise<AsyncIterable<Uint8Array> | undefined> {
     const stored = this.files.get(fileId);
-    if (!stored || stored.workspace_id !== workspaceId) return undefined;
+    if (
+      !stored ||
+      stored.workspace_id !== workspaceId ||
+      stored.visibility !== "public"
+    ) {
+      return undefined;
+    }
+    return singleChunk(stored.bytes);
+  }
+
+  async openInternalSnapshotBytes(
+    workspaceId: WorkspaceId,
+    fileId: string,
+  ): Promise<AsyncIterable<Uint8Array> | undefined> {
+    const stored = this.files.get(fileId);
+    if (
+      !stored ||
+      stored.workspace_id !== workspaceId ||
+      stored.visibility !== "internal"
+    ) {
+      return undefined;
+    }
     return singleChunk(stored.bytes);
   }
 
   async delete(workspaceId: WorkspaceId, fileId: string): Promise<boolean> {
     const stored = this.files.get(fileId);
-    if (!stored || stored.workspace_id !== workspaceId) return false;
+    if (
+      !stored ||
+      stored.workspace_id !== workspaceId ||
+      stored.visibility !== "public"
+    ) {
+      return false;
+    }
+    this.deleteStored(workspaceId, fileId, stored);
+    return true;
+  }
+
+  async deleteInternalSnapshot(
+    workspaceId: WorkspaceId,
+    fileId: string,
+  ): Promise<boolean> {
+    const stored = this.files.get(fileId);
+    if (
+      !stored ||
+      stored.workspace_id !== workspaceId ||
+      stored.visibility !== "internal"
+    ) {
+      return false;
+    }
+    this.deleteStored(workspaceId, fileId, stored);
+    return true;
+  }
+
+  private deleteStored(
+    workspaceId: WorkspaceId,
+    fileId: string,
+    stored: StoredFile,
+  ): void {
     this.files.delete(fileId);
     this.workspaceBytes.set(
       workspaceId,
@@ -101,7 +187,6 @@ export class InMemoryFileStorage implements FileStorage {
           stored.metadata.size_bytes,
       ),
     );
-    return true;
   }
 
   async list(
@@ -114,6 +199,7 @@ export class InMemoryFileStorage implements FileStorage {
     }
     const rows = [...this.files.values()]
       .filter((file) => file.workspace_id === workspaceId)
+      .filter((file) => file.visibility === "public")
       .map(toRecord)
       .sort(compareRecords);
     const cursorRows =
