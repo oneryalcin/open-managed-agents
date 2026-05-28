@@ -47,6 +47,11 @@ export interface FileStoragePage {
 }
 
 export interface FileStorage {
+  /**
+   * Creates must be atomic with respect to quota accounting: either metadata,
+   * bytes, and workspace byte totals are all committed, or none are. Persistent
+   * backends must not split quota check/write/accounting across unsafe awaits.
+   */
   create(
     workspaceId: WorkspaceId,
     input: UploadedFileInput,

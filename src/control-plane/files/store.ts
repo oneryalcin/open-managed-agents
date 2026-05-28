@@ -115,12 +115,12 @@ export class InMemoryFileStorage implements FileStorage {
     const rows = [...this.files.values()]
       .filter((file) => file.workspace_id === workspaceId)
       .map(toRecord)
-      .sort((a, b) => a.metadata.id.localeCompare(b.metadata.id));
+      .sort(compareRecords);
     const cursorRows =
       opts.beforeId !== undefined
-        ? rows.filter((row) => row.metadata.id < opts.beforeId!)
+        ? rows.filter((row) => compareId(row.metadata.id, opts.beforeId!) < 0)
         : opts.afterId !== undefined
-          ? rows.filter((row) => row.metadata.id > opts.afterId!)
+          ? rows.filter((row) => compareId(row.metadata.id, opts.afterId!) > 0)
           : rows;
     const pageRows =
       opts.beforeId === undefined
@@ -221,4 +221,12 @@ function toRecord(stored: StoredFile): FileStorageRecord {
     sha256: stored.sha256,
     metadata: { ...stored.metadata },
   };
+}
+
+function compareRecords(a: FileStorageRecord, b: FileStorageRecord): number {
+  return compareId(a.metadata.id, b.metadata.id);
+}
+
+function compareId(a: string, b: string): number {
+  return a.localeCompare(b);
 }

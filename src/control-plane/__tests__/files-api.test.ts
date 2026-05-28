@@ -29,11 +29,11 @@ describe("files API", () => {
     });
     expect(JSON.stringify(created)).not.toContain("memory://");
 
-    const retrievedRes = await app.request(`/v1/files/${created.id}?beta=true`);
+    const retrievedRes = await app.request(`/v1/files/${created.id}`);
     expect(retrievedRes.status).toBe(200);
     await expect(retrievedRes.json()).resolves.toEqual(created);
 
-    const listRes = await app.request("/v1/files?beta=true&limit=10");
+    const listRes = await app.request("/v1/files?limit=10");
     expect(listRes.status).toBe(200);
     await expect(listRes.json()).resolves.toEqual({
       data: [created],
@@ -42,7 +42,7 @@ describe("files API", () => {
       last_id: created.id,
     });
 
-    const deletedRes = await app.request(`/v1/files/${created.id}?beta=true`, {
+    const deletedRes = await app.request(`/v1/files/${created.id}`, {
       method: "DELETE",
     });
     expect(deletedRes.status).toBe(200);
@@ -51,7 +51,7 @@ describe("files API", () => {
       type: "file_deleted",
     });
 
-    const missingRes = await app.request(`/v1/files/${created.id}?beta=true`);
+    const missingRes = await app.request(`/v1/files/${created.id}`);
     expect(missingRes.status).toBe(404);
   });
 
@@ -63,7 +63,7 @@ describe("files API", () => {
       content: "private",
     });
 
-    const res = await app.request(`/v1/files/${created.id}/content?beta=true`);
+    const res = await app.request(`/v1/files/${created.id}/content`);
 
     expect(res.status).toBe(400);
     const body = (await res.json()) as ApiErrorBody;
@@ -112,10 +112,10 @@ describe("files API", () => {
     });
     const responses = [
       created,
-      await jsonFrom(app.request(`/v1/files/${created.id}?beta=true`)),
-      await jsonFrom(app.request("/v1/files?beta=true")),
-      await jsonFrom(app.request(`/v1/files/${created.id}/content?beta=true`)),
-      await jsonFrom(app.request("/v1/files/file_missing?beta=true")),
+      await jsonFrom(app.request(`/v1/files/${created.id}`)),
+      await jsonFrom(app.request("/v1/files")),
+      await jsonFrom(app.request(`/v1/files/${created.id}/content`)),
+      await jsonFrom(app.request("/v1/files/file_missing")),
     ];
 
     for (const response of responses) {
@@ -126,7 +126,7 @@ describe("files API", () => {
 
   it("rejects missing multipart file payloads", async () => {
     const app = createInMemoryControlPlaneApp();
-    const res = await app.request("/v1/files?beta=true", {
+    const res = await app.request("/v1/files", {
       method: "POST",
       body: new FormData(),
     });
@@ -141,7 +141,7 @@ describe("files API", () => {
 
   it("returns invalid_request_error for malformed multipart bodies", async () => {
     const app = createInMemoryControlPlaneApp();
-    const res = await app.request("/v1/files?beta=true", {
+    const res = await app.request("/v1/files", {
       method: "POST",
       headers: {
         "content-type": "multipart/form-data; boundary=broken",
@@ -171,7 +171,7 @@ describe("files API", () => {
     expect(oversizedJsonRes.status).toBe(413);
 
     const form = new FormData();
-    const fileRes = await app.request("/v1/files?beta=true", {
+    const fileRes = await app.request("/v1/files", {
       method: "POST",
       headers: {
         "content-length": String(MAX_REQUEST_BODY_BYTES + 1),
@@ -186,6 +186,40 @@ describe("files API", () => {
       message: "`file` is required",
     });
     expect(MAX_REQUEST_BODY_BYTES + 1).toBeLessThan(MAX_FILE_UPLOAD_REQUEST_BYTES);
+  });
+
+  it("paginates before_id and after_id through the HTTP layer", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const files = [];
+    for (const name of ["a", "b", "c", "d", "e"]) {
+      files.push(
+        await uploadFile(app, {
+          filename: `${name}.txt`,
+          mimeType: "text/plain",
+          content: name,
+        }),
+      );
+    }
+    files.sort((a, b) => a.id.localeCompare(b.id));
+    const [a, b, c, d] = files;
+
+    const beforeRes = await app.request(`/v1/files?before_id=${d!.id}&limit=2`);
+    expect(beforeRes.status).toBe(200);
+    await expect(beforeRes.json()).resolves.toMatchObject({
+      data: [b, c],
+      has_more: true,
+      first_id: b!.id,
+      last_id: c!.id,
+    });
+
+    const afterRes = await app.request(`/v1/files?after_id=${a!.id}&limit=2`);
+    expect(afterRes.status).toBe(200);
+    await expect(afterRes.json()).resolves.toMatchObject({
+      data: [b, c],
+      has_more: true,
+      first_id: b!.id,
+      last_id: c!.id,
+    });
   });
 });
 
@@ -202,7 +236,7 @@ async function uploadFile(
     "file",
     new File([input.content], input.filename, { type: input.mimeType }),
   );
-  const res = await app.request("/v1/files?beta=true", {
+  const res = await app.request("/v1/files", {
     method: "POST",
     body: form,
   });
