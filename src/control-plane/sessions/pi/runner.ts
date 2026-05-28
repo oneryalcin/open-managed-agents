@@ -8,7 +8,10 @@ import {
 import type {
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
+  RuntimeSessionFileMount,
+  RuntimeSessionPrepareOptions,
 } from "../../events/types.ts";
+import { RuntimeUnsupportedSessionFileResourcesError } from "../../events/types.ts";
 import type { ManagedAgentsUserCustomToolResultEventInput } from "../../../types/events.ts";
 import type { WorkspaceId } from "../../workspace.ts";
 import {
@@ -45,6 +48,13 @@ export type PiRuntimeSessionFactory = (
   workspaceId: WorkspaceId,
   sessionId: string,
 ) => Promise<PiRuntimeSession>;
+
+export type PiSessionFileMount = RuntimeSessionFileMount;
+export type PiSessionFileMountResolver = (
+  workspaceId: WorkspaceId,
+  sessionId: string,
+) => Promise<readonly PiSessionFileMount[]> | readonly PiSessionFileMount[];
+
 interface RuntimeHandle {
   session: PiRuntimeSession;
   sandbox: SandboxProvider | undefined;
@@ -79,6 +89,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       sandboxProviderFactory?: SandboxProviderFactory;
       sandboxProviderSelection?: SandboxProviderSelection;
       sandboxProviderSelectionOptions?: SandboxProviderSelectionResolverOptions;
+      fileMountResolver?: PiSessionFileMountResolver;
       customTools?: PiCustomToolsProvider;
       customToolTimeoutMs?: number;
     } = {},
@@ -100,6 +111,19 @@ export class PiSessionRunner implements RuntimeEventRunner {
     opts: { signal?: AbortSignal } = {},
   ): AsyncIterable<unknown> {
     return this.runOnSession(workspaceId, sessionId, text, opts.signal);
+  }
+
+  async prepareSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    opts: RuntimeSessionPrepareOptions = {},
+  ): Promise<void> {
+    const handle = await this.getOrCreateHandle(
+      workspaceId,
+      sessionId,
+      opts.fileMounts,
+    );
+    this.touch(sessionId, handle);
   }
 
   claimCustomToolResult(
@@ -337,6 +361,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private async getOrCreateHandle(
     workspaceId: WorkspaceId,
     sessionId: string,
+    fileMounts?: readonly PiSessionFileMount[],
   ): Promise<RuntimeHandle> {
     if (this.closed) throw new Error("PiSessionRunner is closed");
     if (this.closedSessionIds.has(sessionId)) {
@@ -362,6 +387,16 @@ export class PiSessionRunner implements RuntimeEventRunner {
             workspaceId,
             sessionId,
           );
+          const mounts =
+            fileMounts ??
+            (await this.opts.fileMountResolver?.(workspaceId, sessionId)) ??
+            [];
+          if (mounts.length > 0) {
+            if (typeof sandbox?.materializeFileResources !== "function") {
+              throw new RuntimeUnsupportedSessionFileResourcesError();
+            }
+            await sandbox.materializeFileResources(mounts);
+          }
           assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
           session =
             this.sessionFactory === undefined

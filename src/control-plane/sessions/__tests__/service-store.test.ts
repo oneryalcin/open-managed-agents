@@ -8,6 +8,10 @@ import { DefaultSessionService } from "../service.ts";
 import { SqliteSessionStore } from "../store.ts";
 import { InMemoryFileStorage } from "../../files/store.ts";
 import type { SessionStore } from "../types.ts";
+import type {
+  RuntimeEventRunner,
+  RuntimeSessionPrepareOptions,
+} from "../../events/types.ts";
 
 const OTHER_WORKSPACE_ID = "wrk_other";
 
@@ -143,6 +147,113 @@ describe("session service/store", () => {
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
   });
 
+  it("cleans prepared runtime if persistence fails after materialization", async () => {
+    const runtime = new FakeRuntimePreparer();
+    const fixture = createFixture({
+      fileStorage: true,
+      failSessionCreate: true,
+      runtime,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow("injected session create failure");
+
+    expect(runtime.prepares).toHaveLength(1);
+    expect(runtime.closed).toEqual([
+      { workspaceId: DEFAULT_WORKSPACE_ID, sessionId: runtime.prepares[0]!.sessionId },
+    ]);
+    expect(fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data)
+      .toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("materializes file resources before persisting the session row", async () => {
+    const runtime = new FakeRuntimePreparer();
+    const fixture = createFixture({ fileStorage: true, runtime });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+
+    expect(runtime.prepares).toHaveLength(1);
+    expect(runtime.prepares[0]).toMatchObject({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      sessionId: session.id,
+    });
+    expect(runtime.prepares[0]?.visibleDuringPrepare).toBe(false);
+    expect(runtime.prepares[0]?.fileMounts).toEqual([
+      expect.objectContaining({
+        mountPath: `/mnt/session/uploads/${source.metadata.id}`,
+        snapshotFileId: expect.stringMatching(/^file_/),
+        sha256: source.sha256,
+        sizeBytes: 5,
+      }),
+    ]);
+  });
+
+  it("does not prepare runtime for resource-free sessions", async () => {
+    const runtime = new FakeRuntimePreparer();
+    const fixture = createFixture({ runtime });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+
+    await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+
+    expect(runtime.prepares).toEqual([]);
+    expect(runtime.closed).toEqual([]);
+  });
+
+  it("cleans snapshots and prepared runtime if materialization fails", async () => {
+    const runtime = new FakeRuntimePreparer({
+      throwOnPrepare: new Error("materialization failed"),
+    });
+    const fixture = createFixture({ fileStorage: true, runtime });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow("materialization failed");
+
+    expect(fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data)
+      .toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+    expect(runtime.closed).toEqual([{ workspaceId: DEFAULT_WORKSPACE_ID, sessionId: expect.any(String) }]);
+  });
+
   it("enforces injectable session resource count and mounted-byte limits", async () => {
     const fixture = createFixture({
       fileStorage: true,
@@ -212,6 +323,7 @@ function createFixture(
     failSessionCreate?: boolean;
     maxFileResources?: number;
     maxMountedBytes?: number;
+    runtime?: RuntimeEventRunner;
   } = {},
 ): {
   sessions: DefaultSessionService;
@@ -226,6 +338,9 @@ function createFixture(
   const agents = new DefaultAgentService(agentStore);
   const environments = new DefaultEnvironmentService(environmentStore);
   const fileStorage = opts.fileStorage ? new InMemoryFileStorage() : undefined;
+  if (opts.runtime instanceof FakeRuntimePreparer) {
+    opts.runtime.currentStore = sessionStore;
+  }
   const serviceStore = opts.failSessionCreate
     ? failCreateStore(sessionStore)
     : sessionStore;
@@ -241,6 +356,7 @@ function createFixture(
       ...(opts.maxMountedBytes === undefined
         ? {}
         : { maxMountedBytes: opts.maxMountedBytes }),
+      ...(opts.runtime === undefined ? {} : { runtime: opts.runtime }),
     },
   );
 
@@ -262,6 +378,47 @@ function createFixture(
       });
     },
   };
+}
+
+class FakeRuntimePreparer implements RuntimeEventRunner {
+  readonly prepares: Array<{
+    workspaceId: string;
+    sessionId: string;
+    visibleDuringPrepare: boolean;
+    fileMounts: NonNullable<RuntimeSessionPrepareOptions["fileMounts"]>;
+  }> = [];
+  readonly closed: Array<{ workspaceId: string; sessionId: string }> = [];
+
+  constructor(
+    private readonly opts: {
+      throwOnPrepare?: Error;
+    } = {},
+  ) {}
+
+  prepareSession(
+    workspaceId: string,
+    sessionId: string,
+    opts: RuntimeSessionPrepareOptions = {},
+  ): void {
+    this.prepares.push({
+      workspaceId,
+      sessionId,
+      visibleDuringPrepare:
+        this.currentStore?.retrieveAny(workspaceId, sessionId) !== undefined,
+      fileMounts: opts.fileMounts ?? [],
+    });
+    if (this.opts.throwOnPrepare) throw this.opts.throwOnPrepare;
+  }
+
+  // Assigned by the fixture after construction so the fake can verify the
+  // create path does not publish a half-materialized session row.
+  currentStore: SqliteSessionStore | undefined;
+
+  async *runUserMessage(): AsyncIterable<unknown> {}
+
+  closeSession(workspaceId: string, sessionId: string): void {
+    this.closed.push({ workspaceId, sessionId });
+  }
 }
 
 function failCreateStore(delegate: SqliteSessionStore): SessionStore {

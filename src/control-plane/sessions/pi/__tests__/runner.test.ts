@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PiCustomToolsProvider } from "../custom-tools.ts";
 import {
   PiSessionRunner,
+  type PiSessionFileMount,
   type PiRuntimeSession,
 } from "../runner.ts";
 import type { SandboxProvider } from "../sandbox/provider.ts";
@@ -209,6 +210,152 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     await close;
     await expect(run).rejects.toThrow("Runtime session sesn_1 is closed");
     expect(session.disposed).toBe(true);
+  });
+
+  it("prepareSession materializes file mounts and reuses the prepared session", async () => {
+    const factory = new FakeSessionFactory();
+    const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+    const mounts: PiSessionFileMount[] = [
+      {
+        mountPath: "/mnt/session/uploads/probe.txt",
+        snapshotFileId: "file_snapshot",
+        sha256: "sha",
+        sizeBytes: 5,
+        bytes: new TextEncoder().encode("input"),
+      },
+    ];
+
+    await runner.prepareSession("wrk", "sesn_1", { fileMounts: mounts });
+    await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+
+    expect(sandbox.materialized).toEqual([mounts]);
+    expect(factory.sessions).toHaveLength(1);
+    expect(factory.sessions[0]?.prompts).toEqual(["one"]);
+  });
+
+  it("re-materializes file mounts from the resolver when a prepared handle was evicted", async () => {
+    const factory = new FakeSessionFactory();
+    const sandboxes: FakeSandboxProvider[] = [];
+    const mounts: PiSessionFileMount[] = [
+      {
+        mountPath: "/mnt/session/uploads/probe.txt",
+        snapshotFileId: "file_snapshot",
+        sha256: "sha",
+        sizeBytes: 5,
+        bytes: new TextEncoder().encode("input"),
+      },
+    ];
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => {
+        const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
+        sandboxes.push(sandbox);
+        return sandbox;
+      },
+      fileMountResolver: () => mounts,
+      idleTtlMs: 0,
+    });
+
+    await runner.prepareSession("wrk", "sesn_1", { fileMounts: mounts });
+    await runner.closeSession("wrk", "sesn_1");
+    await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+
+    expect(sandboxes).toHaveLength(2);
+    expect(sandboxes[0]?.materialized).toEqual([mounts]);
+    expect(sandboxes[1]?.materialized).toEqual([mounts]);
+    expect(factory.sessions[1]?.prompts).toEqual(["one"]);
+  });
+
+  it("materializes resolver-provided file mounts on first user message", async () => {
+    const factory = new FakeSessionFactory();
+    const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
+    const mounts: PiSessionFileMount[] = [
+      {
+        mountPath: "/mnt/session/uploads/probe.txt",
+        snapshotFileId: "file_snapshot",
+        sha256: "sha",
+        sizeBytes: 5,
+        bytes: new TextEncoder().encode("input"),
+      },
+    ];
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      fileMountResolver: () => mounts,
+      idleTtlMs: 0,
+    });
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+
+    expect(sandbox.materialized).toEqual([mounts]);
+    expect(factory.sessions[0]?.prompts).toEqual(["one"]);
+  });
+
+  it("does not re-materialize resolver-provided mounts over an already prepared handle", async () => {
+    const factory = new FakeSessionFactory();
+    const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
+    const preparedMounts: PiSessionFileMount[] = [
+      {
+        mountPath: "/mnt/session/uploads/prepared.txt",
+        snapshotFileId: "file_prepared",
+        sha256: "sha",
+        sizeBytes: 5,
+        bytes: new TextEncoder().encode("input"),
+      },
+    ];
+    const resolverMounts: PiSessionFileMount[] = [
+      {
+        mountPath: "/mnt/session/uploads/resolver.txt",
+        snapshotFileId: "file_resolver",
+        sha256: "sha",
+        sizeBytes: 5,
+        bytes: new TextEncoder().encode("input"),
+      },
+    ];
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      fileMountResolver: () => resolverMounts,
+      idleTtlMs: 0,
+    });
+
+    await runner.prepareSession("wrk", "sesn_1", { fileMounts: preparedMounts });
+    await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+
+    expect(sandbox.materialized).toEqual([preparedMounts]);
+  });
+
+  it("prepareSession rejects file mounts when the sandbox cannot materialize them", async () => {
+    const factory = new FakeSessionFactory();
+    const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
+    (sandbox as { materializeFileResources?: unknown }).materializeFileResources =
+      undefined;
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      runner.prepareSession("wrk", "sesn_1", {
+        fileMounts: [
+          {
+            mountPath: "/mnt/session/uploads/probe.txt",
+            snapshotFileId: "file_snapshot",
+            sha256: "sha",
+            sizeBytes: 5,
+            bytes: new TextEncoder().encode("input"),
+          },
+        ],
+      }),
+    ).rejects.toThrow("does not support session file resources");
+    expect(factory.sessions).toHaveLength(0);
+    expect(sandbox.disposed).toBe(true);
   });
 
   it("does not create a Pi session if sandbox provisioning fails", async () => {
@@ -818,6 +965,12 @@ class FakeSandboxProvider implements SandboxProvider {
     this.toolNames = new Set(toolNames);
     this.tools = toolInstances.map((name) => ({ name }) as SandboxProvider["tools"][number]);
   }
+
+  async materializeFileResources(mounts: readonly PiSessionFileMount[]): Promise<void> {
+    this.materialized.push(mounts);
+  }
+
+  readonly materialized: Array<readonly PiSessionFileMount[]> = [];
 
   recordInvocation(
     toolName: "bash" | "read" | "write" | "edit" | "find" | "ls",

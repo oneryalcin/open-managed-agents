@@ -21,6 +21,7 @@ import type {
   RuntimeEventTranslator,
   SessionEventsService,
 } from "./events/types.ts";
+import type { FileStorage } from "./files/types.ts";
 import {
   createDeploymentPiSessionRunner,
   parseDeploymentRuntimeConfigFromEnv,
@@ -38,7 +39,11 @@ import {
 import { sessionsRoutes } from "./sessions/routes.ts";
 import { DefaultSessionService } from "./sessions/service.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
-import type { SessionService } from "./sessions/types.ts";
+import type {
+  SessionFileMountSnapshotRow,
+  SessionService,
+} from "./sessions/types.ts";
+import type { PiSessionFileMountResolver } from "./sessions/pi/runner.ts";
 import { translatePiEvent } from "./sessions/pi/translator.ts";
 
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
@@ -127,11 +132,34 @@ export function createDeploymentControlPlaneApp(
   opts: DeploymentControlPlaneAppOptions = {},
 ): Hono<AppEnv> {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
-  return createInMemoryControlPlaneApp({
-    runtime: {
-      runner: createDeploymentPiSessionRunner(runtimeConfig, opts.runner),
-      translate: translatePiEvent,
-    },
+  const agentStore = SqliteAgentStore.open(":memory:");
+  const environmentStore = SqliteEnvironmentStore.open(":memory:");
+  const sessionStore = SqliteSessionStore.open(":memory:");
+  const eventStore = EventStore.open(":memory:");
+  const fileStorage = new InMemoryFileStorage();
+  const broadcaster = new SessionEventBroadcaster(eventStore);
+  const runner = createDeploymentPiSessionRunner(runtimeConfig, {
+    ...opts.runner,
+    fileMountResolver: createFileMountResolver(sessionStore, fileStorage),
+  });
+  const runtime = { runner, translate: translatePiEvent };
+  return createControlPlaneApp({
+    agents: new DefaultAgentService(agentStore),
+    environments: new DefaultEnvironmentService(environmentStore),
+    files: new DefaultFileService(fileStorage),
+    sessions: new DefaultSessionService(
+      sessionStore,
+      agentStore,
+      environmentStore,
+      fileStorage,
+      { runtime: runner },
+    ),
+    sessionEvents: new DefaultSessionEventsService(
+      eventStore,
+      sessionStore,
+      broadcaster,
+      runtime,
+    ),
   });
 }
 
@@ -153,6 +181,7 @@ export function createInMemoryControlPlaneApp(
       agentStore,
       environmentStore,
       fileStorage,
+      opts.runtime?.runner ? { runtime: opts.runtime.runner } : {},
     ),
     sessionEvents: new DefaultSessionEventsService(
       eventStore,
@@ -161,6 +190,43 @@ export function createInMemoryControlPlaneApp(
       opts.runtime,
     ),
   });
+}
+
+function createFileMountResolver(
+  sessionStore: Pick<SqliteSessionStore, "getFileMountSnapshots">,
+  fileStorage: Pick<FileStorage, "openInternalSnapshotBytes">,
+): PiSessionFileMountResolver {
+  return async (workspaceId, sessionId) => {
+    const snapshots = sessionStore.getFileMountSnapshots(workspaceId, sessionId);
+    return Promise.all(
+      snapshots.map(async (snapshot) =>
+        snapshotToRuntimeMount(workspaceId, fileStorage, snapshot),
+      ),
+    );
+  };
+}
+
+async function snapshotToRuntimeMount(
+  workspaceId: string,
+  fileStorage: Pick<FileStorage, "openInternalSnapshotBytes">,
+  snapshot: SessionFileMountSnapshotRow,
+) {
+  const bytes = await fileStorage.openInternalSnapshotBytes(
+    workspaceId,
+    snapshot.snapshot_file_id,
+  );
+  if (!bytes) {
+    throw new Error(
+      `Session file snapshot ${snapshot.snapshot_file_id} not found`,
+    );
+  }
+  return {
+    mountPath: snapshot.mount_path,
+    snapshotFileId: snapshot.snapshot_file_id,
+    sha256: snapshot.sha256,
+    sizeBytes: snapshot.size_bytes,
+    bytes,
+  };
 }
 
 export function parseBetaFeatures(header: string | undefined): Set<string> {

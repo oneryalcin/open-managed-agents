@@ -106,6 +106,11 @@ export interface SessionEventsService {
 }
 
 export interface RuntimeEventRunner {
+  prepareSession?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    opts?: RuntimeSessionPrepareOptions,
+  ): Promise<void> | void;
   runUserMessage(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -125,6 +130,24 @@ export interface RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): ReadonlySet<string>;
+}
+
+export interface RuntimeSessionFileMount {
+  mountPath: string;
+  snapshotFileId: string;
+  sha256: string;
+  sizeBytes: number;
+  bytes: AsyncIterable<Uint8Array> | Uint8Array;
+}
+
+export interface RuntimeSessionPrepareOptions {
+  fileMounts?: readonly RuntimeSessionFileMount[];
+}
+
+export class RuntimeUnsupportedSessionFileResourcesError extends Error {
+  constructor() {
+    super("Configured runtime does not support session file resources");
+  }
 }
 
 export interface RuntimeCustomToolUseEvent {
