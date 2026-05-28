@@ -1,6 +1,10 @@
 import { File } from "node:buffer";
 import { describe, expect, it } from "vitest";
-import { createInMemoryControlPlaneApp } from "../app.ts";
+import {
+  MAX_REQUEST_BODY_BYTES,
+  createInMemoryControlPlaneApp,
+} from "../app.ts";
+import { MAX_FILE_UPLOAD_REQUEST_BYTES } from "../files/routes.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsFileMetadata } from "../../types/files.ts";
 
@@ -133,6 +137,55 @@ describe("files API", () => {
       type: "invalid_request_error",
       message: "`file` is required",
     });
+  });
+
+  it("returns invalid_request_error for malformed multipart bodies", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const res = await app.request("/v1/files?beta=true", {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=broken",
+      },
+      body: "--not-the-boundary\r\nbroken",
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error).toEqual({
+      type: "invalid_request_error",
+      message: "Request body must be valid multipart/form-data",
+    });
+  });
+
+  it("keeps the large upload body limit scoped to files", async () => {
+    const app = createInMemoryControlPlaneApp();
+
+    const oversizedJsonRes = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(MAX_REQUEST_BODY_BYTES + 1),
+      },
+      body: "{}",
+    });
+    expect(oversizedJsonRes.status).toBe(413);
+
+    const form = new FormData();
+    const fileRes = await app.request("/v1/files?beta=true", {
+      method: "POST",
+      headers: {
+        "content-length": String(MAX_REQUEST_BODY_BYTES + 1),
+      },
+      body: form,
+    });
+
+    expect(fileRes.status).toBe(400);
+    const body = (await fileRes.json()) as ApiErrorBody;
+    expect(body.error).toEqual({
+      type: "invalid_request_error",
+      message: "`file` is required",
+    });
+    expect(MAX_REQUEST_BODY_BYTES + 1).toBeLessThan(MAX_FILE_UPLOAD_REQUEST_BYTES);
   });
 });
 

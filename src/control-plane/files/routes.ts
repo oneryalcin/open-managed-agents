@@ -1,15 +1,34 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { File as NodeFile } from "node:buffer";
-import { invalidRequest } from "../errors.ts";
+import {
+  invalidRequest,
+  requestTooLarge,
+  toApiErrorBody,
+  type ApiErrorBody,
+} from "../errors.ts";
 import { parseLimit } from "../http.ts";
 import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import type { FileService } from "./types.ts";
 
+export const MAX_FILE_UPLOAD_REQUEST_BYTES = 12 * 1024 * 1024;
+
 export function filesRoutes(service: FileService): Hono {
   const app = new Hono();
 
+  app.use(
+    "/",
+    bodyLimit({
+      maxSize: MAX_FILE_UPLOAD_REQUEST_BYTES,
+      onError: (c) => {
+        const err = requestTooLarge();
+        return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+      },
+    }),
+  );
+
   app.post("/", async (c) => {
-    const body = await c.req.parseBody();
+    const body = await parseMultipartBody(c.req);
     const file = body.file;
     if (!isUploadedFile(file)) {
       throw invalidRequest("`file` is required");
@@ -73,4 +92,24 @@ function isUploadedFile(value: unknown): value is NodeFile {
       typeof value.type === "string"
     )
   );
+}
+
+async function parseMultipartBody(req: {
+  parseBody(): Promise<Record<string, string | File>>;
+}): Promise<Record<string, string | File>> {
+  try {
+    return await req.parseBody();
+  } catch (error) {
+    throw invalidRequest("Request body must be valid multipart/form-data", String(error));
+  }
+}
+
+function jsonError(body: ApiErrorBody, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=UTF-8",
+      "request-id": body.request_id,
+    },
+  });
 }

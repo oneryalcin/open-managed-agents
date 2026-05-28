@@ -41,7 +41,7 @@ import { SqliteSessionStore } from "./sessions/store.ts";
 import type { SessionService } from "./sessions/types.ts";
 import { translatePiEvent } from "./sessions/pi/translator.ts";
 
-export const MAX_REQUEST_BODY_BYTES = 12 * 1024 * 1024;
+export const MAX_REQUEST_BODY_BYTES = 1_048_576;
 export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 
 interface AppEnv {
@@ -72,6 +72,13 @@ export interface DeploymentControlPlaneAppOptions {
 
 export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const defaultBodyLimit = bodyLimit({
+    maxSize: MAX_REQUEST_BODY_BYTES,
+    onError: (c) => {
+      const err = requestTooLarge();
+      return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+    },
+  });
 
   app.use("*", async (c, next) => {
     const reqId = requestId();
@@ -80,16 +87,13 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     await next();
   });
 
-  app.use(
-    "*",
-    bodyLimit({
-      maxSize: MAX_REQUEST_BODY_BYTES,
-      onError: (c) => {
-        const err = requestTooLarge();
-        return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
-      },
-    }),
-  );
+  app.use("*", async (c, next) => {
+    if (c.req.method === "POST" && c.req.path === "/v1/files") {
+      await next();
+      return;
+    }
+    return defaultBodyLimit(c, next);
+  });
 
   app.use("*", async (c, next) => {
     c.set("betaFeatures", parseBetaFeatures(c.req.header("anthropic-beta")));
