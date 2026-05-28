@@ -26,6 +26,12 @@ still tracked separately in the roadmap.
 - [Scratch: Pi 0.75.4 empirical findings](scratch-pi-findings.md) — what we learn from probing Pi; feeds back into the ADRs below as decisions firm up.
 - [Threat model (stub)](threat-model.md) — security categories to fill in before multi-tenant deployment or untrusted users.
 
+## Implementation plans
+
+- [Session file-resource control plane](plans/0043-session-file-resource-control-plane.md) — PR-A plan for issue #43, covering session resource parsing,
+  mount-path normalization, internal snapshots, and non-Docker acceptance
+  tests.
+
 ## Current smoke checks
 
 Run from the repo root:
