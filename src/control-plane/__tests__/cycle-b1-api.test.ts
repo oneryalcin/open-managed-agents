@@ -274,21 +274,6 @@ describe("Cycle B.1 API", () => {
         body: JSON.stringify({
           agent: agent.id,
           environment_id: environment.id,
-          resources: [],
-        }),
-      }),
-      400,
-      "invalid_request_error",
-      "Field `resources` is not yet supported by this server.",
-    );
-
-    await expectError(
-      await app.request("/v1/sessions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          agent: agent.id,
-          environment_id: environment.id,
           vault_ids: [],
         }),
       }),

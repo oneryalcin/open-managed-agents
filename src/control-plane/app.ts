@@ -152,6 +152,7 @@ export function createInMemoryControlPlaneApp(
       sessionStore,
       agentStore,
       environmentStore,
+      fileStorage,
     ),
     sessionEvents: new DefaultSessionEventsService(
       eventStore,

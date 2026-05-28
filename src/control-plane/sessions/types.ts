@@ -4,6 +4,7 @@ import type {
   ManagedAgentsDeletedSession,
   ManagedAgentsSession,
   ManagedAgentsSessionAgentRef,
+  ManagedAgentsSessionFileResource,
   ManagedAgentsSessionStatus,
 } from "../../types/sessions.ts";
 import type { WorkspaceId } from "../workspace.ts";
@@ -21,10 +22,23 @@ export interface SessionRow {
   updated_at: string;
   archived_at: string | null;
   usage: null;
+  resources: ManagedAgentsSessionFileResource[];
+}
+
+export interface SessionFileMountSnapshotRow {
+  workspace_id: WorkspaceId;
+  session_id: string;
+  resource_id: string;
+  file_id: string;
+  mount_path: string;
+  snapshot_file_id: string;
+  sha256: string;
+  size_bytes: number;
 }
 
 export interface CreateSessionRecord {
   row: SessionRow;
+  snapshots?: SessionFileMountSnapshotRow[];
 }
 
 export interface ListSessionsOptions {
@@ -54,6 +68,10 @@ export interface SessionStore {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): SessionRow | undefined;
+  getFileMountSnapshots(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): SessionFileMountSnapshotRow[];
   list(
     workspaceId: WorkspaceId,
     opts?: ListSessionsOptions,
@@ -65,7 +83,7 @@ export interface SessionService {
   create(
     workspaceId: WorkspaceId,
     input: unknown,
-  ): ManagedAgentsSession;
+  ): Promise<ManagedAgentsSession>;
   retrieve(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -77,7 +95,7 @@ export interface SessionService {
   delete(
     workspaceId: WorkspaceId,
     sessionId: string,
-  ): ManagedAgentsDeletedSession;
+  ): Promise<ManagedAgentsDeletedSession>;
   list(
     workspaceId: WorkspaceId,
     opts?: ListSessionsOptions,
@@ -88,4 +106,5 @@ export type {
   CreateManagedSessionRequest,
   ManagedAgentsDeletedSession,
   ManagedAgentsSession,
+  ManagedAgentsSessionFileResource,
 };

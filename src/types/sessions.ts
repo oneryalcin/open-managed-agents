@@ -23,6 +23,25 @@ export interface CreateManagedSessionRequest {
   environment_id: string;
   title?: string | null;
   metadata?: Record<string, string>;
+  resources?: CreateManagedSessionResourceInput[];
+}
+
+export type CreateManagedSessionResourceInput =
+  | CreateManagedSessionFileResourceInput;
+
+export interface CreateManagedSessionFileResourceInput {
+  type: "file";
+  file_id: string;
+  mount_path?: string;
+}
+
+export interface ManagedAgentsSessionFileResource {
+  id: string;
+  type: "file";
+  file_id: string;
+  mount_path: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ManagedAgentsSession {
@@ -37,6 +56,7 @@ export interface ManagedAgentsSession {
   updated_at: string;
   archived_at: string | null;
   usage: null;
+  resources: ManagedAgentsSessionFileResource[];
 }
 
 export interface ManagedAgentsDeletedSession {
