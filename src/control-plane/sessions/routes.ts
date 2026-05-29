@@ -3,6 +3,7 @@ import { parseJsonBody, parseLimit, parseOrder } from "../http.ts";
 import { invalidRequest } from "../errors.ts";
 import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import type { SessionEventsService } from "../events/types.ts";
+import { toManagedSession } from "./serialize.ts";
 import type { SessionService } from "./types.ts";
 
 export function sessionsRoutes(
@@ -44,10 +45,12 @@ export function sessionsRoutes(
 
   app.post("/:id/archive", async (c) => {
     const sessionId = c.req.param("id");
-    events.assertSessionArchivable(DEFAULT_WORKSPACE_ID, sessionId);
-    const session = service.archive(DEFAULT_WORKSPACE_ID, sessionId);
+    const row = events.archiveSessionRowAfterPreflight(
+      DEFAULT_WORKSPACE_ID,
+      sessionId,
+    );
     await events.archiveSession(DEFAULT_WORKSPACE_ID, sessionId);
-    return c.json(session, 200);
+    return c.json(toManagedSession(row), 200);
   });
 
   app.delete("/:id", async (c) => {

@@ -4,10 +4,20 @@ import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
 import type {
+  PersistedSessionEvent,
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
+  SessionEventBroadcaster as SessionEventBroadcasterContract,
 } from "../events/types.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
+import type {
+  CreateSessionRecord,
+  ListSessionsOptions,
+  SessionFileMountSnapshotRow,
+  SessionRow,
+  SessionStore,
+} from "../sessions/types.ts";
+import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type {
@@ -15,6 +25,7 @@ import type {
   ManagedAgentsSession,
   ManagedAgentsSessionStatus,
 } from "../../types/sessions.ts";
+import type { WorkspaceId } from "../workspace.ts";
 
 const VALID_AGENT = {
   name: "Lifecycle Agent",
@@ -340,16 +351,22 @@ describe("session lifecycle API", () => {
 
   it("allows terminated sessions and rejects rescheduling sessions at archive preflight", () => {
     const terminated = createGuardHarness({ status: "terminated" });
-    expect(() =>
-      terminated.service.assertSessionArchivable(
+    const archivedTerminated = terminated.service.archiveSessionRowAfterPreflight(
+      "wrk_default",
+      terminated.sessionId,
+    );
+    expect(archivedTerminated.status).toBe("terminated");
+    expect(archivedTerminated.archived_at).toEqual(expect.any(String));
+
+    const archivedAgain = terminated.service.archiveSessionRowAfterPreflight(
         "wrk_default",
         terminated.sessionId,
-      ),
-    ).not.toThrow();
+    );
+    expect(archivedAgain.archived_at).toBe(archivedTerminated.archived_at);
 
     const rescheduling = createGuardHarness({ status: "rescheduling" });
     expect(() =>
-      rescheduling.service.assertSessionArchivable(
+      rescheduling.service.archiveSessionRowAfterPreflight(
         "wrk_default",
         rescheduling.sessionId,
       ),
@@ -357,8 +374,133 @@ describe("session lifecycle API", () => {
 
     const running = createGuardHarness({ status: "running" });
     expect(() =>
-      running.service.assertSessionArchivable("wrk_default", running.sessionId),
+      running.service.archiveSessionRowAfterPreflight(
+        "wrk_default",
+        running.sessionId,
+      ),
     ).toThrow(archiveRunningMessage(running.sessionId, "running"));
+  });
+
+  it("rejects sends during the archive preflight-to-mutation window without side effects", () => {
+    const runner = new ClaimingRunner();
+    const { broadcaster, eventStore, service, sessionId, store } =
+      createArchiveGuardHarness({ runner });
+    guardState(service).pendingCustomToolActions.set(sessionId, {
+      ids: ["sevt_pending_tool"],
+      timer: undefined,
+    });
+    let observed = false;
+
+    store.onArchive = () => {
+      observed = true;
+      expect(() =>
+        service.send("wrk_default", sessionId, {
+          events: [
+            {
+              type: "user.custom_tool_result",
+              custom_tool_use_id: "sevt_pending_tool",
+              content: [{ type: "text", text: "done" }],
+            },
+          ],
+        }),
+      ).toThrow(`Session ${sessionId} not found`);
+      expect(eventStore.list(sessionId)).toEqual([]);
+      expect(broadcaster.published).toEqual([]);
+      expect(runner.claimed).toEqual([]);
+      expect(guardState(service).activeRuntimeTasks.has(sessionId)).toBe(false);
+      expect(
+        guardState(service).pendingCustomToolActions.get(sessionId)?.ids,
+      ).toEqual(["sevt_pending_tool"]);
+    };
+
+    const archived = service.archiveSessionRowAfterPreflight(
+      "wrk_default",
+      sessionId,
+    );
+
+    expect(observed).toBe(true);
+    expect(archived.status).toBe("terminated");
+  });
+
+  it("releases the archive guard if row mutation throws", () => {
+    const { eventStore, service, sessionId, store } = createArchiveGuardHarness();
+    store.throwNextArchive = true;
+
+    expect(() =>
+      service.archiveSessionRowAfterPreflight("wrk_default", sessionId),
+    ).toThrow("archive failed");
+
+    service.send("wrk_default", sessionId, {
+      events: [
+        { type: "user.message", content: [{ type: "text", text: "after" }] },
+      ],
+    });
+    expect(eventStore.list(sessionId).map((event) => event.type)).toEqual([
+      "user.message",
+    ]);
+  });
+
+  it("keeps sends blocked until overlapping archive preflights fully release", () => {
+    const { eventStore, service, sessionId, store } = createArchiveGuardHarness();
+    let checkedDuringOuterArchive = false;
+
+    store.onArchive = () => {
+      if (checkedDuringOuterArchive) return;
+      checkedDuringOuterArchive = true;
+      store.throwNextArchive = true;
+      expect(() =>
+        service.archiveSessionRowAfterPreflight("wrk_default", sessionId),
+      ).toThrow("archive failed");
+      expect(() =>
+        service.send("wrk_default", sessionId, {
+          events: [
+            {
+              type: "user.message",
+              content: [{ type: "text", text: "during outer" }],
+            },
+          ],
+        }),
+      ).toThrow(`Session ${sessionId} not found`);
+      expect(eventStore.list(sessionId)).toEqual([]);
+    };
+
+    service.archiveSessionRowAfterPreflight("wrk_default", sessionId);
+
+    expect(checkedDuringOuterArchive).toBe(true);
+    expect(eventStore.list(sessionId)).toEqual([]);
+  });
+
+  it("scopes the archive guard by workspace and session identity", () => {
+    const sharedSessionId = "sesn_shared_guard";
+    const { eventStore, service, store } = createArchiveGuardHarness({
+      sessionId: sharedSessionId,
+      workspaces: ["wrk_a", "wrk_b"],
+    });
+    let sentInOtherWorkspace = false;
+
+    store.onArchive = (workspaceId) => {
+      if (workspaceId !== "wrk_a") return;
+      service.send("wrk_b", sharedSessionId, {
+        events: [
+          {
+            type: "user.message",
+            content: [{ type: "text", text: "other workspace" }],
+          },
+        ],
+      });
+      sentInOtherWorkspace = true;
+    };
+
+    service.archiveSessionRowAfterPreflight("wrk_a", sharedSessionId);
+
+    expect(sentInOtherWorkspace).toBe(true);
+    expect(store.retrieveAny("wrk_a", sharedSessionId)?.archived_at).toEqual(
+      expect.any(String),
+    );
+    expect(store.retrieveAny("wrk_b", sharedSessionId)?.archived_at).toBe(null);
+    expect(eventStore.list(sharedSessionId).map((event) => event.type)).toEqual([
+      "user.message",
+    ]);
   });
 });
 
@@ -369,10 +511,27 @@ interface GuardHarness {
   sessionId: string;
 }
 
+interface ArchiveGuardHarness {
+  broadcaster: RecordingBroadcaster;
+  eventStore: EventStore;
+  runner: RuntimeEventRunner | undefined;
+  service: DefaultSessionEventsService;
+  sessionId: string;
+  store: HookedSessionStore;
+}
+
 interface GuardState {
+  archivingSessions: Map<string, number>;
   closedSessions: Set<string>;
   deletedSessions: Set<string>;
   activeRuntimeTasks: Map<string, number>;
+  pendingCustomToolActions: Map<
+    string,
+    {
+      ids: string[];
+      timer: ReturnType<typeof setTimeout> | undefined;
+    }
+  >;
 }
 
 function createGuardHarness(
@@ -424,6 +583,170 @@ function createGuardHarness(
 
 function guardState(service: DefaultSessionEventsService): GuardState {
   return service as unknown as GuardState;
+}
+
+function createArchiveGuardHarness(
+  opts: {
+    runner?: RuntimeEventRunner;
+    sessionId?: string;
+    status?: ManagedAgentsSessionStatus;
+    workspaces?: WorkspaceId[];
+  } = {},
+): ArchiveGuardHarness {
+  const sessionId =
+    opts.sessionId ?? `sesn_${Math.random().toString(16).slice(2)}`;
+  const eventStore = EventStore.open(":memory:");
+  const store = new HookedSessionStore();
+  const broadcaster = new RecordingBroadcaster();
+  const service = new DefaultSessionEventsService(
+    eventStore,
+    store,
+    broadcaster,
+    opts.runner === undefined
+      ? undefined
+      : {
+          runner: opts.runner,
+          translate: () => [],
+        },
+  );
+  for (const workspaceId of opts.workspaces ?? ["wrk_default"]) {
+    store.create({
+      row: sessionRow({
+        sessionId,
+        status: opts.status ?? "idle",
+        workspaceId,
+      }),
+    });
+  }
+  return {
+    broadcaster,
+    eventStore,
+    runner: opts.runner,
+    service,
+    sessionId,
+    store,
+  };
+}
+
+function sessionRow(opts: {
+  sessionId: string;
+  status: ManagedAgentsSessionStatus;
+  workspaceId: WorkspaceId;
+}): SessionRow {
+  const now = new Date().toISOString();
+  return {
+    id: opts.sessionId,
+    workspace_id: opts.workspaceId,
+    type: "session",
+    agent: { type: "agent", id: "agent_guard", version: 1 },
+    environment_id: "env_guard",
+    status: opts.status,
+    title: null,
+    metadata: {},
+    created_at: now,
+    updated_at: now,
+    archived_at: null,
+    usage: null,
+    resources: [],
+  };
+}
+
+class HookedSessionStore implements SessionStore {
+  private readonly rows = new Map<string, SessionRow>();
+  onArchive:
+    | ((workspaceId: WorkspaceId, sessionId: string) => void)
+    | undefined;
+  throwNextArchive = false;
+
+  create(record: CreateSessionRecord): SessionRow {
+    this.rows.set(this.key(record.row.workspace_id, record.row.id), record.row);
+    return record.row;
+  }
+
+  retrieve(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): SessionRow | undefined {
+    const row = this.retrieveAny(workspaceId, sessionId);
+    if (!row || row.archived_at !== null || row.status === "terminated") {
+      return undefined;
+    }
+    return row;
+  }
+
+  retrieveAny(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): SessionRow | undefined {
+    return this.rows.get(this.key(workspaceId, sessionId));
+  }
+
+  archive(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    archivedAt: string,
+  ): SessionRow | undefined {
+    const shouldThrow = this.throwNextArchive;
+    this.throwNextArchive = false;
+    this.onArchive?.(workspaceId, sessionId);
+    if (shouldThrow) throw new Error("archive failed");
+    const row = this.retrieveAny(workspaceId, sessionId);
+    if (!row) return undefined;
+    const next: SessionRow = {
+      ...row,
+      status: "terminated",
+      archived_at: row.archived_at ?? archivedAt,
+      updated_at: row.archived_at === null ? archivedAt : row.updated_at,
+    };
+    this.rows.set(this.key(workspaceId, sessionId), next);
+    return next;
+  }
+
+  delete(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): SessionRow | undefined {
+    const row = this.retrieveAny(workspaceId, sessionId);
+    if (!row) return undefined;
+    this.rows.delete(this.key(workspaceId, sessionId));
+    return row;
+  }
+
+  getFileMountSnapshots(): SessionFileMountSnapshotRow[] {
+    return [];
+  }
+
+  list(
+    workspaceId: WorkspaceId,
+    opts: ListSessionsOptions = {},
+  ): ManagedAgentsListPage<SessionRow> {
+    const data = [...this.rows.values()].filter((row) => {
+      if (row.workspace_id !== workspaceId) return false;
+      return opts.includeArchived === true
+        ? true
+        : row.archived_at === null && row.status !== "terminated";
+    });
+    return { data, has_more: false, next_page: null };
+  }
+
+  private key(workspaceId: WorkspaceId, sessionId: string): string {
+    return JSON.stringify([workspaceId, sessionId]);
+  }
+}
+
+class RecordingBroadcaster implements SessionEventBroadcasterContract {
+  readonly published: PersistedSessionEvent[] = [];
+  readonly closed: string[] = [];
+
+  publishPersisted(events: readonly PersistedSessionEvent[]): void {
+    this.published.push(...events);
+  }
+
+  closeSession(sessionId: string): void {
+    this.closed.push(sessionId);
+  }
+
+  async *subscribe(): AsyncIterable<PersistedSessionEvent> {}
 }
 
 class CloseTrackingRunner implements RuntimeEventRunner {
@@ -483,6 +806,19 @@ class DelayedRunner implements RuntimeEventRunner {
 
   release(): void {
     this.resume?.();
+  }
+}
+
+class ClaimingRunner extends DelayedRunner {
+  readonly claimed: string[] = [];
+
+  claimCustomToolResult(
+    _workspaceId: string,
+    _sessionId: string,
+    event: { custom_tool_use_id: string },
+  ): () => void {
+    this.claimed.push(event.custom_tool_use_id);
+    return () => {};
   }
 }
 

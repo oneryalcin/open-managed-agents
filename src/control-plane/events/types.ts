@@ -5,6 +5,7 @@ import type {
   ManagedAgentsUserCustomToolResultEventInput,
 } from "../../types/events.ts";
 import type { JsonObject } from "../../types/json.ts";
+import type { SessionRow } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
 /**
@@ -85,7 +86,10 @@ export interface SessionEventsService {
     input: unknown,
     opts?: { signal?: AbortSignal },
   ): ManagedAgentsEvent[];
-  assertSessionArchivable(workspaceId: WorkspaceId, sessionId: string): void;
+  archiveSessionRowAfterPreflight(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): SessionRow;
   archiveSession(
     workspaceId: WorkspaceId,
     sessionId: string,
