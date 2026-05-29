@@ -1,0 +1,901 @@
+## environment.created
+{
+  "archived_at": null,
+  "config": {
+    "environment": {},
+    "init_script": "",
+    "networking": {
+      "type": "unrestricted"
+    },
+    "packages": {
+      "apt": [],
+      "cargo": [],
+      "gem": [],
+      "go": [],
+      "npm": [],
+      "pip": [],
+      "type": "packages"
+    },
+    "type": "cloud"
+  },
+  "created_at": "2026-05-29T09:33:38.783583Z",
+  "description": "",
+  "id": "env_018dp5Xd6BeBHFSVjd6WdUB5",
+  "metadata": {},
+  "name": "oma-agent-archive-probe-1780047218-30209",
+  "scope": "organization",
+  "state": "active",
+  "type": "environment",
+  "updated_at": "2026-05-29T09:33:38.783583Z"
+}
+## agent.created.v1
+{
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+  "description": null,
+  "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+  "mcp_servers": [],
+  "metadata": {},
+  "model": {
+    "id": "claude-sonnet-4-6",
+    "speed": "standard"
+  },
+  "multiagent": null,
+  "name": "oma-agent-archive-probe-1780047218-30209",
+  "skills": [],
+  "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+  "tools": [
+    {
+      "configs": [],
+      "default_config": {
+        "enabled": true,
+        "permission_policy": {
+          "type": "always_allow"
+        }
+      },
+      "type": "agent_toolset_20260401"
+    }
+  ],
+  "type": "agent",
+  "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+  "version": 1
+}
+## agent.updated
+{
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+  "description": null,
+  "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+  "mcp_servers": [],
+  "metadata": {},
+  "model": {
+    "id": "claude-sonnet-4-6",
+    "speed": "standard"
+  },
+  "multiagent": null,
+  "name": "oma-agent-archive-probe-1780047218-30209-v2",
+  "skills": [],
+  "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+  "tools": [
+    {
+      "configs": [],
+      "default_config": {
+        "enabled": true,
+        "permission_policy": {
+          "type": "always_allow"
+        }
+      },
+      "type": "agent_toolset_20260401"
+    }
+  ],
+  "type": "agent",
+  "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 326312, tzinfo=datetime.timezone.utc)",
+  "version": 2
+}
+## agent.versions.before_archive
+[
+  {
+    "archived_at": null,
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 326312, tzinfo=datetime.timezone.utc)",
+    "version": 2
+  },
+  {
+    "archived_at": null,
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "version": 1
+  }
+]
+## session.created.before_archive
+{
+  "agent": {
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 2
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 952616, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_018dp5Xd6BeBHFSVjd6WdUB5",
+  "id": "sesn_0154s8Z4EoTsYsAzmmxAqFph",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [],
+  "stats": {
+    "active_seconds": 0.0,
+    "duration_seconds": 0.0
+  },
+  "status": "idle",
+  "title": "oma-agent-archive-idle-session-1780047218-30209",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 952616, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "vault_ids": []
+}
+## session.created.running_before_archive
+{
+  "agent": {
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 2
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 40, 364065, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_018dp5Xd6BeBHFSVjd6WdUB5",
+  "id": "sesn_01TAtff9MseAaeFjusGezRFN",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [],
+  "stats": {
+    "active_seconds": 0.0,
+    "duration_seconds": 0.0
+  },
+  "status": "idle",
+  "title": "oma-agent-archive-running-session-1780047218-30209",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 40, 364065, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "vault_ids": []
+}
+## events.send.running_session
+{
+  "data": [
+    {
+      "content": [
+        {
+          "text": "Use the bash tool exactly once. Run this exact command: sleep 10; printf 'OMA_AGENT_ARCHIVE_PROBE_1780047218-30209\\n'. Do not answer from memory.",
+          "type": "text"
+        }
+      ],
+      "id": "sevt_01Pzu6YNDTrfUosDi7KSKdLK",
+      "processed_at": null,
+      "type": "user.message"
+    }
+  ]
+}
+## agents.archive.while_session_running
+{
+  "ok": true,
+  "response": {
+    "archived_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=TzInfo(0))",
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=datetime.timezone.utc)",
+    "version": 2
+  }
+}
+## running_session.observed_events
+[
+  {
+    "name": null,
+    "status": null,
+    "type": "session.status_running"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "session.thread_status_running"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "user.message"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "span.model_request_start"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "agent.thinking"
+  },
+  {
+    "name": "bash",
+    "status": null,
+    "type": "agent.tool_use"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "span.model_request_end"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "agent.tool_result"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "span.model_request_start"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "agent.message"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "span.model_request_end"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "session.thread_status_idle"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "session.status_idle"
+  }
+]
+## running_session.retrieve.after_agent_archive_attempt
+{
+  "agent": {
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 2
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 40, 364065, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_018dp5Xd6BeBHFSVjd6WdUB5",
+  "id": "sesn_01TAtff9MseAaeFjusGezRFN",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [],
+  "stats": {
+    "active_seconds": 24.898,
+    "duration_seconds": 26.803551182
+  },
+  "status": "idle",
+  "title": "oma-agent-archive-running-session-1780047218-30209",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 29, 9, 34, 6, 886847, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 579
+    },
+    "cache_read_input_tokens": 10512,
+    "input_tokens": 4,
+    "output_tokens": 145
+  },
+  "vault_ids": []
+}
+## running_session.events.after_agent_archive_attempt
+[
+  {
+    "id": "sevt_01KsLfS9ZxYpdqqu4xjQgE3v",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 33, 41, 844392, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "id": "sevt_01RWki9PzNWHeF1WdyKsZMZY",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 33, 41, 844393, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_015fCuy5JW5pBp6ie6xrxChP",
+    "type": "session.thread_status_running"
+  },
+  {
+    "content": [
+      {
+        "text": "Use the bash tool exactly once. Run this exact command: sleep 10; printf 'OMA_AGENT_ARCHIVE_PROBE_1780047218-30209\\n'. Do not answer from memory.",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01Pzu6YNDTrfUosDi7KSKdLK",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 33, 44, 127307, tzinfo=TzInfo(0))",
+    "type": "user.message"
+  },
+  {
+    "id": "sevt_0176FqRxUazPSVxayG8cEZTs",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 33, 44, 127308, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "id": "sevt_01Xuzff5vP5fG4x8geqAmaXt",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 33, 44, 127309, tzinfo=TzInfo(0))",
+    "type": "agent.thinking"
+  },
+  {
+    "evaluated_permission": "allow",
+    "id": "sevt_011VMfsvXhPF5prQoAx8C7fr",
+    "input": {
+      "command": "sleep 10; printf 'OMA_AGENT_ARCHIVE_PROBE_1780047218-30209\\n'"
+    },
+    "name": "bash",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 33, 44, 127311, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "agent.tool_use"
+  },
+  {
+    "id": "sevt_01XDSm9paQCw4aJTBRqtgjnt",
+    "is_error": false,
+    "model_request_start_id": "sevt_0176FqRxUazPSVxayG8cEZTs",
+    "model_usage": {
+      "cache_creation_input_tokens": 438,
+      "cache_read_input_tokens": 5037,
+      "input_tokens": 3,
+      "output_tokens": 107,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 33, 44, 127312, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "content": [
+      {
+        "text": "OMA_AGENT_ARCHIVE_PROBE_1780047218-30209\n",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01Pqs2qg94raHpaUmWi8tJY1",
+    "is_error": false,
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 34, 4, 85150, tzinfo=TzInfo(0))",
+    "tool_use_id": "sevt_011VMfsvXhPF5prQoAx8C7fr",
+    "type": "agent.tool_result"
+  },
+  {
+    "id": "sevt_0158N4S4oy6ZyTxgBMombJv6",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 34, 6, 555286, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "content": [
+      {
+        "text": "The command completed after the 10-second sleep and printed:\n\n**OMA_AGENT_ARCHIVE_PROBE_1780047218-30209**",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01JzQky2BteT73F4ZadoZfe4",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 34, 6, 555287, tzinfo=TzInfo(0))",
+    "type": "agent.message"
+  },
+  {
+    "id": "sevt_01N3oiUjwgodusG8mh4NBPd9",
+    "is_error": false,
+    "model_request_start_id": "sevt_0158N4S4oy6ZyTxgBMombJv6",
+    "model_usage": {
+      "cache_creation_input_tokens": 141,
+      "cache_read_input_tokens": 5475,
+      "input_tokens": 1,
+      "output_tokens": 38,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 34, 6, 555288, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "agent_name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "id": "sevt_015H68tNoSkbTuFihripQMmw",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 34, 6, 747021, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_015fCuy5JW5pBp6ie6xrxChP",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_01EjZHkFu8r4Tpxwf84bo2p3",
+    "processed_at": "datetime.datetime(2026, 5, 29, 9, 34, 6, 747022, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.status_idle"
+  }
+]
+## agents.archive.second_call
+{
+  "ok": true,
+  "response": {
+    "archived_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=TzInfo(0))",
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 326312, tzinfo=datetime.timezone.utc)",
+    "version": 2
+  }
+}
+## agents.retrieve.after_archive.default
+{
+  "ok": true,
+  "response": {
+    "archived_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=TzInfo(0))",
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 326312, tzinfo=datetime.timezone.utc)",
+    "version": 2
+  }
+}
+## agents.retrieve.after_archive.version_1
+{
+  "ok": true,
+  "response": {
+    "archived_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=TzInfo(0))",
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "version": 1
+  }
+}
+## agents.retrieve.after_archive.current_version
+{
+  "ok": true,
+  "response": {
+    "archived_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=TzInfo(0))",
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 326312, tzinfo=datetime.timezone.utc)",
+    "version": 2
+  }
+}
+## agent.versions.after_archive
+[
+  {
+    "archived_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=TzInfo(0))",
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209-v2",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 326312, tzinfo=datetime.timezone.utc)",
+    "version": 2
+  },
+  {
+    "archived_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=TzInfo(0))",
+    "created_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "description": null,
+    "id": "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "mcp_servers": [],
+    "metadata": {},
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-agent-archive-probe-1780047218-30209",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "updated_at": "datetime.datetime(2026, 5, 29, 9, 33, 39, 44430, tzinfo=datetime.timezone.utc)",
+    "version": 1
+  }
+]
+## agents.list.after_archive
+{
+  "default_contains_agent": false,
+  "default_ids": [],
+  "include_archived_contains_agent": true,
+  "include_archived_ids": [
+    "agent_01PaLdPeXXjVgKPQetLvZLfS",
+    "agent_01XFsTxzYnRmz1cDqj8qQzzX",
+    "agent_01AHfoexpwKdKpBrL8g8i72L",
+    "agent_01Djqo53SrJCEWwqsrJz636k",
+    "agent_01Kb9mTiRZDmh2SiKbUVGY7a"
+  ]
+}
+## sessions.create.with_archived_agent
+{
+  "error": {
+    "body": {
+      "error": {
+        "message": "agent agent_01PaLdPeXXjVgKPQetLvZLfS is archived and cannot be used to create a session",
+        "type": "invalid_request_error"
+      },
+      "request_id": "req_011CbWdZ4317QzgC7Zfxo71T",
+      "type": "error"
+    },
+    "message": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'agent agent_01PaLdPeXXjVgKPQetLvZLfS is archived and cannot be used to create a session'}, 'request_id': 'req_011CbWdZ4317QzgC7Zfxo71T'}",
+    "status_code": 400,
+    "type": "BadRequestError"
+  },
+  "ok": false
+}
+## sessions.create.with_archived_agent_version_1
+{
+  "error": {
+    "body": {
+      "error": {
+        "message": "agent agent_01PaLdPeXXjVgKPQetLvZLfS is archived and cannot be used to create a session",
+        "type": "invalid_request_error"
+      },
+      "request_id": "req_011CbWdZ4n9mRsbmbW1eZb21",
+      "type": "error"
+    },
+    "message": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'agent agent_01PaLdPeXXjVgKPQetLvZLfS is archived and cannot be used to create a session'}, 'request_id': 'req_011CbWdZ4n9mRsbmbW1eZb21'}",
+    "status_code": 400,
+    "type": "BadRequestError"
+  },
+  "ok": false
+}
+## sessions.create.with_archived_agent_current_version
+{
+  "error": {
+    "body": {
+      "error": {
+        "message": "agent agent_01PaLdPeXXjVgKPQetLvZLfS is archived and cannot be used to create a session",
+        "type": "invalid_request_error"
+      },
+      "request_id": "req_011CbWdZ5XYK7nSfQpzDLuet",
+      "type": "error"
+    },
+    "message": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'agent agent_01PaLdPeXXjVgKPQetLvZLfS is archived and cannot be used to create a session'}, 'request_id': 'req_011CbWdZ5XYK7nSfQpzDLuet'}",
+    "status_code": 400,
+    "type": "BadRequestError"
+  },
+  "ok": false
+}
+## agents.archive.invalid_missing_id
+{
+  "error": {
+    "body": {
+      "error": {
+        "message": "Invalid agent ID.",
+        "type": "invalid_request_error"
+      },
+      "request_id": "req_011CbWdZ6RNWHinJooepm1Mh",
+      "type": "error"
+    },
+    "message": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Invalid agent ID.'}, 'request_id': 'req_011CbWdZ6RNWHinJooepm1Mh'}",
+    "status_code": 400,
+    "type": "BadRequestError"
+  },
+  "ok": false
+}
+## agents.archive.valid_missing_id
+{
+  "error": {
+    "body": {
+      "error": {
+        "message": "Agent not found.",
+        "type": "not_found_error"
+      },
+      "request_id": "req_011CbWdZ72b3N69d82CxDSXg",
+      "type": "error"
+    },
+    "message": "Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', 'message': 'Agent not found.'}, 'request_id': 'req_011CbWdZ72b3N69d82CxDSXg'}",
+    "status_code": 404,
+    "type": "NotFoundError"
+  },
+  "ok": false
+}
+## verdict
+{
+  "archive_while_running_ok": true,
+  "running_session_event_types": [
+    "session.status_running",
+    "session.thread_status_running",
+    "user.message",
+    "span.model_request_start",
+    "agent.thinking",
+    "agent.tool_use",
+    "span.model_request_end",
+    "agent.tool_result",
+    "span.model_request_start",
+    "agent.message",
+    "span.model_request_end",
+    "session.thread_status_idle",
+    "session.status_idle"
+  ]
+}
+## session.delete.cleanup.sesn_01TAtff9MseAaeFjusGezRFN
+{
+  "id": "sesn_01TAtff9MseAaeFjusGezRFN",
+  "type": "session_deleted"
+}
+## session.delete.cleanup.sesn_0154s8Z4EoTsYsAzmmxAqFph
+{
+  "id": "sesn_0154s8Z4EoTsYsAzmmxAqFph",
+  "type": "session_deleted"
+}
+## agent.archive.cleanup
+{
+  "archived_at": "datetime.datetime(2026, 5, 29, 9, 33, 42, 366442, tzinfo=TzInfo(0))",
+  "id": "agent_01PaLdPeXXjVgKPQetLvZLfS"
+}
+## environment.delete.cleanup
+{
+  "id": "env_018dp5Xd6BeBHFSVjd6WdUB5",
+  "type": "environment_deleted"
+}
