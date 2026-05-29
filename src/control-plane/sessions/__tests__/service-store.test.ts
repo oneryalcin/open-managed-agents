@@ -68,7 +68,11 @@ describe("session service/store", () => {
       environment_id: environment.id,
     });
 
-    const archived = fixture.sessions.archive(DEFAULT_WORKSPACE_ID, session.id);
+    const archived = fixture.sessionStore.archive(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+      new Date().toISOString(),
+    )!;
 
     expect(archived.id).toBe(session.id);
     expect(archived.status).toBe("terminated");

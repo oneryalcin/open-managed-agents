@@ -88,10 +88,6 @@ export interface SessionService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): ManagedAgentsSession;
-  archive(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): ManagedAgentsSession;
   delete(
     workspaceId: WorkspaceId,
     sessionId: string,

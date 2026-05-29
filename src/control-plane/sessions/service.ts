@@ -23,6 +23,7 @@ import {
   normalizeSessionFileResources,
   type SessionFileResourceMountInput,
 } from "./resources.ts";
+import { toManagedSession } from "./serialize.ts";
 import type {
   ListSessionsOptions,
   SessionFileMountSnapshotRow,
@@ -141,18 +142,6 @@ export class DefaultSessionService implements SessionService {
     sessionId: string,
   ): ManagedAgentsSession {
     const row = this.store.retrieveAny(workspaceId, sessionId);
-    if (!row) {
-      throw notFound(`Session ${sessionId} not found`);
-    }
-    return toManagedSession(row);
-  }
-
-  archive(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): ManagedAgentsSession {
-    const archivedAt = new Date().toISOString();
-    const row = this.store.archive(workspaceId, sessionId, archivedAt);
     if (!row) {
       throw notFound(`Session ${sessionId} not found`);
     }
@@ -347,30 +336,6 @@ function parseAgentRef(agent: CreateManagedSessionRequest["agent"]): {
   return agent.version === undefined
     ? { id: agent.id }
     : { id: agent.id, version: agent.version };
-}
-
-function toManagedSession(row: SessionRow): ManagedAgentsSession {
-  return {
-    id: row.id,
-    type: row.type,
-    agent: row.agent,
-    environment_id: row.environment_id,
-    status: row.status,
-    title: row.title,
-    metadata: row.metadata,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    archived_at: row.archived_at,
-    usage: row.usage,
-    resources: row.resources.map((resource) => ({
-      id: resource.id,
-      type: resource.type,
-      file_id: resource.file_id,
-      mount_path: resource.mount_path,
-      created_at: resource.created_at,
-      updated_at: resource.updated_at,
-    })),
-  };
 }
 
 function rejectUnsupportedField(obj: Record<string, unknown>, field: string): void {

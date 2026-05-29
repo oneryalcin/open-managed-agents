@@ -54,6 +54,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly deletedSessions = new Set<string>();
   private readonly activeRuntimeTasks = new Map<string, number>();
   private readonly interruptedCustomToolActions = new Map<string, Set<string>>();
+  private readonly archivingSessions = new Map<string, number>();
 
   constructor(
     private readonly events: SessionEventStore,
@@ -74,6 +75,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
     input: unknown,
     opts: { signal?: AbortSignal } = {},
   ): ManagedAgentsEvent[] {
+    if (this.isArchivingSession(workspaceId, sessionId)) {
+      throw notFound(`Session ${sessionId} not found`);
+    }
     requireActiveSession(this.sessions, workspaceId, sessionId);
     const req = parseSendRequest(input);
     const customToolResultClaims = this.claimCustomToolResults(
@@ -128,7 +132,28 @@ export class DefaultSessionEventsService implements SessionEventsService {
     });
   }
 
-  assertSessionArchivable(workspaceId: WorkspaceId, sessionId: string): void {
+  archiveSessionRowAfterPreflight(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): SessionRow {
+    this.assertSessionArchivable(workspaceId, sessionId);
+    this.incrementArchivingSession(workspaceId, sessionId);
+    try {
+      const archivedAt = new Date().toISOString();
+      const row = this.sessions.archive(workspaceId, sessionId, archivedAt);
+      if (!row) {
+        throw notFound(`Session ${sessionId} not found`);
+      }
+      return row;
+    } finally {
+      this.decrementArchivingSession(workspaceId, sessionId);
+    }
+  }
+
+  private assertSessionArchivable(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): void {
     const session = requireExistingSession(this.sessions, workspaceId, sessionId);
     if (session.archived_at !== null || session.status === "terminated") return;
     if (
@@ -140,6 +165,34 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (session.status === "running" || session.status === "rescheduling") {
       throw sessionNotArchivable(sessionId, session.status);
     }
+  }
+
+  private isArchivingSession(workspaceId: WorkspaceId, sessionId: string): boolean {
+    return (
+      (this.archivingSessions.get(archiveGuardKey(workspaceId, sessionId)) ?? 0) >
+      0
+    );
+  }
+
+  private incrementArchivingSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): void {
+    const key = archiveGuardKey(workspaceId, sessionId);
+    this.archivingSessions.set(key, (this.archivingSessions.get(key) ?? 0) + 1);
+  }
+
+  private decrementArchivingSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): void {
+    const key = archiveGuardKey(workspaceId, sessionId);
+    const remaining = (this.archivingSessions.get(key) ?? 1) - 1;
+    if (remaining > 0) {
+      this.archivingSessions.set(key, remaining);
+      return;
+    }
+    this.archivingSessions.delete(key);
   }
 
   async archiveSession(
@@ -548,6 +601,10 @@ function sessionNotArchivable(
   return invalidRequest(
     `Session ${sessionId} cannot be archived while its status is "${status}". Only pending or idle sessions may be archived.`,
   );
+}
+
+function archiveGuardKey(workspaceId: WorkspaceId, sessionId: string): string {
+  return JSON.stringify([workspaceId, sessionId]);
 }
 
 function parseSendRequest(input: unknown): SendSessionEventsRequest {
