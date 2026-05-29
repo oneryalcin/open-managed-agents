@@ -9,6 +9,7 @@
 
 import { serve } from "@hono/node-server";
 import { createInMemoryControlPlaneApp } from "../src/control-plane/app.ts";
+import { fetchWithManagedAgentsBeta } from "./managed-agents-beta.ts";
 
 const app = createInMemoryControlPlaneApp();
 const server = serve({
@@ -23,7 +24,7 @@ try {
   }
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
-  const createRes = await fetch(`${baseUrl}/v1/agents`, {
+  const createRes = await fetchWithManagedAgentsBeta(`${baseUrl}/v1/agents`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -44,7 +45,7 @@ try {
   }
   console.log(`created: ${created.id}`);
 
-  const retrieveRes = await fetch(`${baseUrl}/v1/agents/${created.id}`);
+  const retrieveRes = await fetchWithManagedAgentsBeta(`${baseUrl}/v1/agents/${created.id}`);
   assertStatus(retrieveRes, 200, "retrieve agent");
   const retrieved = (await retrieveRes.json()) as { id?: unknown; name?: unknown };
   if (retrieved.id !== created.id || retrieved.name !== "Probe Agent") {
@@ -52,7 +53,7 @@ try {
   }
   console.log("retrieved: ok");
 
-  const listRes = await fetch(`${baseUrl}/v1/agents?limit=10`);
+  const listRes = await fetchWithManagedAgentsBeta(`${baseUrl}/v1/agents?limit=10`);
   assertStatus(listRes, 200, "list agents");
   const listed = (await listRes.json()) as {
     data?: Array<{ id?: unknown }>;
@@ -69,7 +70,7 @@ try {
   }
   console.log("listed: ok");
 
-  const missingRes = await fetch(`${baseUrl}/v1/agents/agent_missing`);
+  const missingRes = await fetchWithManagedAgentsBeta(`${baseUrl}/v1/agents/agent_missing`);
   assertStatus(missingRes, 404, "missing agent");
   const missing = (await missingRes.json()) as {
     type?: unknown;

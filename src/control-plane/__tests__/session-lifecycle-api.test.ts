@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInMemoryControlPlaneApp } from "../app.ts";
+import { createInMemoryControlPlaneApp } from "./helpers.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";

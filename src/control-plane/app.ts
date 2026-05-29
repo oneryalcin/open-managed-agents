@@ -52,7 +52,6 @@ export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 interface AppEnv {
   Variables: {
     requestId: string;
-    betaFeatures: Set<string>;
   };
 }
 
@@ -93,16 +92,23 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   });
 
   app.use("*", async (c, next) => {
+    const betaFeatures = parseBetaFeatures(c.req.header("anthropic-beta"));
+    if (
+      isManagedAgentsRoute(c.req.path) &&
+      !betaFeatures.has(MANAGED_AGENTS_BETA)
+    ) {
+      const err = new ApiError(404, "not_found_error", "not found");
+      return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+    }
+    await next();
+  });
+
+  app.use("*", async (c, next) => {
     if (c.req.method === "POST" && c.req.path === "/v1/files") {
       await next();
       return;
     }
     return defaultBodyLimit(c, next);
-  });
-
-  app.use("*", async (c, next) => {
-    c.set("betaFeatures", parseBetaFeatures(c.req.header("anthropic-beta")));
-    await next();
   });
 
   app.route("/v1/agents", agentsRoutes(services.agents));
@@ -236,6 +242,16 @@ export function parseBetaFeatures(header: string | undefined): Set<string> {
       .map((value) => value.trim())
       .filter((value) => value.length > 0),
   );
+}
+
+function isManagedAgentsRoute(path: string): boolean {
+  // Keep this in sync with the Managed Agents route registrations above.
+  return [
+    "/v1/agents",
+    "/v1/environments",
+    "/v1/files",
+    "/v1/sessions",
+  ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
 function jsonError(body: ApiErrorBody, status: number): Response {

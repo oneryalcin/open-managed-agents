@@ -5,6 +5,7 @@
  */
 
 import { createInMemoryControlPlaneApp } from "../src/control-plane/app.ts";
+import { requestWithManagedAgentsBeta } from "./managed-agents-beta.ts";
 
 const app = createInMemoryControlPlaneApp();
 
@@ -50,7 +51,7 @@ const filtered = await getJson(
 );
 console.log(`filtered.user.message=${filtered.data.length}`);
 
-const missing = await app.request("/v1/sessions/sesn_missing/events");
+const missing = await requestWithManagedAgentsBeta(app, "/v1/sessions/sesn_missing/events");
 const missingBody = (await missing.json()) as {
   error: { type: string; message: string };
 };
@@ -58,7 +59,7 @@ console.log(
   `missing.status=${missing.status} type=${missingBody.error.type} message=${missingBody.error.message}`,
 );
 
-const atomicFail = await app.request(`/v1/sessions/${session.id}/events`, {
+const atomicFail = await requestWithManagedAgentsBeta(app, `/v1/sessions/${session.id}/events`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
@@ -75,7 +76,7 @@ console.log(
   `atomic.status=${atomicFail.status} type=${atomicBody.error.type} message=${atomicBody.error.message}`,
 );
 
-const pathBodyMismatch = await app.request(`/v1/sessions/${session.id}/events`, {
+const pathBodyMismatch = await requestWithManagedAgentsBeta(app, `/v1/sessions/${session.id}/events`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
@@ -96,7 +97,7 @@ console.log(
 );
 
 async function create(path: string, body: unknown): Promise<Record<string, unknown>> {
-  const res = await app.request(path, {
+  const res = await requestWithManagedAgentsBeta(app, path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -108,7 +109,7 @@ async function create(path: string, body: unknown): Promise<Record<string, unkno
 }
 
 async function sendEvents(sessionId: string, events: unknown[]): Promise<void> {
-  const res = await app.request(`/v1/sessions/${sessionId}/events`, {
+  const res = await requestWithManagedAgentsBeta(app, `/v1/sessions/${sessionId}/events`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ events }),
@@ -126,7 +127,7 @@ async function getJson(path: string): Promise<{
   data: Array<{ id: string; type: string }>;
   next_page: string | null;
 }> {
-  const res = await app.request(path);
+  const res = await requestWithManagedAgentsBeta(app, path);
   if (res.status !== 200) {
     throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
   }

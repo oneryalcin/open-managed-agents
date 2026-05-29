@@ -37,6 +37,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createDeploymentControlPlaneApp } from "../src/control-plane/app.ts";
+import { requestWithManagedAgentsBeta } from "./managed-agents-beta.ts";
 
 const OUT_DIR = join(process.cwd(), "scratch", "artifacts", "session-lifecycle-smoke");
 const RUN_ID = Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -123,7 +124,7 @@ async function runArchiveCase(): Promise<Record<string, unknown>> {
 async function runDeleteCase(): Promise<Record<string, unknown>> {
   const sessionId = await startMidRunSession(`DELETE_${RUN_ID}`);
   const containerSeen = await waitForContainer(sessionId, true, 30_000);
-  const streamRes = await app.request(`/v1/sessions/${sessionId}/events/stream`);
+  const streamRes = await requestWithManagedAgentsBeta(app, `/v1/sessions/${sessionId}/events/stream`);
   const streamTextPromise = streamRes.text();
   await delay(250);
 
@@ -254,7 +255,7 @@ async function req(
   path: string,
   body?: unknown,
 ): Promise<{ status: number; body: unknown }> {
-  const res = await app.request(path, {
+  const res = await requestWithManagedAgentsBeta(app, path, {
     method,
     headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

@@ -14,6 +14,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createControlPlaneApp } from "../src/control-plane/app.ts";
+import { requestWithManagedAgentsBeta } from "./managed-agents-beta.ts";
 import { DefaultAgentService } from "../src/control-plane/agents/service.ts";
 import { SqliteAgentStore } from "../src/control-plane/agents/store.ts";
 import { DefaultEnvironmentService } from "../src/control-plane/environments/service.ts";
@@ -144,7 +145,7 @@ console.log(`event.types=${list.data.map((event) => event.type).join(",")}`);
 console.log("verdict=PASS C.3 live reconnect recovered the runtime event log");
 
 async function create(path: string, body: unknown): Promise<Record<string, unknown>> {
-  const res = await app.request(path, {
+  const res = await requestWithManagedAgentsBeta(app, path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -156,7 +157,7 @@ async function create(path: string, body: unknown): Promise<Record<string, unkno
 }
 
 async function sendMessage(sessionId: string, text: string): Promise<void> {
-  const res = await app.request(`/v1/sessions/${sessionId}/events`, {
+  const res = await requestWithManagedAgentsBeta(app, `/v1/sessions/${sessionId}/events`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -169,7 +170,7 @@ async function sendMessage(sessionId: string, text: string): Promise<void> {
 }
 
 async function openStream(sessionId: string, lastEventId?: string): Promise<Response> {
-  const res = await app.request(`/v1/sessions/${sessionId}/events/stream`, {
+  const res = await requestWithManagedAgentsBeta(app, `/v1/sessions/${sessionId}/events/stream`, {
     headers: {
       accept: "text/event-stream",
       ...(lastEventId === undefined ? {} : { "last-event-id": lastEventId }),
@@ -185,7 +186,7 @@ async function getEvents(path: string): Promise<{
   data: Array<Record<string, unknown>>;
   next_page: string | null;
 }> {
-  const res = await app.request(path);
+  const res = await requestWithManagedAgentsBeta(app, path);
   if (res.status !== 200) {
     throw new Error(`list failed: ${res.status} ${await res.text()}`);
   }

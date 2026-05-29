@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createControlPlaneApp } from "../app.ts";
+import { createControlPlaneApp } from "./helpers.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import { DefaultAgentService } from "../agents/service.ts";
 import { SqliteAgentStore } from "../agents/store.ts";

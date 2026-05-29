@@ -4,7 +4,7 @@ import {
   MANAGED_AGENTS_BETA,
   createInMemoryControlPlaneApp,
   parseBetaFeatures,
-} from "../app.ts";
+} from "./helpers.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";

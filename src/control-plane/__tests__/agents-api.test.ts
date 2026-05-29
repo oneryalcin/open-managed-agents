@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInMemoryControlPlaneApp } from "../app.ts";
+import { createInMemoryControlPlaneApp } from "./helpers.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ApiErrorBody } from "../errors.ts";
 

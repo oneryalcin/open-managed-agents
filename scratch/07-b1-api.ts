@@ -11,6 +11,7 @@
 
 import { serve } from "@hono/node-server";
 import { createInMemoryControlPlaneApp } from "../src/control-plane/app.ts";
+import { fetchWithManagedAgentsBeta } from "./managed-agents-beta.ts";
 
 const app = createInMemoryControlPlaneApp();
 const server = serve({
@@ -74,7 +75,7 @@ try {
   assertEqual(secondSession.agent.version, 1, "requested current version");
   console.log(`session object-ref: ${secondSession.id}`);
 
-  const listRes = await fetch(
+  const listRes = await fetchWithManagedAgentsBeta(
     `${baseUrl}/v1/sessions?agent_id=${agent.id}&order=desc&limit=10`,
   );
   assertStatus(listRes, 200, "list sessions");
@@ -92,16 +93,16 @@ try {
   assertEqual(listed.next_page, null, "session list next_page");
   console.log("sessions list: ok");
 
-  const unsupportedRes = await fetch(`${baseUrl}/v1/sessions`, {
+  const unsupportedRes = await fetchWithManagedAgentsBeta(`${baseUrl}/v1/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       agent: agent.id,
       environment_id: environment.id,
-      resources: [],
+      vault_ids: [],
     }),
   });
-  assertStatus(unsupportedRes, 400, "unsupported resources");
+  assertStatus(unsupportedRes, 400, "unsupported vault_ids");
   const unsupported = (await unsupportedRes.json()) as {
     type?: unknown;
     error?: { type?: unknown; message?: unknown };
@@ -112,7 +113,7 @@ try {
     unsupported.error,
     {
       type: "invalid_request_error",
-      message: "Field `resources` is not yet supported by this server.",
+      message: "Field `vault_ids` is not yet supported by this server.",
     },
     "unsupported error",
   );
@@ -130,7 +131,7 @@ try {
 }
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetchWithManagedAgentsBeta(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",

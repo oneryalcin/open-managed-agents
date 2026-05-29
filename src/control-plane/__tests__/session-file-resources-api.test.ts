@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDeploymentControlPlaneApp,
   createInMemoryControlPlaneApp,
-} from "../app.ts";
+} from "./helpers.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";

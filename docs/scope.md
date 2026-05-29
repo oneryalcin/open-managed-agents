@@ -33,7 +33,7 @@ The smallest end-to-end flow that proves the architecture **and preserves the "b
 **Cross-cutting invariants:**
 - Event IDs persisted server-side (UUIDv7); events written to SQLite on emit, not just buffered in-memory.
 - One custom tool round-trip working end-to-end (`agent.custom_tool_use` + synthesized `session.status_idle{stop_reason:requires_action}` → `user.custom_tool_result`).
-- All endpoints accept the `anthropic-beta: managed-agents-2026-04-01` header (no-op pass-through; required because Anthropic SDKs send it on every call).
+- All Managed Agents endpoints require the `anthropic-beta: managed-agents-2026-04-01` header. Requests missing that beta are hidden behind the beta gate before route-specific body parsing or validation.
 - Success status code is **`200`** on every endpoint including POST creates (NOT `201`) — see [ADR 0004](adrs/0004-managed-agents-rest-sse-surface-as-north-star.md) Tier 1.
 - Error responses use the full envelope: `{type: "error", error: {type, message}, request_id: "req_..."}`. See [ADR 0004](adrs/0004-managed-agents-rest-sse-surface-as-north-star.md) Tier 1.
 
