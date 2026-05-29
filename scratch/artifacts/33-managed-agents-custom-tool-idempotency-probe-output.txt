@@ -1,0 +1,684 @@
+## state.path
+"scratch/artifacts/33-managed-agents-custom-tool-idempotency-probe-1780083971-15257.state.json"
+## environment.created
+{
+  "id": "env_01MChgMUQwT55Z2MRaEPbgYc",
+  "model": "claude-haiku-4-5"
+}
+## no_key.requires_action
+{
+  "observed": [
+    {
+      "id": "sevt_01MbYHZ5YMPqy1kipJ6GJkff",
+      "stop_reason": null,
+      "type": "session.status_running"
+    },
+    {
+      "id": "sevt_01D2UTmp9QVnwyMRJUQLdt8x",
+      "stop_reason": null,
+      "type": "session.thread_status_running"
+    },
+    {
+      "id": "sevt_011GbZo4HQYKL8T33kgJAZbb",
+      "stop_reason": null,
+      "type": "user.message"
+    },
+    {
+      "id": "sevt_01T6YZULQLHn1BLpP6pwUths",
+      "stop_reason": null,
+      "type": "span.model_request_start"
+    },
+    {
+      "id": "sevt_017m2ewbBEjE3ARh6iM1WQX6",
+      "stop_reason": null,
+      "type": "agent.thinking"
+    },
+    {
+      "id": "sevt_01HPrwhnfdccPKbWf7PdCoFT",
+      "stop_reason": null,
+      "type": "agent.custom_tool_use"
+    },
+    {
+      "id": "sevt_01LFQs3GnkERHHy8SsiTesuo",
+      "stop_reason": null,
+      "type": "span.model_request_end"
+    },
+    {
+      "id": "sevt_013W4LvAbpQdywkTBvwoZPDY",
+      "stop_reason": {
+        "event_ids": [
+          "sevt_01HPrwhnfdccPKbWf7PdCoFT"
+        ],
+        "type": "requires_action"
+      },
+      "type": "session.thread_status_idle"
+    },
+    {
+      "id": "sevt_01Cv2PnWewHdUNWgXkhw8TrC",
+      "stop_reason": {
+        "event_ids": [
+          "sevt_01HPrwhnfdccPKbWf7PdCoFT"
+        ],
+        "type": "requires_action"
+      },
+      "type": "session.status_idle"
+    }
+  ],
+  "session_id": "sesn_01Dpm3iCrLjuuBSZ51S9Uqec",
+  "tool_id": "sevt_01HPrwhnfdccPKbWf7PdCoFT"
+}
+## no_key.first_result
+{
+  "ok": true,
+  "response": {
+    "data": [
+      {
+        "content": [
+          {
+            "text": "NO_KEY_RESULT",
+            "type": "text"
+          }
+        ],
+        "custom_tool_use_id": "sevt_01HPrwhnfdccPKbWf7PdCoFT",
+        "id": "sevt_013eFBbcmMd4sJSZiZMHDeaA",
+        "is_error": false,
+        "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 15, 70084, tzinfo=TzInfo(0))",
+        "session_thread_id": null,
+        "type": "user.custom_tool_result"
+      }
+    ]
+  }
+}
+## no_key.before_completed_turn_duplicate
+{
+  "agent_message_count": 1,
+  "custom_tool_result_count": 1,
+  "event_count": 17
+}
+## no_key.duplicate_result
+{
+  "ok": true,
+  "response": {
+    "data": [
+      {
+        "content": [
+          {
+            "text": "NO_KEY_RESULT",
+            "type": "text"
+          }
+        ],
+        "custom_tool_use_id": "sevt_01HPrwhnfdccPKbWf7PdCoFT",
+        "id": "sevt_01WXLWz5vajmm3xWWjDUiuGi",
+        "is_error": false,
+        "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 17, 114339, tzinfo=TzInfo(0))",
+        "session_thread_id": null,
+        "type": "user.custom_tool_result"
+      }
+    ]
+  }
+}
+## no_key.after_completed_turn_duplicate
+{
+  "agent_message_count": 1,
+  "custom_tool_result_count": 2,
+  "event_count": 22,
+  "session_status_running_count": 3,
+  "settle_reason": "end_turn"
+}
+## no_key.events.list
+[
+  {
+    "id": "sevt_01MbYHZ5YMPqy1kipJ6GJkff",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 13, 123214, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-no-key-1780083971-15257",
+    "id": "sevt_01D2UTmp9QVnwyMRJUQLdt8x",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 13, 123215, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01AZR715anmBhDLLH9bd5nPi",
+    "type": "session.thread_status_running"
+  },
+  {
+    "content": [
+      {
+        "text": "Call ask_idempotency_probe exactly once with question='no-key'. Do not answer before the tool result.",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_011GbZo4HQYKL8T33kgJAZbb",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 14, 514844, tzinfo=TzInfo(0))",
+    "type": "user.message"
+  },
+  {
+    "id": "sevt_01T6YZULQLHn1BLpP6pwUths",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 14, 514845, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "id": "sevt_017m2ewbBEjE3ARh6iM1WQX6",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 14, 514846, tzinfo=TzInfo(0))",
+    "type": "agent.thinking"
+  },
+  {
+    "id": "sevt_01HPrwhnfdccPKbWf7PdCoFT",
+    "input": {
+      "question": "no-key"
+    },
+    "name": "ask_idempotency_probe",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 14, 514848, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "agent.custom_tool_use"
+  },
+  {
+    "id": "sevt_01LFQs3GnkERHHy8SsiTesuo",
+    "is_error": false,
+    "model_request_start_id": "sevt_01T6YZULQLHn1BLpP6pwUths",
+    "model_usage": {
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 1348,
+      "output_tokens": 120,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 14, 514849, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-no-key-1780083971-15257",
+    "id": "sevt_013W4LvAbpQdywkTBvwoZPDY",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 14, 669700, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01AZR715anmBhDLLH9bd5nPi",
+    "stop_reason": {
+      "event_ids": [
+        "sevt_01HPrwhnfdccPKbWf7PdCoFT"
+      ],
+      "type": "requires_action"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_01Cv2PnWewHdUNWgXkhw8TrC",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 14, 669701, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "event_ids": [
+        "sevt_01HPrwhnfdccPKbWf7PdCoFT"
+      ],
+      "type": "requires_action"
+    },
+    "type": "session.status_idle"
+  },
+  {
+    "content": [
+      {
+        "text": "NO_KEY_RESULT",
+        "type": "text"
+      }
+    ],
+    "custom_tool_use_id": "sevt_01HPrwhnfdccPKbWf7PdCoFT",
+    "id": "sevt_013eFBbcmMd4sJSZiZMHDeaA",
+    "is_error": false,
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 15, 180086, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "user.custom_tool_result"
+  },
+  {
+    "id": "sevt_01JZj2P287fhjRkp4Prj8iF4",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 15, 307758, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-no-key-1780083971-15257",
+    "id": "sevt_01QXGAZ4TUNgE9XxBeeYhh2G",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 15, 307759, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01AZR715anmBhDLLH9bd5nPi",
+    "type": "session.thread_status_running"
+  },
+  {
+    "id": "sevt_013uWXtwTk3gw8v975cQ2sRk",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 16, 471789, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "content": [
+      {
+        "text": "NO_KEY_RESULT",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01HPQrQuP8DUp2SXsdt4j3Ud",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 16, 471790, tzinfo=TzInfo(0))",
+    "type": "agent.message"
+  },
+  {
+    "id": "sevt_017qoZFaPEnd1NwTSNAqQboc",
+    "is_error": false,
+    "model_request_start_id": "sevt_013uWXtwTk3gw8v975cQ2sRk",
+    "model_usage": {
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 1486,
+      "output_tokens": 9,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 16, 471791, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-no-key-1780083971-15257",
+    "id": "sevt_01AUBjGJzacmbjd9B3v1sh3H",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 16, 668871, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01AZR715anmBhDLLH9bd5nPi",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_01XZkEcMHzy2Lnpacx2ocn5T",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 16, 668872, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.status_idle"
+  },
+  {
+    "id": "sevt_01HhcPFBa9JYFsrJi73omGdJ",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 17, 440765, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-no-key-1780083971-15257",
+    "id": "sevt_018QaQEcWph8izhepWFX1cYi",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 17, 440766, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01AZR715anmBhDLLH9bd5nPi",
+    "type": "session.thread_status_running"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-no-key-1780083971-15257",
+    "id": "sevt_01VW6yZvesQgP9vMpsGSYPHc",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 17, 662576, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01AZR715anmBhDLLH9bd5nPi",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_01VUTtqq9YpsALSSPSfuLurh",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 17, 662577, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.status_idle"
+  },
+  {
+    "content": [
+      {
+        "text": "NO_KEY_RESULT",
+        "type": "text"
+      }
+    ],
+    "custom_tool_use_id": "sevt_01HPrwhnfdccPKbWf7PdCoFT",
+    "id": "sevt_01WXLWz5vajmm3xWWjDUiuGi",
+    "is_error": false,
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 17, 114339, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "user.custom_tool_result"
+  }
+]
+## same_key.requires_action
+{
+  "idempotency_key": "oma-probe-1780083971-15257-same-key",
+  "observed": [
+    {
+      "id": "sevt_01Co5Xo5RgM4WNmtG4uCybk2",
+      "stop_reason": null,
+      "type": "session.status_running"
+    },
+    {
+      "id": "sevt_01DxHZjWNbafHz2JEqp7DYpo",
+      "stop_reason": null,
+      "type": "session.thread_status_running"
+    },
+    {
+      "id": "sevt_014QCbbMZYZH219GE7MYkkDJ",
+      "stop_reason": null,
+      "type": "user.message"
+    },
+    {
+      "id": "sevt_015m4hWZNboGYxSdUnyS9hxu",
+      "stop_reason": null,
+      "type": "span.model_request_start"
+    },
+    {
+      "id": "sevt_01114QM8Hdi213EcRsFp1QLs",
+      "stop_reason": null,
+      "type": "agent.thinking"
+    },
+    {
+      "id": "sevt_014pBADUZmZJtxqa84231mLh",
+      "stop_reason": null,
+      "type": "agent.custom_tool_use"
+    },
+    {
+      "id": "sevt_015jy6Ry34QLRanpLHLZUGHk",
+      "stop_reason": null,
+      "type": "span.model_request_end"
+    },
+    {
+      "id": "sevt_01AeVVJ65xUrnWQJqCcqtyuf",
+      "stop_reason": {
+        "event_ids": [
+          "sevt_014pBADUZmZJtxqa84231mLh"
+        ],
+        "type": "requires_action"
+      },
+      "type": "session.thread_status_idle"
+    },
+    {
+      "id": "sevt_01JXHUimsGzjPcfu8xbtmneb",
+      "stop_reason": {
+        "event_ids": [
+          "sevt_014pBADUZmZJtxqa84231mLh"
+        ],
+        "type": "requires_action"
+      },
+      "type": "session.status_idle"
+    }
+  ],
+  "session_id": "sesn_01LaWJ63kJpgL7LzT6xh3cdc",
+  "tool_id": "sevt_014pBADUZmZJtxqa84231mLh"
+}
+## same_key.first_result
+{
+  "ok": true,
+  "response": {
+    "data": [
+      {
+        "content": [
+          {
+            "text": "SAME_KEY_RESULT",
+            "type": "text"
+          }
+        ],
+        "custom_tool_use_id": "sevt_014pBADUZmZJtxqa84231mLh",
+        "id": "sevt_012MRR7v7L9Ae3wAinGXfqbs",
+        "is_error": false,
+        "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 22, 161519, tzinfo=TzInfo(0))",
+        "session_thread_id": null,
+        "type": "user.custom_tool_result"
+      }
+    ]
+  }
+}
+## same_key.before_completed_turn_duplicate
+{
+  "agent_message_count": 1,
+  "custom_tool_result_count": 1,
+  "event_count": 17
+}
+## same_key.duplicate_result
+{
+  "ok": true,
+  "response": {
+    "data": [
+      {
+        "content": [
+          {
+            "text": "SAME_KEY_RESULT",
+            "type": "text"
+          }
+        ],
+        "custom_tool_use_id": "sevt_014pBADUZmZJtxqa84231mLh",
+        "id": "sevt_01LYbXRU5soi7LdRZgZnWXSo",
+        "is_error": false,
+        "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 24, 170986, tzinfo=TzInfo(0))",
+        "session_thread_id": null,
+        "type": "user.custom_tool_result"
+      }
+    ]
+  }
+}
+## same_key.after_completed_turn_duplicate
+{
+  "agent_message_count": 1,
+  "custom_tool_result_count": 2,
+  "event_count": 22,
+  "session_status_running_count": 3,
+  "settle_reason": "end_turn"
+}
+## same_key.events.list
+[
+  {
+    "id": "sevt_01Co5Xo5RgM4WNmtG4uCybk2",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 20, 516476, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-same-key-1780083971-15257",
+    "id": "sevt_01DxHZjWNbafHz2JEqp7DYpo",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 20, 516477, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01TGVjdZ12Vb1QhdazVMeM6V",
+    "type": "session.thread_status_running"
+  },
+  {
+    "content": [
+      {
+        "text": "Call ask_idempotency_probe exactly once with question='same-key'. Do not answer before the tool result.",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_014QCbbMZYZH219GE7MYkkDJ",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 21, 633969, tzinfo=TzInfo(0))",
+    "type": "user.message"
+  },
+  {
+    "id": "sevt_015m4hWZNboGYxSdUnyS9hxu",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 21, 633970, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "id": "sevt_01114QM8Hdi213EcRsFp1QLs",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 21, 633971, tzinfo=TzInfo(0))",
+    "type": "agent.thinking"
+  },
+  {
+    "id": "sevt_014pBADUZmZJtxqa84231mLh",
+    "input": {
+      "question": "same-key"
+    },
+    "name": "ask_idempotency_probe",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 21, 633973, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "agent.custom_tool_use"
+  },
+  {
+    "id": "sevt_015jy6Ry34QLRanpLHLZUGHk",
+    "is_error": false,
+    "model_request_start_id": "sevt_015m4hWZNboGYxSdUnyS9hxu",
+    "model_usage": {
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 1348,
+      "output_tokens": 116,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 21, 633974, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-same-key-1780083971-15257",
+    "id": "sevt_01AeVVJ65xUrnWQJqCcqtyuf",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 21, 810882, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01TGVjdZ12Vb1QhdazVMeM6V",
+    "stop_reason": {
+      "event_ids": [
+        "sevt_014pBADUZmZJtxqa84231mLh"
+      ],
+      "type": "requires_action"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_01JXHUimsGzjPcfu8xbtmneb",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 21, 810883, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "event_ids": [
+        "sevt_014pBADUZmZJtxqa84231mLh"
+      ],
+      "type": "requires_action"
+    },
+    "type": "session.status_idle"
+  },
+  {
+    "content": [
+      {
+        "text": "SAME_KEY_RESULT",
+        "type": "text"
+      }
+    ],
+    "custom_tool_use_id": "sevt_014pBADUZmZJtxqa84231mLh",
+    "id": "sevt_012MRR7v7L9Ae3wAinGXfqbs",
+    "is_error": false,
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 22, 266839, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "user.custom_tool_result"
+  },
+  {
+    "id": "sevt_01UzgjCKuBETCvZoHhbfxqC7",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 22, 434693, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-same-key-1780083971-15257",
+    "id": "sevt_01Xn3nZeT93oFcVpYGQHyQDZ",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 22, 434694, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01TGVjdZ12Vb1QhdazVMeM6V",
+    "type": "session.thread_status_running"
+  },
+  {
+    "id": "sevt_01KYxhpaMGzoqQKQ17pgTrAn",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 23, 222301, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "content": [
+      {
+        "text": "SAME_KEY_RESULT",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01FuqAp5y7HP3Zs1wzr6Ps1h",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 23, 222302, tzinfo=TzInfo(0))",
+    "type": "agent.message"
+  },
+  {
+    "id": "sevt_018vrQczQiuccoVJEK7LyW5W",
+    "is_error": false,
+    "model_request_start_id": "sevt_01KYxhpaMGzoqQKQ17pgTrAn",
+    "model_usage": {
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 1483,
+      "output_tokens": 10,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 23, 222303, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-same-key-1780083971-15257",
+    "id": "sevt_019gQ2CJr6GrVRHeKwffjhr5",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 23, 409995, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01TGVjdZ12Vb1QhdazVMeM6V",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_01VYN6XGtWjfCUGJEhHdhrD6",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 23, 409996, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.status_idle"
+  },
+  {
+    "id": "sevt_01WpxFVSc1LeToUNG2rqoaAw",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 24, 503637, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-same-key-1780083971-15257",
+    "id": "sevt_01YGRNk7vqiEHZ1j1AUKYj1n",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 24, 503638, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01TGVjdZ12Vb1QhdazVMeM6V",
+    "type": "session.thread_status_running"
+  },
+  {
+    "agent_name": "oma-idempotency-probe-same-key-1780083971-15257",
+    "id": "sevt_017dTy51w4BKQ8Ja23B37fFE",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 24, 722401, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01TGVjdZ12Vb1QhdazVMeM6V",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_01MMtfzSjQDKkb6keTbGd12n",
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 24, 722402, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.status_idle"
+  },
+  {
+    "content": [
+      {
+        "text": "SAME_KEY_RESULT",
+        "type": "text"
+      }
+    ],
+    "custom_tool_use_id": "sevt_014pBADUZmZJtxqa84231mLh",
+    "id": "sevt_01LYbXRU5soi7LdRZgZnWXSo",
+    "is_error": false,
+    "processed_at": "datetime.datetime(2026, 5, 29, 19, 46, 24, 170986, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "user.custom_tool_result"
+  }
+]
+## verdict
+{
+  "no_key_duplicate_ok": true,
+  "no_key_duplicate_status": null,
+  "same_key_duplicate_ok": true,
+  "same_key_duplicate_status": null
+}
+## session.delete.cleanup
+{
+  "id": "sesn_01Dpm3iCrLjuuBSZ51S9Uqec",
+  "type": "session_deleted"
+}
+## session.delete.cleanup
+{
+  "id": "sesn_01LaWJ63kJpgL7LzT6xh3cdc",
+  "type": "session_deleted"
+}
+## agent.archive.cleanup
+{
+  "archived_at": "datetime.datetime(2026, 5, 29, 19, 46, 27, 153711, tzinfo=TzInfo(0))",
+  "id": "agent_01KKwe7F3XCrmy2QcxWSek35"
+}
+## agent.archive.cleanup
+{
+  "archived_at": "datetime.datetime(2026, 5, 29, 19, 46, 27, 548430, tzinfo=TzInfo(0))",
+  "id": "agent_01Xpqkao5bzjR2cVwovmkdXQ"
+}
+## environment.delete.cleanup
+{
+  "id": "env_01MChgMUQwT55Z2MRaEPbgYc",
+  "type": "environment_deleted"
+}
