@@ -5,9 +5,11 @@ import { SqliteAgentStore } from "../agents/store.ts";
 import { DefaultEnvironmentService } from "../environments/service.ts";
 import { SqliteEnvironmentStore } from "../environments/store.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
+import { materializePersistedEvents } from "../events/persist.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
 import type {
+  RuntimeActionCloseReason,
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
 } from "../events/types.ts";
@@ -142,6 +144,284 @@ describe("Cycle D custom tool round trip", () => {
     expect(res.status).toBe(404);
     const events = await getEvents(fixture.app, session.id);
     expect(events).toEqual([]);
+  });
+
+  it("accepts an identical stale custom tool result without resolving runtime twice", async () => {
+    const runner = new FakeCustomToolRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.custom_tool_use"),
+    );
+    const customUse = waiting.find(
+      (event) => event.type === "agent.custom_tool_use",
+    );
+    const content = [{ type: "text" as const, text: "external answer" }];
+
+    await sendCustomToolResult(
+      fixture.app,
+      session.id,
+      customUse?.id as string,
+      content,
+    );
+    await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.message"),
+    );
+
+    await sendCustomToolResult(
+      fixture.app,
+      session.id,
+      customUse?.id as string,
+      content,
+    );
+
+    const final = await getEvents(fixture.app, session.id);
+    expect(
+      final.filter((event) => event.type === "user.custom_tool_result"),
+    ).toHaveLength(2);
+    expect(
+      final.filter((event) => event.type === "agent.message"),
+    ).toHaveLength(1);
+    expect(runner.claimCount).toBe(1);
+  });
+
+  it("rejects a different duplicate custom tool result before persistence", async () => {
+    const runner = new FakeCustomToolRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.custom_tool_use"),
+    );
+    const customUse = waiting.find(
+      (event) => event.type === "agent.custom_tool_use",
+    );
+
+    await sendCustomToolResult(
+      fixture.app,
+      session.id,
+      customUse?.id as string,
+      [{ type: "text", text: "external answer" }],
+    );
+    await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.message"),
+    );
+
+    const res = await fixture.app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [
+          {
+            type: "user.custom_tool_result",
+            custom_tool_use_id: customUse?.id,
+            content: [{ type: "text", text: "different" }],
+            is_error: false,
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const final = await getEvents(fixture.app, session.id);
+    expect(
+      final.filter((event) => event.type === "user.custom_tool_result"),
+    ).toHaveLength(1);
+    expect(runner.claimCount).toBe(1);
+  });
+
+  it("terminalizes a custom tool result when runtime state is lost", async () => {
+    const fixture = makeFixture(new FakeCustomToolRunner(), { leaseTtlMs: -1 });
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) =>
+        events.some((event) => event.type === "agent.custom_tool_use") &&
+        events.some(
+          (event) =>
+            event.type === "session.status_idle" &&
+            (event.stop_reason as { type?: unknown } | undefined)?.type ===
+              "requires_action",
+        ),
+    );
+    const customUse = waiting.find(
+      (event) => event.type === "agent.custom_tool_use",
+    );
+
+    const recreated = fixture.recreate(new NoPendingCustomToolRunner());
+    fixture.service.recoverAbandonedRuntimeTurns("wrk_default");
+    await sendCustomToolResult(
+      recreated,
+      session.id,
+      customUse?.id as string,
+      [{ type: "text", text: "late" }],
+    );
+
+    const final = await getEvents(recreated, session.id);
+    expect(final.at(-2)).toMatchObject({
+      type: "session.error",
+      message: expect.stringContaining("runtime state is no longer available"),
+    });
+    expect(final.at(-1)).toMatchObject({
+      type: "session.status_idle",
+      stop_reason: { type: "end_turn" },
+    });
+    expect(
+      final.filter((event) => event.type === "user.custom_tool_result"),
+    ).toHaveLength(1);
+  });
+
+  it("interrupt closes durable custom tool waits after restart", async () => {
+    const fixture = makeFixture(new FakeCustomToolRunner());
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) =>
+        events.some((event) => event.type === "agent.custom_tool_use") &&
+        events.some(
+          (event) =>
+            event.type === "session.status_idle" &&
+            (event.stop_reason as { type?: unknown } | undefined)?.type ===
+              "requires_action",
+        ),
+    );
+    const customUse = waiting.find(
+      (event) => event.type === "agent.custom_tool_use",
+    );
+
+    const recreated = fixture.recreate(new NoPendingCustomToolRunner());
+    const interrupt = await recreated.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ events: [{ type: "user.interrupt" }] }),
+    });
+    expect(interrupt.status).toBe(200);
+
+    const stale = await recreated.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [
+          {
+            type: "user.custom_tool_result",
+            custom_tool_use_id: customUse?.id,
+            content: [{ type: "text", text: "stale" }],
+            is_error: false,
+          },
+        ],
+      }),
+    });
+    expect(stale.status).toBe(404);
+  });
+
+  it("recovers an accepted user-message turn from durable trigger event IDs", async () => {
+    const runner = new FakeImmediateRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+    const now = new Date().toISOString();
+    const [row] = materializePersistedEvents(
+      "wrk_default",
+      session.id,
+      [
+        {
+          type: "user.message",
+          payload: { content: [{ type: "text", text: "recover me" }] },
+        },
+      ],
+      now,
+    );
+    fixture.eventStore.appendBatchWithRuntimeChanges([row], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId: session.id,
+          turnId: "rtun_recover_accepted",
+          ownerId: "owner_crashed",
+          ownerGeneration: 1,
+          leaseExpiresAt: now,
+          triggerEventIds: [row.id],
+          now,
+        },
+      ],
+    });
+
+    fixture.service.recoverAbandonedRuntimeTurns("wrk_default");
+
+    const final = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.message"),
+    );
+    expect(runner.prompts).toEqual(["recover me"]);
+    expect(final.map((event) => event.type)).toEqual([
+      "user.message",
+      "agent.message",
+      "session.status_idle",
+    ]);
+  });
+
+  it("retries startup recovery after a foreign runtime lease expires", async () => {
+    const runner = new FakeImmediateRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+    const now = new Date().toISOString();
+    const [row] = materializePersistedEvents(
+      "wrk_default",
+      session.id,
+      [
+        {
+          type: "user.message",
+          payload: { content: [{ type: "text", text: "recover after ttl" }] },
+        },
+      ],
+      now,
+    );
+    fixture.eventStore.appendBatchWithRuntimeChanges([row], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId: session.id,
+          turnId: "rtun_recover_after_ttl",
+          ownerId: "owner_crashed",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 20).toISOString(),
+          triggerEventIds: [row.id],
+          now,
+        },
+      ],
+    });
+
+    fixture.service.recoverAbandonedRuntimeTurns("wrk_default");
+    expect(runner.prompts).toEqual([]);
+
+    const final = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.message"),
+    );
+    expect(runner.prompts).toEqual(["recover after ttl"]);
+    expect(final.map((event) => event.type)).toEqual([
+      "user.message",
+      "agent.message",
+      "session.status_idle",
+    ]);
   });
 
   it("aggregates parallel custom tool waits and re-emits remaining actions after partial resolution", async () => {
@@ -298,6 +578,24 @@ describe("Cycle D custom tool round trip", () => {
     });
 
     runner.expireFirst();
+    const staleResult = await fixture.app.request(
+      `/v1/sessions/${session.id}/events`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          events: [
+            {
+              type: "user.custom_tool_result",
+              custom_tool_use_id: firstUse?.id,
+              content: [{ type: "text", text: "stale" }],
+              is_error: false,
+            },
+          ],
+        }),
+      },
+    );
+    expect(staleResult.status).toBe(404);
     runner.continueWithSecond();
 
     const secondWait = await eventuallyEvents(
@@ -321,6 +619,7 @@ describe("Cycle D custom tool round trip", () => {
 
 class FakeCustomToolRunner implements RuntimeEventRunner {
   boundCustomToolUseId: string | undefined;
+  claimCount = 0;
   private resolveResult:
     | ((event: ManagedAgentsUserCustomToolResultEventInput) => void)
     | undefined;
@@ -367,7 +666,47 @@ class FakeCustomToolRunner implements RuntimeEventRunner {
     event: ManagedAgentsUserCustomToolResultEventInput,
   ): (() => void) | undefined {
     if (event.custom_tool_use_id !== this.boundCustomToolUseId) return undefined;
-    return () => this.resolveResult?.(event);
+    return () => {
+      this.claimCount += 1;
+      this.resolveResult?.(event);
+    };
+  }
+
+  customToolNames(): ReadonlySet<string> {
+    return new Set(["ask_user"]);
+  }
+}
+
+class NoPendingCustomToolRunner implements RuntimeEventRunner {
+  async *runUserMessage(): AsyncIterable<unknown> {}
+
+  claimCustomToolResult(): (() => void) | undefined {
+    return undefined;
+  }
+
+  customToolNames(): ReadonlySet<string> {
+    return new Set(["ask_user"]);
+  }
+}
+
+class FakeImmediateRunner implements RuntimeEventRunner {
+  readonly prompts: string[] = [];
+
+  async *runUserMessage(
+    _workspaceId: string,
+    _sessionId: string,
+    text: string,
+  ): AsyncIterable<unknown> {
+    this.prompts.push(text);
+    yield {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `runtime saw: ${text}` }],
+        stopReason: "stop",
+      },
+    };
+    yield { type: "agent_end", messages: [], willRetry: false };
   }
 
   customToolNames(): ReadonlySet<string> {
@@ -511,7 +850,9 @@ class FakeGappedCustomToolRunner implements RuntimeEventRunner {
 }
 
 class FakeExpiringCustomToolRunner implements RuntimeEventRunner {
-  private releaseFirst: (() => void) | undefined;
+  private releaseFirst:
+    | ((reason?: RuntimeActionCloseReason) => void)
+    | undefined;
   private readonly continue = deferred<void>();
 
   async *runUserMessage(): AsyncIterable<unknown> {
@@ -547,7 +888,7 @@ class FakeExpiringCustomToolRunner implements RuntimeEventRunner {
   }
 
   expireFirst(): void {
-    this.releaseFirst?.();
+    this.releaseFirst?.("timeout");
   }
 
   continueWithSecond(): void {
@@ -555,24 +896,47 @@ class FakeExpiringCustomToolRunner implements RuntimeEventRunner {
   }
 }
 
-function makeFixture(runner: RuntimeEventRunner): {
+function makeFixture(
+  runner: RuntimeEventRunner,
+  opts: { leaseTtlMs?: number } = {},
+): {
   app: ReturnType<typeof createControlPlaneApp>;
+  eventStore: EventStore;
+  service: DefaultSessionEventsService;
+  recreate(runner: RuntimeEventRunner): ReturnType<typeof createControlPlaneApp>;
 } {
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
-  const broadcaster = new SessionEventBroadcaster(eventStore);
-  return {
-    app: createControlPlaneApp({
+  let currentService!: DefaultSessionEventsService;
+  const buildApp = (runtimeRunner: RuntimeEventRunner) => {
+    const broadcaster = new SessionEventBroadcaster(eventStore);
+    currentService = new DefaultSessionEventsService(
+      eventStore,
+      sessionStore,
+      broadcaster,
+      {
+        runner: runtimeRunner,
+        translate: translatePiEvent,
+        ...(opts.leaseTtlMs === undefined ? {} : { leaseTtlMs: opts.leaseTtlMs }),
+      },
+    );
+    return createControlPlaneApp({
       agents: new DefaultAgentService(agentStore),
       environments: new DefaultEnvironmentService(environmentStore),
       sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore),
-      sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {
-        runner,
-        translate: translatePiEvent,
-      }),
-    }),
+      sessionEvents: currentService,
+    });
+  };
+  const app = buildApp(runner);
+  return {
+    app,
+    eventStore,
+    get service() {
+      return currentService;
+    },
+    recreate: buildApp,
   };
 }
 

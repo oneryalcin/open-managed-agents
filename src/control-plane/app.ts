@@ -154,6 +154,13 @@ export function createDeploymentControlPlaneApp(
     }),
   });
   const runtime = { runner, translate: translatePiEvent };
+  const sessionEvents = new DefaultSessionEventsService(
+    eventStore,
+    sessionStore,
+    broadcaster,
+    runtime,
+  );
+  sessionEvents.recoverAbandonedRuntimeTurns("wrk_default");
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore),
     environments: new DefaultEnvironmentService(environmentStore),
@@ -165,12 +172,7 @@ export function createDeploymentControlPlaneApp(
       fileStorage,
       { runtime: runner },
     ),
-    sessionEvents: new DefaultSessionEventsService(
-      eventStore,
-      sessionStore,
-      broadcaster,
-      runtime,
-    ),
+    sessionEvents,
   });
 }
 

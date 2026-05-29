@@ -6,6 +6,7 @@ import type {
 } from "../../../types/events.ts";
 import type { JsonObject } from "../../../types/json.ts";
 import type {
+  RuntimeActionCloseReason,
   RuntimeCustomToolResult,
   RuntimeCustomToolUseEvent,
 } from "../../events/types.ts";
@@ -23,7 +24,7 @@ interface PendingCustomToolCall {
   sessionId: string;
   resolve: (result: RuntimeCustomToolResult) => void;
   reject: (error: Error) => void;
-  cleanup: () => void;
+  cleanup: (reason?: RuntimeActionCloseReason) => void;
 }
 
 export class PiCustomToolBridge {
@@ -123,17 +124,19 @@ export class PiCustomToolBridge {
     let customToolUseId: string | undefined;
     const result = await new Promise<RuntimeCustomToolResult>((resolve, reject) => {
       let released = false;
-      let releaseCustomToolUseId: (() => void) | undefined;
-      const cleanup = () => {
+      let releaseCustomToolUseId:
+        | ((reason?: RuntimeActionCloseReason) => void)
+        | undefined;
+      const cleanup = (reason?: RuntimeActionCloseReason) => {
         if (released) return;
         released = true;
         signal?.removeEventListener("abort", onAbort);
         if (timer) clearTimeout(timer);
-        releaseCustomToolUseId?.();
+        releaseCustomToolUseId?.(reason);
       };
       const onAbort = () => {
         if (customToolUseId) this.pending.delete(customToolUseId);
-        cleanup();
+        cleanup("interrupted");
         reject(new Error(`Custom tool ${name} aborted`));
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -141,7 +144,7 @@ export class PiCustomToolBridge {
         this.timeoutMs > 0
           ? setTimeout(() => {
               if (customToolUseId) this.pending.delete(customToolUseId);
-              cleanup();
+              cleanup("timeout");
               reject(new Error(`Custom tool ${name} timed out`));
             }, this.timeoutMs)
           : undefined;

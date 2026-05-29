@@ -18,6 +18,7 @@ import type { WorkspaceId } from "../workspace.ts";
  */
 export interface PersistedSessionEvent {
   id: string;
+  workspace_id: WorkspaceId;
   session_id: string;
   type: EventType;
   processed_at: string | null;
@@ -43,19 +44,186 @@ export interface SessionEventRecordPage {
   next_page: string | null;
 }
 
+export type RuntimeTurnState =
+  | "accepted"
+  | "dispatching"
+  | "running"
+  | "paused"
+  | "terminalizing"
+  | "terminalized"
+  | "completed";
+
+export type RuntimeActionType = "custom_tool" | "tool_confirmation";
+
+export type RuntimeActionState = "pending" | "acknowledged" | "closed";
+
+export type RuntimeActionCloseReason =
+  | "completed"
+  | "terminalized"
+  | "interrupted"
+  | "archived"
+  | "deleted"
+  | "timeout";
+
+export class RuntimeTurnOwnershipLostError extends Error {
+  constructor(readonly turnId: string) {
+    super(`Runtime turn ownership lost: ${turnId}`);
+    this.name = "RuntimeTurnOwnershipLostError";
+  }
+}
+
+export interface PendingRuntimeTurnRecord {
+  workspace_id: WorkspaceId;
+  session_id: string;
+  turn_id: string;
+  owner_id: string;
+  owner_generation: number;
+  lease_expires_at: string;
+  state: RuntimeTurnState;
+  trigger_event_ids: string[];
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  terminalized_at: string | null;
+}
+
+export interface PendingRuntimeActionRecord {
+  workspace_id: WorkspaceId;
+  session_id: string;
+  turn_id: string;
+  action_id: string;
+  action_type: RuntimeActionType;
+  state: RuntimeActionState;
+  acknowledged_at: string | null;
+  closed_at: string | null;
+  close_reason: RuntimeActionCloseReason | null;
+  created_at: string;
+  updated_at: string;
+  turn: PendingRuntimeTurnRecord;
+}
+
+export interface AcceptedRuntimeTurnDraft {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  ownerId: string;
+  ownerGeneration: number;
+  leaseExpiresAt: string;
+  triggerEventIds: readonly string[];
+  now: string;
+}
+
+export interface RuntimeActionDraft {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  actionId: string;
+  actionType: RuntimeActionType;
+  now: string;
+}
+
+export interface RuntimeActionAcknowledgement {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  actionId: string;
+  now: string;
+}
+
+export interface RuntimeActionClosure {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  actionId: string;
+  reason: RuntimeActionCloseReason;
+  now: string;
+}
+
+export interface RuntimeTurnStateChange {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  ownerId?: string;
+  ownerGeneration?: number;
+  leaseExpiresAt?: string;
+  state: RuntimeTurnState;
+  now: string;
+}
+
+export interface RuntimeTurnLeaseRenewal {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  ownerId: string;
+  ownerGeneration: number;
+  leaseExpiresAt: string;
+  now: string;
+}
+
+export interface RuntimeTurnClosure {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  ownerId?: string;
+  ownerGeneration?: number;
+  reason: RuntimeActionCloseReason;
+  state: "completed" | "terminalized";
+  now: string;
+}
+
+export interface RuntimeTurnRecoveryClaim {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  ownerId: string;
+  leaseExpiresAt: string;
+  now: string;
+}
+
+export interface EventStoreRuntimeChanges {
+  acceptedTurns?: AcceptedRuntimeTurnDraft[];
+  openedActions?: RuntimeActionDraft[];
+  acknowledgedActions?: RuntimeActionAcknowledgement[];
+  closedActions?: RuntimeActionClosure[];
+  turnStates?: RuntimeTurnStateChange[];
+  leaseRenewals?: RuntimeTurnLeaseRenewal[];
+  closedTurns?: RuntimeTurnClosure[];
+}
+
 export interface SessionEventStore {
   append(event: PersistedSessionEvent): void;
   appendBatch(events: readonly PersistedSessionEvent[]): void;
-  deleteForSession(sessionId: string): void;
+  appendBatchWithRuntimeChanges(
+    events: readonly PersistedSessionEvent[],
+    changes: EventStoreRuntimeChanges,
+  ): void;
+  deleteForSession(workspaceId: WorkspaceId, sessionId: string): void;
   list(
+    workspaceId: WorkspaceId,
     sessionId: string,
     opts?: ListSessionEventRecordsOptions,
   ): PersistedSessionEvent[];
   listPage(
+    workspaceId: WorkspaceId,
     sessionId: string,
     opts?: ListSessionEventRecordsOptions,
   ): SessionEventRecordPage;
-  retrieve(id: string): PersistedSessionEvent | undefined;
+  retrieve(workspaceId: WorkspaceId, id: string): PersistedSessionEvent | undefined;
+  findRuntimeAction(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    actionId: string,
+  ): PendingRuntimeActionRecord | undefined;
+  listPendingRuntimeTurns(workspaceId: WorkspaceId): PendingRuntimeTurnRecord[];
+  claimAcceptedRuntimeTurnForRecovery(
+    claim: RuntimeTurnRecoveryClaim,
+  ): PendingRuntimeTurnRecord | undefined;
+  claimRuntimeTurnForTerminalization(
+    claim: RuntimeTurnRecoveryClaim,
+  ): PendingRuntimeTurnRecord | undefined;
+  listRuntimeActionsForTurn(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    turnId: string,
+  ): PendingRuntimeActionRecord[];
   close?(): void;
 }
 
@@ -73,8 +241,9 @@ export interface StreamSessionEventsOptions {
 
 export interface SessionEventBroadcaster {
   publishPersisted(events: readonly PersistedSessionEvent[]): void;
-  closeSession(sessionId: string): void;
+  closeSession(workspaceId: WorkspaceId, sessionId: string): void;
   subscribe(
+    workspaceId: WorkspaceId,
     sessionId: string,
     opts?: { lastSeenId?: string; signal?: AbortSignal },
   ): AsyncIterable<PersistedSessionEvent>;
@@ -99,6 +268,7 @@ export interface SessionEventsService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<void>;
+  recoverAbandonedRuntimeTurns(workspaceId: WorkspaceId): void;
   list(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -187,7 +357,7 @@ export interface RuntimeCustomToolUseEvent {
   input: JsonObject;
   bindCustomToolUseId: (
     customToolUseId: string,
-    releaseCustomToolUseId: () => void,
+    releaseCustomToolUseId: (reason?: RuntimeActionCloseReason) => void,
   ) => void;
   rejectCustomToolUse: (error: Error) => void;
 }
@@ -200,7 +370,7 @@ export interface RuntimeToolPermissionUseEvent {
   evaluatedPermission: "allow" | "ask" | "deny";
   bindToolUseId: (
     toolUseId: string,
-    releaseToolUseId: () => void,
+    releaseToolUseId: (reason?: RuntimeActionCloseReason) => void,
   ) => void;
   rejectToolUse: (error: Error) => void;
 }

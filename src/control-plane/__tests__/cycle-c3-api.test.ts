@@ -46,7 +46,7 @@ describe("Cycle C.3 API", () => {
     gate.resolve();
     await first;
     await until(() => {
-      const events = fixture.eventStore.list(session.id);
+      const events = fixture.eventStore.list("wrk_default", session.id);
       return (
         events.filter((event) => event.type === "agent.message").length === 2 &&
         events.filter((event) => event.type === "session.status_idle").length === 1

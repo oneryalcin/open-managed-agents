@@ -21,6 +21,8 @@ import type { PersistedSessionEvent } from "../src/control-plane/events/types.ts
 import type { JsonObject } from "../src/types/json.ts";
 import { newEventId } from "../src/types/events.ts";
 
+const WORKSPACE_ID = "wrk_default";
+
 const log = (msg: string) => console.log(msg);
 
 function makeEvent(
@@ -31,6 +33,7 @@ function makeEvent(
   const now = new Date().toISOString();
   return {
     id: newEventId(),
+    workspace_id: WORKSPACE_ID,
     session_id: sessionId,
     type,
     processed_at: now,
@@ -56,12 +59,16 @@ const e2 = makeEvent(SID, "agent.message", { text: "world" });
 emit(e1);
 emit(e2);
 {
-  const list = store.list(SID);
+  const list = store.list(WORKSPACE_ID, SID);
   log(`store.list(): ${list.length} events (expected 2)`);
   for (const [i, ev] of list.entries()) {
     log(`  [${i}] ${ev.type} ${JSON.stringify(ev.payload)}`);
   }
-  log(`store.retrieve(e1.id) === e1.id: ${store.retrieve(e1.id)?.id === e1.id}`);
+  log(
+    `store.retrieve(e1.id) === e1.id: ${
+      store.retrieve(WORKSPACE_ID, e1.id)?.id === e1.id
+    }`,
+  );
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -73,7 +80,7 @@ log("--- Part 2: subscribe() with no lastSeenId replays full history ---");
   const ac = new AbortController();
   const collected: PersistedSessionEvent[] = [];
   let iter = 0;
-  for await (const event of broadcaster.subscribe(SID, { signal: ac.signal })) {
+  for await (const event of broadcaster.subscribe(WORKSPACE_ID, SID, { signal: ac.signal })) {
     collected.push(event);
     iter += 1;
     // We expect 2 events from history; abort once we've seen both.
@@ -110,7 +117,7 @@ log("--- Part 3: replay-then-tail with concurrent publishes ---");
 
   const consumePromise = (async () => {
     let n = 0;
-    for await (const event of broadcaster.subscribe(SID, { lastSeenId, signal: ac.signal })) {
+    for await (const event of broadcaster.subscribe(WORKSPACE_ID, SID, { lastSeenId, signal: ac.signal })) {
       collected.push(event);
       log(`  recv: ${event.type.padEnd(22)} id=${event.id.slice(0, 20)}…`);
       n += 1;
@@ -169,7 +176,7 @@ log("--- Part 4: subscribe() paginates replay across many events ---");
 
   const ac = new AbortController();
   const collected: string[] = [];
-  for await (const event of broadcaster.subscribe(SID4, { signal: ac.signal })) {
+  for await (const event of broadcaster.subscribe(WORKSPACE_ID, SID4, { signal: ac.signal })) {
     collected.push(event.id);
     if (collected.length >= N) ac.abort();
   }
@@ -209,7 +216,7 @@ log("--- Part 5: live buffer overflow → refetch from store ---");
   // live buffer has time to overflow during a burst.
   const consumePromise = (async () => {
     let pausedOnce = false;
-    for await (const event of broadcaster.subscribe(SID5, {
+    for await (const event of broadcaster.subscribe(WORKSPACE_ID, SID5, {
       signal: ac.signal,
       // Smaller maxBuffer makes the test faster while exercising the same path.
       maxBuffer: 1000,

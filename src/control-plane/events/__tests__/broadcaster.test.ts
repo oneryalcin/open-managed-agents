@@ -5,6 +5,8 @@ import { EventStore } from "../store.ts";
 import type { PersistedSessionEvent } from "../types.ts";
 import { STREAM_TEST_TIMEOUT_MS, hasTimedOut } from "../../__tests__/test-timeouts.ts";
 
+const WORKSPACE_ID = "wrk_default";
+
 describe("session event broadcaster", () => {
   it("replays persisted history then tails live notifications without duplicates", async () => {
     const store = EventStore.open(":memory:");
@@ -19,7 +21,9 @@ describe("session event broadcaster", () => {
     const ac = new AbortController();
     const seen: string[] = [];
     const consume = (async () => {
-      for await (const event of broadcaster.subscribe(sessionId, { signal: ac.signal })) {
+      for await (const event of broadcaster.subscribe(WORKSPACE_ID, sessionId, {
+        signal: ac.signal,
+      })) {
         seen.push(event.id);
         if (seen.length === 3) ac.abort();
       }
@@ -47,7 +51,7 @@ describe("session event broadcaster", () => {
 
     const ac = new AbortController();
     const seen: string[] = [];
-    for await (const event of broadcaster.subscribe(sessionId, {
+    for await (const event of broadcaster.subscribe(WORKSPACE_ID, sessionId, {
       signal: ac.signal,
       lastSeenId: e1.id,
     })) {
@@ -75,7 +79,7 @@ describe("session event broadcaster", () => {
     const ac = new AbortController();
     const seen: string[] = [];
     const consume = (async () => {
-      for await (const event of broadcaster.subscribe(sessionId, {
+      for await (const event of broadcaster.subscribe(WORKSPACE_ID, sessionId, {
         signal: ac.signal,
         maxBuffer: 2,
       })) {
@@ -102,7 +106,7 @@ describe("session event broadcaster", () => {
     const sessionId = "sesn_broadcaster_c";
     const event = makeEvent(sessionId, "x");
     broadcaster.publishPersisted([event]);
-    expect(store.retrieve(event.id)).toBeUndefined();
+    expect(store.retrieve(WORKSPACE_ID, event.id)).toBeUndefined();
   });
 
   it("closeSession ends live subscribers after queued events drain", async () => {
@@ -114,14 +118,14 @@ describe("session event broadcaster", () => {
 
     const seen: string[] = [];
     const consume = (async () => {
-      for await (const item of broadcaster.subscribe(sessionId)) {
+      for await (const item of broadcaster.subscribe(WORKSPACE_ID, sessionId)) {
         seen.push(item.id);
       }
     })();
 
     await until(() => seen.length === 1);
     expect(broadcaster.subscriberCount(sessionId)).toBe(1);
-    broadcaster.closeSession(sessionId);
+    broadcaster.closeSession(WORKSPACE_ID, sessionId);
     await consume;
 
     expect(seen).toEqual([event.id]);
@@ -133,6 +137,7 @@ function makeEvent(sessionId: string, text: string): PersistedSessionEvent {
   const now = new Date().toISOString();
   return {
     id: newEventId(),
+    workspace_id: WORKSPACE_ID,
     session_id: sessionId,
     type: "user.message",
     processed_at: now,
