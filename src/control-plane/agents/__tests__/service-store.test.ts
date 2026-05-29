@@ -16,9 +16,49 @@ describe("AgentService + AgentStore", () => {
     const agent = service.create("wrk_a", REQUEST);
 
     expect(service.retrieve("wrk_a", agent.id).id).toBe(agent.id);
+    expect(store.retrieveAny("wrk_a", agent.id)?.id).toBe(agent.id);
     expect(() => service.retrieve("wrk_b", agent.id)).toThrow(
       `Agent ${agent.id} not found`,
     );
+  });
+
+  it("archives agents idempotently while preserving direct lookup", () => {
+    const store = SqliteAgentStore.open(":memory:");
+    const service = new DefaultAgentService(store);
+    const agent = service.create("wrk_default", REQUEST);
+
+    const archived = service.archive("wrk_default", agent.id);
+
+    expect(archived.id).toBe(agent.id);
+    expect(archived.archived_at).toEqual(expect.any(String));
+    expect(store.retrieve("wrk_default", agent.id)).toBeUndefined();
+    expect(service.retrieve("wrk_default", agent.id)).toEqual(archived);
+    expect(service.list("wrk_default")).toEqual({
+      data: [],
+      has_more: false,
+      next_page: null,
+    });
+    expect(service.list("wrk_default", { includeArchived: true })).toEqual({
+      data: [archived],
+      has_more: false,
+      next_page: null,
+    });
+
+    const archivedAgain = service.archive("wrk_default", agent.id);
+    expect(archivedAgain.archived_at).toBe(archived.archived_at);
+    expect(archivedAgain.updated_at).toBe(archived.updated_at);
+  });
+
+  it("does not leak archived agents across workspaces", () => {
+    const store = SqliteAgentStore.open(":memory:");
+    const service = new DefaultAgentService(store);
+    const agent = service.create("wrk_a", REQUEST);
+
+    expect(() => service.archive("wrk_b", agent.id)).toThrow(
+      `Agent ${agent.id} not found`,
+    );
+    expect(service.retrieve("wrk_a", agent.id).archived_at).toBe(null);
+    expect(store.retrieveAny("wrk_b", agent.id)).toBeUndefined();
   });
 
   it("paginates list results by opaque next_page cursor", () => {

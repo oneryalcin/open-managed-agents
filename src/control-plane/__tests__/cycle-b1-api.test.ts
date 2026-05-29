@@ -227,6 +227,54 @@ describe("Cycle B.1 API", () => {
     );
   });
 
+  it("rejects new sessions for archived agents while keeping existing sessions", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+    const existing = await createSession(app, {
+      agent: agent.id,
+      environment_id: environment.id,
+      title: "Existing before archive",
+    });
+
+    const archiveRes = await app.request(`/v1/agents/${agent.id}/archive`, {
+      method: "POST",
+    });
+    expect(archiveRes.status).toBe(200);
+
+    const retrieveExistingRes = await app.request(`/v1/sessions/${existing.id}`);
+    expect(retrieveExistingRes.status).toBe(200);
+    await expect(retrieveExistingRes.json()).resolves.toEqual(existing);
+
+    await expectError(
+      await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: agent.id,
+          environment_id: environment.id,
+        }),
+      }),
+      400,
+      "invalid_request_error",
+      `agent ${agent.id} is archived and cannot be used to create a session`,
+    );
+
+    await expectError(
+      await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: { type: "agent", id: agent.id, version: agent.version },
+          environment_id: environment.id,
+        }),
+      }),
+      400,
+      "invalid_request_error",
+      `agent ${agent.id} is archived and cannot be used to create a session`,
+    );
+  });
+
   it("uses not_found_error for missing retrieved sessions and environments", async () => {
     const app = createInMemoryControlPlaneApp();
 

@@ -33,6 +33,13 @@ export function agentsRoutes(service: AgentService): Hono {
     );
   });
 
+  app.post("/:id/archive", (c) => {
+    return c.json(
+      service.archive(DEFAULT_WORKSPACE_ID, c.req.param("id")),
+      200,
+    );
+  });
+
   return app;
 }
 

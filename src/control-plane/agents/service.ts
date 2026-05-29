@@ -57,7 +57,19 @@ export class DefaultAgentService implements AgentService {
     workspaceId: WorkspaceId,
     agentId: string,
   ): ManagedAgentsAgent {
-    const row = this.store.retrieve(workspaceId, agentId);
+    const row = this.store.retrieveAny(workspaceId, agentId);
+    if (!row) {
+      throw notFound(`Agent ${agentId} not found`);
+    }
+    return toManagedAgent(row);
+  }
+
+  archive(
+    workspaceId: WorkspaceId,
+    agentId: string,
+  ): ManagedAgentsAgent {
+    const archivedAt = new Date().toISOString();
+    const row = this.store.archive(workspaceId, agentId, archivedAt);
     if (!row) {
       throw notFound(`Agent ${agentId} not found`);
     }
