@@ -13,7 +13,7 @@ Requires:
   ANTHROPIC_API_KEY
 
 Optional:
-  OMA_PROBE_ENVIRONMENT_ID
+  OMA_PROBE_ENVIRONMENT_ID (otherwise the probe creates and deletes a throwaway)
   OMA_ARCHIVE_PROBE_MODEL (default: claude-sonnet-4-6)
 
 Run:
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -33,6 +34,7 @@ import anthropic
 MODEL = os.environ.get("OMA_ARCHIVE_PROBE_MODEL", "claude-sonnet-4-6")
 RUN_ID = f"{int(time.time())}-{os.getpid()}"
 MARKER = f"OMA_AGENT_ARCHIVE_PROBE_{RUN_ID}"
+REQUEST_ID_RE = re.compile(r"req_[A-Za-z0-9]+")
 
 
 def public(value: Any) -> Any:
@@ -60,19 +62,28 @@ def emit(label: str, value: Any) -> None:
     print(json.dumps(public(value), indent=2, sort_keys=True, default=str))
 
 
+def redact_request_ids(value: Any) -> Any:
+    if isinstance(value, str):
+        return REQUEST_ID_RE.sub("<redacted_request_id>", value)
+    if isinstance(value, list):
+        return [redact_request_ids(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): "<redacted_request_id>"
+            if key == "request_id"
+            else redact_request_ids(val)
+            for key, val in value.items()
+        }
+    return value
+
+
 def error_shape(exc: BaseException) -> dict[str, Any]:
     return {
         "type": type(exc).__name__,
         "status_code": getattr(exc, "status_code", None),
-        "message": str(exc)[:1000],
-        "body": public(getattr(exc, "body", None)),
+        "message": redact_request_ids(str(exc)[:1000]),
+        "body": redact_request_ids(public(getattr(exc, "body", None))),
     }
-
-
-def first_id(items: Any) -> str:
-    for item in items:
-        return item.id
-    raise RuntimeError("no items available")
 
 
 def event_type(event: Any) -> str:
@@ -100,17 +111,15 @@ def main() -> None:
 
     try:
         if env_id is None:
-            try:
-                env_id = first_id(client.beta.environments.list(limit=1))
-                emit("environment.reused", {"id": env_id})
-            except RuntimeError:
-                env = client.beta.environments.create(
-                    name=f"oma-agent-archive-probe-{RUN_ID}",
-                    config={"type": "cloud", "networking": {"type": "unrestricted"}},
-                )
-                env_id = env.id
-                created_env_id = env.id
-                emit("environment.created", env)
+            env = client.beta.environments.create(
+                name=f"oma-agent-archive-probe-{RUN_ID}",
+                config={"type": "cloud", "networking": {"type": "unrestricted"}},
+            )
+            env_id = env.id
+            created_env_id = env.id
+            emit("environment.created", env)
+        else:
+            emit("environment.provided", {"id": env_id})
 
         agent = client.beta.agents.create(
             name=f"oma-agent-archive-probe-{RUN_ID}",
@@ -223,8 +232,8 @@ def main() -> None:
             {
                 "default_contains_agent": any(item.id == agent_id for item in default_list),
                 "include_archived_contains_agent": any(item.id == agent_id for item in archived_list),
-                "default_ids": [item.id for item in default_list],
-                "include_archived_ids": [item.id for item in archived_list],
+                "default_count": len(default_list),
+                "include_archived_count": len(archived_list),
             },
         )
 
