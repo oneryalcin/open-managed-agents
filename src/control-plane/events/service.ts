@@ -4,6 +4,8 @@ import {
   type ManagedAgentsEvent,
   type ManagedAgentsOpaqueContentBlock,
   type ManagedAgentsUserCustomToolResultEventInput,
+  type ManagedAgentsUserEventInput,
+  type ManagedAgentsUserToolConfirmationEventInput,
   type SendSessionEventsRequest,
 } from "../../types/events.ts";
 import {
@@ -26,6 +28,8 @@ import type {
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
   RuntimeEventTranslator,
+  RuntimeToolPermissionUseEvent,
+  PersistedSessionEvent,
   SessionEventBroadcaster,
   SessionEventStore,
   SessionEventsService,
@@ -39,6 +43,18 @@ const SUPPORTED_USER_EVENT_TYPES = new Set([
   "user.custom_tool_result",
   "user.tool_confirmation",
 ] as const);
+
+interface ToolConfirmationCommit {
+  event: ManagedAgentsUserToolConfirmationEventInput;
+  toolUseId: string;
+  commit: () => void;
+  row?: PersistedSessionEvent;
+}
+
+interface ToolConfirmationReplay {
+  event: ManagedAgentsUserToolConfirmationEventInput;
+  row: PersistedSessionEvent;
+}
 
 export class DefaultSessionEventsService implements SessionEventsService {
   private readonly runtimeRunner: RuntimeEventRunner | undefined;
@@ -54,6 +70,24 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly deletedSessions = new Set<string>();
   private readonly activeRuntimeTasks = new Map<string, number>();
   private readonly interruptedCustomToolActions = new Map<string, Set<string>>();
+  private readonly pendingToolConfirmations = new Map<
+    string,
+    {
+      ids: string[];
+      timer: ReturnType<typeof setTimeout> | undefined;
+    }
+  >();
+  private readonly interruptedToolConfirmations = new Map<string, Set<string>>();
+  private readonly completedToolConfirmations = new Map<
+    string,
+    {
+      workspaceId: WorkspaceId;
+      sessionId: string;
+      result: "allow" | "deny";
+      denyMessage?: string | null;
+      row: PersistedSessionEvent;
+    }
+  >();
   private readonly archivingSessions = new Map<string, number>();
 
   constructor(
@@ -85,8 +119,28 @@ export class DefaultSessionEventsService implements SessionEventsService {
       sessionId,
       req.events,
     );
+    const toolConfirmationClaims = this.claimToolConfirmations(
+      workspaceId,
+      sessionId,
+      req.events,
+    );
+    const existingToolConfirmations = new Map<
+      ManagedAgentsUserEventInput,
+      PersistedSessionEvent
+    >(
+      toolConfirmationClaims
+        .filter(
+          (claim): claim is (ToolConfirmationCommit | ToolConfirmationReplay) & {
+            row: PersistedSessionEvent;
+          } => claim.row !== undefined,
+        )
+        .map((claim) => [claim.event, claim.row] as const),
+    );
+    const persistableEvents = req.events.filter(
+      (event) => !existingToolConfirmations.has(event),
+    );
     const now = new Date().toISOString();
-    const drafts: EventDraft[] = req.events.map((event) => ({
+    const drafts: EventDraft[] = persistableEvents.map((event) => ({
       type: event.type,
       payload: eventPayload(event),
     }));
@@ -95,15 +149,44 @@ export class DefaultSessionEventsService implements SessionEventsService {
     // dedupe before B.4 runtime consumers process irreversible actions
     // (notably user.tool_confirmation and user.custom_tool_result).
     persistAndPublish(this.events, this.broadcaster, rows);
-    if (customToolResultClaims.length > 0) {
+    const rowsByInput = new Map<
+      SendSessionEventsRequest["events"][number],
+      PersistedSessionEvent
+    >();
+    for (let i = 0; i < persistableEvents.length; i += 1) {
+      rowsByInput.set(persistableEvents[i], rows[i]);
+    }
+    const committedToolConfirmations = toolConfirmationClaims.filter(
+      (claim): claim is ToolConfirmationCommit => "commit" in claim,
+    );
+    const hasCommittedRuntimeInputs =
+      customToolResultClaims.length > 0 || committedToolConfirmations.length > 0;
+    if (hasCommittedRuntimeInputs) {
       for (const { customToolUseId } of customToolResultClaims) {
         this.removePendingCustomToolAction(sessionId, customToolUseId);
+      }
+      for (const { toolUseId } of committedToolConfirmations) {
+        this.removePendingToolConfirmation(sessionId, toolUseId);
       }
       this.persistRuntimeDrafts(sessionId, [
         { type: "session.status_running", payload: {} },
       ]);
       for (const { commit } of customToolResultClaims) commit();
-      this.flushPendingCustomToolActions(sessionId);
+      for (const claim of committedToolConfirmations) {
+        const row = claim.row ?? rowsByInput.get(claim.event);
+        if (!row) {
+          throw new Error("Persisted tool confirmation row missing");
+        }
+        claim.commit();
+        this.completedToolConfirmations.set(claim.event.tool_use_id, {
+          workspaceId,
+          sessionId,
+          result: claim.event.result,
+          denyMessage: claim.event.deny_message,
+          row,
+        });
+      }
+      this.flushPendingActions(sessionId);
     }
     this.maybeRunRuntimeFromUserMessages(
       workspaceId,
@@ -112,7 +195,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
       opts.signal,
     );
     this.maybeInterruptRuntime(workspaceId, sessionId, req.events);
-    return rows.map(toManagedAgentsEvent);
+    return req.events.map((event) =>
+      toSendResponseEvent(
+        existingToolConfirmations.get(event) ?? rowsByInput.get(event),
+      ),
+    );
   }
 
   private maybeInterruptRuntime(
@@ -124,6 +211,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     this.blockInterruptedCustomToolActions(
       sessionId,
       this.clearPendingCustomToolActions(sessionId),
+    );
+    this.blockInterruptedToolConfirmations(
+      sessionId,
+      this.clearPendingToolConfirmations(sessionId),
     );
     void Promise.resolve(
       this.runtimeRunner?.interruptSession?.(workspaceId, sessionId),
@@ -158,7 +249,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (session.archived_at !== null || session.status === "terminated") return;
     if (
       (this.activeRuntimeTasks.get(sessionId) ?? 0) > 0 &&
-      !this.hasPendingCustomToolActions(sessionId)
+      !this.hasPendingRuntimeActions(sessionId)
     ) {
       throw sessionNotArchivable(sessionId, "running");
     }
@@ -202,7 +293,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     requireExistingSession(this.sessions, workspaceId, sessionId);
     this.closedSessions.add(sessionId);
     this.clearPendingCustomToolActions(sessionId);
+    this.clearPendingToolConfirmations(sessionId);
+    this.clearCompletedToolConfirmations(sessionId);
     this.interruptedCustomToolActions.delete(sessionId);
+    this.interruptedToolConfirmations.delete(sessionId);
     if (!this.hasSessionEvent(sessionId, "session.status_terminated")) {
       this.persistLifecycleDrafts(sessionId, [
         { type: "session.status_terminated", payload: {} },
@@ -218,7 +312,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): Promise<void> {
     this.closedSessions.add(sessionId);
     this.clearPendingCustomToolActions(sessionId);
+    this.clearPendingToolConfirmations(sessionId);
+    this.clearCompletedToolConfirmations(sessionId);
     this.interruptedCustomToolActions.delete(sessionId);
+    this.interruptedToolConfirmations.delete(sessionId);
     this.persistLifecycleDrafts(sessionId, [
       { type: "session.deleted", payload: {} },
     ]);
@@ -351,6 +448,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
     this.activeRuntimeTasks.delete(sessionId);
     this.interruptedCustomToolActions.delete(sessionId);
+    this.interruptedToolConfirmations.delete(sessionId);
     this.retireLifecycleGuardsIfIdle(sessionId);
   }
 
@@ -380,11 +478,27 @@ export class DefaultSessionEventsService implements SessionEventsService {
             this.persistCustomToolUse(sessionId, piEvent);
             continue;
           }
+          if (isRuntimeToolPermissionUseEvent(piEvent)) {
+            this.persistToolPermissionUse(sessionId, piEvent);
+            continue;
+          }
           const drafts = this.runtimeTranslator(piEvent, {
             customToolNames: this.runtimeRunner.customToolNames?.(
               workspaceId,
               sessionId,
             ),
+            publicToolUseIdForPiToolCallId: (piToolCallId) =>
+              this.runtimeRunner?.publicToolUseIdForPiToolCallId?.(
+                workspaceId,
+                sessionId,
+                piToolCallId,
+              ),
+            suppressPiToolUse: (piToolCallId) =>
+              this.runtimeRunner?.suppressPiToolUse?.(
+                workspaceId,
+                sessionId,
+                piToolCallId,
+              ) === true,
           });
           if (drafts.length === 0) continue;
           if (this.closedSessions.has(sessionId)) return;
@@ -425,21 +539,21 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): void {
     if (this.closedSessions.has(sessionId)) return;
     if (this.deletedSessions.has(sessionId)) return;
-    const now = new Date().toISOString();
-    const useRows = materializePersistedEvents(
-      sessionId,
-      [
-        {
-          type: "agent.custom_tool_use",
-          payload: {
-            name: event.name,
-            input: event.input,
-          },
-        },
-      ],
-      now,
-    );
     try {
+      const now = new Date().toISOString();
+      const useRows = materializePersistedEvents(
+        sessionId,
+        [
+          {
+            type: "agent.custom_tool_use",
+            payload: {
+              name: event.name,
+              input: event.input,
+            },
+          },
+        ],
+        now,
+      );
       event.bindCustomToolUseId(useRows[0].id, () => {
         this.removePendingCustomToolAction(sessionId, useRows[0].id);
       });
@@ -447,6 +561,41 @@ export class DefaultSessionEventsService implements SessionEventsService {
       this.addPendingCustomToolAction(sessionId, useRows[0].id);
     } catch (error) {
       event.rejectCustomToolUse(toError(error));
+      throw error;
+    }
+  }
+
+  private persistToolPermissionUse(
+    sessionId: string,
+    event: RuntimeToolPermissionUseEvent,
+  ): void {
+    if (this.closedSessions.has(sessionId)) return;
+    if (this.deletedSessions.has(sessionId)) return;
+    try {
+      const now = new Date().toISOString();
+      const useRows = materializePersistedEvents(
+        sessionId,
+        [
+          {
+            type: "agent.tool_use",
+            payload: {
+              name: event.name,
+              input: event.input,
+              evaluated_permission: event.evaluatedPermission,
+            },
+          },
+        ],
+        now,
+      );
+      event.bindToolUseId(useRows[0].id, () => {
+        this.removePendingToolConfirmation(sessionId, useRows[0].id);
+      });
+      persistAndPublish(this.events, this.broadcaster, useRows);
+      if (event.evaluatedPermission === "ask") {
+        this.addPendingToolConfirmation(sessionId, useRows[0].id);
+      }
+    } catch (error) {
+      event.rejectToolUse(toError(error));
       throw error;
     }
   }
@@ -490,6 +639,179 @@ export class DefaultSessionEventsService implements SessionEventsService {
     return commits;
   }
 
+  private claimToolConfirmations(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    events: SendSessionEventsRequest["events"],
+  ): Array<ToolConfirmationCommit | ToolConfirmationReplay> {
+    const claims: Array<ToolConfirmationCommit | ToolConfirmationReplay> = [];
+    let interruptedInBatch = false;
+    const seenToolUseIds = new Set<string>();
+    for (const event of events) {
+      if (event.type === "user.interrupt") {
+        interruptedInBatch = true;
+        continue;
+      }
+      if (event.type !== "user.tool_confirmation") continue;
+      if (seenToolUseIds.has(event.tool_use_id)) {
+        throw invalidRequest(
+          `\`events\` cannot contain duplicate user.tool_confirmation for ${event.tool_use_id}`,
+        );
+      }
+      seenToolUseIds.add(event.tool_use_id);
+      if (
+        interruptedInBatch ||
+        this.interruptedToolConfirmations
+          .get(sessionId)
+          ?.has(event.tool_use_id) === true
+      ) {
+        throw notFound(`No pending tool confirmation: ${event.tool_use_id}`);
+      }
+      const completed = this.completedToolConfirmations.get(event.tool_use_id);
+      const persisted = this.findPersistedToolConfirmation(
+        workspaceId,
+        sessionId,
+        event,
+      );
+      const durableCompleted =
+        completed ?? persisted?.completed;
+      if (durableCompleted) {
+        if (
+          durableCompleted.workspaceId !== workspaceId ||
+          durableCompleted.sessionId !== sessionId
+        ) {
+          throw notFound(`No pending tool confirmation: ${event.tool_use_id}`);
+        }
+        if (!sameToolConfirmation(durableCompleted, event)) {
+          throw invalidRequest(
+            `Tool confirmation ${event.tool_use_id} was already processed with a different result`,
+          );
+        }
+        claims.push({ event, row: durableCompleted.row });
+        continue;
+      }
+      const commit = this.runtimeRunner?.claimToolConfirmation?.(
+        workspaceId,
+        sessionId,
+        event,
+      );
+      if (!commit) {
+        if (persisted?.row) {
+          this.terminalizeLostToolConfirmation(sessionId, event.tool_use_id);
+          claims.push({ event, row: persisted.row });
+          continue;
+        }
+        throw notFound(`No pending tool confirmation: ${event.tool_use_id}`);
+      }
+      claims.push({
+        event,
+        toolUseId: event.tool_use_id,
+        commit,
+        ...(persisted?.row === undefined ? {} : { row: persisted.row }),
+      });
+    }
+    return claims;
+  }
+
+  private findPersistedToolConfirmation(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    event: ManagedAgentsUserToolConfirmationEventInput,
+  ):
+    | {
+        row: PersistedSessionEvent;
+        completed?: {
+          workspaceId: WorkspaceId;
+          sessionId: string;
+          result: "allow" | "deny";
+          denyMessage?: string | null;
+          row: PersistedSessionEvent;
+        };
+      }
+    | undefined {
+    const rows = this.listToolConfirmationHistory(sessionId);
+    const row = rows.find(
+      (candidate) =>
+        candidate.type === "user.tool_confirmation" &&
+        candidate.payload.tool_use_id === event.tool_use_id,
+    );
+    if (!row) return undefined;
+    const result = row.payload.result;
+    if (result !== "allow" && result !== "deny") return undefined;
+    const denyMessage = row.payload.deny_message;
+    const accepted: {
+      result: "allow" | "deny";
+      denyMessage?: string | null;
+    } = {
+      result,
+      denyMessage:
+        denyMessage === null || typeof denyMessage === "string"
+          ? denyMessage
+          : undefined,
+    };
+    if (!sameToolConfirmation(accepted, event)) {
+      throw invalidRequest(
+        `Tool confirmation ${event.tool_use_id} was already accepted with a different result`,
+      );
+    }
+    if (!hasToolResultForToolUseId(rows, event.tool_use_id)) {
+      return { row };
+    }
+    return {
+      row,
+      completed: {
+        workspaceId,
+        sessionId,
+        result,
+        denyMessage: accepted.denyMessage,
+        row,
+      },
+    };
+  }
+
+  private terminalizeLostToolConfirmation(
+    sessionId: string,
+    toolUseId: string,
+  ): void {
+    this.persistRuntimeDrafts(sessionId, [
+      {
+        type: "agent.tool_result",
+        payload: {
+          tool_use_id: toolUseId,
+          content: [
+            {
+              type: "text",
+              text: `Tool confirmation ${toolUseId} was accepted, but runtime state is no longer available and the builtin tool execution outcome is unknown.`,
+            },
+          ],
+          is_error: true,
+        },
+      },
+      {
+        type: "session.status_idle",
+        payload: { stop_reason: { type: "end_turn" } },
+      },
+    ]);
+  }
+
+  private listToolConfirmationHistory(
+    sessionId: string,
+  ): PersistedSessionEvent[] {
+    const rows: PersistedSessionEvent[] = [];
+    let page: string | undefined;
+    do {
+      const result = this.events.listPage(sessionId, {
+        order: "asc",
+        limit: 1000,
+        page,
+        types: ["user.tool_confirmation", "agent.tool_result"],
+      });
+      rows.push(...result.data);
+      page = result.next_page ?? undefined;
+    } while (page !== undefined);
+    return rows;
+  }
+
   private addPendingCustomToolAction(
     sessionId: string,
     customToolUseId: string,
@@ -506,7 +828,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     // requires_action event. If another tool arrives later, we re-emit
     // requires_action with the full remaining pending set.
     pending.timer = setTimeout(() => {
-      this.flushPendingCustomToolActions(sessionId);
+      this.flushPendingActions(sessionId);
     }, 0);
   }
 
@@ -534,6 +856,61 @@ export class DefaultSessionEventsService implements SessionEventsService {
     return (this.pendingCustomToolActions.get(sessionId)?.ids.length ?? 0) > 0;
   }
 
+  private addPendingToolConfirmation(
+    sessionId: string,
+    toolUseId: string,
+  ): void {
+    let pending = this.pendingToolConfirmations.get(sessionId);
+    if (!pending) {
+      pending = { ids: [], timer: undefined };
+      this.pendingToolConfirmations.set(sessionId, pending);
+    }
+    pending.ids.push(toolUseId);
+    if (pending.timer) return;
+    pending.timer = setTimeout(() => {
+      this.flushPendingActions(sessionId);
+    }, 0);
+  }
+
+  private removePendingToolConfirmation(
+    sessionId: string,
+    toolUseId: string,
+  ): void {
+    const pending = this.pendingToolConfirmations.get(sessionId);
+    if (!pending) return;
+    pending.ids = pending.ids.filter((id) => id !== toolUseId);
+    if (pending.ids.length === 0 && pending.timer === undefined) {
+      this.pendingToolConfirmations.delete(sessionId);
+    }
+  }
+
+  private clearPendingToolConfirmations(sessionId: string): string[] {
+    const pending = this.pendingToolConfirmations.get(sessionId);
+    if (!pending) return [];
+    if (pending.timer) clearTimeout(pending.timer);
+    this.pendingToolConfirmations.delete(sessionId);
+    return [...pending.ids];
+  }
+
+  private hasPendingToolConfirmations(sessionId: string): boolean {
+    return (this.pendingToolConfirmations.get(sessionId)?.ids.length ?? 0) > 0;
+  }
+
+  private clearCompletedToolConfirmations(sessionId: string): void {
+    for (const [id, completed] of this.completedToolConfirmations) {
+      if (completed.sessionId === sessionId) {
+        this.completedToolConfirmations.delete(id);
+      }
+    }
+  }
+
+  private hasPendingRuntimeActions(sessionId: string): boolean {
+    return (
+      this.hasPendingCustomToolActions(sessionId) ||
+      this.hasPendingToolConfirmations(sessionId)
+    );
+  }
+
   private blockInterruptedCustomToolActions(
     sessionId: string,
     customToolUseIds: readonly string[],
@@ -547,28 +924,57 @@ export class DefaultSessionEventsService implements SessionEventsService {
     for (const id of customToolUseIds) blocked.add(id);
   }
 
-  private flushPendingCustomToolActions(sessionId: string): void {
-    const pending = this.pendingCustomToolActions.get(sessionId);
-    if (!pending) return;
-    if (pending.timer) {
-      clearTimeout(pending.timer);
-      pending.timer = undefined;
+  private blockInterruptedToolConfirmations(
+    sessionId: string,
+    toolUseIds: readonly string[],
+  ): void {
+    if (toolUseIds.length === 0) return;
+    let blocked = this.interruptedToolConfirmations.get(sessionId);
+    if (!blocked) {
+      blocked = new Set<string>();
+      this.interruptedToolConfirmations.set(sessionId, blocked);
     }
-    if (pending.ids.length === 0) {
+    for (const id of toolUseIds) blocked.add(id);
+  }
+
+  private flushPendingActions(sessionId: string): void {
+    const custom = this.pendingCustomToolActions.get(sessionId);
+    const confirmations = this.pendingToolConfirmations.get(sessionId);
+    if (!custom && !confirmations) return;
+    if (custom?.timer) {
+      clearTimeout(custom.timer);
+      custom.timer = undefined;
+    }
+    if (confirmations?.timer) {
+      clearTimeout(confirmations.timer);
+      confirmations.timer = undefined;
+    }
+    const ids = [
+      ...(custom?.ids ?? []),
+      ...(confirmations?.ids ?? []),
+    ];
+    if (custom && custom.ids.length === 0) {
       this.pendingCustomToolActions.delete(sessionId);
-      return;
     }
+    if (confirmations && confirmations.ids.length === 0) {
+      this.pendingToolConfirmations.delete(sessionId);
+    }
+    if (ids.length === 0) return;
     this.persistRuntimeDrafts(sessionId, [
       {
         type: "session.status_idle",
         payload: {
           stop_reason: {
             type: "requires_action",
-            event_ids: [...pending.ids],
+            event_ids: ids,
           },
         },
       },
     ]);
+  }
+
+  private flushPendingCustomToolActions(sessionId: string): void {
+    this.flushPendingActions(sessionId);
   }
 }
 
@@ -757,6 +1163,41 @@ function eventPayload(event: SendSessionEventsRequest["events"][number]): JsonOb
   return payload as Record<string, JsonValue>;
 }
 
+function toSendResponseEvent(
+  row: PersistedSessionEvent | undefined,
+): ManagedAgentsEvent {
+  if (!row) throw new Error("Persisted event row missing");
+  const event = toManagedAgentsEvent(row);
+  if (row.type === "user.tool_confirmation") {
+    return { ...event, processed_at: null };
+  }
+  return event;
+}
+
+function sameToolConfirmation(
+  completed: {
+    result: "allow" | "deny";
+    denyMessage?: string | null;
+  },
+  event: ManagedAgentsUserToolConfirmationEventInput,
+): boolean {
+  return (
+    completed.result === event.result &&
+    (completed.denyMessage ?? null) === (event.deny_message ?? null)
+  );
+}
+
+function hasToolResultForToolUseId(
+  rows: readonly PersistedSessionEvent[],
+  toolUseId: string,
+): boolean {
+  return rows.some(
+    (row) =>
+      row.type === "agent.tool_result" &&
+      row.payload.tool_use_id === toolUseId,
+  );
+}
+
 function optionalBooleanSpread(
   value: unknown,
   field: string,
@@ -794,6 +1235,23 @@ function isRuntimeCustomToolUseEvent(
     isJsonObject(event.input) &&
     typeof event.bindCustomToolUseId === "function" &&
     typeof event.rejectCustomToolUse === "function"
+  );
+}
+
+function isRuntimeToolPermissionUseEvent(
+  event: unknown,
+): event is RuntimeToolPermissionUseEvent {
+  if (!isObjectRecord(event)) return false;
+  return (
+    event.type === "oma.tool_permission_use" &&
+    typeof event.piToolCallId === "string" &&
+    typeof event.name === "string" &&
+    isJsonObject(event.input) &&
+    (event.evaluatedPermission === "allow" ||
+      event.evaluatedPermission === "ask" ||
+      event.evaluatedPermission === "deny") &&
+    typeof event.bindToolUseId === "function" &&
+    typeof event.rejectToolUse === "function"
   );
 }
 

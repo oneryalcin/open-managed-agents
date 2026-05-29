@@ -3,6 +3,7 @@ import type {
   ManagedAgentsContentBlock,
   ManagedAgentsEvent,
   ManagedAgentsUserCustomToolResultEventInput,
+  ManagedAgentsUserToolConfirmationEventInput,
 } from "../../types/events.ts";
 import type { JsonObject } from "../../types/json.ts";
 import type { SessionRow } from "../sessions/types.ts";
@@ -127,6 +128,11 @@ export interface RuntimeEventRunner {
     sessionId: string,
     event: ManagedAgentsUserCustomToolResultEventInput,
   ): (() => void) | undefined;
+  claimToolConfirmation?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    event: ManagedAgentsUserToolConfirmationEventInput,
+  ): (() => void) | undefined;
   interruptSession?(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -139,6 +145,16 @@ export interface RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): ReadonlySet<string>;
+  publicToolUseIdForPiToolCallId?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    piToolCallId: string,
+  ): string | undefined;
+  suppressPiToolUse?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    piToolCallId: string,
+  ): boolean;
 }
 
 export interface RuntimeSessionFileMount {
@@ -151,6 +167,11 @@ export interface RuntimeSessionFileMount {
 
 export interface RuntimeSessionPrepareOptions {
   fileMounts?: readonly RuntimeSessionFileMount[];
+  agent?: {
+    type: "agent";
+    id: string;
+    version: number;
+  };
 }
 
 export class RuntimeUnsupportedSessionFileResourcesError extends Error {
@@ -171,8 +192,23 @@ export interface RuntimeCustomToolUseEvent {
   rejectCustomToolUse: (error: Error) => void;
 }
 
+export interface RuntimeToolPermissionUseEvent {
+  type: "oma.tool_permission_use";
+  piToolCallId: string;
+  name: string;
+  input: JsonObject;
+  evaluatedPermission: "allow" | "ask" | "deny";
+  bindToolUseId: (
+    toolUseId: string,
+    releaseToolUseId: () => void,
+  ) => void;
+  rejectToolUse: (error: Error) => void;
+}
+
 export interface RuntimeTranslatorContext {
   customToolNames?: ReadonlySet<string>;
+  publicToolUseIdForPiToolCallId?: (piToolCallId: string) => string | undefined;
+  suppressPiToolUse?: (piToolCallId: string) => boolean;
 }
 
 export type RuntimeEventTranslator = (

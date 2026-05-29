@@ -119,6 +119,7 @@ export class DefaultSessionService implements SessionService {
       if (mounts.length > 0 && this.runtime?.prepareSession) {
         await this.runtime.prepareSession(workspaceId, row.id, {
           fileMounts: mounts,
+          agent: row.agent,
         });
         runtimePrepared = true;
       }

@@ -45,17 +45,6 @@ describe("Cycle B.2 API", () => {
             custom_tool_use_id: "ctu_2",
             content: [{ type: "text", text: "done" }],
           },
-          {
-            type: "user.tool_confirmation",
-            tool_use_id: "tu_1",
-            result: "allow",
-          },
-          {
-            type: "user.tool_confirmation",
-            tool_use_id: "tu_2",
-            result: "deny",
-            deny_message: "not safe",
-          },
         ],
       }),
     });
@@ -64,13 +53,11 @@ describe("Cycle B.2 API", () => {
       expect.stringMatching(/^req_/),
     );
     const sendBody = (await sendRes.json()) as { data: Array<Record<string, unknown>> };
-    expect(sendBody.data).toHaveLength(5);
+    expect(sendBody.data).toHaveLength(3);
     expect(sendBody.data.map((event) => event.type)).toEqual([
       "user.message",
       "user.custom_tool_result",
       "user.custom_tool_result",
-      "user.tool_confirmation",
-      "user.tool_confirmation",
     ]);
     for (const event of sendBody.data) {
       expect(event.id).toEqual(expect.stringMatching(/^sevt_/));
@@ -191,11 +178,6 @@ describe("Cycle B.2 API", () => {
             type: "user.custom_tool_result",
             custom_tool_use_id: "ctu_1",
             content: [{ type: "text", text: "ok" }],
-          },
-          {
-            type: "user.tool_confirmation",
-            tool_use_id: "tu_1",
-            result: "allow",
           },
         ],
       }),

@@ -164,6 +164,36 @@ describe("agents API", () => {
     expect(JSON.stringify(body)).not.toContain("developerMessage");
   });
 
+  it("rejects duplicate builtin agent toolsets", async () => {
+    const app = createInMemoryControlPlaneApp();
+
+    const res = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...VALID_AGENT,
+        tools: [
+          {
+            type: "agent_toolset_20260401",
+            default_config: { permission_policy: { type: "always_allow" } },
+          },
+          {
+            type: "agent_toolset_20260401",
+            default_config: { permission_policy: { type: "never_allow" } },
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        message: "`tools` may contain at most one `agent_toolset_20260401` entry",
+      },
+    });
+  });
+
   it("returns the public notFound envelope for unregistered routes", async () => {
     const app = createInMemoryControlPlaneApp();
 

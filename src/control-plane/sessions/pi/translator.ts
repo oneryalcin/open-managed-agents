@@ -59,6 +59,7 @@ function translateMessageEnd(
     const args = isObject(block.arguments) ? block.arguments : {};
     if (!toolUseId || !name) continue;
     if (context.customToolNames?.has(name)) continue;
+    if (context.suppressPiToolUse?.(toolUseId) === true) continue;
     // ADR 0011: event IDs stay server-assigned sevt_*; Pi's toolu_* remains
     // payload correlation data and inbound handling translates as needed.
     const payload: JsonObject = {
@@ -89,7 +90,8 @@ function translateToolExecutionEnd(
   if (!toolUseId) return [];
 
   const payload: JsonObject = {
-    tool_use_id: toolUseId,
+    tool_use_id:
+      context.publicToolUseIdForPiToolCallId?.(toolUseId) ?? toolUseId,
     content: [],
     is_error: event.isError === true,
   };

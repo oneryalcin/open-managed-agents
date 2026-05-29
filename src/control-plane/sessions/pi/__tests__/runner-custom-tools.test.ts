@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ManagedAgentsCustomTool } from "../../../../types/agents.ts";
-import type { ManagedAgentsUserCustomToolResultEventInput } from "../../../../types/events.ts";
+import type {
+  ManagedAgentsUserCustomToolResultEventInput,
+  ManagedAgentsUserToolConfirmationEventInput,
+} from "../../../../types/events.ts";
 import type { PiRuntimeSession } from "../runner.ts";
 
 const sdk = vi.hoisted(() => {
@@ -190,16 +193,224 @@ describe("PiSessionRunner custom-tool bridge", () => {
       idleTtlMs: 0,
     });
 
-    await collect(runner.runUserMessage("wrk_default", "sesn_sandbox", "run"));
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_sandbox", "run")
+      [Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({ type: "agent_start" });
+    const toolUse = (await iterator.next()).value;
+    expect(toolUse).toMatchObject({
+      type: "oma.tool_permission_use",
+      piToolCallId: "toolu_mock_runner",
+      name: "bash",
+      input: { question: "continue?" },
+      evaluatedPermission: "allow",
+    });
+    toolUse.bindToolUseId("sevt_builtin_tool", () => {});
+    expect((await iterator.next()).value).toEqual({
+      type: "agent_end",
+      messages: [],
+      willRetry: false,
+    });
+    expect((await iterator.next()).done).toBe(true);
 
     expect(sdk.lastCreateOptions()).toMatchObject({
       noTools: "builtin",
       tools: ["bash", "ask_user"],
     });
-    expect(sdk.lastCreateOptions()?.customTools).toContain(sandboxTool);
     expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
       "bash",
       "ask_user",
+    ]);
+    expect(sandboxTool.execute).toHaveBeenCalledOnce();
+  });
+
+  it("pauses always_ask builtin tools until a tool_confirmation is committed", async () => {
+    const sandboxTool = {
+      name: "bash",
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const runner = new PiSessionRunner({
+      sandboxProviderFactory: async () =>
+        ({
+          cwd: "/workspace",
+          operations: {},
+          tools: [sandboxTool] as unknown as SandboxProvider["tools"],
+          toolNames: new Set(["bash"]),
+          invocations: {
+            total: 0,
+            byTool: {
+              bash: 0,
+              read: 0,
+              write: 0,
+              edit: 0,
+              find: 0,
+              ls: 0,
+            },
+            toolCallIds: {
+              bash: new Set(),
+              read: new Set(),
+              write: new Set(),
+              edit: new Set(),
+              find: new Set(),
+              ls: new Set(),
+            },
+          },
+          dispose: vi.fn(),
+        }) as unknown as SandboxProvider,
+      builtinToolAccess: () => ({ enabled: true, permission: "ask" }),
+      customToolTimeoutMs: 0,
+      idleTtlMs: 0,
+    });
+
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_builtin_ask", "run")
+      [Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({ type: "agent_start" });
+    const toolUse = (await iterator.next()).value;
+    expect(toolUse).toMatchObject({
+      type: "oma.tool_permission_use",
+      piToolCallId: "toolu_mock_runner",
+      name: "bash",
+      evaluatedPermission: "ask",
+    });
+    toolUse.bindToolUseId("sevt_builtin_ask", () => {});
+    expect(sandboxTool.execute).not.toHaveBeenCalled();
+    const resumed = iterator.next();
+    await Promise.resolve();
+
+    const commit = runner.claimToolConfirmation("wrk_default", "sesn_builtin_ask", {
+      type: "user.tool_confirmation",
+      tool_use_id: "sevt_builtin_ask",
+      result: "allow",
+    } satisfies ManagedAgentsUserToolConfirmationEventInput);
+    expect(commit).toBeTypeOf("function");
+    commit?.();
+
+    expect((await resumed).value).toEqual({
+      type: "agent_end",
+      messages: [],
+      willRetry: false,
+    });
+    expect((await iterator.next()).done).toBe(true);
+    expect(sandboxTool.execute).toHaveBeenCalledOnce();
+  });
+
+  it("denies never_allow builtin tools without invoking the sandbox provider", async () => {
+    const sandboxTool = {
+      name: "bash",
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const runner = new PiSessionRunner({
+      sandboxProviderFactory: async () =>
+        ({
+          cwd: "/workspace",
+          operations: {},
+          tools: [sandboxTool] as unknown as SandboxProvider["tools"],
+          toolNames: new Set(["bash"]),
+          invocations: {
+            total: 0,
+            byTool: {
+              bash: 0,
+              read: 0,
+              write: 0,
+              edit: 0,
+              find: 0,
+              ls: 0,
+            },
+            toolCallIds: {
+              bash: new Set(),
+              read: new Set(),
+              write: new Set(),
+              edit: new Set(),
+              find: new Set(),
+              ls: new Set(),
+            },
+          },
+          dispose: vi.fn(),
+        }) as unknown as SandboxProvider,
+      builtinToolAccess: () => ({ enabled: true, permission: "deny" }),
+      customToolTimeoutMs: 0,
+      idleTtlMs: 0,
+    });
+
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_builtin_deny", "run")
+      [Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({ type: "agent_start" });
+    const toolUse = (await iterator.next()).value;
+    expect(toolUse).toMatchObject({
+      type: "oma.tool_permission_use",
+      piToolCallId: "toolu_mock_runner",
+      name: "bash",
+      evaluatedPermission: "deny",
+    });
+    toolUse.bindToolUseId("sevt_builtin_deny", () => {});
+
+    await expect(iterator.next()).rejects.toThrow("denied by policy");
+    expect(sandboxTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("omits disabled builtin tools from Pi customTools and the active allowlist", async () => {
+    const bashTool = {
+      name: "bash",
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const readTool = {
+      name: "read",
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const runner = new PiSessionRunner({
+      sandboxProviderFactory: async () =>
+        ({
+          cwd: "/workspace",
+          operations: {},
+          tools: [bashTool, readTool] as unknown as SandboxProvider["tools"],
+          toolNames: new Set(["bash", "read"]),
+          invocations: {
+            total: 0,
+            byTool: {
+              bash: 0,
+              read: 0,
+              write: 0,
+              edit: 0,
+              find: 0,
+              ls: 0,
+            },
+            toolCallIds: {
+              bash: new Set(),
+              read: new Set(),
+              write: new Set(),
+              edit: new Set(),
+              find: new Set(),
+              ls: new Set(),
+            },
+          },
+          dispose: vi.fn(),
+        }) as unknown as SandboxProvider,
+      builtinToolAccess: (_workspaceId, _sessionId, toolName) => ({
+        enabled: toolName !== "read",
+        permission: "allow",
+      }),
+      customToolTimeoutMs: 0,
+      idleTtlMs: 0,
+    });
+
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_disabled", "run")
+      [Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({ type: "agent_start" });
+    const toolUse = (await iterator.next()).value;
+    toolUse.bindToolUseId("sevt_builtin_allow", () => {});
+    expect((await iterator.next()).value).toEqual({
+      type: "agent_end",
+      messages: [],
+      willRetry: false,
+    });
+    expect((await iterator.next()).done).toBe(true);
+
+    expect(sdk.lastCreateOptions()?.tools).toEqual(["bash"]);
+    expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
+      "bash",
     ]);
   });
 });

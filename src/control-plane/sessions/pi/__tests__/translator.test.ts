@@ -105,6 +105,47 @@ describe("Pi translator (Cycle C.1)", () => {
     expect(drafts[0]?.payload.name).toBe("bash");
     expect(drafts[1]?.payload.tool_use_id).toBe("toolu_builtin_bash");
   });
+
+  it("suppresses permission-managed duplicate tool_use and remaps tool_result to the public event id", () => {
+    const context = {
+      suppressPiToolUse: (id: string) => id === "toolu_builtin_bash",
+      publicToolUseIdForPiToolCallId: (id: string) =>
+        id === "toolu_builtin_bash" ? "sevt_public_tool" : undefined,
+    };
+    const drafts = [
+      ...translatePiEvent(
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "I will run bash." },
+              {
+                type: "toolCall",
+                id: "toolu_builtin_bash",
+                name: "bash",
+                arguments: { command: "printf ok" },
+              },
+            ],
+          },
+        },
+        context,
+      ),
+      ...translatePiEvent(
+        {
+          type: "tool_execution_end",
+          toolCallId: "toolu_builtin_bash",
+          toolName: "bash",
+          result: { content: [{ type: "text", text: "ok" }] },
+          isError: false,
+        },
+        context,
+      ),
+    ];
+
+    expect(types(drafts)).toEqual(["agent.message", "agent.tool_result"]);
+    expect(drafts[1]?.payload.tool_use_id).toBe("sevt_public_tool");
+  });
 });
 
 function translateScenario(scenario: Scenario): EventDraft[] {
