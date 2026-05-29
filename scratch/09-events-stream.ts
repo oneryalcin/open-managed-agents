@@ -5,6 +5,7 @@
  */
 
 import { createInMemoryControlPlaneApp } from "../src/control-plane/app.ts";
+import { requestWithManagedAgentsBeta } from "./managed-agents-beta.ts";
 
 const app = createInMemoryControlPlaneApp();
 
@@ -26,7 +27,7 @@ console.log(`session=${session.id}`);
 
 await sendMessage(session.id, "sentinel");
 
-const streamRes = await app.request(`/v1/sessions/${session.id}/events/stream`, {
+const streamRes = await requestWithManagedAgentsBeta(app, `/v1/sessions/${session.id}/events/stream`, {
   headers: { accept: "text/event-stream" },
 });
 const reader = sseReader(streamRes);
@@ -42,7 +43,7 @@ console.log(`live.next=${live?.id} ${live?.event}`);
 await reader.cancel();
 await sendMessage(session.id, "disconnect-window");
 
-const stream2 = await app.request(`/v1/sessions/${session.id}/events/stream`, {
+const stream2 = await requestWithManagedAgentsBeta(app, `/v1/sessions/${session.id}/events/stream`, {
   headers: { accept: "text/event-stream" },
 });
 const reader2 = sseReader(stream2);
@@ -62,14 +63,14 @@ for (let i = 0; i < 3; i += 1) {
 console.log(`reconnect.recovered=${recovered} ids=${seen.size}`);
 
 // Last-Event-ID malformed is fail-open (stream still returns first history event).
-const malformed = await app.request(`/v1/sessions/${session.id}/events/stream`, {
+const malformed = await requestWithManagedAgentsBeta(app, `/v1/sessions/${session.id}/events/stream`, {
   headers: { "last-event-id": "bad_cursor" },
 });
 const malformedFirst = await sseReader(malformed).nextEvent();
 console.log(`malformed.first=${malformedFirst?.id}`);
 
 async function create(path: string, body: unknown): Promise<Record<string, unknown>> {
-  const res = await app.request(path, {
+  const res = await requestWithManagedAgentsBeta(app, path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -81,7 +82,7 @@ async function create(path: string, body: unknown): Promise<Record<string, unkno
 }
 
 async function sendMessage(sessionId: string, text: string): Promise<void> {
-  const res = await app.request(`/v1/sessions/${sessionId}/events`, {
+  const res = await requestWithManagedAgentsBeta(app, `/v1/sessions/${sessionId}/events`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -97,7 +98,7 @@ async function getEvents(path: string): Promise<{
   data: Array<Record<string, unknown>>;
   next_page: string | null;
 }> {
-  const res = await app.request(path);
+  const res = await requestWithManagedAgentsBeta(app, path);
   if (res.status !== 200) {
     throw new Error(`list failed: ${res.status} ${await res.text()}`);
   }

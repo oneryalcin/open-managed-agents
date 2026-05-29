@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
-import { createControlPlaneApp } from "../app.ts";
+import { createControlPlaneApp } from "./helpers.ts";
 import { DefaultAgentService } from "../agents/service.ts";
 import { SqliteAgentStore } from "../agents/store.ts";
 import { DefaultEnvironmentService } from "../environments/service.ts";

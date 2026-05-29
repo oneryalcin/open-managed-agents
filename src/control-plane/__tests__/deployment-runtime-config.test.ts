@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDeploymentControlPlaneApp } from "../app.ts";
+import { createDeploymentControlPlaneApp } from "./helpers.ts";
 import {
   createDeploymentPiSessionRunner,
   parseDeploymentRuntimeConfigFromEnv,

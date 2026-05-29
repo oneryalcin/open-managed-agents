@@ -13,6 +13,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createControlPlaneApp } from "../src/control-plane/app.ts";
+import { requestWithManagedAgentsBeta } from "./managed-agents-beta.ts";
 import { DefaultAgentService } from "../src/control-plane/agents/service.ts";
 import { SqliteAgentStore } from "../src/control-plane/agents/store.ts";
 import { DefaultEnvironmentService } from "../src/control-plane/environments/service.ts";
@@ -62,7 +63,7 @@ const session = (await create("/v1/sessions", {
 console.log(`session=${session.id}`);
 console.log(`unique=${UNIQUE}`);
 
-const streamRes = await app.request(`/v1/sessions/${session.id}/events/stream`, {
+const streamRes = await requestWithManagedAgentsBeta(app, `/v1/sessions/${session.id}/events/stream`, {
   headers: { accept: "text/event-stream" },
 });
 const stream = sseReader(streamRes);
@@ -119,7 +120,7 @@ console.log(`list.count=${list.data.length} listedRecall=${listedRecall}`);
 console.log("verdict=PASS C.3a live continuity works through events.stream and events.list");
 
 async function create(path: string, body: unknown): Promise<Record<string, unknown>> {
-  const res = await app.request(path, {
+  const res = await requestWithManagedAgentsBeta(app, path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -131,7 +132,7 @@ async function create(path: string, body: unknown): Promise<Record<string, unkno
 }
 
 async function sendMessage(sessionId: string, text: string): Promise<void> {
-  const res = await app.request(`/v1/sessions/${sessionId}/events`, {
+  const res = await requestWithManagedAgentsBeta(app, `/v1/sessions/${sessionId}/events`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -147,7 +148,7 @@ async function getEvents(path: string): Promise<{
   data: Array<Record<string, unknown>>;
   next_page: string | null;
 }> {
-  const res = await app.request(path);
+  const res = await requestWithManagedAgentsBeta(app, path);
   if (res.status !== 200) {
     throw new Error(`list failed: ${res.status} ${await res.text()}`);
   }

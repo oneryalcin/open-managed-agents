@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_REQUEST_BODY_BYTES,
   createInMemoryControlPlaneApp,
-} from "../app.ts";
+} from "./helpers.ts";
 import { MAX_FILE_UPLOAD_REQUEST_BYTES } from "../files/routes.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsFileMetadata } from "../../types/files.ts";

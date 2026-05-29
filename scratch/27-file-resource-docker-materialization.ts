@@ -33,6 +33,7 @@ const ISSUE_URL =
 const PAYLOAD = "OMA_FILE_RESOURCE_PROBE=ok\n";
 const MOUNT_PATH = "/mnt/session/uploads/probe.txt";
 const COMMAND = `cat ${MOUNT_PATH}`;
+const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 
 if (process.env.OMA_RUN_FILE_RESOURCE_MATERIALIZATION_PROBE !== "true") {
   console.log(
@@ -99,7 +100,7 @@ if (mountedPayload !== PAYLOAD) {
   );
 }
 
-await request(`/v1/files/${file.id}?beta=true`, { method: "DELETE" });
+await request(`/v1/files/${file.id}`, { method: "DELETE" });
 
 await sendEvents(session.id, [
   {
@@ -165,7 +166,7 @@ async function uploadFile(
 ): Promise<Record<string, string>> {
   const form = new FormData();
   form.set("file", new File([content], filename, { type: mimeType }));
-  return requestJson("/v1/files?beta=true", {
+  return requestJson("/v1/files", {
     method: "POST",
     body: form,
   });
@@ -195,7 +196,11 @@ async function requestJson(
 }
 
 async function request(path: string, init?: RequestInit): Promise<Response> {
-  return app.request(path, init);
+  const headers = new Headers(init?.headers);
+  if (!headers.has("anthropic-beta")) {
+    headers.set("anthropic-beta", MANAGED_AGENTS_BETA);
+  }
+  return app.request(path, { ...init, headers });
 }
 
 async function deleteSession(sessionId: string): Promise<void> {

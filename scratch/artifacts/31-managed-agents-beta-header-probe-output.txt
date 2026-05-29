@@ -1,0 +1,251 @@
+[
+  {
+    "body": {
+      "error": {
+        "message": "not found",
+        "type": "not_found_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "missing",
+    "path": "/v1/agents",
+    "status": 404
+  },
+  {
+    "body": {
+      "error": {
+        "message": "not found",
+        "type": "not_found_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "future_only",
+    "path": "/v1/agents",
+    "status": 404
+  },
+  {
+    "body": {
+      "error": {
+        "message": "not found",
+        "type": "not_found_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "env_only",
+    "path": "/v1/agents",
+    "status": 404
+  },
+  {
+    "body": {
+      "data_len": 1,
+      "keys": [
+        "data"
+      ]
+    },
+    "case": "managed",
+    "path": "/v1/agents",
+    "status": 200
+  },
+  {
+    "body": {
+      "data_len": 1,
+      "keys": [
+        "data"
+      ]
+    },
+    "case": "managed_plus_future",
+    "path": "/v1/agents",
+    "status": 200
+  },
+  {
+    "body": {
+      "error": {
+        "message": "not found",
+        "type": "not_found_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "missing",
+    "path": "/v1/sessions",
+    "status": 404
+  },
+  {
+    "body": {
+      "error": {
+        "message": "not found",
+        "type": "not_found_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "future_only",
+    "path": "/v1/sessions",
+    "status": 404
+  },
+  {
+    "body": {
+      "error": {
+        "message": "not found",
+        "type": "not_found_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "env_only",
+    "path": "/v1/sessions",
+    "status": 404
+  },
+  {
+    "body": {
+      "data_len": 3,
+      "keys": [
+        "data"
+      ]
+    },
+    "case": "managed",
+    "path": "/v1/sessions",
+    "status": 200
+  },
+  {
+    "body": {
+      "data_len": 3,
+      "keys": [
+        "data"
+      ]
+    },
+    "case": "managed_plus_future",
+    "path": "/v1/sessions",
+    "status": 200
+  },
+  {
+    "body": {
+      "error": {
+        "message": "The environments API requires the `environments-2025-11-01` value in the `anthropic-beta` header.",
+        "type": "not_found_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "missing",
+    "path": "/v1/environments",
+    "status": 404
+  },
+  {
+    "body": {
+      "data_len": 1,
+      "keys": [
+        "data",
+        "first_id",
+        "has_more",
+        "last_id"
+      ]
+    },
+    "case": "env_beta",
+    "path": "/v1/environments",
+    "status": 200
+  },
+  {
+    "body": {
+      "data_len": 1,
+      "keys": [
+        "data",
+        "next_page"
+      ]
+    },
+    "case": "managed",
+    "path": "/v1/environments",
+    "status": 200
+  },
+  {
+    "body": {
+      "error": {
+        "message": "Only one environments beta header may be specified per request.",
+        "type": "invalid_request_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "managed_plus_env",
+    "path": "/v1/environments",
+    "status": 400
+  },
+  {
+    "body": {
+      "error": {
+        "message": "Unexpected value(s) `future-beta` for the `anthropic-beta` header. Please consult our documentation at docs.claude.com or try again without the header.",
+        "type": "invalid_request_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "managed_plus_future",
+    "path": "/v1/environments",
+    "status": 400
+  },
+  {
+    "body": {
+      "error": {
+        "message": "Not found",
+        "type": "not_found_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "missing",
+    "path": "/v1/files",
+    "status": 404
+  },
+  {
+    "body": {
+      "data_len": 0,
+      "keys": [
+        "data",
+        "has_more"
+      ]
+    },
+    "case": "files_guess",
+    "path": "/v1/files",
+    "status": 200
+  },
+  {
+    "body": {
+      "data_len": 0,
+      "keys": [
+        "data",
+        "has_more"
+      ]
+    },
+    "case": "managed",
+    "path": "/v1/files",
+    "status": 200
+  },
+  {
+    "body": {
+      "data_len": 0,
+      "keys": [
+        "data",
+        "has_more"
+      ]
+    },
+    "case": "managed_plus_env",
+    "path": "/v1/files",
+    "status": 200
+  },
+  {
+    "body": {
+      "error": {
+        "message": "Unexpected value(s) `future-beta` for the `anthropic-beta` header. Please consult our documentation at docs.claude.com or try again without the header.",
+        "type": "invalid_request_error"
+      },
+      "request_id": "<redacted_request_id>",
+      "type": "error"
+    },
+    "case": "managed_plus_future",
+    "path": "/v1/files",
+    "status": 400
+  }
+]

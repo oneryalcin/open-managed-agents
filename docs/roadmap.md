@@ -36,12 +36,14 @@ Scope:
 - Add a default environment stub and minimal environment read/list/create routes if needed by session creation.
 - Add session storage and service boundaries.
 - Implement `POST /v1/sessions`, `GET /v1/sessions`, and `GET /v1/sessions/{id}`.
-- Accept and persist `title` and `metadata` on session create. Reject runtime-bearing unsupported fields (`resources`, `vault_ids`) with a caller-safe `invalid_request_error`; do not silently pretend mounts or vaults work.
+- Accept and persist `title` and `metadata` on session create. Reject runtime-bearing unsupported fields such as `vault_ids` with a caller-safe `invalid_request_error`; do not silently pretend vaults work.
 - Implement `POST /v1/sessions/{id}/events` for synthetic `user.message`, `user.custom_tool_result`, and `user.tool_confirmation` events.
 - Implement `GET /v1/sessions/{id}/events` using the existing `EventStore`, with `page` as the opaque cursor token and `next_page` in the response. Support `order` where the upstream SDK examples rely on it.
 - Implement `GET /v1/sessions/{id}/events/stream` using the existing `SessionEventBroadcaster`.
 - Support the upstream reconnect pattern: open the live stream first, list persisted history, then dedupe live events by ID. Also honor `Last-Event-ID` as an additive SSE resume convenience.
-- Make `anthropic-beta: managed-agents-2026-04-01` acceptance explicit but permissive. SDK clients send it; local curl probes should not be punished for omitting it during development.
+- Require `anthropic-beta: managed-agents-2026-04-01` on the Managed Agents
+  route surface. SDK clients send it, and local curl/scratch probes must send it
+  too so they exercise route behavior instead of the beta gate.
 
 #### Cycle B.1 Implementation Plan
 
@@ -59,8 +61,9 @@ B.1 proves environments and sessions as stored Managed Agents wire objects. It d
 **Middleware contract:**
 
 - Parse the `anthropic-beta` header into `betaFeatures: Set<string>` on the Hono context.
-- Accept a missing header so local probes and manual curl remain easy.
-- Accept `managed-agents-2026-04-01` as a no-op for now.
+- Reject missing or wrong-only beta headers before body parsing on Managed Agents
+  routes.
+- Accept `managed-agents-2026-04-01` as the required Managed Agents beta.
 - Accept comma-separated beta values and preserve all trimmed values in the set.
 - Accept unknown beta values for forward compatibility; do not 400 on future SDK headers.
 
