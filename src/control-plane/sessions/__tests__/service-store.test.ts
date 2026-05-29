@@ -204,6 +204,7 @@ describe("session service/store", () => {
     expect(runtime.prepares[0]).toMatchObject({
       workspaceId: DEFAULT_WORKSPACE_ID,
       sessionId: session.id,
+      agent: { id: agent.id, version: 1 },
     });
     expect(runtime.prepares[0]?.visibleDuringPrepare).toBe(false);
     expect(runtime.prepares[0]?.fileMounts).toEqual([
@@ -390,6 +391,7 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
     sessionId: string;
     visibleDuringPrepare: boolean;
     fileMounts: NonNullable<RuntimeSessionPrepareOptions["fileMounts"]>;
+    agent: RuntimeSessionPrepareOptions["agent"];
   }> = [];
   readonly closed: Array<{ workspaceId: string; sessionId: string }> = [];
 
@@ -410,6 +412,7 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
       visibleDuringPrepare:
         this.currentStore?.retrieveAny(workspaceId, sessionId) !== undefined,
       fileMounts: opts.fileMounts ?? [],
+      agent: opts.agent,
     });
     if (this.opts.throwOnPrepare) throw this.opts.throwOnPrepare;
   }

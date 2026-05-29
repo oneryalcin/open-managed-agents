@@ -44,6 +44,7 @@ import type {
   SessionService,
 } from "./sessions/types.ts";
 import type { PiSessionFileMountResolver } from "./sessions/pi/runner.ts";
+import { createStoreBackedBuiltinToolAccessResolver } from "./sessions/pi/tool-permissions.ts";
 import { translatePiEvent } from "./sessions/pi/translator.ts";
 
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
@@ -147,6 +148,10 @@ export function createDeploymentControlPlaneApp(
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
     fileMountResolver: createFileMountResolver(sessionStore, fileStorage),
+    builtinToolAccess: createStoreBackedBuiltinToolAccessResolver({
+      sessions: sessionStore,
+      agents: agentStore,
+    }),
   });
   const runtime = { runner, translate: translatePiEvent };
   return createControlPlaneApp({

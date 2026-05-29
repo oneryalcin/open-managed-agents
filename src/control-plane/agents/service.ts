@@ -189,7 +189,16 @@ function toolArrayField(
   const value = obj[field];
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw invalidRequest(`\`${field}\` must be an array`);
-  return value.map(parseTool);
+  const tools = value.map(parseTool);
+  const agentToolsetCount = tools.filter(
+    (tool) => tool.type === "agent_toolset_20260401",
+  ).length;
+  if (agentToolsetCount > 1) {
+    throw invalidRequest(
+      "`tools` may contain at most one `agent_toolset_20260401` entry",
+    );
+  }
+  return tools;
 }
 
 function parseTool(value: unknown): ManagedAgentsTool {
