@@ -65,9 +65,14 @@ export class DefaultSessionService implements SessionService {
   ): Promise<ManagedAgentsSession> {
     const req = parseCreateSession(input);
     const agentRef = parseAgentRef(req.agent);
-    const agent = this.agents.retrieve(workspaceId, agentRef.id);
+    const agent = this.agents.retrieveAny(workspaceId, agentRef.id);
     if (!agent) {
       throw invalidRequest(`Agent ${agentRef.id} not found`);
+    }
+    if (agent.archived_at !== null) {
+      throw invalidRequest(
+        `agent ${agentRef.id} is archived and cannot be used to create a session`,
+      );
     }
     if (agentRef.version !== undefined && agentRef.version !== agent.version) {
       throw invalidRequest(

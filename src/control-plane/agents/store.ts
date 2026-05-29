@@ -52,6 +52,8 @@ export class SqliteAgentStore implements AgentStore {
   private readonly db: DatabaseSync;
   private readonly insertStmt: StatementSync;
   private readonly retrieveActiveStmt: StatementSync;
+  private readonly retrieveAnyStmt: StatementSync;
+  private readonly archiveStmt: StatementSync;
   private readonly listActiveStmt: StatementSync;
   private readonly listAllStmt: StatementSync;
   private readonly listActiveSinceStmt: StatementSync;
@@ -70,6 +72,16 @@ export class SqliteAgentStore implements AgentStore {
     this.retrieveActiveStmt = this.db.prepare(
       `SELECT * FROM agents
        WHERE workspace_id = ? AND id = ? AND archived_at IS NULL`,
+    );
+    this.retrieveAnyStmt = this.db.prepare(
+      `SELECT * FROM agents
+       WHERE workspace_id = ? AND id = ?`,
+    );
+    this.archiveStmt = this.db.prepare(
+      `UPDATE agents
+       SET archived_at = COALESCE(archived_at, ?),
+           updated_at = CASE WHEN archived_at IS NULL THEN ? ELSE updated_at END
+       WHERE workspace_id = ? AND id = ?`,
     );
     this.listActiveStmt = this.db.prepare(
       `SELECT * FROM agents
@@ -133,6 +145,26 @@ export class SqliteAgentStore implements AgentStore {
       agentId,
     ) as unknown as AgentDbRow | undefined;
     return row ? deserialize(row) : undefined;
+  }
+
+  retrieveAny(
+    workspaceId: string,
+    agentId: string,
+  ): AgentRow | undefined {
+    const row = this.retrieveAnyStmt.get(
+      workspaceId,
+      agentId,
+    ) as unknown as AgentDbRow | undefined;
+    return row ? deserialize(row) : undefined;
+  }
+
+  archive(
+    workspaceId: string,
+    agentId: string,
+    archivedAt: string,
+  ): AgentRow | undefined {
+    this.archiveStmt.run(archivedAt, archivedAt, workspaceId, agentId);
+    return this.retrieveAny(workspaceId, agentId);
   }
 
   list(

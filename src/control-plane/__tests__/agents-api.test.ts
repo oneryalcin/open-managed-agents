@@ -19,16 +19,9 @@ describe("agents API", () => {
   it("creates, retrieves, and lists agents", async () => {
     const app = createInMemoryControlPlaneApp();
 
-    const createdRes = await app.request("/v1/agents", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "anthropic-beta": "managed-agents-2026-04-01",
-      },
-      body: JSON.stringify(VALID_AGENT),
+    const created = await createAgent(app, {
+      "anthropic-beta": "managed-agents-2026-04-01",
     });
-    expect(createdRes.status).toBe(200);
-    const created = (await createdRes.json()) as ManagedAgentsAgent;
     expect(created).toMatchObject({
       id: expect.stringMatching(/^agent_/),
       type: "agent",
@@ -56,6 +49,74 @@ describe("agents API", () => {
       has_more: false,
       next_page: null,
     });
+  });
+
+  it("archives agents idempotently and keeps direct retrieve available", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const created = await createAgent(app);
+
+    const archiveRes = await app.request(`/v1/agents/${created.id}/archive`, {
+      method: "POST",
+    });
+    expect(archiveRes.status).toBe(200);
+    const archived = (await archiveRes.json()) as ManagedAgentsAgent;
+    expect(archived).toMatchObject({
+      id: created.id,
+      type: "agent",
+      archived_at: expect.any(String),
+    });
+
+    const archiveAgainRes = await app.request(`/v1/agents/${created.id}/archive`, {
+      method: "POST",
+    });
+    expect(archiveAgainRes.status).toBe(200);
+    const archivedAgain = (await archiveAgainRes.json()) as ManagedAgentsAgent;
+    expect(archivedAgain.archived_at).toBe(archived.archived_at);
+    expect(archivedAgain.updated_at).toBe(archived.updated_at);
+
+    const retrieveRes = await app.request(`/v1/agents/${created.id}`);
+    expect(retrieveRes.status).toBe(200);
+    await expect(retrieveRes.json()).resolves.toEqual(archived);
+
+    const defaultListRes = await app.request("/v1/agents?limit=10");
+    expect(defaultListRes.status).toBe(200);
+    await expect(defaultListRes.json()).resolves.toMatchObject({
+      data: [],
+      has_more: false,
+      next_page: null,
+    });
+
+    const archivedListRes = await app.request(
+      "/v1/agents?include_archived=true&limit=10",
+    );
+    expect(archivedListRes.status).toBe(200);
+    await expect(archivedListRes.json()).resolves.toEqual({
+      data: [archived],
+      has_more: false,
+      next_page: null,
+    });
+  });
+
+  it("returns the public notFound envelope for missing archive targets", async () => {
+    const app = createInMemoryControlPlaneApp();
+
+    const res = await app.request("/v1/agents/agent_missing/archive", {
+      method: "POST",
+    });
+
+    expect(res.status).toBe(404);
+    const requestId = res.headers.get("request-id");
+    expect(requestId).toEqual(expect.stringMatching(/^req_/));
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body).toEqual({
+      type: "error",
+      error: {
+        type: "not_found_error",
+        message: "Agent agent_missing not found",
+      },
+      request_id: expect.stringMatching(/^req_/),
+    });
+    expect(body.request_id).toBe(requestId);
   });
 
   it("returns the Anthropic-shaped error envelope", async () => {
@@ -164,3 +225,19 @@ describe("agents API", () => {
     });
   });
 });
+
+async function createAgent(
+  app: ReturnType<typeof createInMemoryControlPlaneApp>,
+  headers: Record<string, string> = {},
+): Promise<ManagedAgentsAgent> {
+  const res = await app.request("/v1/agents", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(VALID_AGENT),
+  });
+  expect(res.status).toBe(200);
+  return (await res.json()) as ManagedAgentsAgent;
+}

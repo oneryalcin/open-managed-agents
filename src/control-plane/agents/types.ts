@@ -47,6 +47,15 @@ export interface AgentStore {
     workspaceId: WorkspaceId,
     agentId: string,
   ): AgentRow | undefined;
+  retrieveAny(
+    workspaceId: WorkspaceId,
+    agentId: string,
+  ): AgentRow | undefined;
+  archive(
+    workspaceId: WorkspaceId,
+    agentId: string,
+    archivedAt: string,
+  ): AgentRow | undefined;
   list(
     workspaceId: WorkspaceId,
     opts?: ListAgentsOptions,
@@ -60,6 +69,10 @@ export interface AgentService {
     input: unknown,
   ): ManagedAgentsAgent;
   retrieve(
+    workspaceId: WorkspaceId,
+    agentId: string,
+  ): ManagedAgentsAgent;
+  archive(
     workspaceId: WorkspaceId,
     agentId: string,
   ): ManagedAgentsAgent;
