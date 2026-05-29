@@ -1,0 +1,888 @@
+## environment.created
+{
+  "id": "<redacted_hosted_id>"
+}
+## scenarios
+[
+  {
+    "agent_id": "<redacted_hosted_id>",
+    "confirmation_response": {
+      "data": [
+        {
+          "deny_message": "Denied by OMA probe.",
+          "id": "<redacted_hosted_id>",
+          "processed_at": null,
+          "result": "deny",
+          "session_thread_id": null,
+          "tool_use_id": "<redacted_hosted_id>",
+          "type": "user.tool_confirmation"
+        }
+      ]
+    },
+    "listed": [
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 17, 288124, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.status_running"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 17, 288125, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.thread_status_running"
+      },
+      {
+        "content_text": [
+          "Use bash exactly once. Run this exact command: printf 'OMA_TOOL_CONFIRMATION_DENY_1780071735-70250\\n' | tee /workspace/oma_tool_confirmation_deny_1780071735-70250.txt."
+        ],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672898, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "user.message"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672899, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_start"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672900, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "agent.thinking"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": "ask",
+        "id": "<redacted_hosted_id>",
+        "input": {
+          "command": "printf 'OMA_TOOL_CONFIRMATION_DENY_1780071735-70250\\n' | tee /workspace/oma_tool_confirmation_deny_1780071735-70250.txt"
+        },
+        "is_error": null,
+        "name": "bash",
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672902, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "agent.tool_use"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": false,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672903, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_end"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 833605, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": {
+          "event_ids": [
+            "<redacted_hosted_id>"
+          ],
+          "type": "requires_action"
+        },
+        "tool_use_id": null,
+        "type": "session.thread_status_idle"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 833606, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": {
+          "event_ids": [
+            "<redacted_hosted_id>"
+          ],
+          "type": "requires_action"
+        },
+        "tool_use_id": null,
+        "type": "session.status_idle"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 20, 710866, tzinfo=TzInfo(0))",
+        "result": "deny",
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": "<redacted_hosted_id>",
+        "type": "user.tool_confirmation"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 20, 848984, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.status_running"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 20, 848985, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.thread_status_running"
+      },
+      {
+        "content_text": [
+          "Permission to use bash has been rejected. Rejection message: Denied by OMA probe."
+        ],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": true,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 20, 966637, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": "<redacted_hosted_id>",
+        "type": "agent.tool_result"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 23, 908357, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_start"
+      },
+      {
+        "content_text": [
+          "The bash tool call was denied. The system rejected the request with the message **\"Denied by OMA probe.\"** \u2014 meaning the command was blocked before it could execute. No output was produced and no file was written."
+        ],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 23, 908358, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "agent.message"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": false,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 23, 908359, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_end"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 24, 111324, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "tool_use_id": null,
+        "type": "session.thread_status_idle"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 24, 111325, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "tool_use_id": null,
+        "type": "session.status_idle"
+      }
+    ],
+    "observed": [
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 17, 288124, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.status_running"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 17, 288125, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.thread_status_running"
+      },
+      {
+        "content_text": [
+          "Use bash exactly once. Run this exact command: printf 'OMA_TOOL_CONFIRMATION_DENY_1780071735-70250\\n' | tee /workspace/oma_tool_confirmation_deny_1780071735-70250.txt."
+        ],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672898, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "user.message"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672899, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_start"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672900, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "agent.thinking"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": "ask",
+        "id": "<redacted_hosted_id>",
+        "input": {
+          "command": "printf 'OMA_TOOL_CONFIRMATION_DENY_1780071735-70250\\n' | tee /workspace/oma_tool_confirmation_deny_1780071735-70250.txt"
+        },
+        "is_error": null,
+        "name": "bash",
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672902, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "agent.tool_use"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": false,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 672903, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_end"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 833605, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": {
+          "event_ids": [
+            "<redacted_hosted_id>"
+          ],
+          "type": "requires_action"
+        },
+        "tool_use_id": null,
+        "type": "session.thread_status_idle"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 19, 833606, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": {
+          "event_ids": [
+            "<redacted_hosted_id>"
+          ],
+          "type": "requires_action"
+        },
+        "tool_use_id": null,
+        "type": "session.status_idle"
+      }
+    ],
+    "ok": true,
+    "result": "deny",
+    "session_id": "<redacted_hosted_id>",
+    "side_effect_checks": [
+      {
+        "command": "if [ -f /workspace/oma_tool_confirmation_deny_1780071735-70250.txt ]; then cat /workspace/oma_tool_confirmation_deny_1780071735-70250.txt; else printf 'OMA_FILE_MISSING\\n'; fi",
+        "expected": "absent",
+        "label": "deny.after_confirmation",
+        "ok": true,
+        "tool_result_text": "OMA_FILE_MISSING\n"
+      }
+    ]
+  },
+  {
+    "agent_id": "<redacted_hosted_id>",
+    "confirmation_response": {
+      "data": [
+        {
+          "deny_message": null,
+          "id": "<redacted_hosted_id>",
+          "processed_at": null,
+          "result": "allow",
+          "session_thread_id": null,
+          "tool_use_id": "<redacted_hosted_id>",
+          "type": "user.tool_confirmation"
+        }
+      ]
+    },
+    "listed": [
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 36, 8744, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.status_running"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 36, 8745, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.thread_status_running"
+      },
+      {
+        "content_text": [
+          "Use bash exactly once. Run this exact command: printf 'OMA_TOOL_CONFIRMATION_ALLOW_1780071735-70250\\n' | tee /workspace/oma_tool_confirmation_allow_1780071735-70250.txt."
+        ],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 139579, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "user.message"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 139580, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_start"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": "ask",
+        "id": "<redacted_hosted_id>",
+        "input": {
+          "command": "printf 'OMA_TOOL_CONFIRMATION_ALLOW_1780071735-70250\\n' | tee /workspace/oma_tool_confirmation_allow_1780071735-70250.txt"
+        },
+        "is_error": null,
+        "name": "bash",
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 139581, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "agent.tool_use"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": false,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 139582, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_end"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 291200, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": {
+          "event_ids": [
+            "<redacted_hosted_id>"
+          ],
+          "type": "requires_action"
+        },
+        "tool_use_id": null,
+        "type": "session.thread_status_idle"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 291201, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": {
+          "event_ids": [
+            "<redacted_hosted_id>"
+          ],
+          "type": "requires_action"
+        },
+        "tool_use_id": null,
+        "type": "session.status_idle"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 39, 233578, tzinfo=TzInfo(0))",
+        "result": "allow",
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": "<redacted_hosted_id>",
+        "type": "user.tool_confirmation"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 39, 358003, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.status_running"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 39, 358004, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.thread_status_running"
+      },
+      {
+        "content_text": [
+          "OMA_TOOL_CONFIRMATION_ALLOW_1780071735-70250\n"
+        ],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": false,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 43, 645949, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": "<redacted_hosted_id>",
+        "type": "agent.tool_result"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 45, 796082, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_start"
+      },
+      {
+        "content_text": [
+          "The command ran successfully. It printed `OMA_TOOL_CONFIRMATION_ALLOW_1780071735-70250` to stdout and wrote the same content to `/workspace/oma_tool_confirmation_allow_1780071735-70250.txt`."
+        ],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 45, 796083, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "agent.message"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": false,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 45, 796084, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_end"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 46, 23791, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "tool_use_id": null,
+        "type": "session.thread_status_idle"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 46, 23792, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "tool_use_id": null,
+        "type": "session.status_idle"
+      }
+    ],
+    "observed": [
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 36, 8744, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.status_running"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 36, 8745, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "session.thread_status_running"
+      },
+      {
+        "content_text": [
+          "Use bash exactly once. Run this exact command: printf 'OMA_TOOL_CONFIRMATION_ALLOW_1780071735-70250\\n' | tee /workspace/oma_tool_confirmation_allow_1780071735-70250.txt."
+        ],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 139579, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "user.message"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 139580, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_start"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": "ask",
+        "id": "<redacted_hosted_id>",
+        "input": {
+          "command": "printf 'OMA_TOOL_CONFIRMATION_ALLOW_1780071735-70250\\n' | tee /workspace/oma_tool_confirmation_allow_1780071735-70250.txt"
+        },
+        "is_error": null,
+        "name": "bash",
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 139581, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "agent.tool_use"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": false,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 139582, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": null,
+        "tool_use_id": null,
+        "type": "span.model_request_end"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 291200, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": "<redacted_hosted_id>",
+        "stop_reason": {
+          "event_ids": [
+            "<redacted_hosted_id>"
+          ],
+          "type": "requires_action"
+        },
+        "tool_use_id": null,
+        "type": "session.thread_status_idle"
+      },
+      {
+        "content_text": [],
+        "evaluated_permission": null,
+        "id": "<redacted_hosted_id>",
+        "input": null,
+        "is_error": null,
+        "name": null,
+        "processed_at": "datetime.datetime(2026, 5, 29, 16, 22, 38, 291201, tzinfo=TzInfo(0))",
+        "result": null,
+        "session_thread_id": null,
+        "stop_reason": {
+          "event_ids": [
+            "<redacted_hosted_id>"
+          ],
+          "type": "requires_action"
+        },
+        "tool_use_id": null,
+        "type": "session.status_idle"
+      }
+    ],
+    "ok": true,
+    "result": "allow",
+    "session_id": "<redacted_hosted_id>",
+    "side_effect_checks": [
+      {
+        "command": "if [ -f /workspace/oma_tool_confirmation_allow_1780071735-70250.txt ]; then cat /workspace/oma_tool_confirmation_allow_1780071735-70250.txt; else printf 'OMA_FILE_MISSING\\n'; fi",
+        "expected": "present",
+        "label": "allow.after_confirmation",
+        "ok": true,
+        "tool_result_text": "OMA_TOOL_CONFIRMATION_ALLOW_1780071735-70250\n"
+      }
+    ]
+  }
+]
+## verdict
+{
+  "all_ok": true,
+  "requires_action_observed": [
+    true,
+    true
+  ],
+  "side_effect_checks_ok": [
+    true,
+    true
+  ]
+}
+## environment.delete.cleanup
+{
+  "id": "<redacted_hosted_id>",
+  "type": "environment_deleted"
+}
