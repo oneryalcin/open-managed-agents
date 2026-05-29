@@ -1,0 +1,425 @@
+## environment.created
+{
+  "archived_at": null,
+  "config": {
+    "environment": {},
+    "init_script": "",
+    "networking": {
+      "type": "unrestricted"
+    },
+    "packages": {
+      "apt": [],
+      "cargo": [],
+      "gem": [],
+      "go": [],
+      "npm": [],
+      "pip": [],
+      "type": "packages"
+    },
+    "type": "cloud"
+  },
+  "created_at": "2026-05-28T23:35:32.655125Z",
+  "description": "",
+  "id": "env_01Gyvnd1SaQKHewckcuHnzYw",
+  "metadata": {},
+  "name": "oma-archive-requires-action-probe-1780011332-57518",
+  "scope": "organization",
+  "state": "active",
+  "type": "environment",
+  "updated_at": "2026-05-28T23:35:32.655125Z"
+}
+## agent.created
+{
+  "id": "agent_01Djqo53SrJCEWwqsrJz636k",
+  "model": "claude-sonnet-4-6"
+}
+## session.created
+{
+  "agent": {
+    "description": null,
+    "id": "agent_01Djqo53SrJCEWwqsrJz636k",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-archive-requires-action-probe-1780011332-57518",
+    "skills": [],
+    "system": "You have one custom tool named ask_archive_probe. When asked, call it exactly once and then wait for its result. Do not answer from memory.",
+    "tools": [
+      {
+        "description": "Ask the API caller for archive probe input.",
+        "input_schema": {
+          "properties": {
+            "question": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "question"
+          ],
+          "type": "object"
+        },
+        "name": "ask_archive_probe",
+        "type": "custom"
+      }
+    ],
+    "type": "agent",
+    "version": 1
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 28, 23, 35, 33, 253444, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_01Gyvnd1SaQKHewckcuHnzYw",
+  "id": "sesn_017y9LRsqVBi8mgscFqLGsjR",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [],
+  "stats": {
+    "active_seconds": 0.0,
+    "duration_seconds": 0.0
+  },
+  "status": "idle",
+  "title": "oma-archive-requires-action-probe-1780011332-57518",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 28, 23, 35, 33, 253444, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "vault_ids": []
+}
+## events.send
+{
+  "data": [
+    {
+      "content": [
+        {
+          "text": "Call ask_archive_probe exactly once with question='archive requires_action probe'. Do not answer before the tool result.",
+          "type": "text"
+        }
+      ],
+      "id": "sevt_01Wak6zwJXCHrc27LYPsHpdK",
+      "processed_at": null,
+      "type": "user.message"
+    }
+  ]
+}
+## stream.observed_until_requires_action
+[
+  {
+    "name": null,
+    "stop_reason": null,
+    "type": "session.status_running"
+  },
+  {
+    "name": null,
+    "stop_reason": null,
+    "type": "session.thread_status_running"
+  },
+  {
+    "name": null,
+    "stop_reason": null,
+    "type": "user.message"
+  },
+  {
+    "name": null,
+    "stop_reason": null,
+    "type": "span.model_request_start"
+  },
+  {
+    "name": null,
+    "stop_reason": null,
+    "type": "agent.thinking"
+  },
+  {
+    "name": null,
+    "stop_reason": null,
+    "type": "agent.message"
+  },
+  {
+    "name": "ask_archive_probe",
+    "stop_reason": null,
+    "type": "agent.custom_tool_use"
+  },
+  {
+    "name": null,
+    "stop_reason": null,
+    "type": "span.model_request_end"
+  },
+  {
+    "name": null,
+    "stop_reason": {
+      "event_ids": [
+        "sevt_01Y2j1vPDXQ444ZNDbg8S6sS"
+      ],
+      "type": "requires_action"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "name": null,
+    "stop_reason": {
+      "event_ids": [
+        "sevt_01Y2j1vPDXQ444ZNDbg8S6sS"
+      ],
+      "type": "requires_action"
+    },
+    "type": "session.status_idle"
+  }
+]
+## sessions.archive.requires_action
+{
+  "ok": true,
+  "response": {
+    "agent": {
+      "description": null,
+      "id": "agent_01Djqo53SrJCEWwqsrJz636k",
+      "mcp_servers": [],
+      "model": {
+        "id": "claude-sonnet-4-6",
+        "speed": "standard"
+      },
+      "multiagent": null,
+      "name": "oma-archive-requires-action-probe-1780011332-57518",
+      "skills": [],
+      "system": "You have one custom tool named ask_archive_probe. When asked, call it exactly once and then wait for its result. Do not answer from memory.",
+      "tools": [
+        {
+          "description": "Ask the API caller for archive probe input.",
+          "input_schema": {
+            "properties": {
+              "question": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "question"
+            ],
+            "type": "object"
+          },
+          "name": "ask_archive_probe",
+          "type": "custom"
+        }
+      ],
+      "type": "agent",
+      "version": 1
+    },
+    "archived_at": "datetime.datetime(2026, 5, 28, 23, 35, 38, 430067, tzinfo=TzInfo(0))",
+    "created_at": "datetime.datetime(2026, 5, 28, 23, 35, 33, 253444, tzinfo=datetime.timezone.utc)",
+    "environment_id": "env_01Gyvnd1SaQKHewckcuHnzYw",
+    "id": "sesn_017y9LRsqVBi8mgscFqLGsjR",
+    "metadata": {},
+    "outcome_evaluations": [],
+    "resources": [],
+    "stats": {
+      "active_seconds": 2.486,
+      "duration_seconds": 5.176623456
+    },
+    "status": "terminated",
+    "title": "oma-archive-requires-action-probe-1780011332-57518",
+    "type": "session",
+    "updated_at": "datetime.datetime(2026, 5, 28, 23, 35, 38, 430067, tzinfo=datetime.timezone.utc)",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 1371
+      },
+      "cache_read_input_tokens": 0,
+      "input_tokens": 3,
+      "output_tokens": 101
+    },
+    "vault_ids": []
+  }
+}
+## session.retrieve.after_archive_attempt
+{
+  "agent": {
+    "description": null,
+    "id": "agent_01Djqo53SrJCEWwqsrJz636k",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-archive-requires-action-probe-1780011332-57518",
+    "skills": [],
+    "system": "You have one custom tool named ask_archive_probe. When asked, call it exactly once and then wait for its result. Do not answer from memory.",
+    "tools": [
+      {
+        "description": "Ask the API caller for archive probe input.",
+        "input_schema": {
+          "properties": {
+            "question": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "question"
+          ],
+          "type": "object"
+        },
+        "name": "ask_archive_probe",
+        "type": "custom"
+      }
+    ],
+    "type": "agent",
+    "version": 1
+  },
+  "archived_at": "datetime.datetime(2026, 5, 28, 23, 35, 38, 350282, tzinfo=TzInfo(0))",
+  "created_at": "datetime.datetime(2026, 5, 28, 23, 35, 33, 253444, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_01Gyvnd1SaQKHewckcuHnzYw",
+  "id": "sesn_017y9LRsqVBi8mgscFqLGsjR",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [],
+  "stats": {
+    "active_seconds": 2.486,
+    "duration_seconds": 5.096838
+  },
+  "status": "terminated",
+  "title": "oma-archive-requires-action-probe-1780011332-57518",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 28, 23, 35, 38, 350282, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 1371
+    },
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 101
+  },
+  "vault_ids": []
+}
+## events.list.after_archive_attempt
+[
+  {
+    "id": "sevt_01K1n3BDGYr7VfW52sxDuh5L",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 34, 669690, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-archive-requires-action-probe-1780011332-57518",
+    "id": "sevt_01EZcAstS52pg8s3e7kFyhPZ",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 34, 669691, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_0183k2WY8aJXs3D9buXn9bP7",
+    "type": "session.thread_status_running"
+  },
+  {
+    "content": [
+      {
+        "text": "Call ask_archive_probe exactly once with question='archive requires_action probe'. Do not answer before the tool result.",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01Wak6zwJXCHrc27LYPsHpdK",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 37, 10091, tzinfo=TzInfo(0))",
+    "type": "user.message"
+  },
+  {
+    "id": "sevt_017cC8z51AjLnWmNpHMFAiL9",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 37, 10092, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "id": "sevt_01Roa2VMFyDxpfyiEWKyfVJP",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 37, 10093, tzinfo=TzInfo(0))",
+    "type": "agent.thinking"
+  },
+  {
+    "content": [
+      {
+        "text": "Sure! Calling the tool now.",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01VjHah127koHEyUpWVvzV4s",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 37, 10095, tzinfo=TzInfo(0))",
+    "type": "agent.message"
+  },
+  {
+    "id": "sevt_01Y2j1vPDXQ444ZNDbg8S6sS",
+    "input": {
+      "question": "archive requires_action probe"
+    },
+    "name": "ask_archive_probe",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 37, 10096, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "agent.custom_tool_use"
+  },
+  {
+    "id": "sevt_01X7BTCuo21paJLoBbzh6rfD",
+    "is_error": false,
+    "model_request_start_id": "sevt_017cC8z51AjLnWmNpHMFAiL9",
+    "model_usage": {
+      "cache_creation_input_tokens": 1371,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 3,
+      "output_tokens": 101,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 37, 10097, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "agent_name": "oma-archive-requires-action-probe-1780011332-57518",
+    "id": "sevt_01BZPYxAcHnXiLW24VDCdxpd",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 37, 162094, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_0183k2WY8aJXs3D9buXn9bP7",
+    "stop_reason": {
+      "event_ids": [
+        "sevt_01Y2j1vPDXQ444ZNDbg8S6sS"
+      ],
+      "type": "requires_action"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_01Xw66btkBhjipgx8caLLMaR",
+    "processed_at": "datetime.datetime(2026, 5, 28, 23, 35, 37, 162095, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "event_ids": [
+        "sevt_01Y2j1vPDXQ444ZNDbg8S6sS"
+      ],
+      "type": "requires_action"
+    },
+    "type": "session.status_idle"
+  }
+]
+## verdict
+{
+  "archive_accepted": true,
+  "archive_status_code": null,
+  "observed_event_types": [
+    "session.status_running",
+    "session.thread_status_running",
+    "user.message",
+    "span.model_request_start",
+    "agent.thinking",
+    "agent.message",
+    "agent.custom_tool_use",
+    "span.model_request_end",
+    "session.thread_status_idle",
+    "session.status_idle"
+  ],
+  "requires_action_observed": true
+}
+## session.delete.cleanup
+{
+  "id": "sesn_017y9LRsqVBi8mgscFqLGsjR",
+  "type": "session_deleted"
+}
+## agent.archive.cleanup
+{
+  "archived_at": "datetime.datetime(2026, 5, 28, 23, 35, 39, 746596, tzinfo=TzInfo(0))",
+  "id": "agent_01Djqo53SrJCEWwqsrJz636k"
+}
+## environment.delete.cleanup
+{
+  "id": "env_01Gyvnd1SaQKHewckcuHnzYw",
+  "type": "environment_deleted"
+}

@@ -128,6 +128,20 @@ export class DefaultSessionEventsService implements SessionEventsService {
     });
   }
 
+  assertSessionArchivable(workspaceId: WorkspaceId, sessionId: string): void {
+    const session = requireExistingSession(this.sessions, workspaceId, sessionId);
+    if (session.archived_at !== null || session.status === "terminated") return;
+    if (
+      (this.activeRuntimeTasks.get(sessionId) ?? 0) > 0 &&
+      !this.hasPendingCustomToolActions(sessionId)
+    ) {
+      throw sessionNotArchivable(sessionId, "running");
+    }
+    if (session.status === "running" || session.status === "rescheduling") {
+      throw sessionNotArchivable(sessionId, session.status);
+    }
+  }
+
   async archiveSession(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -463,6 +477,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     return [...pending.ids];
   }
 
+  private hasPendingCustomToolActions(sessionId: string): boolean {
+    return (this.pendingCustomToolActions.get(sessionId)?.ids.length ?? 0) > 0;
+  }
+
   private blockInterruptedCustomToolActions(
     sessionId: string,
     customToolUseIds: readonly string[],
@@ -523,6 +541,14 @@ function requireExistingSession(
   return session;
 }
 
+function sessionNotArchivable(
+  sessionId: string,
+  status: "running" | "rescheduling",
+): Error {
+  return invalidRequest(
+    `Session ${sessionId} cannot be archived while its status is "${status}". Only pending or idle sessions may be archived.`,
+  );
+}
 
 function parseSendRequest(input: unknown): SendSessionEventsRequest {
   const obj = objectInput(input);

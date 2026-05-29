@@ -85,6 +85,7 @@ export interface SessionEventsService {
     input: unknown,
     opts?: { signal?: AbortSignal },
   ): ManagedAgentsEvent[];
+  assertSessionArchivable(workspaceId: WorkspaceId, sessionId: string): void;
   archiveSession(
     workspaceId: WorkspaceId,
     sessionId: string,

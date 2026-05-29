@@ -1,0 +1,401 @@
+## environment.created
+{
+  "archived_at": null,
+  "config": {
+    "environment": {},
+    "init_script": "",
+    "networking": {
+      "type": "unrestricted"
+    },
+    "packages": {
+      "apt": [],
+      "cargo": [],
+      "gem": [],
+      "go": [],
+      "npm": [],
+      "pip": [],
+      "type": "packages"
+    },
+    "type": "cloud"
+  },
+  "created_at": "2026-05-28T22:58:34.155897Z",
+  "description": "",
+  "id": "env_01HbCLoHEFWRyBJ5PxArSxf9",
+  "metadata": {},
+  "name": "oma-archive-running-probe-1780009113-81399",
+  "scope": "organization",
+  "state": "active",
+  "type": "environment",
+  "updated_at": "2026-05-28T22:58:34.155897Z"
+}
+## agent.created
+{
+  "id": "agent_01Kb9mTiRZDmh2SiKbUVGY7a",
+  "model": "claude-sonnet-4-6"
+}
+## session.created
+{
+  "agent": {
+    "description": null,
+    "id": "agent_01Kb9mTiRZDmh2SiKbUVGY7a",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-archive-running-probe-1780009113-81399",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 1
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 28, 22, 58, 34, 816887, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_01HbCLoHEFWRyBJ5PxArSxf9",
+  "id": "sesn_01F6hSGLWbDhkcV7rEzF3Za3",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [],
+  "stats": {
+    "active_seconds": 0.0,
+    "duration_seconds": 0.0
+  },
+  "status": "idle",
+  "title": "oma-archive-running-probe-1780009113-81399",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 28, 22, 58, 34, 816887, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "vault_ids": []
+}
+## events.send
+{
+  "data": [
+    {
+      "content": [
+        {
+          "text": "Use the bash tool exactly once. Run this exact command: sleep 20; printf 'OMA_ARCHIVE_RUNNING_PROBE_1780009113-81399\\n'. Do not answer from memory.",
+          "type": "text"
+        }
+      ],
+      "id": "sevt_01Wa6hR8cjgtaZTExw9BuAQG",
+      "processed_at": null,
+      "type": "user.message"
+    }
+  ]
+}
+## sessions.archive.mid_run
+{
+  "error": {
+    "body": {
+      "error": {
+        "message": "Session sesn_01F6hSGLWbDhkcV7rEzF3Za3 cannot be archived while its status is \"running\". Only pending or idle sessions may be archived.",
+        "type": "invalid_request_error"
+      },
+      "request_id": "req_011CbVo6A9X5jRvB6tRgtdN6",
+      "type": "error"
+    },
+    "message": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Session sesn_01F6hSGLWbDhkcV7rEzF3Za3 cannot be archived while its status is \"running\". Only pending or idle sessions may be archived.'}, 'request_id': 'req_011CbVo6A9X5jRvB6tRgtdN6'}",
+    "status_code": 400,
+    "type": "BadRequestError"
+  },
+  "ok": false
+}
+## stream.observed_events
+[
+  {
+    "name": null,
+    "status": null,
+    "type": "session.status_running"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "session.thread_status_running"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "user.message"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "span.model_request_start"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "agent.thinking"
+  },
+  {
+    "name": "bash",
+    "status": null,
+    "type": "agent.tool_use"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "span.model_request_end"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "agent.tool_result"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "span.model_request_start"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "agent.message"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "span.model_request_end"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "session.thread_status_idle"
+  },
+  {
+    "name": null,
+    "status": null,
+    "type": "session.status_idle"
+  }
+]
+## session.retrieve.after_archive_attempt
+{
+  "agent": {
+    "description": null,
+    "id": "agent_01Kb9mTiRZDmh2SiKbUVGY7a",
+    "mcp_servers": [],
+    "model": {
+      "id": "claude-sonnet-4-6",
+      "speed": "standard"
+    },
+    "multiagent": null,
+    "name": "oma-archive-running-probe-1780009113-81399",
+    "skills": [],
+    "system": "When asked, use bash exactly once. Do not answer from memory. Use the provided exact command.",
+    "tools": [
+      {
+        "configs": [],
+        "default_config": {
+          "enabled": true,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "type": "agent",
+    "version": 1
+  },
+  "archived_at": null,
+  "created_at": "datetime.datetime(2026, 5, 28, 22, 58, 34, 816887, tzinfo=datetime.timezone.utc)",
+  "environment_id": "env_01HbCLoHEFWRyBJ5PxArSxf9",
+  "id": "sesn_01F6hSGLWbDhkcV7rEzF3Za3",
+  "metadata": {},
+  "outcome_evaluations": [],
+  "resources": [],
+  "stats": {
+    "active_seconds": 25.097,
+    "duration_seconds": 27.156676718
+  },
+  "status": "idle",
+  "title": "oma-archive-running-probe-1780009113-81399",
+  "type": "session",
+  "updated_at": "datetime.datetime(2026, 5, 28, 22, 59, 1, 587361, tzinfo=datetime.timezone.utc)",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 5616
+    },
+    "cache_read_input_tokens": 5475,
+    "input_tokens": 4,
+    "output_tokens": 144
+  },
+  "vault_ids": []
+}
+## events.list.after_archive_attempt
+[
+  {
+    "id": "sevt_01VBRKuQzrhXQeYdr7Wj5NZJ",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 58, 36, 343013, tzinfo=TzInfo(0))",
+    "type": "session.status_running"
+  },
+  {
+    "agent_name": "oma-archive-running-probe-1780009113-81399",
+    "id": "sevt_01UTvL1u4X3jHQx3paTbQrbK",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 58, 36, 343014, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01JmTyqxRFRvPMSWpm4aFnfM",
+    "type": "session.thread_status_running"
+  },
+  {
+    "content": [
+      {
+        "text": "Use the bash tool exactly once. Run this exact command: sleep 20; printf 'OMA_ARCHIVE_RUNNING_PROBE_1780009113-81399\\n'. Do not answer from memory.",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01Wa6hR8cjgtaZTExw9BuAQG",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 58, 38, 419367, tzinfo=TzInfo(0))",
+    "type": "user.message"
+  },
+  {
+    "id": "sevt_01NJU8UATVctVoXbm3NGA2HT",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 58, 38, 419368, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "id": "sevt_011XCmvELAWsHjRVRAyN9ECx",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 58, 38, 419369, tzinfo=TzInfo(0))",
+    "type": "agent.thinking"
+  },
+  {
+    "evaluated_permission": "allow",
+    "id": "sevt_01AcahkCTo1yw2mxQ7f2ng3Y",
+    "input": {
+      "command": "sleep 20; printf 'OMA_ARCHIVE_RUNNING_PROBE_1780009113-81399\\n'"
+    },
+    "name": "bash",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 58, 38, 419371, tzinfo=TzInfo(0))",
+    "session_thread_id": null,
+    "type": "agent.tool_use"
+  },
+  {
+    "id": "sevt_018xCrfpJZf54R3NzCy4mUF1",
+    "is_error": false,
+    "model_request_start_id": "sevt_01NJU8UATVctVoXbm3NGA2HT",
+    "model_usage": {
+      "cache_creation_input_tokens": 5475,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 3,
+      "output_tokens": 107,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 58, 38, 419372, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "content": [
+      {
+        "text": "OMA_ARCHIVE_RUNNING_PROBE_1780009113-81399\n",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01BiYfcCbZjSbwRpTMteNr49",
+    "is_error": false,
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 58, 59, 717051, tzinfo=TzInfo(0))",
+    "tool_use_id": "sevt_01AcahkCTo1yw2mxQ7f2ng3Y",
+    "type": "agent.tool_result"
+  },
+  {
+    "id": "sevt_01WaFgMfKGM2ELFKZhFrqJGY",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 59, 1, 257701, tzinfo=TzInfo(0))",
+    "type": "span.model_request_start"
+  },
+  {
+    "content": [
+      {
+        "text": "The command completed successfully. Here is the output:\n\n```\nOMA_ARCHIVE_RUNNING_PROBE_1780009113-81399\n```",
+        "type": "text"
+      }
+    ],
+    "id": "sevt_01KPVFgvTYVeopQxBeqMvfow",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 59, 1, 257702, tzinfo=TzInfo(0))",
+    "type": "agent.message"
+  },
+  {
+    "id": "sevt_0131g7nzxz1R3Urs13i7YDqT",
+    "is_error": false,
+    "model_request_start_id": "sevt_01WaFgMfKGM2ELFKZhFrqJGY",
+    "model_usage": {
+      "cache_creation_input_tokens": 141,
+      "cache_read_input_tokens": 5475,
+      "input_tokens": 1,
+      "output_tokens": 37,
+      "speed": null
+    },
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 59, 1, 257703, tzinfo=TzInfo(0))",
+    "type": "span.model_request_end"
+  },
+  {
+    "agent_name": "oma-archive-running-probe-1780009113-81399",
+    "id": "sevt_01BfK9jGPV7n1CHRfwPuJQH7",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 59, 1, 446037, tzinfo=TzInfo(0))",
+    "session_thread_id": "sthr_01JmTyqxRFRvPMSWpm4aFnfM",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.thread_status_idle"
+  },
+  {
+    "id": "sevt_014ttJzwcvSUdPHFc3jSDpKa",
+    "processed_at": "datetime.datetime(2026, 5, 28, 22, 59, 1, 446038, tzinfo=TzInfo(0))",
+    "stop_reason": {
+      "type": "end_turn"
+    },
+    "type": "session.status_idle"
+  }
+]
+## verdict
+{
+  "archive_accepted": false,
+  "archive_attempted": true,
+  "archive_status_code": 400,
+  "observed_event_types": [
+    "session.status_running",
+    "session.thread_status_running",
+    "user.message",
+    "span.model_request_start",
+    "agent.thinking",
+    "agent.tool_use",
+    "span.model_request_end",
+    "agent.tool_result",
+    "span.model_request_start",
+    "agent.message",
+    "span.model_request_end",
+    "session.thread_status_idle",
+    "session.status_idle"
+  ]
+}
+## session.delete.cleanup
+{
+  "id": "sesn_01F6hSGLWbDhkcV7rEzF3Za3",
+  "type": "session_deleted"
+}
+## agent.archive.cleanup
+{
+  "archived_at": "datetime.datetime(2026, 5, 28, 22, 59, 4, 279513, tzinfo=TzInfo(0))",
+  "id": "agent_01Kb9mTiRZDmh2SiKbUVGY7a"
+}
+## environment.delete.cleanup
+{
+  "id": "env_01HbCLoHEFWRyBJ5PxArSxf9",
+  "type": "environment_deleted"
+}
