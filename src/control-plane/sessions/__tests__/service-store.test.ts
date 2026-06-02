@@ -19,6 +19,7 @@ const OTHER_WORKSPACE_ID = "wrk_other";
 describe("session service/store", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("keeps workspace rows isolated and does not leak workspace_id to wire responses", async () => {
@@ -110,6 +111,12 @@ describe("session service/store", () => {
     expect(
       fixture.sessions.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data,
     ).toEqual([]);
+  });
+
+  it("rejects invalid pending snapshot cleanup retry caps", () => {
+    expect(() => createFixture({ pendingSnapshotCleanupMaxAttempts: 0 })).toThrow(
+      "pendingSnapshotCleanupMaxAttempts must be at least 1",
+    );
   });
 
   it("releases internal snapshot quota when deleting a session", async () => {
@@ -295,6 +302,194 @@ describe("session service/store", () => {
       fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
     ).toEqual([]);
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("stops automatic pending internal snapshot delete retries at the cap", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    const fixture = createFixture({
+      fileStorage,
+      pendingSnapshotCleanupRetryDelayMs: 25,
+      pendingSnapshotCleanupMaxAttempts: 1,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+    const snapshot = fixture.sessionStore.getFileMountSnapshots(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    )[0]!;
+    fileStorage.failDeletesFor.add(snapshot.snapshot_file_id);
+
+    await fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id);
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([expect.objectContaining({ attempt_count: 1 })]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "Pending internal snapshot delete reached retry cap",
+      expect.objectContaining({
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        sessionId: session.id,
+        resourceId: snapshot.resource_id,
+        snapshotFileId: snapshot.snapshot_file_id,
+        attemptCount: 1,
+        maxAttempts: 1,
+        error: "injected snapshot delete failure",
+      }),
+    );
+
+    fileStorage.failDeletesFor.clear();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([expect.objectContaining({ attempt_count: 1 })]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the pending internal snapshot delete retry cap across service restart", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    const fixture = createFixture({
+      fileStorage,
+      pendingSnapshotCleanupMaxAttempts: 2,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+    const snapshot = fixture.sessionStore.getFileMountSnapshots(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    )[0]!;
+    fileStorage.failDeletesFor.add(snapshot.snapshot_file_id);
+
+    await fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id);
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([expect.objectContaining({ attempt_count: 1 })]);
+    expect(warn).not.toHaveBeenCalledWith(
+      "Pending internal snapshot delete reached retry cap",
+      expect.anything(),
+    );
+
+    const restarted = new DefaultSessionService(
+      fixture.sessionStore,
+      fixture.agentStore,
+      fixture.environmentStore,
+      fixture.fileStorage,
+      { pendingSnapshotCleanupMaxAttempts: 2 },
+    );
+    await restarted.drainStartupSnapshotSweepsForTest();
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([expect.objectContaining({ attempt_count: 2 })]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    expect(warn).toHaveBeenCalledWith(
+      "Pending internal snapshot delete reached retry cap",
+      expect.objectContaining({
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        sessionId: session.id,
+        resourceId: snapshot.resource_id,
+        snapshotFileId: snapshot.snapshot_file_id,
+        attemptCount: 2,
+        maxAttempts: 2,
+        error: "injected snapshot delete failure",
+      }),
+    );
+  });
+
+  it("skips capped pending internal snapshot delete siblings during later sweeps", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    const fixture = createFixture({
+      fileStorage,
+      pendingSnapshotCleanupMaxAttempts: 2,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const firstSource = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "first.txt",
+      mimeType: "text/plain",
+      body: bytes("first"),
+    });
+    const secondSource = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "second.txt",
+      mimeType: "text/plain",
+      body: bytes("second"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [
+        { type: "file", file_id: firstSource.metadata.id, mount_path: "first.txt" },
+        { type: "file", file_id: secondSource.metadata.id, mount_path: "second.txt" },
+      ],
+    });
+    const [firstSnapshot, secondSnapshot] = fixture.sessionStore
+      .getFileMountSnapshots(DEFAULT_WORKSPACE_ID, session.id);
+    fileStorage.failDeletesFor.add(firstSnapshot!.snapshot_file_id);
+    fileStorage.failDeletesFor.add(secondSnapshot!.snapshot_file_id);
+
+    await fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id);
+    fixture.sessionStore.recordPendingInternalSnapshotDeleteAttempt(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+      firstSnapshot!.resource_id,
+      new Date().toISOString(),
+      "manually capped for test",
+    );
+    warn.mockClear();
+
+    await fixture.sessions.sweepPendingInternalSnapshotDeletes(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    );
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([
+      expect.objectContaining({
+        resource_id: firstSnapshot!.resource_id,
+        attempt_count: 2,
+      }),
+      expect.objectContaining({
+        resource_id: secondSnapshot!.resource_id,
+        attempt_count: 2,
+      }),
+    ]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "Pending internal snapshot delete reached retry cap",
+      expect.objectContaining({
+        resourceId: secondSnapshot!.resource_id,
+        snapshotFileId: secondSnapshot!.snapshot_file_id,
+        attemptCount: 2,
+      }),
+    );
   });
 
   it("startup sweep recovers pending internal snapshot deletes after a crash window", async () => {
@@ -591,6 +786,161 @@ describe("session service/store", () => {
       ),
     ).toEqual([]);
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("stops automatic create-rollback cleanup retries at the cap", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    fileStorage.failAllDeletes = true;
+    const fixture = createFixture({
+      fileStorage,
+      failSessionCreate: true,
+      pendingSnapshotCleanupRetryDelayMs: 25,
+      pendingSnapshotCleanupMaxAttempts: 1,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow("injected session create failure");
+
+    const pending = fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+      DEFAULT_WORKSPACE_ID,
+    );
+    expect(pending).toEqual([expect.objectContaining({ attempt_count: 1 })]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    expect(warn).toHaveBeenCalledWith(
+      "Pending internal snapshot create rollback reached retry cap",
+      expect.objectContaining({
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        sessionId: pending[0]!.session_id,
+        resourceId: pending[0]!.resource_id,
+        snapshotFileId: pending[0]!.snapshot_file_id,
+        attemptCount: 1,
+        maxAttempts: 1,
+        error: "injected snapshot delete failure",
+      }),
+    );
+
+    fileStorage.failAllDeletes = false;
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toEqual([expect.objectContaining({ attempt_count: 1 })]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips capped create-rollback siblings during later sweeps", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    const fixture = createFixture({
+      fileStorage,
+      pendingSnapshotCleanupMaxAttempts: 2,
+    });
+    const firstSnapshot = await fixture.fileStorage!.createInternalSnapshot(
+      DEFAULT_WORKSPACE_ID,
+      {
+        fileId: "file_failed_capped_create_rollback",
+        filename: "first.txt",
+        mimeType: "text/plain",
+        scopeId: "sesrsc_failed_capped_create_rollback",
+        body: bytes("first"),
+      },
+    );
+    const secondSnapshot = await fixture.fileStorage!.createInternalSnapshot(
+      DEFAULT_WORKSPACE_ID,
+      {
+        fileId: "file_retryable_create_rollback",
+        filename: "second.txt",
+        mimeType: "text/plain",
+        scopeId: "sesrsc_retryable_create_rollback",
+        body: bytes("second"),
+      },
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollback(
+      rollbackRow({
+        resourceId: "sesrsc_failed_capped_create_rollback",
+        snapshotFileId: firstSnapshot.metadata.id,
+        sizeBytes: firstSnapshot.metadata.size_bytes,
+      }),
+      new Date().toISOString(),
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollback(
+      rollbackRow({
+        resourceId: "sesrsc_retryable_create_rollback",
+        snapshotFileId: secondSnapshot.metadata.id,
+        sizeBytes: secondSnapshot.metadata.size_bytes,
+      }),
+      new Date().toISOString(),
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollbackAttempt(
+      DEFAULT_WORKSPACE_ID,
+      "sesn_create_rollback",
+      "sesrsc_failed_capped_create_rollback",
+      new Date().toISOString(),
+      "first failure",
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollbackAttempt(
+      DEFAULT_WORKSPACE_ID,
+      "sesn_create_rollback",
+      "sesrsc_failed_capped_create_rollback",
+      new Date().toISOString(),
+      "manually capped for test",
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollbackAttempt(
+      DEFAULT_WORKSPACE_ID,
+      "sesn_create_rollback",
+      "sesrsc_retryable_create_rollback",
+      new Date().toISOString(),
+      "first failure",
+    );
+    fileStorage.failDeletesFor.add(firstSnapshot.metadata.id);
+    fileStorage.failDeletesFor.add(secondSnapshot.metadata.id);
+
+    await fixture.sessions.sweepPendingInternalSnapshotCreateRollbacks(
+      DEFAULT_WORKSPACE_ID,
+      "sesn_create_rollback",
+    );
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+        "sesn_create_rollback",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        resource_id: "sesrsc_failed_capped_create_rollback",
+        attempt_count: 2,
+      }),
+      expect.objectContaining({
+        resource_id: "sesrsc_retryable_create_rollback",
+        attempt_count: 2,
+      }),
+    ]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "Pending internal snapshot create rollback reached retry cap",
+      expect.objectContaining({
+        resourceId: "sesrsc_retryable_create_rollback",
+        snapshotFileId: secondSnapshot.metadata.id,
+        attemptCount: 2,
+      }),
+    );
   });
 
   it("startup sweep recovers create-rollback rows after a crash window", async () => {
@@ -1020,6 +1370,7 @@ function createFixture(
     runtime?: RuntimeEventRunner;
     sessionStore?: SqliteSessionStore;
     pendingSnapshotCleanupRetryDelayMs?: number;
+    pendingSnapshotCleanupMaxAttempts?: number;
   } = {},
 ): {
   sessions: DefaultSessionService;
@@ -1065,6 +1416,12 @@ function createFixture(
         : {
             pendingSnapshotCleanupRetryDelayMs:
               opts.pendingSnapshotCleanupRetryDelayMs,
+          }),
+      ...(opts.pendingSnapshotCleanupMaxAttempts === undefined
+        ? {}
+        : {
+            pendingSnapshotCleanupMaxAttempts:
+              opts.pendingSnapshotCleanupMaxAttempts,
           }),
     },
   );

@@ -35,19 +35,32 @@ import type {
 const MAX_SESSION_FILE_RESOURCES = 10;
 const MAX_SESSION_MOUNTED_BYTES = 50 * 1024 * 1024;
 const DEFAULT_PENDING_SNAPSHOT_CLEANUP_RETRY_DELAY_MS = 30_000;
+const DEFAULT_PENDING_SNAPSHOT_CLEANUP_MAX_ATTEMPTS = 5;
 
 type PendingSnapshotCleanupRow = Pick<
   SessionFileMountSnapshotRow,
   "session_id" | "resource_id" | "snapshot_file_id"
 > & {
   created_at: string;
+  attempt_count: number;
 };
+
+interface PendingSnapshotCleanupRetryContext {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  resourceId: string;
+  snapshotFileId: string;
+  retryLabel: string;
+  attemptCount: number;
+  error: string;
+}
 
 export interface DefaultSessionServiceOptions {
   maxFileResources?: number;
   maxMountedBytes?: number;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
   pendingSnapshotCleanupRetryDelayMs?: number;
+  pendingSnapshotCleanupMaxAttempts?: number;
 }
 
 export class DefaultSessionService implements SessionService {
@@ -60,6 +73,7 @@ export class DefaultSessionService implements SessionService {
   private readonly startupSnapshotCreateRollbackSweep: Promise<void>;
   private readonly startedAt = new Date().toISOString();
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
+  private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -82,6 +96,12 @@ export class DefaultSessionService implements SessionService {
     this.pendingSnapshotCleanupRetryDelayMs =
       opts.pendingSnapshotCleanupRetryDelayMs ??
       DEFAULT_PENDING_SNAPSHOT_CLEANUP_RETRY_DELAY_MS;
+    this.pendingSnapshotCleanupMaxAttempts =
+      opts.pendingSnapshotCleanupMaxAttempts ??
+      DEFAULT_PENDING_SNAPSHOT_CLEANUP_MAX_ATTEMPTS;
+    if (this.pendingSnapshotCleanupMaxAttempts < 1) {
+      throw invalidRequest("pendingSnapshotCleanupMaxAttempts must be at least 1");
+    }
     this.startupSnapshotDeleteSweep = this.sweepPendingInternalSnapshotDeletes().catch(
       (error) => {
         console.warn("Pending internal snapshot delete startup sweep failed", error);
@@ -252,6 +272,7 @@ export class DefaultSessionService implements SessionService {
               rowSessionId,
             ),
         }),
+      retryLabel: "delete",
     });
   }
 
@@ -307,6 +328,7 @@ export class DefaultSessionService implements SessionService {
               sessionId: rowSessionId,
             }),
         }),
+      retryLabel: "create rollback",
     });
   }
 
@@ -333,6 +355,7 @@ export class DefaultSessionService implements SessionService {
         error: string,
       ) => void;
       scheduleRetry: (workspaceId: WorkspaceId, sessionId: string) => void;
+      retryLabel: string;
     },
   ): Promise<void> {
     if (!this.files) return;
@@ -347,6 +370,9 @@ export class DefaultSessionService implements SessionService {
         if (opts.createdBefore !== undefined && row.created_at >= opts.createdBefore) {
           continue;
         }
+        if (row.attempt_count >= this.pendingSnapshotCleanupMaxAttempts) {
+          continue;
+        }
         try {
           await this.files.deleteInternalSnapshot(
             pendingWorkspaceId,
@@ -354,13 +380,29 @@ export class DefaultSessionService implements SessionService {
           );
           opts.clearRow(pendingWorkspaceId, row.session_id, row.resource_id);
         } catch (error) {
+          const message = errorMessage(error);
+          const attemptedAt = new Date().toISOString();
+          const nextAttemptCount = row.attempt_count + 1;
           opts.recordAttempt(
             pendingWorkspaceId,
             row.session_id,
             row.resource_id,
-            new Date().toISOString(),
-            errorMessage(error),
+            attemptedAt,
+            message,
           );
+          const context = {
+            workspaceId: pendingWorkspaceId,
+            sessionId: row.session_id,
+            resourceId: row.resource_id,
+            snapshotFileId: row.snapshot_file_id,
+            retryLabel: opts.retryLabel,
+            attemptCount: nextAttemptCount,
+            error: message,
+          };
+          if (nextAttemptCount >= this.pendingSnapshotCleanupMaxAttempts) {
+            this.warnPendingSnapshotCleanupRetryCap(context);
+            continue;
+          }
           opts.scheduleRetry(pendingWorkspaceId, row.session_id);
         }
       }
@@ -390,6 +432,23 @@ export class DefaultSessionService implements SessionService {
     }, this.pendingSnapshotCleanupRetryDelayMs);
     timer.unref?.();
     opts.timers.set(key, timer);
+  }
+
+  private warnPendingSnapshotCleanupRetryCap(
+    context: PendingSnapshotCleanupRetryContext,
+  ): void {
+    console.warn(
+      `Pending internal snapshot ${context.retryLabel} reached retry cap`,
+      {
+        workspaceId: context.workspaceId,
+        sessionId: context.sessionId,
+        resourceId: context.resourceId,
+        snapshotFileId: context.snapshotFileId,
+        attemptCount: context.attemptCount,
+        maxAttempts: this.pendingSnapshotCleanupMaxAttempts,
+        error: context.error,
+      },
+    );
   }
 
   list(
