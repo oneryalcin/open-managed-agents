@@ -3,6 +3,7 @@ import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type {
   CreateSessionRecord,
   ListSessionsOptions,
+  PendingInternalSnapshotDeleteRow,
   SessionFileMountSnapshotRow,
   SessionRow,
   SessionStore,
@@ -54,6 +55,22 @@ CREATE TABLE IF NOT EXISTS session_file_mount_snapshots (
 );
 CREATE INDEX IF NOT EXISTS session_file_mount_snapshots_by_session
 ON session_file_mount_snapshots (workspace_id, session_id);
+
+CREATE TABLE IF NOT EXISTS pending_internal_snapshot_deletes (
+  workspace_id      TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  resource_id       TEXT NOT NULL,
+  file_id           TEXT NOT NULL,
+  mount_path        TEXT NOT NULL,
+  snapshot_file_id  TEXT NOT NULL,
+  sha256            TEXT NOT NULL,
+  size_bytes        INTEGER NOT NULL,
+  created_at        TEXT NOT NULL,
+  last_attempt_at   TEXT,
+  attempt_count     INTEGER NOT NULL DEFAULT 0,
+  last_error        TEXT,
+  PRIMARY KEY (workspace_id, session_id, resource_id)
+);
 `;
 
 interface SessionDbRow {
@@ -80,11 +97,17 @@ export class SqliteSessionStore implements SessionStore {
   private readonly retrieveActiveStmt: StatementSync;
   private readonly retrieveAnyStmt: StatementSync;
   private readonly archiveStmt: StatementSync;
+  private readonly insertPendingSnapshotDeletesStmt: StatementSync;
   private readonly deleteStmt: StatementSync;
   private readonly deleteResourcesStmt: StatementSync;
   private readonly deleteSnapshotsStmt: StatementSync;
   private readonly resourcesBySessionStmt: StatementSync;
   private readonly snapshotsBySessionStmt: StatementSync;
+  private readonly pendingSnapshotDeleteWorkspacesStmt: StatementSync;
+  private readonly pendingSnapshotDeletesByWorkspaceStmt: StatementSync;
+  private readonly pendingSnapshotDeletesBySessionStmt: StatementSync;
+  private readonly recordPendingSnapshotDeleteAttemptStmt: StatementSync;
+  private readonly clearPendingSnapshotDeleteStmt: StatementSync;
   private readonly listStmts: Map<string, StatementSync> = new Map();
 
   constructor(db: DatabaseSync) {
@@ -120,6 +143,17 @@ export class SqliteSessionStore implements SessionStore {
        SET status = 'terminated', updated_at = ?, archived_at = COALESCE(archived_at, ?)
        WHERE workspace_id = ? AND id = ?`,
     );
+    this.insertPendingSnapshotDeletesStmt = this.db.prepare(
+      `INSERT OR IGNORE INTO pending_internal_snapshot_deletes (
+        workspace_id, session_id, resource_id, file_id, mount_path,
+        snapshot_file_id, sha256, size_bytes, created_at
+      )
+      SELECT
+        workspace_id, session_id, resource_id, file_id, mount_path,
+        snapshot_file_id, sha256, size_bytes, ?
+      FROM session_file_mount_snapshots
+      WHERE workspace_id = ? AND session_id = ?`,
+    );
     this.deleteStmt = this.db.prepare(
       `DELETE FROM sessions
        WHERE workspace_id = ? AND id = ?`,
@@ -141,6 +175,32 @@ export class SqliteSessionStore implements SessionStore {
       `SELECT * FROM session_file_mount_snapshots
        WHERE workspace_id = ? AND session_id = ?
        ORDER BY resource_id ASC`,
+    );
+    this.pendingSnapshotDeleteWorkspacesStmt = this.db.prepare(
+      `SELECT DISTINCT workspace_id
+       FROM pending_internal_snapshot_deletes
+       ORDER BY workspace_id ASC`,
+    );
+    this.pendingSnapshotDeletesByWorkspaceStmt = this.db.prepare(
+      `SELECT *
+       FROM pending_internal_snapshot_deletes
+       WHERE workspace_id = ?
+       ORDER BY session_id ASC, resource_id ASC`,
+    );
+    this.pendingSnapshotDeletesBySessionStmt = this.db.prepare(
+      `SELECT *
+       FROM pending_internal_snapshot_deletes
+       WHERE workspace_id = ? AND session_id = ?
+       ORDER BY resource_id ASC`,
+    );
+    this.recordPendingSnapshotDeleteAttemptStmt = this.db.prepare(
+      `UPDATE pending_internal_snapshot_deletes
+       SET last_attempt_at = ?, attempt_count = attempt_count + 1, last_error = ?
+       WHERE workspace_id = ? AND session_id = ? AND resource_id = ?`,
+    );
+    this.clearPendingSnapshotDeleteStmt = this.db.prepare(
+      `DELETE FROM pending_internal_snapshot_deletes
+       WHERE workspace_id = ? AND session_id = ? AND resource_id = ?`,
     );
   }
 
@@ -228,8 +288,10 @@ export class SqliteSessionStore implements SessionStore {
   delete(workspaceId: string, sessionId: string): SessionRow | undefined {
     const existing = this.retrieveAny(workspaceId, sessionId);
     if (!existing) return undefined;
+    const now = new Date().toISOString();
     this.db.exec("BEGIN");
     try {
+      this.insertPendingSnapshotDeletesStmt.run(now, workspaceId, sessionId);
       this.deleteSnapshotsStmt.run(workspaceId, sessionId);
       this.deleteResourcesStmt.run(workspaceId, sessionId);
       this.deleteStmt.run(workspaceId, sessionId);
@@ -249,6 +311,48 @@ export class SqliteSessionStore implements SessionStore {
       workspaceId,
       sessionId,
     ) as unknown as SessionFileMountSnapshotRow[];
+  }
+
+  listPendingInternalSnapshotDeleteWorkspaces(): string[] {
+    const rows = this.pendingSnapshotDeleteWorkspacesStmt.all() as Array<{
+      workspace_id: string;
+    }>;
+    return rows.map((row) => row.workspace_id);
+  }
+
+  getPendingInternalSnapshotDeletes(
+    workspaceId: string,
+    sessionId?: string,
+  ): PendingInternalSnapshotDeleteRow[] {
+    const rows =
+      sessionId === undefined
+        ? this.pendingSnapshotDeletesByWorkspaceStmt.all(workspaceId)
+        : this.pendingSnapshotDeletesBySessionStmt.all(workspaceId, sessionId);
+    return rows as unknown as PendingInternalSnapshotDeleteRow[];
+  }
+
+  recordPendingInternalSnapshotDeleteAttempt(
+    workspaceId: string,
+    sessionId: string,
+    resourceId: string,
+    attemptedAt: string,
+    error: string,
+  ): void {
+    this.recordPendingSnapshotDeleteAttemptStmt.run(
+      attemptedAt,
+      error,
+      workspaceId,
+      sessionId,
+      resourceId,
+    );
+  }
+
+  clearPendingInternalSnapshotDelete(
+    workspaceId: string,
+    sessionId: string,
+    resourceId: string,
+  ): void {
+    this.clearPendingSnapshotDeleteStmt.run(workspaceId, sessionId, resourceId);
   }
 
   list(

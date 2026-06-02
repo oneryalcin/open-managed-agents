@@ -1047,6 +1047,18 @@ class CollidingSessionStore implements SessionStore {
     return [];
   }
 
+  listPendingInternalSnapshotDeleteWorkspaces(): [] {
+    return [];
+  }
+
+  getPendingInternalSnapshotDeletes(): [] {
+    return [];
+  }
+
+  recordPendingInternalSnapshotDeleteAttempt(): void {}
+
+  clearPendingInternalSnapshotDelete(): void {}
+
   list(
     workspaceId: string,
     opts: { includeArchived?: boolean } = {},

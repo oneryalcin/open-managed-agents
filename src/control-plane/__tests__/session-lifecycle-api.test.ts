@@ -821,6 +821,18 @@ class HookedSessionStore implements SessionStore {
     return [];
   }
 
+  listPendingInternalSnapshotDeleteWorkspaces(): WorkspaceId[] {
+    return [];
+  }
+
+  getPendingInternalSnapshotDeletes(): [] {
+    return [];
+  }
+
+  recordPendingInternalSnapshotDeleteAttempt(): void {}
+
+  clearPendingInternalSnapshotDelete(): void {}
+
   list(
     workspaceId: WorkspaceId,
     opts: ListSessionsOptions = {},

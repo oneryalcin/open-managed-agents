@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqliteAgentStore } from "../../agents/store.ts";
 import { DefaultAgentService } from "../../agents/service.ts";
 import { SqliteEnvironmentStore } from "../../environments/store.ts";
@@ -16,6 +17,10 @@ import type {
 const OTHER_WORKSPACE_ID = "wrk_other";
 
 describe("session service/store", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps workspace rows isolated and does not leak workspace_id to wire responses", async () => {
     const fixture = createFixture();
     const firstAgent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
@@ -126,6 +131,313 @@ describe("session service/store", () => {
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
     await fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id);
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID),
+    ).toEqual([]);
+  });
+
+  it("queues internal snapshot cleanup when hard-delete storage deletion fails", async () => {
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    const fixture = createFixture({ fileStorage });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+    const snapshot = fixture.sessionStore.getFileMountSnapshots(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    )[0]!;
+    fileStorage.failDeletesFor.add(snapshot.snapshot_file_id);
+
+    await expect(fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id)).resolves.toEqual({
+      id: session.id,
+      type: "session_deleted",
+    });
+
+    expect(() => fixture.sessions.retrieve(DEFAULT_WORKSPACE_ID, session.id))
+      .toThrow("Session");
+    expect(fixture.sessionStore.getFileMountSnapshots(DEFAULT_WORKSPACE_ID, session.id))
+      .toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([
+      expect.objectContaining({
+        workspace_id: DEFAULT_WORKSPACE_ID,
+        session_id: session.id,
+        resource_id: snapshot.resource_id,
+        snapshot_file_id: snapshot.snapshot_file_id,
+        attempt_count: 1,
+        last_attempt_at: expect.any(String),
+        last_error: "injected snapshot delete failure",
+      }),
+    ]);
+
+    fileStorage.failDeletesFor.clear();
+    await fixture.sessions.sweepPendingInternalSnapshotDeletes(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    );
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("clears successful snapshot deletes while keeping failed siblings queued", async () => {
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    const fixture = createFixture({ fileStorage });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const firstSource = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "first.txt",
+      mimeType: "text/plain",
+      body: bytes("first"),
+    });
+    const secondSource = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "second.txt",
+      mimeType: "text/plain",
+      body: bytes("second"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [
+        {
+          type: "file",
+          file_id: firstSource.metadata.id,
+          mount_path: "first.txt",
+        },
+        {
+          type: "file",
+          file_id: secondSource.metadata.id,
+          mount_path: "second.txt",
+        },
+      ],
+    });
+    const snapshots = fixture.sessionStore.getFileMountSnapshots(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    );
+    const failedSnapshot = snapshots[0]!;
+    const successfulSnapshot = snapshots[1]!;
+    fileStorage.failDeletesFor.add(failedSnapshot.snapshot_file_id);
+
+    await fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id);
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([
+      expect.objectContaining({
+        resource_id: failedSnapshot.resource_id,
+        snapshot_file_id: failedSnapshot.snapshot_file_id,
+        attempt_count: 1,
+      }),
+    ]);
+    expect(
+      fixture.fileStorage!.getInternalRecordForTest(
+        successfulSnapshot.snapshot_file_id,
+      ),
+    ).toBeUndefined();
+    expect(
+      fixture.fileStorage!.getInternalRecordForTest(failedSnapshot.snapshot_file_id),
+    ).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ id: failedSnapshot.snapshot_file_id }),
+      }),
+    );
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(16);
+  });
+
+  it("retries pending internal snapshot deletes during normal uptime", async () => {
+    vi.useFakeTimers();
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    const fixture = createFixture({
+      fileStorage,
+      pendingSnapshotDeleteRetryDelayMs: 25,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+    const snapshot = fixture.sessionStore.getFileMountSnapshots(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    )[0]!;
+    fileStorage.failDeletesFor.add(snapshot.snapshot_file_id);
+
+    await fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id);
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([expect.objectContaining({ attempt_count: 1 })]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+
+    fileStorage.failDeletesFor.clear();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("startup sweep recovers pending internal snapshot deletes after a crash window", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+
+    fixture.sessionStore.delete(DEFAULT_WORKSPACE_ID, session.id);
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toHaveLength(1);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+
+    const restarted = new DefaultSessionService(
+      fixture.sessionStore,
+      fixture.agentStore,
+      fixture.environmentStore,
+      fixture.fileStorage,
+    );
+    await restarted.drainStartupSnapshotDeleteSweepForTest();
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("clears pending internal snapshot deletes when storage is already absent", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+    const snapshot = fixture.sessionStore.getFileMountSnapshots(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    )[0]!;
+
+    fixture.sessionStore.delete(DEFAULT_WORKSPACE_ID, session.id);
+    await fixture.fileStorage!.deleteInternalSnapshot(
+      DEFAULT_WORKSPACE_ID,
+      snapshot.snapshot_file_id,
+    );
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+
+    await fixture.sessions.sweepPendingInternalSnapshotDeletes(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    );
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("does not sweep another workspace's pending internal snapshot deletes", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+
+    fixture.sessionStore.delete(DEFAULT_WORKSPACE_ID, session.id);
+    await fixture.sessions.sweepPendingInternalSnapshotDeletes(OTHER_WORKSPACE_ID);
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toHaveLength(1);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+
+    await fixture.sessions.sweepPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID);
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("rolls back pending snapshot-delete rows when hard-delete metadata deletion fails", async () => {
+    const db = new DatabaseSync(":memory:");
+    const fixture = createFixture({
+      fileStorage: true,
+      sessionStore: new SqliteSessionStore(db),
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+
+    db.exec(`
+      CREATE TRIGGER fail_session_delete
+      BEFORE DELETE ON sessions
+      BEGIN
+        SELECT RAISE(ABORT, 'injected session delete failure');
+      END;
+    `);
+
+    await expect(
+      fixture.sessions.delete(DEFAULT_WORKSPACE_ID, session.id),
+    ).rejects.toThrow("injected session delete failure");
+
+    expect(fixture.sessionStore.retrieveAny(DEFAULT_WORKSPACE_ID, session.id)?.id)
+      .toBe(session.id);
+    expect(fixture.sessionStore.getFileMountSnapshots(DEFAULT_WORKSPACE_ID, session.id))
+      .toHaveLength(1);
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
   });
 
   it("cleans internal snapshots if session persistence fails", async () => {
@@ -324,25 +636,34 @@ describe("session service/store", () => {
 
 function createFixture(
   opts: {
-    fileStorage?: boolean;
+    fileStorage?: boolean | InMemoryFileStorage;
     failSessionCreate?: boolean;
     maxFileResources?: number;
     maxMountedBytes?: number;
     runtime?: RuntimeEventRunner;
+    sessionStore?: SqliteSessionStore;
+    pendingSnapshotDeleteRetryDelayMs?: number;
   } = {},
 ): {
   sessions: DefaultSessionService;
   sessionStore: SqliteSessionStore;
+  agentStore: SqliteAgentStore;
+  environmentStore: SqliteEnvironmentStore;
   fileStorage?: InMemoryFileStorage;
   createAgent(workspaceId: string, name: string): { id: string };
   createEnvironment(workspaceId: string, name: string): { id: string };
 } {
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
-  const sessionStore = SqliteSessionStore.open(":memory:");
+  const sessionStore = opts.sessionStore ?? SqliteSessionStore.open(":memory:");
   const agents = new DefaultAgentService(agentStore);
   const environments = new DefaultEnvironmentService(environmentStore);
-  const fileStorage = opts.fileStorage ? new InMemoryFileStorage() : undefined;
+  const fileStorage =
+    opts.fileStorage instanceof InMemoryFileStorage
+      ? opts.fileStorage
+      : opts.fileStorage
+        ? new InMemoryFileStorage()
+        : undefined;
   if (opts.runtime instanceof FakeRuntimePreparer) {
     opts.runtime.currentStore = sessionStore;
   }
@@ -362,12 +683,20 @@ function createFixture(
         ? {}
         : { maxMountedBytes: opts.maxMountedBytes }),
       ...(opts.runtime === undefined ? {} : { runtime: opts.runtime }),
+      ...(opts.pendingSnapshotDeleteRetryDelayMs === undefined
+        ? {}
+        : {
+            pendingSnapshotDeleteRetryDelayMs:
+              opts.pendingSnapshotDeleteRetryDelayMs,
+          }),
     },
   );
 
   return {
     sessions,
     sessionStore,
+    agentStore,
+    environmentStore,
     ...(fileStorage === undefined ? {} : { fileStorage }),
     createAgent(workspaceId: string, name: string): { id: string } {
       return agents.create(workspaceId, {
@@ -428,6 +757,20 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
   }
 }
 
+class FaultyInternalSnapshotDeleteStorage extends InMemoryFileStorage {
+  readonly failDeletesFor = new Set<string>();
+
+  override async deleteInternalSnapshot(
+    workspaceId: string,
+    fileId: string,
+  ): Promise<boolean> {
+    if (this.failDeletesFor.has(fileId)) {
+      throw new Error("injected snapshot delete failure");
+    }
+    return super.deleteInternalSnapshot(workspaceId, fileId);
+  }
+}
+
 function failCreateStore(delegate: SqliteSessionStore): SessionStore {
   return {
     create(): never {
@@ -438,6 +781,14 @@ function failCreateStore(delegate: SqliteSessionStore): SessionStore {
     archive: delegate.archive.bind(delegate),
     delete: delegate.delete.bind(delegate),
     getFileMountSnapshots: delegate.getFileMountSnapshots.bind(delegate),
+    listPendingInternalSnapshotDeleteWorkspaces:
+      delegate.listPendingInternalSnapshotDeleteWorkspaces.bind(delegate),
+    getPendingInternalSnapshotDeletes:
+      delegate.getPendingInternalSnapshotDeletes.bind(delegate),
+    recordPendingInternalSnapshotDeleteAttempt:
+      delegate.recordPendingInternalSnapshotDeleteAttempt.bind(delegate),
+    clearPendingInternalSnapshotDelete:
+      delegate.clearPendingInternalSnapshotDelete.bind(delegate),
     list: delegate.list.bind(delegate),
     close: delegate.close.bind(delegate),
   };
