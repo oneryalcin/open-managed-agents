@@ -108,6 +108,7 @@ The detailed roadmap, architecture notes, and compatibility decisions live in
 the docs:
 
 - [First Docker-local run](docs/tutorials/docker-local-first-run.md)
+- [Examples](docs/examples.md)
 - [Roadmap](docs/roadmap.md)
 - [Architecture](docs/architecture.md)
 - [ADRs](docs/adrs/)

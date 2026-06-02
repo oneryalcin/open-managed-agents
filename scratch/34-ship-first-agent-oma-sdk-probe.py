@@ -33,16 +33,12 @@ import anthropic
 import httpx
 
 
-WORKSHOP = Path(
-    os.environ.get(
-        "OMA_SHIP_FIRST_WORKSHOP_DIR",
-        "/Users/mehmetoneryalcin/dev/junk/cwc-workshops/ship-your-first-managed-agent",
-    )
-)
-DATA = WORKSHOP / "data"
+WORKSHOP_DIR = os.environ.get("OMA_SHIP_FIRST_WORKSHOP_DIR")
+WORKSHOP = Path(WORKSHOP_DIR) if WORKSHOP_DIR else None
+DATA = WORKSHOP / "data" if WORKSHOP else None
 BASE_URL = os.environ.get("OMA_PROBE_BASE_URL", "http://127.0.0.1:40178")
 BETA = os.environ.get("OMA_MANAGED_AGENTS_BETA", "managed-agents-2026-04-01")
-MODEL = os.environ.get("OMA_SHIP_FIRST_PROBE_MODEL", "claude-opus-4-7")
+MODEL = os.environ.get("OMA_SHIP_FIRST_PROBE_MODEL", "claude-sonnet-4-6")
 LOG_HTTP = os.environ.get("OMA_PROBE_LOG_HTTP") == "true"
 
 SYSTEM = (
@@ -122,12 +118,14 @@ def log_request(request: httpx.Request) -> None:
 
 
 def load_text(name: str) -> str:
+    if DATA is None:
+        raise RuntimeError("OMA_SHIP_FIRST_WORKSHOP_DIR must point to the workshop checkout")
     return (DATA / name).read_text()
 
 
-metrics = json.loads(load_text("metrics.json"))
-deploys = load_text("deploys.json")
-diff = load_text("diff.txt")
+metrics: dict[str, Any] = {}
+deploys = ""
+diff = ""
 
 
 def handle_tool(name: str, args: dict[str, Any]) -> str:
@@ -153,6 +151,24 @@ def text_from_blocks(blocks: Any) -> str:
 
 
 def main() -> int:
+    global metrics, deploys, diff
+
+    if WORKSHOP is None:
+        emit(
+            "probe.config_error",
+            {"message": "OMA_SHIP_FIRST_WORKSHOP_DIR must point to the workshop checkout"},
+        )
+        return 2
+    if DATA is None or not DATA.exists():
+        emit(
+            "probe.config_error",
+            {"message": f"workshop data directory not found: {DATA}"},
+        )
+        return 2
+    metrics = json.loads(load_text("metrics.json"))
+    deploys = load_text("deploys.json")
+    diff = load_text("diff.txt")
+
     http_client = httpx.Client(event_hooks={"request": [log_request]})
     client = anthropic.Anthropic(
         api_key=os.environ.get("ANTHROPIC_API_KEY", "oma-local-dummy-key"),
