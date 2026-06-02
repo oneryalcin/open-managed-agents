@@ -67,13 +67,15 @@ These appear in Anthropic's Managed Agents event stream but are tied to features
 
 | Event type | Tied to | Deferred until |
 |---|---|---|
+| `user.define_outcome` | Outcomes | Post-MVP |
+| `user.tool_result` | Self-hosted sandbox agent-tool results | Self-hosted sandbox mode |
 | `agent.mcp_tool_use`, `agent.mcp_tool_result` | MCP servers | Post-MVP (vaults + MCP cycle) |
 | `agent.thread_context_compacted` | Pi compaction | Cycle C (SessionManager) — Pi will emit this when context fills; we translate then |
-| `session.status_rescheduled` | Retryable error recovery | Post-MVP |
+| `agent.thread_message_sent`, `agent.thread_message_received` | Multiagent | Post-MVP |
+| `session.updated` | Session update requests | Post-MVP |
+| `session.thread_created`, `session.thread_status_*` | Multiagent | Post-MVP |
 | `span.model_request_start`, `span.model_request_end` | Model-inference observability | Post-MVP |
 | `span.outcome_evaluation_*` | Outcomes (rubric-graded loop) | Post-MVP |
-| `session.thread_*`, `agent.thread_message_*` | Multiagent | Post-MVP |
-| `user.define_outcome` | Outcomes | Post-MVP |
 
 ## Non-goals
 
