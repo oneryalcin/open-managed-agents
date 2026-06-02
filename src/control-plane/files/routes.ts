@@ -11,7 +11,7 @@ import { parseLimit } from "../http.ts";
 import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import type { FileService } from "./types.ts";
 
-export const MAX_FILE_UPLOAD_REQUEST_BYTES = 12 * 1024 * 1024;
+export const MAX_FILE_UPLOAD_REQUEST_BYTES = 24 * 1024 * 1024;
 
 export function filesRoutes(service: FileService): Hono {
   const app = new Hono();

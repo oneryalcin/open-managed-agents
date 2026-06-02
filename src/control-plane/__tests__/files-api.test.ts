@@ -5,6 +5,7 @@ import {
   createInMemoryControlPlaneApp,
 } from "./helpers.ts";
 import { MAX_FILE_UPLOAD_REQUEST_BYTES } from "../files/routes.ts";
+import { MAX_UPLOADED_FILE_BYTES } from "../files/types.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsFileMetadata } from "../../types/files.ts";
 
@@ -186,6 +187,7 @@ describe("files API", () => {
       message: "`file` is required",
     });
     expect(MAX_REQUEST_BODY_BYTES + 1).toBeLessThan(MAX_FILE_UPLOAD_REQUEST_BYTES);
+    expect(MAX_UPLOADED_FILE_BYTES).toBeLessThan(MAX_FILE_UPLOAD_REQUEST_BYTES);
   });
 
   it("paginates before_id and after_id through the HTTP layer", async () => {

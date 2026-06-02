@@ -49,6 +49,7 @@ import { translatePiEvent } from "./sessions/pi/translator.ts";
 
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
 export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
+export const FILES_API_BETA = "files-api-2025-04-14";
 
 interface AppEnv {
   Variables: {
@@ -94,10 +95,7 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
 
   app.use("*", async (c, next) => {
     const betaFeatures = parseBetaFeatures(c.req.header("anthropic-beta"));
-    if (
-      isManagedAgentsRoute(c.req.path) &&
-      !betaFeatures.has(MANAGED_AGENTS_BETA)
-    ) {
+    if (isManagedAgentsRoute(c.req.path) && !hasRequiredBeta(c.req.path, betaFeatures)) {
       const err = new ApiError(404, "not_found_error", "not found");
       return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
     }
@@ -259,6 +257,16 @@ function isManagedAgentsRoute(path: string): boolean {
     "/v1/files",
     "/v1/sessions",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function hasRequiredBeta(path: string, betaFeatures: Set<string>): boolean {
+  if (betaFeatures.has(MANAGED_AGENTS_BETA)) {
+    return true;
+  }
+  if (path === "/v1/files" || path.startsWith("/v1/files/")) {
+    return betaFeatures.has(FILES_API_BETA);
+  }
+  return false;
 }
 
 function jsonError(body: ApiErrorBody, status: number): Response {
