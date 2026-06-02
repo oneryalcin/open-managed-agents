@@ -7,5 +7,5 @@ specific flows end-to-end against local OMA.
 ## Managed Agents Workshops
 
 - [Ship Your First Managed Agent](examples/ship-your-first-managed-agent.md)
-  runs the official workshop's Python SDK flow against a local OMA deployment
-  app with Docker-local sandboxing.
+  includes a repo-local Streamlit dashboard, OMA-backed Python SDK agent, and
+  Docker-local smoke adapted from the official workshop.
