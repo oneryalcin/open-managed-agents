@@ -37,6 +37,8 @@ Working today:
 - event listing and SSE streaming with reconnect support;
 - explicit Pi runtime wiring for agent execution;
 - public custom-tool pause/resume round trips;
+- durable runtime wait ledger and restart recovery for pending waits;
+- `user.tool_confirmation` allow/deny round trips for permission-gated tools;
 - `user.interrupt` aborts active Pi turns without disposing reusable sessions;
 - file upload resources and Docker-local session file mounts;
 - guarded local passthrough provider for development tests;
@@ -48,12 +50,10 @@ Working today:
 
 Still missing before claiming broad Anthropic Managed Agents parity:
 
-- archive-running-session parity;
-- permission/evaluated tool confirmations;
-- durable recovery for pending custom-tool waits;
 - request-level idempotency;
 - agent update/versioning;
 - span/model request events;
+- broader event-topology parity;
 - managed remote sandbox providers such as Modal;
 - production auth, RBAC, tenancy, and billing boundaries;
 - CI and a real license.
