@@ -1059,6 +1059,20 @@ class CollidingSessionStore implements SessionStore {
 
   clearPendingInternalSnapshotDelete(): void {}
 
+  recordPendingInternalSnapshotCreateRollback(): void {}
+
+  listPendingInternalSnapshotCreateRollbackWorkspaces(): [] {
+    return [];
+  }
+
+  getPendingInternalSnapshotCreateRollbacks(): [] {
+    return [];
+  }
+
+  recordPendingInternalSnapshotCreateRollbackAttempt(): void {}
+
+  clearPendingInternalSnapshotCreateRollback(): void {}
+
   list(
     workspaceId: string,
     opts: { includeArchived?: boolean } = {},

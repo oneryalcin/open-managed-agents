@@ -8,7 +8,7 @@ import { DEFAULT_WORKSPACE_ID } from "../../workspace.ts";
 import { DefaultSessionService } from "../service.ts";
 import { SqliteSessionStore } from "../store.ts";
 import { InMemoryFileStorage } from "../../files/store.ts";
-import type { SessionStore } from "../types.ts";
+import type { SessionFileMountSnapshotRow, SessionStore } from "../types.ts";
 import type {
   RuntimeEventRunner,
   RuntimeSessionPrepareOptions,
@@ -262,7 +262,7 @@ describe("session service/store", () => {
     const fileStorage = new FaultyInternalSnapshotDeleteStorage();
     const fixture = createFixture({
       fileStorage,
-      pendingSnapshotDeleteRetryDelayMs: 25,
+      pendingSnapshotCleanupRetryDelayMs: 25,
     });
     const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
     const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
@@ -324,7 +324,7 @@ describe("session service/store", () => {
       fixture.environmentStore,
       fixture.fileStorage,
     );
-    await restarted.drainStartupSnapshotDeleteSweepForTest();
+    await restarted.drainStartupSnapshotSweepsForTest();
 
     expect(
       fixture.sessionStore.getPendingInternalSnapshotDeletes(DEFAULT_WORKSPACE_ID, session.id),
@@ -461,6 +461,383 @@ describe("session service/store", () => {
     expect(fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data)
       .toEqual([]);
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("clears create-rollback rows on successful commit and sweep is a no-op", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: source.metadata.id }],
+    });
+    const snapshot = fixture.sessionStore.getFileMountSnapshots(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    )[0]!;
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+        session.id,
+      ),
+    ).toEqual([]);
+
+    await fixture.sessions.sweepPendingInternalSnapshotCreateRollbacks(
+      DEFAULT_WORKSPACE_ID,
+      session.id,
+    );
+
+    expect(
+      fixture.fileStorage!.getInternalRecordForTest(snapshot.snapshot_file_id),
+    ).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ id: snapshot.snapshot_file_id }),
+      }),
+    );
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    expect(fixture.sessionStore.getFileMountSnapshots(DEFAULT_WORKSPACE_ID, session.id))
+      .toEqual([snapshot]);
+  });
+
+  it("queues create-rollback cleanup when session persistence fails and storage delete fails", async () => {
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    fileStorage.failAllDeletes = true;
+    const fixture = createFixture({
+      fileStorage,
+      failSessionCreate: true,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow("injected session create failure");
+
+    expect(fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data)
+      .toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+    const pending = fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+      DEFAULT_WORKSPACE_ID,
+    );
+    expect(pending).toEqual([
+      expect.objectContaining({
+        workspace_id: DEFAULT_WORKSPACE_ID,
+        attempt_count: 1,
+        last_attempt_at: expect.any(String),
+        last_error: "injected snapshot delete failure",
+      }),
+    ]);
+    expect(
+      fixture.sessionStore.getFileMountSnapshots(
+        DEFAULT_WORKSPACE_ID,
+        pending[0]!.session_id,
+      ),
+    ).toEqual([]);
+  });
+
+  it("retries create-rollback cleanup during normal uptime", async () => {
+    vi.useFakeTimers();
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    fileStorage.failAllDeletes = true;
+    const fixture = createFixture({
+      fileStorage,
+      failSessionCreate: true,
+      pendingSnapshotCleanupRetryDelayMs: 25,
+    });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow("injected session create failure");
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toHaveLength(1);
+
+    fileStorage.failAllDeletes = false;
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("startup sweep recovers create-rollback rows after a crash window", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    const snapshot = await fixture.fileStorage!.createInternalSnapshot(
+      DEFAULT_WORKSPACE_ID,
+      {
+        fileId: "file_create_rollback_snapshot",
+        filename: "probe.txt",
+        mimeType: "text/plain",
+        scopeId: "sesrsc_create_rollback",
+        body: bytes("snap"),
+      },
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollback(
+      rollbackRow({
+        snapshotFileId: snapshot.metadata.id,
+        sizeBytes: snapshot.metadata.size_bytes,
+      }),
+      new Date(Date.now() - 1_000).toISOString(),
+    );
+
+    const restarted = new DefaultSessionService(
+      fixture.sessionStore,
+      fixture.agentStore,
+      fixture.environmentStore,
+      fixture.fileStorage,
+    );
+    await restarted.drainStartupSnapshotSweepsForTest();
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(0);
+  });
+
+  it("clears create-rollback rows when snapshot bytes are already absent", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollback(
+      rollbackRow({ snapshotFileId: "file_already_absent" }),
+      new Date().toISOString(),
+    );
+
+    await fixture.sessions.sweepPendingInternalSnapshotCreateRollbacks(
+      DEFAULT_WORKSPACE_ID,
+      "sesn_create_rollback",
+    );
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toEqual([]);
+  });
+
+  it("clears successful create-rollback siblings while keeping failed rows queued", async () => {
+    const fileStorage = new FaultyInternalSnapshotDeleteStorage();
+    const fixture = createFixture({ fileStorage });
+    const failedSnapshot = await fixture.fileStorage!.createInternalSnapshot(
+      DEFAULT_WORKSPACE_ID,
+      {
+        fileId: "file_failed_create_rollback",
+        filename: "failed.txt",
+        mimeType: "text/plain",
+        scopeId: "sesrsc_failed_create_rollback",
+        body: bytes("first"),
+      },
+    );
+    const successfulSnapshot = await fixture.fileStorage!.createInternalSnapshot(
+      DEFAULT_WORKSPACE_ID,
+      {
+        fileId: "file_successful_create_rollback",
+        filename: "successful.txt",
+        mimeType: "text/plain",
+        scopeId: "sesrsc_successful_create_rollback",
+        body: bytes("second"),
+      },
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollback(
+      rollbackRow({
+        resourceId: "sesrsc_failed_create_rollback",
+        snapshotFileId: failedSnapshot.metadata.id,
+        sizeBytes: failedSnapshot.metadata.size_bytes,
+      }),
+      new Date().toISOString(),
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollback(
+      rollbackRow({
+        resourceId: "sesrsc_successful_create_rollback",
+        snapshotFileId: successfulSnapshot.metadata.id,
+        sizeBytes: successfulSnapshot.metadata.size_bytes,
+      }),
+      new Date().toISOString(),
+    );
+    fileStorage.failDeletesFor.add(failedSnapshot.metadata.id);
+
+    await fixture.sessions.sweepPendingInternalSnapshotCreateRollbacks(
+      DEFAULT_WORKSPACE_ID,
+      "sesn_create_rollback",
+    );
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+        "sesn_create_rollback",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        resource_id: "sesrsc_failed_create_rollback",
+        snapshot_file_id: failedSnapshot.metadata.id,
+        attempt_count: 1,
+      }),
+    ]);
+    expect(
+      fixture.fileStorage!.getInternalRecordForTest(successfulSnapshot.metadata.id),
+    ).toBeUndefined();
+    expect(
+      fixture.fileStorage!.getInternalRecordForTest(failedSnapshot.metadata.id),
+    ).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ id: failedSnapshot.metadata.id }),
+      }),
+    );
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
+  it("does not sweep another workspace's create-rollback rows", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    const snapshot = await fixture.fileStorage!.createInternalSnapshot(
+      DEFAULT_WORKSPACE_ID,
+      {
+        fileId: "file_cross_workspace_create_rollback",
+        filename: "probe.txt",
+        mimeType: "text/plain",
+        scopeId: "sesrsc_create_rollback",
+        body: bytes("snap"),
+      },
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollback(
+      rollbackRow({
+        snapshotFileId: snapshot.metadata.id,
+        sizeBytes: snapshot.metadata.size_bytes,
+      }),
+      new Date().toISOString(),
+    );
+
+    await fixture.sessions.sweepPendingInternalSnapshotCreateRollbacks(
+      OTHER_WORKSPACE_ID,
+    );
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toHaveLength(1);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(4);
+
+    await fixture.sessions.sweepPendingInternalSnapshotCreateRollbacks(
+      DEFAULT_WORKSPACE_ID,
+    );
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toEqual([]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(0);
+  });
+
+  it("rejects storage backends that do not honor requested internal snapshot ids", async () => {
+    const fileStorage = new NonHonoringInternalSnapshotIdStorage();
+    const fixture = createFixture({ fileStorage });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow("expected file_");
+
+    expect(fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data)
+      .toEqual([]);
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toEqual([]);
+    expect(
+      fixture.fileStorage!.getInternalRecordForTest("file_unexpected_snapshot"),
+    ).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ id: "file_unexpected_snapshot" }),
+      }),
+    );
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(10);
+  });
+
+  it("startup create-rollback sweep ignores rows newer than the startup fence", async () => {
+    const fixture = createFixture({ fileStorage: true });
+    const snapshot = await fixture.fileStorage!.createInternalSnapshot(
+      DEFAULT_WORKSPACE_ID,
+      {
+        fileId: "file_fresh_create_rollback",
+        filename: "probe.txt",
+        mimeType: "text/plain",
+        scopeId: "sesrsc_fresh_create_rollback",
+        body: bytes("snap"),
+      },
+    );
+    fixture.sessionStore.recordPendingInternalSnapshotCreateRollback(
+      rollbackRow({
+        resourceId: "sesrsc_fresh_create_rollback",
+        snapshotFileId: snapshot.metadata.id,
+        sizeBytes: snapshot.metadata.size_bytes,
+      }),
+      new Date(Date.now() + 1_000).toISOString(),
+    );
+
+    const restarted = new DefaultSessionService(
+      fixture.sessionStore,
+      fixture.agentStore,
+      fixture.environmentStore,
+      fixture.fileStorage,
+    );
+    await restarted.drainStartupSnapshotSweepsForTest();
+
+    expect(
+      fixture.sessionStore.getPendingInternalSnapshotCreateRollbacks(
+        DEFAULT_WORKSPACE_ID,
+      ),
+    ).toHaveLength(1);
+    expect(
+      fixture.fileStorage!.getInternalRecordForTest(snapshot.metadata.id),
+    ).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ id: snapshot.metadata.id }),
+      }),
+    );
   });
 
   it("cleans prepared runtime if persistence fails after materialization", async () => {
@@ -642,7 +1019,7 @@ function createFixture(
     maxMountedBytes?: number;
     runtime?: RuntimeEventRunner;
     sessionStore?: SqliteSessionStore;
-    pendingSnapshotDeleteRetryDelayMs?: number;
+    pendingSnapshotCleanupRetryDelayMs?: number;
   } = {},
 ): {
   sessions: DefaultSessionService;
@@ -683,11 +1060,11 @@ function createFixture(
         ? {}
         : { maxMountedBytes: opts.maxMountedBytes }),
       ...(opts.runtime === undefined ? {} : { runtime: opts.runtime }),
-      ...(opts.pendingSnapshotDeleteRetryDelayMs === undefined
+      ...(opts.pendingSnapshotCleanupRetryDelayMs === undefined
         ? {}
         : {
-            pendingSnapshotDeleteRetryDelayMs:
-              opts.pendingSnapshotDeleteRetryDelayMs,
+            pendingSnapshotCleanupRetryDelayMs:
+              opts.pendingSnapshotCleanupRetryDelayMs,
           }),
     },
   );
@@ -759,15 +1136,29 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
 
 class FaultyInternalSnapshotDeleteStorage extends InMemoryFileStorage {
   readonly failDeletesFor = new Set<string>();
+  failAllDeletes = false;
 
   override async deleteInternalSnapshot(
     workspaceId: string,
     fileId: string,
   ): Promise<boolean> {
-    if (this.failDeletesFor.has(fileId)) {
+    if (this.failAllDeletes || this.failDeletesFor.has(fileId)) {
       throw new Error("injected snapshot delete failure");
     }
     return super.deleteInternalSnapshot(workspaceId, fileId);
+  }
+}
+
+class NonHonoringInternalSnapshotIdStorage extends InMemoryFileStorage {
+  override createInternalSnapshot(
+    workspaceId: string,
+    input: Parameters<InMemoryFileStorage["createInternalSnapshot"]>[1],
+  ): ReturnType<InMemoryFileStorage["createInternalSnapshot"]> {
+    const { fileId: _ignored, ...rest } = input;
+    return super.createInternalSnapshot(workspaceId, {
+      ...rest,
+      fileId: "file_unexpected_snapshot",
+    });
   }
 }
 
@@ -789,8 +1180,38 @@ function failCreateStore(delegate: SqliteSessionStore): SessionStore {
       delegate.recordPendingInternalSnapshotDeleteAttempt.bind(delegate),
     clearPendingInternalSnapshotDelete:
       delegate.clearPendingInternalSnapshotDelete.bind(delegate),
+    recordPendingInternalSnapshotCreateRollback:
+      delegate.recordPendingInternalSnapshotCreateRollback.bind(delegate),
+    listPendingInternalSnapshotCreateRollbackWorkspaces:
+      delegate.listPendingInternalSnapshotCreateRollbackWorkspaces.bind(delegate),
+    getPendingInternalSnapshotCreateRollbacks:
+      delegate.getPendingInternalSnapshotCreateRollbacks.bind(delegate),
+    recordPendingInternalSnapshotCreateRollbackAttempt:
+      delegate.recordPendingInternalSnapshotCreateRollbackAttempt.bind(delegate),
+    clearPendingInternalSnapshotCreateRollback:
+      delegate.clearPendingInternalSnapshotCreateRollback.bind(delegate),
     list: delegate.list.bind(delegate),
     close: delegate.close.bind(delegate),
+  };
+}
+
+function rollbackRow(
+  opts: {
+    resourceId?: string;
+    snapshotFileId: string;
+    sizeBytes?: number;
+    sessionId?: string;
+  },
+): SessionFileMountSnapshotRow {
+  return {
+    workspace_id: DEFAULT_WORKSPACE_ID,
+    session_id: opts.sessionId ?? "sesn_create_rollback",
+    resource_id: opts.resourceId ?? "sesrsc_create_rollback",
+    file_id: "file_source",
+    mount_path: "probe.txt",
+    snapshot_file_id: opts.snapshotFileId,
+    sha256: "sha256",
+    size_bytes: opts.sizeBytes ?? 4,
   };
 }
 

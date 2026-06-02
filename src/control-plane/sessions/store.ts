@@ -3,6 +3,7 @@ import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type {
   CreateSessionRecord,
   ListSessionsOptions,
+  PendingInternalSnapshotCreateRollbackRow,
   PendingInternalSnapshotDeleteRow,
   SessionFileMountSnapshotRow,
   SessionRow,
@@ -71,6 +72,22 @@ CREATE TABLE IF NOT EXISTS pending_internal_snapshot_deletes (
   last_error        TEXT,
   PRIMARY KEY (workspace_id, session_id, resource_id)
 );
+
+CREATE TABLE IF NOT EXISTS pending_internal_snapshot_create_rollbacks (
+  workspace_id      TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  resource_id       TEXT NOT NULL,
+  file_id           TEXT NOT NULL,
+  mount_path        TEXT NOT NULL,
+  snapshot_file_id  TEXT NOT NULL,
+  sha256            TEXT NOT NULL,
+  size_bytes        INTEGER NOT NULL,
+  created_at        TEXT NOT NULL,
+  last_attempt_at   TEXT,
+  attempt_count     INTEGER NOT NULL DEFAULT 0,
+  last_error        TEXT,
+  PRIMARY KEY (workspace_id, session_id, resource_id)
+);
 `;
 
 interface SessionDbRow {
@@ -108,6 +125,13 @@ export class SqliteSessionStore implements SessionStore {
   private readonly pendingSnapshotDeletesBySessionStmt: StatementSync;
   private readonly recordPendingSnapshotDeleteAttemptStmt: StatementSync;
   private readonly clearPendingSnapshotDeleteStmt: StatementSync;
+  private readonly insertPendingSnapshotCreateRollbackStmt: StatementSync;
+  private readonly clearPendingSnapshotCreateRollbacksBySessionStmt: StatementSync;
+  private readonly pendingSnapshotCreateRollbackWorkspacesStmt: StatementSync;
+  private readonly pendingSnapshotCreateRollbacksByWorkspaceStmt: StatementSync;
+  private readonly pendingSnapshotCreateRollbacksBySessionStmt: StatementSync;
+  private readonly recordPendingSnapshotCreateRollbackAttemptStmt: StatementSync;
+  private readonly clearPendingSnapshotCreateRollbackStmt: StatementSync;
   private readonly listStmts: Map<string, StatementSync> = new Map();
 
   constructor(db: DatabaseSync) {
@@ -202,6 +226,42 @@ export class SqliteSessionStore implements SessionStore {
       `DELETE FROM pending_internal_snapshot_deletes
        WHERE workspace_id = ? AND session_id = ? AND resource_id = ?`,
     );
+    this.insertPendingSnapshotCreateRollbackStmt = this.db.prepare(
+      `INSERT INTO pending_internal_snapshot_create_rollbacks (
+        workspace_id, session_id, resource_id, file_id, mount_path,
+        snapshot_file_id, sha256, size_bytes, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.clearPendingSnapshotCreateRollbacksBySessionStmt = this.db.prepare(
+      `DELETE FROM pending_internal_snapshot_create_rollbacks
+       WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.pendingSnapshotCreateRollbackWorkspacesStmt = this.db.prepare(
+      `SELECT DISTINCT workspace_id
+       FROM pending_internal_snapshot_create_rollbacks
+       ORDER BY workspace_id ASC`,
+    );
+    this.pendingSnapshotCreateRollbacksByWorkspaceStmt = this.db.prepare(
+      `SELECT *
+       FROM pending_internal_snapshot_create_rollbacks
+       WHERE workspace_id = ?
+       ORDER BY session_id ASC, resource_id ASC`,
+    );
+    this.pendingSnapshotCreateRollbacksBySessionStmt = this.db.prepare(
+      `SELECT *
+       FROM pending_internal_snapshot_create_rollbacks
+       WHERE workspace_id = ? AND session_id = ?
+       ORDER BY resource_id ASC`,
+    );
+    this.recordPendingSnapshotCreateRollbackAttemptStmt = this.db.prepare(
+      `UPDATE pending_internal_snapshot_create_rollbacks
+       SET last_attempt_at = ?, attempt_count = attempt_count + 1, last_error = ?
+       WHERE workspace_id = ? AND session_id = ? AND resource_id = ?`,
+    );
+    this.clearPendingSnapshotCreateRollbackStmt = this.db.prepare(
+      `DELETE FROM pending_internal_snapshot_create_rollbacks
+       WHERE workspace_id = ? AND session_id = ? AND resource_id = ?`,
+    );
   }
 
   static open(path = ":memory:"): SqliteSessionStore {
@@ -252,6 +312,7 @@ export class SqliteSessionStore implements SessionStore {
           snapshot.size_bytes,
         );
       }
+      this.clearPendingSnapshotCreateRollbacksBySessionStmt.run(s.workspace_id, s.id);
       this.db.exec("COMMIT");
       return s;
     } catch (error) {
@@ -353,6 +414,72 @@ export class SqliteSessionStore implements SessionStore {
     resourceId: string,
   ): void {
     this.clearPendingSnapshotDeleteStmt.run(workspaceId, sessionId, resourceId);
+  }
+
+  recordPendingInternalSnapshotCreateRollback(
+    row: SessionFileMountSnapshotRow,
+    createdAt: string,
+  ): void {
+    this.insertPendingSnapshotCreateRollbackStmt.run(
+      row.workspace_id,
+      row.session_id,
+      row.resource_id,
+      row.file_id,
+      row.mount_path,
+      row.snapshot_file_id,
+      row.sha256,
+      row.size_bytes,
+      createdAt,
+    );
+  }
+
+  listPendingInternalSnapshotCreateRollbackWorkspaces(): string[] {
+    const rows = this.pendingSnapshotCreateRollbackWorkspacesStmt.all() as Array<{
+      workspace_id: string;
+    }>;
+    return rows.map((row) => row.workspace_id);
+  }
+
+  getPendingInternalSnapshotCreateRollbacks(
+    workspaceId: string,
+    sessionId?: string,
+  ): PendingInternalSnapshotCreateRollbackRow[] {
+    const rows =
+      sessionId === undefined
+        ? this.pendingSnapshotCreateRollbacksByWorkspaceStmt.all(workspaceId)
+        : this.pendingSnapshotCreateRollbacksBySessionStmt.all(
+            workspaceId,
+            sessionId,
+          );
+    return rows as unknown as PendingInternalSnapshotCreateRollbackRow[];
+  }
+
+  recordPendingInternalSnapshotCreateRollbackAttempt(
+    workspaceId: string,
+    sessionId: string,
+    resourceId: string,
+    attemptedAt: string,
+    error: string,
+  ): void {
+    this.recordPendingSnapshotCreateRollbackAttemptStmt.run(
+      attemptedAt,
+      error,
+      workspaceId,
+      sessionId,
+      resourceId,
+    );
+  }
+
+  clearPendingInternalSnapshotCreateRollback(
+    workspaceId: string,
+    sessionId: string,
+    resourceId: string,
+  ): void {
+    this.clearPendingSnapshotCreateRollbackStmt.run(
+      workspaceId,
+      sessionId,
+      resourceId,
+    );
   }
 
   list(

@@ -833,6 +833,20 @@ class HookedSessionStore implements SessionStore {
 
   clearPendingInternalSnapshotDelete(): void {}
 
+  recordPendingInternalSnapshotCreateRollback(): void {}
+
+  listPendingInternalSnapshotCreateRollbackWorkspaces(): WorkspaceId[] {
+    return [];
+  }
+
+  getPendingInternalSnapshotCreateRollbacks(): [] {
+    return [];
+  }
+
+  recordPendingInternalSnapshotCreateRollbackAttempt(): void {}
+
+  clearPendingInternalSnapshotCreateRollback(): void {}
+
   list(
     workspaceId: WorkspaceId,
     opts: ListSessionsOptions = {},
