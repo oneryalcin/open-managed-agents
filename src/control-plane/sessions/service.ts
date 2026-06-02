@@ -36,6 +36,13 @@ const MAX_SESSION_FILE_RESOURCES = 10;
 const MAX_SESSION_MOUNTED_BYTES = 50 * 1024 * 1024;
 const DEFAULT_PENDING_SNAPSHOT_CLEANUP_RETRY_DELAY_MS = 30_000;
 
+type PendingSnapshotCleanupRow = Pick<
+  SessionFileMountSnapshotRow,
+  "session_id" | "resource_id" | "snapshot_file_id"
+> & {
+  created_at: string;
+};
+
 export interface DefaultSessionServiceOptions {
   maxFileResources?: number;
   maxMountedBytes?: number;
@@ -210,66 +217,47 @@ export class DefaultSessionService implements SessionService {
     workspaceId?: WorkspaceId,
     sessionId?: string,
   ): Promise<void> {
-    if (!this.files) return;
-    const workspaces =
-      workspaceId === undefined
-        ? this.store.listPendingInternalSnapshotDeleteWorkspaces()
-        : [workspaceId];
-    for (const pendingWorkspaceId of workspaces) {
-      const pending = this.store.getPendingInternalSnapshotDeletes(
-        pendingWorkspaceId,
-        workspaceId === undefined ? undefined : sessionId,
-      );
-      for (const row of pending) {
-        try {
-          await this.files.deleteInternalSnapshot(
-            pendingWorkspaceId,
-            row.snapshot_file_id,
-          );
-          this.store.clearPendingInternalSnapshotDelete(
-            pendingWorkspaceId,
-            row.session_id,
-            row.resource_id,
-          );
-        } catch (error) {
-          this.store.recordPendingInternalSnapshotDeleteAttempt(
-            pendingWorkspaceId,
-            row.session_id,
-            row.resource_id,
-            new Date().toISOString(),
-            errorMessage(error),
-          );
-          this.schedulePendingInternalSnapshotDeleteRetry(
-            pendingWorkspaceId,
-            row.session_id,
-          );
-        }
-      }
-    }
+    await this.sweepPendingSnapshotCleanup({
+      workspaceId,
+      sessionId,
+      listWorkspaces: () => this.store.listPendingInternalSnapshotDeleteWorkspaces(),
+      getRows: (pendingWorkspaceId, pendingSessionId) =>
+        this.store.getPendingInternalSnapshotDeletes(
+          pendingWorkspaceId,
+          pendingSessionId,
+        ),
+      clearRow: (rowWorkspaceId, rowSessionId, resourceId) =>
+        this.store.clearPendingInternalSnapshotDelete(
+          rowWorkspaceId,
+          rowSessionId,
+          resourceId,
+        ),
+      recordAttempt: (rowWorkspaceId, rowSessionId, resourceId, attemptedAt, error) =>
+        this.store.recordPendingInternalSnapshotDeleteAttempt(
+          rowWorkspaceId,
+          rowSessionId,
+          resourceId,
+          attemptedAt,
+          error,
+        ),
+      scheduleRetry: (rowWorkspaceId, rowSessionId) =>
+        this.schedulePendingSnapshotCleanupRetry({
+          workspaceId: rowWorkspaceId,
+          sessionId: rowSessionId,
+          timers: this.pendingSnapshotDeleteRetryTimers,
+          retryLabel: "delete",
+          sweep: () =>
+            this.sweepPendingInternalSnapshotDeletes(
+              rowWorkspaceId,
+              rowSessionId,
+            ),
+        }),
+    });
   }
 
   async drainStartupSnapshotSweepsForTest(): Promise<void> {
     await this.startupSnapshotDeleteSweep;
     await this.startupSnapshotCreateRollbackSweep;
-  }
-
-  private schedulePendingInternalSnapshotDeleteRetry(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): void {
-    const key = JSON.stringify([workspaceId, sessionId]);
-    if (this.pendingSnapshotDeleteRetryTimers.has(key)) return;
-    const timer = setTimeout(() => {
-      this.pendingSnapshotDeleteRetryTimers.delete(key);
-      void this.sweepPendingInternalSnapshotDeletes(workspaceId, sessionId).catch(
-        (error) => {
-          console.warn("Pending internal snapshot delete retry failed", error);
-          this.schedulePendingInternalSnapshotDeleteRetry(workspaceId, sessionId);
-        },
-      );
-    }, this.pendingSnapshotCleanupRetryDelayMs);
-    timer.unref?.();
-    this.pendingSnapshotDeleteRetryTimers.set(key, timer);
   }
 
   async sweepPendingInternalSnapshotCreateRollbacks(
@@ -278,17 +266,80 @@ export class DefaultSessionService implements SessionService {
       | { workspaceId?: WorkspaceId; sessionId?: string; createdBefore?: string },
     sessionId?: string,
   ): Promise<void> {
-    if (!this.files) return;
     const opts =
       typeof workspaceIdOrOpts === "object"
         ? workspaceIdOrOpts
         : { workspaceId: workspaceIdOrOpts, sessionId };
+    await this.sweepPendingSnapshotCleanup({
+      workspaceId: opts.workspaceId,
+      sessionId: opts.sessionId,
+      createdBefore: opts.createdBefore,
+      listWorkspaces: () =>
+        this.store.listPendingInternalSnapshotCreateRollbackWorkspaces(),
+      getRows: (pendingWorkspaceId, pendingSessionId) =>
+        this.store.getPendingInternalSnapshotCreateRollbacks(
+          pendingWorkspaceId,
+          pendingSessionId,
+        ),
+      clearRow: (rowWorkspaceId, rowSessionId, resourceId) =>
+        this.store.clearPendingInternalSnapshotCreateRollback(
+          rowWorkspaceId,
+          rowSessionId,
+          resourceId,
+        ),
+      recordAttempt: (rowWorkspaceId, rowSessionId, resourceId, attemptedAt, error) =>
+        this.store.recordPendingInternalSnapshotCreateRollbackAttempt(
+          rowWorkspaceId,
+          rowSessionId,
+          resourceId,
+          attemptedAt,
+          error,
+        ),
+      scheduleRetry: (rowWorkspaceId, rowSessionId) =>
+        this.schedulePendingSnapshotCleanupRetry({
+          workspaceId: rowWorkspaceId,
+          sessionId: rowSessionId,
+          timers: this.pendingSnapshotCreateRollbackRetryTimers,
+          retryLabel: "create rollback",
+          sweep: () =>
+            this.sweepPendingInternalSnapshotCreateRollbacks({
+              workspaceId: rowWorkspaceId,
+              sessionId: rowSessionId,
+            }),
+        }),
+    });
+  }
+
+  private async sweepPendingSnapshotCleanup(
+    opts: {
+      workspaceId?: WorkspaceId;
+      sessionId?: string;
+      createdBefore?: string;
+      listWorkspaces: () => WorkspaceId[];
+      getRows: (
+        workspaceId: WorkspaceId,
+        sessionId?: string,
+      ) => PendingSnapshotCleanupRow[];
+      clearRow: (
+        workspaceId: WorkspaceId,
+        sessionId: string,
+        resourceId: string,
+      ) => void;
+      recordAttempt: (
+        workspaceId: WorkspaceId,
+        sessionId: string,
+        resourceId: string,
+        attemptedAt: string,
+        error: string,
+      ) => void;
+      scheduleRetry: (workspaceId: WorkspaceId, sessionId: string) => void;
+    },
+  ): Promise<void> {
+    if (!this.files) return;
     const workspaces =
-      opts.workspaceId === undefined
-        ? this.store.listPendingInternalSnapshotCreateRollbackWorkspaces()
-        : [opts.workspaceId];
+      opts.workspaceId === undefined ? opts.listWorkspaces() : [opts.workspaceId];
     for (const pendingWorkspaceId of workspaces) {
-      const pending = this.store.getPendingInternalSnapshotCreateRollbacks(
+      const pending = opts.getRows(
         pendingWorkspaceId,
         opts.workspaceId === undefined ? undefined : opts.sessionId,
       );
@@ -301,51 +352,44 @@ export class DefaultSessionService implements SessionService {
             pendingWorkspaceId,
             row.snapshot_file_id,
           );
-          this.store.clearPendingInternalSnapshotCreateRollback(
-            pendingWorkspaceId,
-            row.session_id,
-            row.resource_id,
-          );
+          opts.clearRow(pendingWorkspaceId, row.session_id, row.resource_id);
         } catch (error) {
-          this.store.recordPendingInternalSnapshotCreateRollbackAttempt(
+          opts.recordAttempt(
             pendingWorkspaceId,
             row.session_id,
             row.resource_id,
             new Date().toISOString(),
             errorMessage(error),
           );
-          this.schedulePendingInternalSnapshotCreateRollbackRetry(
-            pendingWorkspaceId,
-            row.session_id,
-          );
+          opts.scheduleRetry(pendingWorkspaceId, row.session_id);
         }
       }
     }
   }
 
-  private schedulePendingInternalSnapshotCreateRollbackRetry(
-    workspaceId: WorkspaceId,
-    sessionId: string,
+  private schedulePendingSnapshotCleanupRetry(
+    opts: {
+      workspaceId: WorkspaceId;
+      sessionId: string;
+      timers: Map<string, ReturnType<typeof setTimeout>>;
+      retryLabel: string;
+      sweep: () => Promise<void>;
+    },
   ): void {
-    const key = JSON.stringify([workspaceId, sessionId]);
-    if (this.pendingSnapshotCreateRollbackRetryTimers.has(key)) return;
+    const key = JSON.stringify([opts.workspaceId, opts.sessionId]);
+    if (opts.timers.has(key)) return;
     const timer = setTimeout(() => {
-      this.pendingSnapshotCreateRollbackRetryTimers.delete(key);
-      void this.sweepPendingInternalSnapshotCreateRollbacks(
-        { workspaceId, sessionId },
-      ).catch((error) => {
+      opts.timers.delete(key);
+      void opts.sweep().catch((error) => {
         console.warn(
-          "Pending internal snapshot create rollback retry failed",
+          `Pending internal snapshot ${opts.retryLabel} retry failed`,
           error,
         );
-        this.schedulePendingInternalSnapshotCreateRollbackRetry(
-          workspaceId,
-          sessionId,
-        );
+        this.schedulePendingSnapshotCleanupRetry(opts);
       });
     }, this.pendingSnapshotCleanupRetryDelayMs);
     timer.unref?.();
-    this.pendingSnapshotCreateRollbackRetryTimers.set(key, timer);
+    opts.timers.set(key, timer);
   }
 
   list(
