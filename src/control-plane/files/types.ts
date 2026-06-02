@@ -23,6 +23,12 @@ export interface UploadedFileInput {
 
 export interface InternalFileSnapshotInput extends UploadedFileInput {
   scopeId: string;
+  /**
+   * Internal snapshots are named by the control plane before bytes are written
+   * so rollback ledgers can recover uncommitted create failures. Storage
+   * backends must persist exactly this ID or throw before writing bytes.
+   */
+  fileId: string;
 }
 
 export interface FileStorageRecord {

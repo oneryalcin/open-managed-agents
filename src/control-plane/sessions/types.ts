@@ -44,6 +44,14 @@ export interface PendingInternalSnapshotDeleteRow
   last_error: string | null;
 }
 
+export interface PendingInternalSnapshotCreateRollbackRow
+  extends SessionFileMountSnapshotRow {
+  created_at: string;
+  last_attempt_at: string | null;
+  attempt_count: number;
+  last_error: string | null;
+}
+
 export interface CreateSessionRecord {
   row: SessionRow;
   snapshots?: SessionFileMountSnapshotRow[];
@@ -93,6 +101,27 @@ export interface SessionStore {
     error: string,
   ): void;
   clearPendingInternalSnapshotDelete(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    resourceId: string,
+  ): void;
+  recordPendingInternalSnapshotCreateRollback(
+    row: SessionFileMountSnapshotRow,
+    createdAt: string,
+  ): void;
+  listPendingInternalSnapshotCreateRollbackWorkspaces(): WorkspaceId[];
+  getPendingInternalSnapshotCreateRollbacks(
+    workspaceId: WorkspaceId,
+    sessionId?: string,
+  ): PendingInternalSnapshotCreateRollbackRow[];
+  recordPendingInternalSnapshotCreateRollbackAttempt(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    resourceId: string,
+    attemptedAt: string,
+    error: string,
+  ): void;
+  clearPendingInternalSnapshotCreateRollback(
     workspaceId: WorkspaceId,
     sessionId: string,
     resourceId: string,

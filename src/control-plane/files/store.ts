@@ -6,6 +6,7 @@ import type {
   FileStorage,
   FileStoragePage,
   FileStorageRecord,
+  InternalFileSnapshotInput,
   StoredFile,
   UploadedFileInput,
   WorkspaceId,
@@ -41,17 +42,19 @@ export class InMemoryFileStorage implements FileStorage {
       visibility: "public",
       scope: null,
       storageKeySegment: "",
+      fileId: undefined,
     });
   }
 
   async createInternalSnapshot(
     workspaceId: WorkspaceId,
-    input: UploadedFileInput & { scopeId: string },
+    input: InternalFileSnapshotInput,
   ): Promise<FileStorageRecord> {
     return this.createStored(workspaceId, input, {
       visibility: "internal",
       scope: input.scopeId,
       storageKeySegment: "internal/",
+      fileId: input.fileId,
     });
   }
 
@@ -62,6 +65,7 @@ export class InMemoryFileStorage implements FileStorage {
       visibility: StoredFile["visibility"];
       scope: string | null;
       storageKeySegment: string;
+      fileId: string | undefined;
     },
   ): Promise<FileStorageRecord> {
     const { bytes, sizeBytes, sha256 } = await consumeUploadBody(
@@ -75,7 +79,10 @@ export class InMemoryFileStorage implements FileStorage {
       );
     }
 
-    const id = newFileId();
+    const id = opts.fileId ?? newFileId();
+    if (this.files.has(id)) {
+      throw invalidRequest(`File ${id} already exists`);
+    }
     const now = new Date().toISOString();
     const stored: StoredFile = {
       visibility: opts.visibility,

@@ -17,7 +17,7 @@ import type {
 } from "../events/types.ts";
 import { RuntimeUnsupportedSessionFileResourcesError } from "../events/types.ts";
 import type { FileStorage, FileStorageRecord } from "../files/types.ts";
-import { newSessionId, newSessionResourceId } from "../ids.ts";
+import { newFileId, newSessionId, newSessionResourceId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import {
   normalizeSessionFileResources,
@@ -34,13 +34,13 @@ import type {
 
 const MAX_SESSION_FILE_RESOURCES = 10;
 const MAX_SESSION_MOUNTED_BYTES = 50 * 1024 * 1024;
-const DEFAULT_PENDING_SNAPSHOT_DELETE_RETRY_DELAY_MS = 30_000;
+const DEFAULT_PENDING_SNAPSHOT_CLEANUP_RETRY_DELAY_MS = 30_000;
 
 export interface DefaultSessionServiceOptions {
   maxFileResources?: number;
   maxMountedBytes?: number;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
-  pendingSnapshotDeleteRetryDelayMs?: number;
+  pendingSnapshotCleanupRetryDelayMs?: number;
 }
 
 export class DefaultSessionService implements SessionService {
@@ -50,8 +50,14 @@ export class DefaultSessionService implements SessionService {
     | Pick<RuntimeEventRunner, "prepareSession" | "closeSession">
     | undefined;
   private readonly startupSnapshotDeleteSweep: Promise<void>;
-  private readonly pendingSnapshotDeleteRetryDelayMs: number;
+  private readonly startupSnapshotCreateRollbackSweep: Promise<void>;
+  private readonly startedAt = new Date().toISOString();
+  private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  private readonly pendingSnapshotCreateRollbackRetryTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
   >();
@@ -66,14 +72,23 @@ export class DefaultSessionService implements SessionService {
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.runtime = opts.runtime;
-    this.pendingSnapshotDeleteRetryDelayMs =
-      opts.pendingSnapshotDeleteRetryDelayMs ??
-      DEFAULT_PENDING_SNAPSHOT_DELETE_RETRY_DELAY_MS;
+    this.pendingSnapshotCleanupRetryDelayMs =
+      opts.pendingSnapshotCleanupRetryDelayMs ??
+      DEFAULT_PENDING_SNAPSHOT_CLEANUP_RETRY_DELAY_MS;
     this.startupSnapshotDeleteSweep = this.sweepPendingInternalSnapshotDeletes().catch(
       (error) => {
         console.warn("Pending internal snapshot delete startup sweep failed", error);
       },
     );
+    this.startupSnapshotCreateRollbackSweep =
+      this.sweepPendingInternalSnapshotCreateRollbacks({
+        createdBefore: this.startedAt,
+      }).catch((error) => {
+        console.warn(
+          "Pending internal snapshot create rollback startup sweep failed",
+          error,
+        );
+      });
   }
 
   async create(
@@ -102,13 +117,15 @@ export class DefaultSessionService implements SessionService {
     }
 
     const now = new Date().toISOString();
+    const sessionId = newSessionId();
     const { resources, snapshots, mounts } = await this.prepareFileResources(
       workspaceId,
+      sessionId,
       req.resources ?? [],
       now,
     );
     const row: SessionRow = {
-      id: newSessionId(),
+      id: sessionId,
       workspace_id: workspaceId,
       type: "session",
       agent: {
@@ -144,7 +161,15 @@ export class DefaultSessionService implements SessionService {
       if (runtimePrepared || mounts.length > 0) {
         await this.closeRuntimeBestEffort(workspaceId, row.id);
       }
-      await this.deleteSnapshotsBestEffort(workspaceId, sessionSnapshots);
+      await this.sweepPendingInternalSnapshotCreateRollbacks(
+        workspaceId,
+        row.id,
+      ).catch((cleanupError) => {
+        console.warn(
+          "Pending internal snapshot create rollback sweep failed",
+          cleanupError,
+        );
+      });
       if (isUnsupportedFileResourceRuntime(error)) {
         throw invalidRequest(
           "Session file resources are not supported by the configured runtime.",
@@ -223,8 +248,9 @@ export class DefaultSessionService implements SessionService {
     }
   }
 
-  async drainStartupSnapshotDeleteSweepForTest(): Promise<void> {
+  async drainStartupSnapshotSweepsForTest(): Promise<void> {
     await this.startupSnapshotDeleteSweep;
+    await this.startupSnapshotCreateRollbackSweep;
   }
 
   private schedulePendingInternalSnapshotDeleteRetry(
@@ -241,9 +267,85 @@ export class DefaultSessionService implements SessionService {
           this.schedulePendingInternalSnapshotDeleteRetry(workspaceId, sessionId);
         },
       );
-    }, this.pendingSnapshotDeleteRetryDelayMs);
+    }, this.pendingSnapshotCleanupRetryDelayMs);
     timer.unref?.();
     this.pendingSnapshotDeleteRetryTimers.set(key, timer);
+  }
+
+  async sweepPendingInternalSnapshotCreateRollbacks(
+    workspaceIdOrOpts?:
+      | WorkspaceId
+      | { workspaceId?: WorkspaceId; sessionId?: string; createdBefore?: string },
+    sessionId?: string,
+  ): Promise<void> {
+    if (!this.files) return;
+    const opts =
+      typeof workspaceIdOrOpts === "object"
+        ? workspaceIdOrOpts
+        : { workspaceId: workspaceIdOrOpts, sessionId };
+    const workspaces =
+      opts.workspaceId === undefined
+        ? this.store.listPendingInternalSnapshotCreateRollbackWorkspaces()
+        : [opts.workspaceId];
+    for (const pendingWorkspaceId of workspaces) {
+      const pending = this.store.getPendingInternalSnapshotCreateRollbacks(
+        pendingWorkspaceId,
+        opts.workspaceId === undefined ? undefined : opts.sessionId,
+      );
+      for (const row of pending) {
+        if (opts.createdBefore !== undefined && row.created_at >= opts.createdBefore) {
+          continue;
+        }
+        try {
+          await this.files.deleteInternalSnapshot(
+            pendingWorkspaceId,
+            row.snapshot_file_id,
+          );
+          this.store.clearPendingInternalSnapshotCreateRollback(
+            pendingWorkspaceId,
+            row.session_id,
+            row.resource_id,
+          );
+        } catch (error) {
+          this.store.recordPendingInternalSnapshotCreateRollbackAttempt(
+            pendingWorkspaceId,
+            row.session_id,
+            row.resource_id,
+            new Date().toISOString(),
+            errorMessage(error),
+          );
+          this.schedulePendingInternalSnapshotCreateRollbackRetry(
+            pendingWorkspaceId,
+            row.session_id,
+          );
+        }
+      }
+    }
+  }
+
+  private schedulePendingInternalSnapshotCreateRollbackRetry(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): void {
+    const key = JSON.stringify([workspaceId, sessionId]);
+    if (this.pendingSnapshotCreateRollbackRetryTimers.has(key)) return;
+    const timer = setTimeout(() => {
+      this.pendingSnapshotCreateRollbackRetryTimers.delete(key);
+      void this.sweepPendingInternalSnapshotCreateRollbacks(
+        { workspaceId, sessionId },
+      ).catch((error) => {
+        console.warn(
+          "Pending internal snapshot create rollback retry failed",
+          error,
+        );
+        this.schedulePendingInternalSnapshotCreateRollbackRetry(
+          workspaceId,
+          sessionId,
+        );
+      });
+    }, this.pendingSnapshotCleanupRetryDelayMs);
+    timer.unref?.();
+    this.pendingSnapshotCreateRollbackRetryTimers.set(key, timer);
   }
 
   list(
@@ -260,6 +362,7 @@ export class DefaultSessionService implements SessionService {
 
   private async prepareFileResources(
     workspaceId: WorkspaceId,
+    sessionId: string,
     resources: CreateManagedSessionResourceInput[],
     now: string,
   ): Promise<{
@@ -290,6 +393,7 @@ export class DefaultSessionService implements SessionService {
     const prepared: Array<{
       source: FileStorageRecord;
       bytes: Uint8Array;
+      sha256: string;
       resourceId: string;
       mountPath: string;
     }> = [];
@@ -317,6 +421,7 @@ export class DefaultSessionService implements SessionService {
       prepared.push({
         source,
         bytes,
+        sha256,
         resourceId: newSessionResourceId(),
         mountPath: resource.mountPath,
       });
@@ -325,12 +430,33 @@ export class DefaultSessionService implements SessionService {
     const createdSnapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">> = [];
     try {
       for (const item of prepared) {
+        const snapshotFileId = newFileId();
+        const rollbackRow: SessionFileMountSnapshotRow = {
+          workspace_id: workspaceId,
+          session_id: sessionId,
+          resource_id: item.resourceId,
+          file_id: item.source.metadata.id,
+          mount_path: item.mountPath,
+          snapshot_file_id: snapshotFileId,
+          sha256: item.sha256,
+          size_bytes: item.bytes.byteLength,
+        };
+        this.store.recordPendingInternalSnapshotCreateRollback(
+          rollbackRow,
+          now,
+        );
         const snapshot = await this.files.createInternalSnapshot(workspaceId, {
+          fileId: snapshotFileId,
           filename: item.source.metadata.filename,
           mimeType: item.source.metadata.mime_type,
           scopeId: item.resourceId,
           body: item.bytes,
         });
+        if (snapshot.metadata.id !== snapshotFileId) {
+          throw new Error(
+            `FileStorage returned internal snapshot id ${snapshot.metadata.id}; expected ${snapshotFileId}`,
+          );
+        }
         createdSnapshots.push({
           workspace_id: workspaceId,
           resource_id: item.resourceId,
@@ -342,7 +468,15 @@ export class DefaultSessionService implements SessionService {
         });
       }
     } catch (error) {
-      await this.deleteSnapshotsBestEffort(workspaceId, createdSnapshots);
+      await this.sweepPendingInternalSnapshotCreateRollbacks(
+        workspaceId,
+        sessionId,
+      ).catch((cleanupError) => {
+        console.warn(
+          "Pending internal snapshot create rollback sweep failed",
+          cleanupError,
+        );
+      });
       throw error;
     }
 
@@ -378,21 +512,6 @@ export class DefaultSessionService implements SessionService {
     }
   }
 
-  private async deleteSnapshotsBestEffort(
-    workspaceId: WorkspaceId,
-    snapshots: Array<Pick<SessionFileMountSnapshotRow, "snapshot_file_id">>,
-  ): Promise<void> {
-    if (!this.files) return;
-    await Promise.all(
-      snapshots.map(async (snapshot) => {
-        try {
-          await this.files?.deleteInternalSnapshot(workspaceId, snapshot.snapshot_file_id);
-        } catch {
-          // Best-effort cleanup; a durable backend can add orphan sweeping.
-        }
-      }),
-    );
-  }
 }
 
 function parseCreateSession(input: unknown): CreateManagedSessionRequest {

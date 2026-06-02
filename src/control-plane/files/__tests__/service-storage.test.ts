@@ -195,12 +195,14 @@ describe("FileService + InMemoryFileStorage", () => {
     });
 
     const snapshot = await storage.createInternalSnapshot(WORKSPACE_A, {
+      fileId: "file_precomputed_snapshot",
       filename: "probe.txt",
       mimeType: "text/plain",
       scopeId: "sesn_123",
       body: bytes("snap"),
     });
 
+    expect(snapshot.metadata.id).toBe("file_precomputed_snapshot");
     expect(snapshot.metadata.scope).toBe("sesn_123");
     expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(9);
     await expect(service.list(WORKSPACE_A)).resolves.toMatchObject({
@@ -225,12 +227,23 @@ describe("FileService + InMemoryFileStorage", () => {
 
     await expect(
       storage.createInternalSnapshot(WORKSPACE_A, {
+        fileId: "file_overflow_snapshot",
         filename: "overflow.txt",
         mimeType: "text/plain",
         scopeId: "sesn_123",
         body: bytes("xx"),
       }),
     ).rejects.toThrow("10 bytes in-memory limit");
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(9);
+    await expect(
+      storage.createInternalSnapshot(WORKSPACE_A, {
+        fileId: snapshot.metadata.id,
+        filename: "duplicate.txt",
+        mimeType: "text/plain",
+        scopeId: "sesn_123",
+        body: bytes("x"),
+      }),
+    ).rejects.toThrow(`File ${snapshot.metadata.id} already exists`);
     expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(9);
 
     await expect(
