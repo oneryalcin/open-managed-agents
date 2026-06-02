@@ -77,6 +77,11 @@ export interface FileStorage {
     workspaceId: WorkspaceId,
     fileId: string,
   ): Promise<AsyncIterable<Uint8Array> | undefined>;
+  /**
+   * Returns true when an internal snapshot was deleted. Returns false only when
+   * the snapshot is already absent for this workspace. Durable backends must
+   * throw for retryable I/O, authorization, or consistency failures.
+   */
   deleteInternalSnapshot(
     workspaceId: WorkspaceId,
     fileId: string,

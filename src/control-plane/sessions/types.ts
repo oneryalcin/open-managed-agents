@@ -36,6 +36,14 @@ export interface SessionFileMountSnapshotRow {
   size_bytes: number;
 }
 
+export interface PendingInternalSnapshotDeleteRow
+  extends SessionFileMountSnapshotRow {
+  created_at: string;
+  last_attempt_at: string | null;
+  attempt_count: number;
+  last_error: string | null;
+}
+
 export interface CreateSessionRecord {
   row: SessionRow;
   snapshots?: SessionFileMountSnapshotRow[];
@@ -72,6 +80,23 @@ export interface SessionStore {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): SessionFileMountSnapshotRow[];
+  listPendingInternalSnapshotDeleteWorkspaces(): WorkspaceId[];
+  getPendingInternalSnapshotDeletes(
+    workspaceId: WorkspaceId,
+    sessionId?: string,
+  ): PendingInternalSnapshotDeleteRow[];
+  recordPendingInternalSnapshotDeleteAttempt(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    resourceId: string,
+    attemptedAt: string,
+    error: string,
+  ): void;
+  clearPendingInternalSnapshotDelete(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    resourceId: string,
+  ): void;
   list(
     workspaceId: WorkspaceId,
     opts?: ListSessionsOptions,

@@ -34,11 +34,13 @@ import type {
 
 const MAX_SESSION_FILE_RESOURCES = 10;
 const MAX_SESSION_MOUNTED_BYTES = 50 * 1024 * 1024;
+const DEFAULT_PENDING_SNAPSHOT_DELETE_RETRY_DELAY_MS = 30_000;
 
 export interface DefaultSessionServiceOptions {
   maxFileResources?: number;
   maxMountedBytes?: number;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
+  pendingSnapshotDeleteRetryDelayMs?: number;
 }
 
 export class DefaultSessionService implements SessionService {
@@ -47,6 +49,12 @@ export class DefaultSessionService implements SessionService {
   private readonly runtime:
     | Pick<RuntimeEventRunner, "prepareSession" | "closeSession">
     | undefined;
+  private readonly startupSnapshotDeleteSweep: Promise<void>;
+  private readonly pendingSnapshotDeleteRetryDelayMs: number;
+  private readonly pendingSnapshotDeleteRetryTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   constructor(
     private readonly store: SessionStore,
@@ -58,6 +66,14 @@ export class DefaultSessionService implements SessionService {
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.runtime = opts.runtime;
+    this.pendingSnapshotDeleteRetryDelayMs =
+      opts.pendingSnapshotDeleteRetryDelayMs ??
+      DEFAULT_PENDING_SNAPSHOT_DELETE_RETRY_DELAY_MS;
+    this.startupSnapshotDeleteSweep = this.sweepPendingInternalSnapshotDeletes().catch(
+      (error) => {
+        console.warn("Pending internal snapshot delete startup sweep failed", error);
+      },
+    );
   }
 
   async create(
@@ -153,13 +169,81 @@ export class DefaultSessionService implements SessionService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<ManagedAgentsDeletedSession> {
-    const snapshots = this.store.getFileMountSnapshots(workspaceId, sessionId);
     const row = this.store.delete(workspaceId, sessionId);
     if (!row) {
       throw notFound(`Session ${sessionId} not found`);
     }
-    await this.deleteSnapshotsBestEffort(workspaceId, snapshots);
+    await this.sweepPendingInternalSnapshotDeletes(workspaceId, sessionId).catch(
+      (error) => {
+        console.warn("Pending internal snapshot delete sweep failed", error);
+      },
+    );
     return { id: row.id, type: "session_deleted" };
+  }
+
+  async sweepPendingInternalSnapshotDeletes(
+    workspaceId?: WorkspaceId,
+    sessionId?: string,
+  ): Promise<void> {
+    if (!this.files) return;
+    const workspaces =
+      workspaceId === undefined
+        ? this.store.listPendingInternalSnapshotDeleteWorkspaces()
+        : [workspaceId];
+    for (const pendingWorkspaceId of workspaces) {
+      const pending = this.store.getPendingInternalSnapshotDeletes(
+        pendingWorkspaceId,
+        workspaceId === undefined ? undefined : sessionId,
+      );
+      for (const row of pending) {
+        try {
+          await this.files.deleteInternalSnapshot(
+            pendingWorkspaceId,
+            row.snapshot_file_id,
+          );
+          this.store.clearPendingInternalSnapshotDelete(
+            pendingWorkspaceId,
+            row.session_id,
+            row.resource_id,
+          );
+        } catch (error) {
+          this.store.recordPendingInternalSnapshotDeleteAttempt(
+            pendingWorkspaceId,
+            row.session_id,
+            row.resource_id,
+            new Date().toISOString(),
+            errorMessage(error),
+          );
+          this.schedulePendingInternalSnapshotDeleteRetry(
+            pendingWorkspaceId,
+            row.session_id,
+          );
+        }
+      }
+    }
+  }
+
+  async drainStartupSnapshotDeleteSweepForTest(): Promise<void> {
+    await this.startupSnapshotDeleteSweep;
+  }
+
+  private schedulePendingInternalSnapshotDeleteRetry(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): void {
+    const key = JSON.stringify([workspaceId, sessionId]);
+    if (this.pendingSnapshotDeleteRetryTimers.has(key)) return;
+    const timer = setTimeout(() => {
+      this.pendingSnapshotDeleteRetryTimers.delete(key);
+      void this.sweepPendingInternalSnapshotDeletes(workspaceId, sessionId).catch(
+        (error) => {
+          console.warn("Pending internal snapshot delete retry failed", error);
+          this.schedulePendingInternalSnapshotDeleteRetry(workspaceId, sessionId);
+        },
+      );
+    }, this.pendingSnapshotDeleteRetryDelayMs);
+    timer.unref?.();
+    this.pendingSnapshotDeleteRetryTimers.set(key, timer);
   }
 
   list(
@@ -498,6 +582,10 @@ function sha256Hex(bytes: Uint8Array): string {
 function limitLabel(bytes: number): string {
   if (bytes % (1024 * 1024) === 0) return `${bytes / (1024 * 1024)} MiB`;
   return `${bytes} bytes`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isUnsupportedFileResourceRuntime(error: unknown): boolean {
