@@ -5,6 +5,7 @@ build/
 .env.*
 !.env.example
 *.log
+!examples/ship-your-first-managed-agent/data/app.log
 .DS_Store
 .idea/
 .vscode/

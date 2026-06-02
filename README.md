@@ -109,6 +109,7 @@ the docs:
 
 - [First Docker-local run](docs/tutorials/docker-local-first-run.md)
 - [Examples](docs/examples.md)
+- [CWC-style Streamlit Managed Agents example](examples/ship-your-first-managed-agent/README.md)
 - [Roadmap](docs/roadmap.md)
 - [Architecture](docs/architecture.md)
 - [ADRs](docs/adrs/)
