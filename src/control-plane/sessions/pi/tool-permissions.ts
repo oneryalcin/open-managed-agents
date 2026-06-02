@@ -4,7 +4,10 @@ import type {
 } from "../../../types/events.ts";
 import type { JsonObject } from "../../../types/json.ts";
 import type { AgentStore } from "../../agents/types.ts";
-import type { RuntimeToolPermissionUseEvent } from "../../events/types.ts";
+import type {
+  RuntimeActionCloseReason,
+  RuntimeToolPermissionUseEvent,
+} from "../../events/types.ts";
 import type { SessionStore } from "../types.ts";
 import type { WorkspaceId } from "../../workspace.ts";
 import type { SandboxedBuiltinToolName } from "./sandbox/provider.ts";
@@ -29,7 +32,7 @@ interface PendingToolConfirmation {
   piToolCallId: string;
   resolve: (result: ToolConfirmationResult) => void;
   reject: (error: Error) => void;
-  cleanup: () => void;
+  cleanup: (reason?: RuntimeActionCloseReason) => void;
 }
 
 interface ToolConfirmationResult {
@@ -194,7 +197,9 @@ export class PiToolPermissionBridge {
     }>((resolve, reject) => {
       let released = false;
       let toolUseId: string | undefined;
-      let releaseToolUseId: (() => void) | undefined;
+      let releaseToolUseId:
+        | ((reason?: RuntimeActionCloseReason) => void)
+        | undefined;
       let confirmation: RegisteredConfirmation | undefined;
       const cleanup = () => {
         if (released) return;
@@ -265,22 +270,22 @@ export class PiToolPermissionBridge {
     piToolCallId: string;
     toolUseId: string;
     signal: AbortSignal | undefined;
-    releaseToolUseId: () => void;
+    releaseToolUseId: (reason?: RuntimeActionCloseReason) => void;
   }): RegisteredConfirmation {
     let rejectPending!: (error: Error) => void;
     const promise = new Promise<ToolConfirmationResult>((resolve, reject) => {
       let released = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const cleanup = () => {
+      const cleanup = (reason?: RuntimeActionCloseReason) => {
         if (released) return;
         released = true;
         if (timer) clearTimeout(timer);
         opts.signal?.removeEventListener("abort", onAbort);
-        opts.releaseToolUseId();
+        opts.releaseToolUseId(reason);
       };
       const onAbort = () => {
         this.pending.delete(opts.toolUseId);
-        cleanup();
+        cleanup("interrupted");
         reject(new Error(`Builtin tool ${opts.toolName} aborted`));
       };
       opts.signal?.addEventListener("abort", onAbort, { once: true });
@@ -290,7 +295,7 @@ export class PiToolPermissionBridge {
         timer = setTimeout(() => {
           this.pending.delete(opts.toolUseId);
           this.markPermissionDenied(opts.sessionId, opts.piToolCallId);
-          cleanup();
+          cleanup("timeout");
           reject(new Error(`Builtin tool ${opts.toolName} confirmation timed out`));
         }, timeoutMs);
       }

@@ -230,6 +230,7 @@ describe("builtin tool confirmations", () => {
     const session = await setupSession(fixture.app);
     const toolUseId = "sevt_paged_tool_use";
     const rows = materializePersistedEvents(
+      "wrk_default",
       session.id,
       [
         ...Array.from({ length: 1001 }, (_, index) => ({
@@ -284,6 +285,7 @@ describe("builtin tool confirmations", () => {
     const toolUse = waiting.find((event) => event.type === "agent.tool_use");
     const toolUseId = toolUse?.id as string;
     const [acceptedRow] = materializePersistedEvents(
+      "wrk_default",
       session.id,
       [
         {
@@ -320,8 +322,55 @@ describe("builtin tool confirmations", () => {
     ).toHaveLength(1);
   });
 
+  it("replays an identical in-flight confirmation without terminalizing the turn", async () => {
+    const fixture = makeSharedFixture(new DelayedToolPermissionRunner("ask"));
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "write");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.tool_use"),
+    );
+    const toolUse = waiting.find((event) => event.type === "agent.tool_use");
+    const toolUseId = toolUse?.id as string;
+
+    const accepted = await sendToolConfirmation(fixture.app, session.id, {
+      type: "user.tool_confirmation",
+      tool_use_id: toolUseId,
+      result: "allow",
+    });
+    const replay = await sendToolConfirmation(fixture.app, session.id, {
+      type: "user.tool_confirmation",
+      tool_use_id: toolUseId,
+      result: "allow",
+    });
+
+    expect(replay.id).toBe(accepted.id);
+
+    const runner = fixture.runner as DelayedToolPermissionRunner;
+    expect(runner.claimCount).toBe(1);
+    runner.release();
+
+    const completed = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.tool_result"),
+    );
+    expect(
+      completed.filter(
+        (event) =>
+          event.type === "user.tool_confirmation" &&
+          event.tool_use_id === toolUseId,
+      ),
+    ).toHaveLength(1);
+    expect(completed.some((event) => event.type === "session.error")).toBe(false);
+  });
+
   it("terminalizes an accepted confirmation when runtime state is lost", async () => {
-    const fixture = makeSharedFixture(new FakeToolPermissionRunner("ask"));
+    const fixture = makeSharedFixture(new FakeToolPermissionRunner("ask"), {
+      leaseTtlMs: -1,
+    });
     const session = await setupSession(fixture.app);
 
     await sendMessage(fixture.app, session.id, "write");
@@ -333,6 +382,7 @@ describe("builtin tool confirmations", () => {
     const toolUse = waiting.find((event) => event.type === "agent.tool_use");
     const toolUseId = toolUse?.id as string;
     const [acceptedRow] = materializePersistedEvents(
+      "wrk_default",
       session.id,
       [
         {
@@ -365,6 +415,40 @@ describe("builtin tool confirmations", () => {
           text: `Tool confirmation ${toolUseId} was accepted, but runtime state is no longer available and the builtin tool execution outcome is unknown.`,
         },
       ],
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "session.status_idle",
+      stop_reason: { type: "end_turn" },
+    });
+  });
+
+  it("terminalizes the first confirmation after restart when runtime state is lost", async () => {
+    const fixture = makeSharedFixture(new FakeToolPermissionRunner("ask"), {
+      leaseTtlMs: -1,
+    });
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "write");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.tool_use"),
+    );
+    const toolUse = waiting.find((event) => event.type === "agent.tool_use");
+    const toolUseId = toolUse?.id as string;
+
+    const recreated = fixture.recreate(new NoPendingToolPermissionRunner());
+    const accepted = await sendToolConfirmation(recreated, session.id, {
+      type: "user.tool_confirmation",
+      tool_use_id: toolUseId,
+      result: "allow",
+    });
+
+    expect(accepted.tool_use_id).toBe(toolUseId);
+    const events = await getEvents(recreated, session.id);
+    expect(events.find((event) => event.type === "agent.tool_result")).toMatchObject({
+      tool_use_id: toolUseId,
+      is_error: true,
     });
     expect(events.at(-1)).toMatchObject({
       type: "session.status_idle",
@@ -529,11 +613,11 @@ describe("builtin tool confirmations", () => {
 
 class FakeToolPermissionRunner implements RuntimeEventRunner {
   boundToolUseId: string | undefined;
-  private resolveConfirmation:
+  protected resolveConfirmation:
     | ((event: ManagedAgentsUserToolConfirmationEventInput) => void)
     | undefined;
 
-  constructor(private readonly permission: "allow" | "ask" | "deny") {}
+  constructor(protected readonly permission: "allow" | "ask" | "deny") {}
 
   async *runUserMessage(): AsyncIterable<unknown> {
     yield { type: "agent_start" };
@@ -598,6 +682,69 @@ class FakeToolPermissionRunner implements RuntimeEventRunner {
   }
 }
 
+class DelayedToolPermissionRunner extends FakeToolPermissionRunner {
+  claimCount = 0;
+  private readonly releaseGate = deferred<void>();
+
+  async *runUserMessage(): AsyncIterable<unknown> {
+    yield { type: "agent_start" };
+    const confirmation = new Promise<ManagedAgentsUserToolConfirmationEventInput>(
+      (resolve) => {
+        this.resolveConfirmation = resolve;
+      },
+    );
+    yield {
+      type: "oma.tool_permission_use",
+      piToolCallId: "toolu_builtin",
+      name: "bash",
+      input: { command: "touch /workspace/probe" },
+      evaluatedPermission: this.permission,
+      bindToolUseId: (id) => {
+        this.boundToolUseId = id;
+      },
+      rejectToolUse: () => {},
+    } satisfies RuntimeToolPermissionUseEvent;
+
+    const result =
+      this.permission === "ask"
+        ? await confirmation
+        : ({ result: this.permission === "deny" ? "deny" : "allow" } as const);
+    await this.releaseGate.promise;
+    yield {
+      type: "tool_execution_end",
+      toolCallId: "toolu_builtin",
+      toolName: "bash",
+      result: {
+        content: [
+          {
+            type: "text",
+            text: result.result === "allow" ? "tool ok" : "tool denied",
+          },
+        ],
+      },
+      isError: result.result === "deny",
+    };
+    yield { type: "agent_end", messages: [], willRetry: false };
+  }
+
+  override claimToolConfirmation(
+    _workspaceId: string,
+    _sessionId: string,
+    event: ManagedAgentsUserToolConfirmationEventInput,
+  ): (() => void) | undefined {
+    if (event.tool_use_id !== this.boundToolUseId) return undefined;
+    return () => {
+      this.claimCount += 1;
+      this.resolveConfirmation?.(event);
+      this.resolveConfirmation = undefined;
+    };
+  }
+
+  release(): void {
+    this.releaseGate.resolve(undefined);
+  }
+}
+
 class NoPendingToolPermissionRunner implements RuntimeEventRunner {
   async *runUserMessage(): AsyncIterable<unknown> {}
 
@@ -629,10 +776,14 @@ class OversizedToolPermissionRunner implements RuntimeEventRunner {
   }
 }
 
-function makeSharedFixture(runner: RuntimeEventRunner): {
+function makeSharedFixture(
+  runner: RuntimeEventRunner,
+  opts: { leaseTtlMs?: number } = {},
+): {
   app: ReturnType<typeof createControlPlaneApp>;
   recreate: (nextRunner: RuntimeEventRunner) => ReturnType<typeof createControlPlaneApp>;
   eventStore: EventStore;
+  runner: RuntimeEventRunner;
 } {
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
@@ -652,7 +803,13 @@ function makeSharedFixture(runner: RuntimeEventRunner): {
         eventStore,
         sessionStore,
         broadcaster,
-        { runner: nextRunner, translate: translatePiEvent },
+        {
+          runner: nextRunner,
+          translate: translatePiEvent,
+          ...(opts.leaseTtlMs === undefined
+            ? {}
+            : { leaseTtlMs: opts.leaseTtlMs }),
+        },
       ),
     });
   };
@@ -660,6 +817,7 @@ function makeSharedFixture(runner: RuntimeEventRunner): {
     app: makeApp(runner),
     recreate: makeApp,
     eventStore,
+    runner,
   };
 }
 
@@ -858,4 +1016,15 @@ async function eventuallyEvents(
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error("timed out waiting for expected events");
+}
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }

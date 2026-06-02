@@ -2,7 +2,9 @@ import { newEventId, type EventType } from "../../types/events.ts";
 import type { JsonObject, JsonValue } from "../../types/json.ts";
 import { invalidRequest } from "../errors.ts";
 import { MAX_EVENT_PAYLOAD_BYTES } from "./constants.ts";
+import type { WorkspaceId } from "../workspace.ts";
 import type {
+  EventStoreRuntimeChanges,
   PersistedSessionEvent,
   SessionEventBroadcaster,
   SessionEventStore,
@@ -14,6 +16,7 @@ export interface EventDraft {
 }
 
 export function materializePersistedEvents(
+  workspaceId: WorkspaceId,
   sessionId: string,
   drafts: readonly EventDraft[],
   now: string,
@@ -27,6 +30,7 @@ export function materializePersistedEvents(
     }
     return {
       id: newEventId(),
+      workspace_id: workspaceId,
       session_id: sessionId,
       type: draft.type,
       processed_at: now,
@@ -44,5 +48,17 @@ export function persistAndPublish(
   // Keep persist-then-notify in the same sync tick. Do not `await` between
   // appendBatch and publishPersisted; that would open a replay gap.
   store.appendBatch(events);
+  broadcaster.publishPersisted(events);
+}
+
+export function persistRuntimeChangesAndPublish(
+  store: SessionEventStore,
+  broadcaster: SessionEventBroadcaster,
+  events: readonly PersistedSessionEvent[],
+  changes: EventStoreRuntimeChanges,
+): void {
+  // Same persist-then-notify invariant as persistAndPublish, with runtime
+  // ledger mutations committed in the same SQLite transaction as the events.
+  store.appendBatchWithRuntimeChanges(events, changes);
   broadcaster.publishPersisted(events);
 }

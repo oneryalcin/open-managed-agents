@@ -26,6 +26,7 @@
 
 import type { EventStore } from "./store.ts";
 import type { PersistedSessionEvent } from "./types.ts";
+import type { WorkspaceId } from "../workspace.ts";
 
 interface Subscriber {
   push(event: PersistedSessionEvent): void;
@@ -59,7 +60,7 @@ export class SessionEventBroadcaster {
    */
   publishPersisted(events: readonly PersistedSessionEvent[]): void {
     for (const event of events) {
-      const subs = this.subscribers.get(event.session_id);
+      const subs = this.subscribers.get(subscriptionKey(event.workspace_id, event.session_id));
       if (!subs) continue;
       for (const sub of subs) {
         sub.push(event);
@@ -67,8 +68,8 @@ export class SessionEventBroadcaster {
     }
   }
 
-  closeSession(sessionId: string): void {
-    const subs = this.subscribers.get(sessionId);
+  closeSession(workspaceId: WorkspaceId, sessionId: string): void {
+    const subs = this.subscribers.get(subscriptionKey(workspaceId, sessionId));
     if (!subs) return;
     for (const sub of subs) {
       sub.close();
@@ -81,6 +82,7 @@ export class SessionEventBroadcaster {
    * live events until the supplied signal aborts.
    */
   async *subscribe(
+    workspaceId: WorkspaceId,
     sessionId: string,
     opts: SubscribeOptions = {},
   ): AsyncIterable<PersistedSessionEvent> {
@@ -129,7 +131,7 @@ export class SessionEventBroadcaster {
     // CRITICAL: register live listener BEFORE replaying. Any event published
     // during replay lands in liveQueue (or trips overflow); dedup by
     // `id <= lastYieldedId` handles the overlap.
-    this.addSubscriber(sessionId, sub);
+    this.addSubscriber(workspaceId, sessionId, sub);
 
     const onAbort = () => {
       wakeSubscriber();
@@ -147,7 +149,7 @@ export class SessionEventBroadcaster {
     const store = this.store;
     function* drainStore(): Generator<PersistedSessionEvent> {
       while (true) {
-        const page = store.list(sessionId, {
+        const page = store.list(workspaceId, sessionId, {
           afterId: lastYieldedId,
           limit: pageSize,
         });
@@ -209,31 +211,45 @@ export class SessionEventBroadcaster {
         });
       }
     } finally {
-      this.removeSubscriber(sessionId, sub);
+      this.removeSubscriber(workspaceId, sessionId, sub);
       opts.signal?.removeEventListener("abort", onAbort);
     }
   }
 
   /** For tests/introspection. Not part of the public broadcaster contract. */
-  subscriberCount(sessionId: string): number {
-    return this.subscribers.get(sessionId)?.size ?? 0;
+  subscriberCount(sessionId: string, workspaceId: WorkspaceId = "wrk_default"): number {
+    return this.subscribers.get(subscriptionKey(workspaceId, sessionId))?.size ?? 0;
   }
 
-  private addSubscriber(sessionId: string, sub: Subscriber): void {
-    let set = this.subscribers.get(sessionId);
+  private addSubscriber(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    sub: Subscriber,
+  ): void {
+    const key = subscriptionKey(workspaceId, sessionId);
+    let set = this.subscribers.get(key);
     if (!set) {
       set = new Set();
-      this.subscribers.set(sessionId, set);
+      this.subscribers.set(key, set);
     }
     set.add(sub);
   }
 
-  private removeSubscriber(sessionId: string, sub: Subscriber): void {
-    const set = this.subscribers.get(sessionId);
+  private removeSubscriber(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    sub: Subscriber,
+  ): void {
+    const key = subscriptionKey(workspaceId, sessionId);
+    const set = this.subscribers.get(key);
     if (!set) return;
     set.delete(sub);
-    if (set.size === 0) this.subscribers.delete(sessionId);
+    if (set.size === 0) this.subscribers.delete(key);
   }
+}
+
+function subscriptionKey(workspaceId: WorkspaceId, sessionId: string): string {
+  return JSON.stringify([workspaceId, sessionId]);
 }
 
 function positiveIntegerOrThrow(value: number, name: string): number {

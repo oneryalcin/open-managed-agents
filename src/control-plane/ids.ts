@@ -16,6 +16,10 @@ export function newRequestId(): string {
   return `req_${uuidv7()}`;
 }
 
+export function newRuntimeTurnId(): string {
+  return `rtun_${uuidv7()}`;
+}
+
 export function newSessionResourceId(): string {
   return `sesrsc_${uuidv7()}`;
 }

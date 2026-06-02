@@ -311,15 +311,20 @@ describe("session lifecycle API", () => {
     await runner.started;
 
     await service.archiveSession("wrk_default", sessionId);
-    expect(guardState(service).closedSessions.has(sessionId)).toBe(true);
-    expect(guardState(service).activeRuntimeTasks.get(sessionId)).toBe(1);
+    expect(guardState(service).closedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(true);
+    expect(guardState(service).activeRuntimeTasks.get(sessionScopeKey("wrk_default", sessionId))).toBe(1);
 
     runner.release();
-    await waitFor(() => !guardState(service).activeRuntimeTasks.has(sessionId));
+    await waitFor(
+      () =>
+        !guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+    );
 
-    expect(guardState(service).closedSessions.has(sessionId)).toBe(false);
-    expect(guardState(service).deletedSessions.has(sessionId)).toBe(false);
-    expect(eventStore.list(sessionId).map((event) => event.type)).toEqual([
+    expect(guardState(service).closedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(false);
+    expect(guardState(service).deletedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(false);
+    expect(eventStore.list("wrk_default", sessionId).map((event) => event.type)).toEqual([
       "user.message",
       "session.status_terminated",
     ]);
@@ -336,17 +341,67 @@ describe("session lifecycle API", () => {
     await runner.started;
 
     await service.deleteSession("wrk_default", sessionId);
-    expect(guardState(service).closedSessions.has(sessionId)).toBe(true);
-    expect(guardState(service).deletedSessions.has(sessionId)).toBe(true);
-    expect(guardState(service).activeRuntimeTasks.get(sessionId)).toBe(1);
-    expect(eventStore.list(sessionId)).toEqual([]);
+    expect(guardState(service).closedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(true);
+    expect(guardState(service).deletedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(true);
+    expect(guardState(service).activeRuntimeTasks.get(sessionScopeKey("wrk_default", sessionId))).toBe(1);
+    expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
 
     runner.release();
-    await waitFor(() => !guardState(service).activeRuntimeTasks.has(sessionId));
+    await waitFor(
+      () =>
+        !guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+    );
 
-    expect(guardState(service).closedSessions.has(sessionId)).toBe(false);
-    expect(guardState(service).deletedSessions.has(sessionId)).toBe(false);
-    expect(eventStore.list(sessionId)).toEqual([]);
+    expect(guardState(service).closedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(false);
+    expect(guardState(service).deletedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(false);
+    expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
+  });
+
+  it("does not emit runtime failure events after archive closes a running session", async () => {
+    const { eventStore, runner, service, sessionId } =
+      createRuntimeFailureHarness();
+
+    service.send("wrk_default", sessionId, {
+      events: [
+        { type: "user.message", content: [{ type: "text", text: "start" }] },
+      ],
+    });
+    await runner.started;
+
+    await service.archiveSession("wrk_default", sessionId);
+    await waitFor(
+      () =>
+        !guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+    );
+
+    expect(eventStore.list("wrk_default", sessionId).map((event) => event.type))
+      .toEqual(["user.message", "session.status_terminated"]);
+  });
+
+  it("does not resurrect deleted event history after runtime failure", async () => {
+    const { eventStore, runner, service, sessionId } =
+      createRuntimeFailureHarness();
+
+    service.send("wrk_default", sessionId, {
+      events: [
+        { type: "user.message", content: [{ type: "text", text: "start" }] },
+      ],
+    });
+    await runner.started;
+
+    await service.deleteSession("wrk_default", sessionId);
+    await waitFor(
+      () =>
+        !guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+    );
+
+    expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
   });
 
   it("allows terminated sessions and rejects rescheduling sessions at archive preflight", () => {
@@ -385,7 +440,7 @@ describe("session lifecycle API", () => {
     const runner = new ClaimingRunner();
     const { broadcaster, eventStore, service, sessionId, store } =
       createArchiveGuardHarness({ runner });
-    guardState(service).pendingCustomToolActions.set(sessionId, {
+    guardState(service).pendingCustomToolActions.set(sessionScopeKey("wrk_default", sessionId), {
       ids: ["sevt_pending_tool"],
       timer: undefined,
     });
@@ -404,12 +459,18 @@ describe("session lifecycle API", () => {
           ],
         }),
       ).toThrow(`Session ${sessionId} not found`);
-      expect(eventStore.list(sessionId)).toEqual([]);
+      expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
       expect(broadcaster.published).toEqual([]);
       expect(runner.claimed).toEqual([]);
-      expect(guardState(service).activeRuntimeTasks.has(sessionId)).toBe(false);
       expect(
-        guardState(service).pendingCustomToolActions.get(sessionId)?.ids,
+        guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+      ).toBe(false);
+      expect(
+        guardState(service).pendingCustomToolActions.get(
+          sessionScopeKey("wrk_default", sessionId),
+        )?.ids,
       ).toEqual(["sevt_pending_tool"]);
     };
 
@@ -435,7 +496,7 @@ describe("session lifecycle API", () => {
         { type: "user.message", content: [{ type: "text", text: "after" }] },
       ],
     });
-    expect(eventStore.list(sessionId).map((event) => event.type)).toEqual([
+    expect(eventStore.list("wrk_default", sessionId).map((event) => event.type)).toEqual([
       "user.message",
     ]);
   });
@@ -461,13 +522,13 @@ describe("session lifecycle API", () => {
           ],
         }),
       ).toThrow(`Session ${sessionId} not found`);
-      expect(eventStore.list(sessionId)).toEqual([]);
+      expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
     };
 
     service.archiveSessionRowAfterPreflight("wrk_default", sessionId);
 
     expect(checkedDuringOuterArchive).toBe(true);
-    expect(eventStore.list(sessionId)).toEqual([]);
+    expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
   });
 
   it("scopes the archive guard by workspace and session identity", () => {
@@ -498,7 +559,7 @@ describe("session lifecycle API", () => {
       expect.any(String),
     );
     expect(store.retrieveAny("wrk_b", sharedSessionId)?.archived_at).toBe(null);
-    expect(eventStore.list(sharedSessionId).map((event) => event.type)).toEqual([
+    expect(eventStore.list("wrk_b", sharedSessionId).map((event) => event.type)).toEqual([
       "user.message",
     ]);
   });
@@ -581,8 +642,52 @@ function createGuardHarness(
   return { eventStore, runner, service, sessionId };
 }
 
+function createRuntimeFailureHarness(): {
+  eventStore: EventStore;
+  runner: ThrowingAfterCloseRunner;
+  service: DefaultSessionEventsService;
+  sessionId: string;
+} {
+  const sessionId = `sesn_${Math.random().toString(16).slice(2)}`;
+  const eventStore = EventStore.open(":memory:");
+  const sessionStore = SqliteSessionStore.open(":memory:");
+  const runner = new ThrowingAfterCloseRunner();
+  const service = new DefaultSessionEventsService(
+    eventStore,
+    sessionStore,
+    new SessionEventBroadcaster(eventStore),
+    {
+      runner,
+      translate: () => [],
+    },
+  );
+  const now = new Date().toISOString();
+  sessionStore.create({
+    row: {
+      id: sessionId,
+      workspace_id: "wrk_default",
+      type: "session",
+      agent: { type: "agent", id: "agent_guard", version: 1 },
+      environment_id: "env_guard",
+      status: "idle",
+      title: null,
+      metadata: {},
+      created_at: now,
+      updated_at: now,
+      archived_at: null,
+      usage: null,
+      resources: [],
+    },
+  });
+  return { eventStore, runner, service, sessionId };
+}
+
 function guardState(service: DefaultSessionEventsService): GuardState {
   return service as unknown as GuardState;
+}
+
+function sessionScopeKey(workspaceId: WorkspaceId, sessionId: string): string {
+  return JSON.stringify([workspaceId, sessionId]);
 }
 
 function createArchiveGuardHarness(
@@ -805,6 +910,30 @@ class DelayedRunner implements RuntimeEventRunner {
   }
 
   release(): void {
+    this.resume?.();
+  }
+}
+
+class ThrowingAfterCloseRunner implements RuntimeEventRunner {
+  readonly started: Promise<void>;
+  private markStarted: (() => void) | undefined;
+  private resume: (() => void) | undefined;
+
+  constructor() {
+    this.started = new Promise<void>((resolve) => {
+      this.markStarted = resolve;
+    });
+  }
+
+  async *runUserMessage(): AsyncIterable<unknown> {
+    await new Promise<void>((resolve) => {
+      this.resume = resolve;
+      this.markStarted?.();
+    });
+    throw new Error("runtime failed after close");
+  }
+
+  async closeSession(): Promise<void> {
     this.resume?.();
   }
 }
