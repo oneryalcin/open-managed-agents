@@ -60,6 +60,28 @@ Local schema references:
 `/tmp/claude-docs/docs/api/typescript/beta/sessions/events/list.md`, and
 `/tmp/claude-docs/docs/api/typescript/beta/sessions/retrieve.md`.
 
+A hosted probe on 2026-06-02 used `claude-sonnet-4-6` to resolve the happy-path
+ordering questions. The probe confirmed that span start events have no public
+provider/model/request metadata, span end events use
+`model_request_start_id` plus `model_usage`, and hosted emits
+`agent.message` / `agent.tool_use` immediately before the corresponding
+`span.model_request_end`. See
+`docs/references/managed-agents-observability-schema-findings.md`.
+
+The upstream Pi SDK docs confirm the runtime event lifecycle names OMA already
+translates (`message_start`, `message_end`, `tool_execution_*`, `agent_*`, and
+`turn_*`), but they do not document the payload fields needed for model usage,
+provider/model metadata, response IDs, or error terminal state. The
+implementation still needs a raw Pi probe before coding those fields.
+
+A fresh Pi raw event probe on 2026-06-02 covered simple responses, custom-tool
+calls, thrown tools, abort, and provider-owned builtin-shaped `bash` tools. It
+confirmed strict non-interleaving for assistant model requests in the probed
+paths, no `responseId` on assistant `message_start`, final usage on assistant
+`message_end`, and abort terminal messages with `stopReason: "aborted"` plus
+zero usage. See
+`docs/references/managed-agents-observability-schema-findings.md`.
+
 ## Goal
 
 Add a small, reviewable span/event-observability slice that lets OMA sessions
@@ -67,8 +89,7 @@ carry the data needed for the essential Console timeline:
 
 - `span.model_request_start`
 - `span.model_request_end`
-- model/provider/response metadata when available
-- token/cache/cost usage when available from Pi
+- token/cache usage when available from Pi
 - model request duration derivable from start/end `processed_at`
 - stable ordering through `events.list` and SSE replay
 
@@ -122,7 +143,7 @@ Recommended public payloads:
 {
   model_request_start_id: "sevt_...",
   is_error: boolean | null,
-  model_usage?: {
+  model_usage: {
     cache_creation_input_tokens: number,
     cache_read_input_tokens: number,
     input_tokens: number,
@@ -145,6 +166,12 @@ The `model_usage` field name comes directly from the Managed Agents TypeScript
 reference. Use that name for model-request end spans rather than the generic
 Pi-local `usage`.
 
+`model_usage` is documented as required on hosted span end events. If a Pi
+terminal event does not expose usage, the implementation must either delay the
+span end until a terminal payload with usage is available, or explicitly ship a
+documented OMA divergence. Do not silently make `model_usage` optional in the
+public contract.
+
 ## Derivation Strategy
 
 Preferred initial mapping:
@@ -152,19 +179,28 @@ Preferred initial mapping:
 1. On Pi `message_start` for assistant messages with model/provider metadata,
    emit `span.model_request_start`.
 2. Track the persisted start event ID for that model request inside the active
-   runtime turn.
+   runtime turn. For normal in-process completion, use a single open assistant
+   model-request slot per runtime turn; current Pi fixtures and the fresh
+   2026-06-02 Pi probe show strict non-interleaved assistant model requests.
 3. On the matching assistant `message_end`, emit `span.model_request_end` with
    `model_request_start_id`, `is_error`, and final `model_usage`.
 4. Continue translating `message_end` into `agent.message` / `agent.tool_use`
    as today.
 
-Ordering should be:
+Do not key the open span by `responseId` at `message_start` time. Existing Pi
+fixtures and the fresh Pi probe show `responseId` on assistant
+`message_update` / `message_end`, not on `message_start`, so the start-side
+correlation must be positional.
+
+Hosted ordering for a simple response is:
 
 ```text
 session.status_running
+session.thread_status_running
+user.message
 span.model_request_start
+agent.message
 span.model_request_end
-agent.message OR agent.tool_use
 ...
 session.status_idle
 ```
@@ -173,13 +209,15 @@ For tool-using turns, each assistant model request gets its own start/end pair:
 
 ```text
 session.status_running
+session.thread_status_running
+user.message
 span.model_request_start
-span.model_request_end
 agent.tool_use
+span.model_request_end
 agent.tool_result
 span.model_request_start
-span.model_request_end
 agent.message
+span.model_request_end
 session.status_idle
 ```
 
@@ -190,22 +228,28 @@ are distinct timeline segments.
 
 ### 1. Probe Pi event metadata first
 
-Add or run a scratch probe that captures a current Pi session for:
+This plan already has a fresh 2026-06-02 probe for the common paths. Before
+coding, rerun or extend the scratch probe if the installed Pi SDK changes or if
+the implementation needs a model-provider error path.
+
+The current probe covers:
 
 - simple assistant message
-- builtin Docker-local bash call
+- provider-owned builtin-shaped bash call
 - persisted custom tool call
-- interrupt or model error if cheap to trigger
+- thrown tool
+- interrupt / abort
 
-The probe should record the raw Pi event stream under `scratch/artifacts/` or a
-documented temporary path. Before coding, confirm:
+The probe records the raw Pi event stream under `scratch/artifacts/`. Current
+findings:
 
-- whether every assistant model request has a stable `responseId`
-- whether `message_start.timestamp` and `message_end.timestamp` are sufficient
-  for internal validation, while public duration remains derived from start/end
+- assistant model requests are strictly non-interleaved in the probed paths
+- `responseId` appears on assistant updates/end, not start
+- `message_start.timestamp` and `message_end.timestamp` are sufficient for
+  internal validation, while public duration remains derived from start/end
   `processed_at`
-- whether usage appears first on updates or only reliably on `message_end`
-- what error-path event shape carries model-request failure data
+- usage appears on updates, but final output usage is reliable on `message_end`
+- tool throw and abort are covered; model-provider error shape remains unknown
 
 ### 2. Extend the public event registry
 
@@ -267,7 +311,97 @@ Recommendation: Option A for the first slice. It is a smaller behavioral change
 and keeps the existing pure translator tests intact. If span handling grows
 past model requests, revisit a stateful translator class.
 
-### 4. Persist spans through the existing event log
+The normalizer should be a single in-pass transform feeding the same ordered
+draft batch as the existing runtime translator. Do not implement it as a second
+`Pi.subscribe()` consumer. The intended shape is:
+
+```ts
+[...spanDraftsFor(piEvent), ...translatePiEvent(piEvent)]
+```
+
+with hosted-compatible ordering for assistant terminal events:
+
+```ts
+[...transcriptDraftsFor(piEvent), spanEndDraftFor(piEvent)]
+```
+
+Add a unit test at the draft-array level so future refactors cannot reorder the
+span and transcript drafts while still passing only persisted-log assertions.
+
+### 4. Close open spans on terminalization
+
+An emitted `span.model_request_start` must not remain permanently dangling if
+the runtime fails, is interrupted, is terminalized during recovery, or loses
+runtime state while waiting for a tool result/confirmation.
+
+Use a small durable open-span field on `pending_runtime_turns` for this. The
+append-only `events` table is session-scoped and has no `turn_id`, and event
+listing is paginated/capped. Reconstructing open spans by scanning the session
+log would either be O(n) with explicit pagination on every terminalization or
+silently wrong if implemented as a single-page scan.
+
+Add a JSON field such as `open_model_request_start_ids` to the pending runtime
+turn record. Treat it as a stack/array of hosted public start event IDs:
+
+1. When emitting `span.model_request_start`, append the span start event and add
+   its persisted `sevt_*` ID to the turn's open-span list in the same
+   `appendBatchWithRuntimeChanges` transaction.
+2. When emitting the matching transcript event and `span.model_request_end`,
+   append both events and remove that start ID from the open-span list in the
+   same transaction.
+3. When terminalizing a turn, read the open-span list from the claimed/current
+   pending runtime turn record and emit one synthetic end per still-open start.
+   Clear the open-span list and close the turn in the same
+   `appendBatchWithRuntimeChanges` transaction.
+
+Synthetic terminalization span ends should use:
+
+```ts
+{
+  model_request_start_id: "sevt_...",
+  is_error: true,
+  model_usage: zeroUsage,
+}
+```
+
+where `zeroUsage` is the hosted-shaped zero-token object:
+
+```ts
+{
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+}
+```
+
+This preserves the required `model_usage` field without fabricating token
+consumption. If hosted model-error probes show a different error usage policy,
+update this plan before implementation.
+
+Terminalization path requirements:
+
+- In-process runtime failure: emit synthetic span ends before the existing
+  `session.error` and `session.status_idle` rows, in the same transaction that
+  terminalizes the runtime turn.
+- Custom-tool / tool-confirmation terminalization: emit synthetic span ends
+  before the existing terminal result/error and idle rows, in the same
+  transaction that acknowledges/closes actions and terminalizes the turn.
+- Abandoned-turn recovery: use the claimed terminalizing turn record's
+  `owner_id` and incremented `owner_generation` when closing the turn, so a
+  stale owner cannot append duplicate synthetic ends after losing the lease.
+- Archive: inject synthetic span ends into the archive close batch before
+  `session.status_terminated`; archive does not emit `session.error`.
+- Delete: no synthetic close is needed after hard delete because the event log
+  is deleted with the session. Close runtime turns before deleting rows as
+  today.
+
+The atomicity requirement is load-bearing: synthetic span ends, open-span-list
+clearing, action closure/acknowledgement when applicable, and turn closure must
+commit or roll back together. Tests should assert the synthetic end appears
+before the terminal rows, not just that it exists.
+
+### 5. Persist spans through the existing event log
 
 Span events must use the same `materializePersistedEvents`,
 `appendBatch`/`appendBatchWithRuntimeChanges`, and broadcaster path as existing
@@ -281,7 +415,7 @@ The implementation must preserve:
 - replay via `Last-Event-ID`
 - atomic persist-before-publish behavior
 
-### 5. Session usage follow-up
+### 6. Session usage follow-up
 
 `sessions.store.ts` currently keeps `usage` as `null`. Once span end events
 carry reliable `model_usage`, add a second small slice to aggregate session-level
@@ -311,18 +445,22 @@ correct event-level usage first.
    drifts.
 2. A simple Pi assistant response emits:
    `session.status_running -> span.model_request_start ->
-   span.model_request_end -> agent.message -> session.status_idle`.
-3. A tool-using Pi turn emits one model span pair before `agent.tool_use` and
-   another model span pair before the final `agent.message`.
-4. `span.model_request_end` includes `model_request_start_id`, `is_error`, and
-   `model_usage` when Pi exposes usage.
+   agent.message -> span.model_request_end -> session.status_idle`.
+3. A tool-using Pi turn emits one model span start before `agent.tool_use`,
+   the matching model span end after `agent.tool_use`, then another model span
+   start before the final `agent.message` and the matching model span end after
+   that message.
+4. `span.model_request_end` includes required `model_request_start_id`,
+   `is_error`, and `model_usage`.
 5. Span start/end events are persisted and replayed through `events.list`.
 6. Span events stream over SSE with the same IDs and order as `events.list`.
 7. `types[]=span.model_request_end` filtering works.
-8. If Pi omits `model_usage` or response ID, the event still emits with missing
-   optional fields rather than fabricating values.
-9. Error/interrupt behavior is either implemented with tests or explicitly
-   deferred with a documented fixture gap.
+8. If Pi omits `responseId`, correlation still works via the single open
+   assistant model-request slot.
+9. Runtime failure, interrupt, archive terminalization, and abandoned-turn
+   recovery close any unmatched model-request start with a synthetic
+   `span.model_request_end{is_error:true}`. Hard delete is the exception
+   because the session event log is removed.
 10. `docs/scope.md`, `docs/roadmap.md`, and the event-topology tracker are
     updated so the supported/deferred event matrix matches code.
 
@@ -332,8 +470,14 @@ Unit:
 
 - Translator/normalizer fixture test for simple assistant span pair.
 - Fixture test for tool-call turn with two span pairs.
-- Fixture test that missing `model_usage` does not throw and does not invent
-  usage.
+- Fixture test that `responseId` is absent on `message_start` and positional
+  correlation still closes the right span.
+- Fixture test that terminalization/recovery closes an unmatched start with
+  `is_error: true`, zero usage, and ordering before terminal rows.
+- Fixture test that archive emits synthetic span ends before
+  `session.status_terminated`.
+- Fixture test that hard delete closes runtime turns and deletes event rows
+  without trying to preserve synthetic span history.
 
 Integration:
 
@@ -352,20 +496,30 @@ Smoke:
 
 ### Risk: Pi usage fields are not stable enough
 
-Mitigation: probe first; only publish fields observed on `message_end` or
-equivalent terminal events. Keep uncertain fields optional.
+Mitigation: probe first; only publish usage observed on `message_end` or
+equivalent terminal events. For synthetic terminalization closes, use explicit
+zero usage and `is_error: true`; otherwise do not emit a hosted-shaped span end
+without required `model_usage` unless the divergence is named.
 
 ### Risk: Start/end correlation breaks on concurrent turns
 
-Mitigation: key span state by `(workspaceId, sessionId, runtime turn, responseId
-or assistant-message index)`. Add a test with multiple model requests in one
-session.
+Mitigation: key span state by `(workspaceId, sessionId, runtime turn)` plus a
+single open assistant model-request slot. Add a test with multiple sequential
+model requests in one session. If a future Pi SDK probe finds interleaved
+assistant model requests, revise this plan before implementation.
+
+### Risk: Durable open-span state drifts from the event log
+
+Mitigation: update the open-span list only in the same
+`appendBatchWithRuntimeChanges` transaction that appends the corresponding span
+events. Do not update the list out-of-band. Add rollback tests around start,
+normal end, and synthetic terminalization batches.
 
 ### Risk: Span events reorder transcript events
 
-Mitigation: emit span events from the same runtime queue before derived
-`agent.message` / `agent.tool_use` drafts for the same model response. Assert
-exact order in tests.
+Mitigation: emit span events from the same runtime queue and match hosted
+ordering: start span, transcript event, end span for the same model response.
+Assert exact order in tests.
 
 ### Risk: Hosted payload shape differs from our guessed payload
 
@@ -375,15 +529,11 @@ wire contract.
 
 ## Open Questions Before Code
 
-1. Does hosted Managed Agents expose a stable `span_id` prefix or only `sevt_*`
-   event IDs for spans?
-2. Are model request start/end payloads top-level fields or nested under
-   something like `model_request`?
-3. Does the hosted API include token usage on span events, session objects, or
-   both?
-4. Does Pi emit model-error terminal metadata that can produce a matching
+1. Does Pi emit model-error terminal metadata that can produce a matching
    `span.model_request_end{is_error:true}`?
-5. Should `agent.message` also carry usage, or should usage live only on spans
+2. What exact event shape does hosted Managed Agents emit on a model request
+   error?
+3. Should `agent.message` also carry usage, or should usage live only on spans
    and session summaries?
 
 ## Review Checklist
