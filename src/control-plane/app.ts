@@ -4,6 +4,7 @@ import { agentsRoutes } from "./agents/routes.ts";
 import { DefaultAgentService } from "./agents/service.ts";
 import { SqliteAgentStore } from "./agents/store.ts";
 import type { AgentService } from "./agents/types.ts";
+import type { ManagedAgentsCustomTool } from "../types/agents.ts";
 import { environmentsRoutes } from "./environments/routes.ts";
 import { DefaultEnvironmentService } from "./environments/service.ts";
 import { SqliteEnvironmentStore } from "./environments/store.ts";
@@ -146,6 +147,12 @@ export function createDeploymentControlPlaneApp(
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
     fileMountResolver: createFileMountResolver(sessionStore, fileStorage),
+    customTools:
+      opts.runner?.customTools ??
+      createStoreBackedCustomToolsProvider({
+        sessions: sessionStore,
+        agents: agentStore,
+      }),
     builtinToolAccess: createStoreBackedBuiltinToolAccessResolver({
       sessions: sessionStore,
       agents: agentStore,
@@ -237,6 +244,27 @@ async function snapshotToRuntimeMount(
     sha256: snapshot.sha256,
     sizeBytes: snapshot.size_bytes,
     bytes,
+  };
+}
+
+function createStoreBackedCustomToolsProvider(opts: {
+  sessions: Pick<SqliteSessionStore, "retrieveAny">;
+  agents: Pick<SqliteAgentStore, "retrieveAny">;
+}): (
+  workspaceId: string,
+  sessionId: string,
+  context?: { agentId?: string },
+) => readonly ManagedAgentsCustomTool[] {
+  return (workspaceId, sessionId, context) => {
+    const session = opts.sessions.retrieveAny(workspaceId, sessionId);
+    const agentId = session?.agent.id ?? context?.agentId;
+    if (!agentId) return [];
+    const agent = opts.agents.retrieveAny(workspaceId, agentId);
+    if (!agent) return [];
+    const tools = agent.tools.filter(
+      (tool): tool is ManagedAgentsCustomTool => tool.type === "custom",
+    );
+    return tools;
   };
 }
 

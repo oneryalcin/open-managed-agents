@@ -210,7 +210,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
   ): ReadonlySet<string> {
     const handle = this.sessions.get(sessionId);
     if (handle) return handle.customToolNames;
-    return this.customToolBridge.customToolNames(workspaceId, sessionId);
+    return this.customToolBridge.customToolNames(
+      workspaceId,
+      sessionId,
+      this.preparingSessionAgentContext(workspaceId, sessionId),
+    );
   }
 
   publicToolUseIdForPiToolCallId(
@@ -473,8 +477,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
     if (pending) return pending;
 
     const created = (async () => {
+        const context = this.preparingSessionAgentContext(workspaceId, sessionId);
         const customToolNames = new Set(
-          (this.opts.customTools?.(workspaceId, sessionId) ?? []).map(
+          (this.opts.customTools?.(workspaceId, sessionId, context) ?? []).map(
             (tool) => tool.name,
           ),
         );
@@ -499,7 +504,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
           session =
             this.sessionFactory === undefined
-              ? await this.createPiSession(workspaceId, sessionId, sandbox)
+              ? await this.createPiSession(workspaceId, sessionId, sandbox, context)
               : await this.sessionFactory(workspaceId, sessionId);
           assertActiveToolSurface(
             session,
@@ -549,6 +554,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
     sandbox: SandboxProvider | undefined,
+    context: { agentId?: string } | undefined,
   ): Promise<PiRuntimeSession> {
     const provider = this.opts.provider ?? "anthropic";
     const modelId = this.opts.model ?? "claude-haiku-4-5";
@@ -557,7 +563,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       throw new Error(`Pi model not available: ${provider}/${modelId}`);
     }
     const customToolNames = (
-      this.opts.customTools?.(workspaceId, sessionId) ?? []
+      this.opts.customTools?.(workspaceId, sessionId, context) ?? []
     ).map((tool) => tool.name);
     const sandboxTools = this.enabledSandboxTools(workspaceId, sessionId, sandbox);
     const customTools: ToolDefinition<any, any, any>[] = [
@@ -566,6 +572,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         workspaceId,
         sessionId,
         () => this.sessions.get(sessionId)?.emitInternal,
+        context,
       ),
     ];
     const { session } = await createAgentSession({
@@ -584,6 +591,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
       sessionManager: SessionManager.inMemory(),
     });
     return session;
+  }
+
+  private preparingSessionAgentContext(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): { agentId?: string } | undefined {
+    const preparing = this.preparingSessionAgents.get(sessionId);
+    if (preparing?.workspaceId !== workspaceId) return undefined;
+    return { agentId: preparing.agentId };
   }
 
   private resolveSandboxProviderFactory(): SandboxProviderFactory | undefined {

@@ -17,6 +17,7 @@ const DEFAULT_CUSTOM_TOOL_TIMEOUT_MS = 5 * 60 * 1000;
 export type PiCustomToolsProvider = (
   workspaceId: WorkspaceId,
   sessionId: string,
+  context?: { agentId?: string },
 ) => readonly ManagedAgentsCustomTool[];
 
 interface PendingCustomToolCall {
@@ -43,9 +44,12 @@ export class PiCustomToolBridge {
   customToolNames(
     workspaceId: WorkspaceId,
     sessionId: string,
+    context?: { agentId?: string },
   ): Set<string> {
     return new Set(
-      (this.opts.customTools?.(workspaceId, sessionId) ?? []).map((tool) => tool.name),
+      (this.opts.customTools?.(workspaceId, sessionId, context) ?? []).map(
+        (tool) => tool.name,
+      ),
     );
   }
 
@@ -53,24 +57,26 @@ export class PiCustomToolBridge {
     workspaceId: WorkspaceId,
     sessionId: string,
     getEmitter: () => ((event: RuntimeCustomToolUseEvent) => void) | undefined,
+    context?: { agentId?: string },
   ): ReturnType<typeof defineTool>[] {
-    return (this.opts.customTools?.(workspaceId, sessionId) ?? []).map((tool) =>
-      defineTool({
-        name: tool.name,
-        label: tool.name,
-        description: tool.description ?? tool.name,
-        parameters: tool.input_schema as never,
-        execute: async (piToolCallId, params, signal) =>
-          this.awaitResult(
-            workspaceId,
-            sessionId,
-            tool.name,
-            piToolCallId,
-            params,
-            signal,
-            getEmitter,
-          ),
-      }),
+    return (this.opts.customTools?.(workspaceId, sessionId, context) ?? []).map(
+      (tool) =>
+        defineTool({
+          name: tool.name,
+          label: tool.name,
+          description: tool.description ?? tool.name,
+          parameters: tool.input_schema as never,
+          execute: async (piToolCallId, params, signal) =>
+            this.awaitResult(
+              workspaceId,
+              sessionId,
+              tool.name,
+              piToolCallId,
+              params,
+              signal,
+              getEmitter,
+            ),
+        }),
     );
   }
 

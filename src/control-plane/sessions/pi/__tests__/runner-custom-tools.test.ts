@@ -110,7 +110,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   SessionManager: sdk.SessionManager,
 }));
 
-import { PiSessionRunner } from "../runner.ts";
+import { PiSessionRunner, type PiSessionFileMount } from "../runner.ts";
 import type { SandboxProvider } from "../sandbox/provider.ts";
 
 describe("PiSessionRunner custom-tool bridge", () => {
@@ -222,6 +222,78 @@ describe("PiSessionRunner custom-tool bridge", () => {
       "ask_user",
     ]);
     expect(sandboxTool.execute).toHaveBeenCalledOnce();
+  });
+
+  it("passes preparing agent context into custom tools for pre-warmed file sessions", async () => {
+    const customTools = vi.fn(
+      (
+        _workspaceId: string,
+        _sessionId: string,
+        context?: { agentId?: string },
+      ): ManagedAgentsCustomTool[] =>
+        context?.agentId === "agent_1" ? [ASK_USER] : [],
+    );
+    const mounts: PiSessionFileMount[] = [
+      {
+        mountPath: "/mnt/session/uploads/probe.txt",
+        snapshotFileId: "file_snapshot",
+        sha256: "sha",
+        sizeBytes: 5,
+        bytes: new TextEncoder().encode("input"),
+      },
+    ];
+    const materializeFileResources = vi.fn();
+    const sandbox = {
+      cwd: "/workspace",
+      operations: {},
+      tools: [],
+      toolNames: new Set(),
+      invocations: {
+        total: 0,
+        byTool: {
+          bash: 0,
+          read: 0,
+          write: 0,
+          edit: 0,
+          find: 0,
+          ls: 0,
+        },
+        toolCallIds: {
+          bash: new Set(),
+          read: new Set(),
+          write: new Set(),
+          edit: new Set(),
+          find: new Set(),
+          ls: new Set(),
+        },
+      },
+      materializeFileResources,
+      dispose: vi.fn(),
+    } as unknown as SandboxProvider;
+    const runner = new PiSessionRunner({
+      customTools,
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    await runner.prepareSession("wrk_default", "sesn_prepared", {
+      fileMounts: mounts,
+      agent: { type: "agent", id: "agent_1", version: 1 },
+    });
+
+    expect(materializeFileResources).toHaveBeenCalledWith(mounts);
+    expect(customTools).toHaveBeenCalledWith(
+      "wrk_default",
+      "sesn_prepared",
+      { agentId: "agent_1" },
+    );
+    expect(sdk.lastCreateOptions()).toMatchObject({
+      noTools: "builtin",
+      tools: ["ask_user"],
+    });
+    expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
+      "ask_user",
+    ]);
   });
 
   it("pauses always_ask builtin tools until a tool_confirmation is committed", async () => {

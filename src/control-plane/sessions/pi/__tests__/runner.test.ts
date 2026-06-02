@@ -369,6 +369,53 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.prompts).toEqual(["one"]);
   });
 
+  it("passes the preparing agent context to custom tools for pre-warmed file sessions", async () => {
+    const seenContexts: Array<{ agentId?: string } | undefined> = [];
+    const customTools: PiCustomToolsProvider = (
+      _workspaceId,
+      _sessionId,
+      context,
+    ) => {
+      seenContexts.push(context);
+      return [
+        {
+          type: "custom",
+          name: "custom_lookup",
+          description: "custom",
+          input_schema: {},
+        },
+      ];
+    };
+    const factory = new FakeSessionFactory({
+      activeToolNames: ["custom_lookup"],
+    });
+    const sandbox = new FakeSandboxProvider([]);
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      customTools,
+      idleTtlMs: 0,
+    });
+    const mounts: PiSessionFileMount[] = [
+      {
+        mountPath: "/mnt/session/uploads/probe.txt",
+        snapshotFileId: "file_snapshot",
+        sha256: "sha",
+        sizeBytes: 5,
+        bytes: new TextEncoder().encode("input"),
+      },
+    ];
+
+    await runner.prepareSession("wrk", "sesn_1", {
+      fileMounts: mounts,
+      agent: { type: "agent", id: "agent_1", version: 1 },
+    });
+
+    expect(sandbox.materialized).toEqual([mounts]);
+    expect(factory.sessions).toHaveLength(1);
+    expect(seenContexts).toContainEqual({ agentId: "agent_1" });
+  });
+
   it("re-materializes file mounts from the resolver when a prepared handle was evicted", async () => {
     const factory = new FakeSessionFactory();
     const sandboxes: FakeSandboxProvider[] = [];
