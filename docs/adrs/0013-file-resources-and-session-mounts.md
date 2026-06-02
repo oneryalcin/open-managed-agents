@@ -87,12 +87,16 @@ File upload needs hard size limits in v1:
 
 | Limit | Default |
 |---|---:|
-| Per uploaded file | 10 MiB |
+| Per uploaded file | 20 MiB |
 | Per session file-resource count | 10 files |
 | Per session aggregate mounted bytes | 50 MiB |
 | Per workspace aggregate in-memory file bytes | 100 MiB |
 
-These are conservative defaults for the in-memory backend. A later implementation may adjust them with upstream evidence or deployment config, but v1 must not be unlimited.
+These are conservative defaults for the in-memory backend. The uploaded-file
+limit is large enough for the official `ship-your-first-managed-agent`
+workshop's uploaded log while remaining explicit and bounded. A later
+implementation may adjust them with upstream evidence or deployment config, but
+v1 must not be unlimited.
 
 Limits must be enforced before storing bytes and before attempting Docker materialization. Exceeding a v1 file/resource quota returns HTTP 400 with `invalid_request_error` and a caller-safe message naming the violated limit. Do not leave the error type to implementation choice.
 

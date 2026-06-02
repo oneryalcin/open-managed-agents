@@ -14,12 +14,19 @@ still tracked separately in the roadmap.
 2. [Architecture](architecture.md) — the three-tier decomposition and how Pi's `AgentSession` primitives map to Managed Agents endpoints
 3. [Roadmap](roadmap.md) — current implementation state and the next cycles
 4. [References](references.md) — upstream docs, SDK docs, related projects we evaluated
+5. [Examples](examples.md) — executable parity examples against external tutorial flows
 
 ## Tutorials
 
 - [First Docker-local run](tutorials/docker-local-first-run.md) — run the
   current MVP path with deployment config, Pi, Docker-local bash, translated
   tool events, and cleanup verification.
+
+## Examples
+
+- [Ship Your First Managed Agent](examples/ship-your-first-managed-agent.md) —
+  run the official workshop's Python SDK flow against local OMA with file
+  upload, Docker-local sandboxing, event streaming, replay, and cleanup.
 
 ## Working notes
 
