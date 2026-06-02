@@ -90,6 +90,7 @@ type CustomToolResultClaim =
       kind: "duplicate";
       event: ManagedAgentsUserCustomToolResultEventInput;
       customToolUseId: string;
+      row?: PersistedSessionEvent;
     }
   | {
       kind: "terminalize";
@@ -200,8 +201,25 @@ export class DefaultSessionEventsService implements SessionEventsService {
         )
         .map((claim) => [claim.event, claim.row] as const),
     );
+    const existingCustomToolResults = new Map<
+      ManagedAgentsUserEventInput,
+      PersistedSessionEvent
+    >(
+      customToolResultClaims
+        .filter(
+          (
+            claim,
+          ): claim is Extract<CustomToolResultClaim, { kind: "duplicate" }> & {
+            row: PersistedSessionEvent;
+          } =>
+            claim.kind === "duplicate" && claim.row !== undefined,
+        )
+        .map((claim) => [claim.event, claim.row] as const),
+    );
     const persistableEvents = req.events.filter(
-      (event) => !existingToolConfirmations.has(event),
+      (event) =>
+        !existingToolConfirmations.has(event) &&
+        !existingCustomToolResults.has(event),
     );
     const now = new Date().toISOString();
     const drafts: EventDraft[] = persistableEvents.map((event) => ({
@@ -260,6 +278,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       [...rows, ...terminalRows, ...toolConfirmationTerminalRows],
       runtimeChanges,
     );
+    this.scheduleAcceptedTurnRecovery(runtimeChanges.acceptedTurns);
     const committedToolConfirmations = toolConfirmationClaims.filter(
       (claim): claim is ToolConfirmationCommit => "commit" in claim,
     );
@@ -272,10 +291,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
       committedToolConfirmations.length > 0;
     if (hasCommittedRuntimeInputs) {
       for (const { customToolUseId } of liveCustomToolResultClaims) {
-        this.removePendingCustomToolAction(sessionId, customToolUseId);
+        this.removePendingCustomToolAction(workspaceId, sessionId, customToolUseId);
       }
       for (const { toolUseId } of committedToolConfirmations) {
-        this.removePendingToolConfirmation(sessionId, toolUseId);
+        this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
       }
       this.persistRuntimeDrafts(workspaceId, sessionId, [
         { type: "session.status_running", payload: {} },
@@ -306,7 +325,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
     this.maybeInterruptRuntime(workspaceId, sessionId, req.events);
     return req.events.map((event) =>
       toSendResponseEvent(
-        existingToolConfirmations.get(event) ?? rowsByInput.get(event),
+        existingToolConfirmations.get(event) ??
+          existingCustomToolResults.get(event) ??
+          rowsByInput.get(event),
       ),
     );
   }
@@ -318,23 +339,25 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): void {
     if (!events.some((event) => event.type === "user.interrupt")) return;
     this.blockInterruptedCustomToolActions(
+      workspaceId,
       sessionId,
       this.closeInterruptedRuntimeActions(
         workspaceId,
         sessionId,
         unique([
-          ...this.clearPendingCustomToolActions(sessionId),
+          ...this.clearPendingCustomToolActions(workspaceId, sessionId),
           ...this.pendingRuntimeActionIds(workspaceId, sessionId, "custom_tool"),
         ]),
       ),
     );
     this.blockInterruptedToolConfirmations(
+      workspaceId,
       sessionId,
       this.closeInterruptedRuntimeActions(
         workspaceId,
         sessionId,
         unique([
-          ...this.clearPendingToolConfirmations(sessionId),
+          ...this.clearPendingToolConfirmations(workspaceId, sessionId),
           ...this.pendingRuntimeActionIds(
             workspaceId,
             sessionId,
@@ -550,8 +573,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     const session = requireExistingSession(this.sessions, workspaceId, sessionId);
     if (session.archived_at !== null || session.status === "terminated") return;
     if (
-      (this.activeRuntimeTasks.get(sessionId) ?? 0) > 0 &&
-      !this.hasPendingRuntimeActions(sessionId)
+      this.activeRuntimeTaskCount(workspaceId, sessionId) > 0 &&
+      !this.hasPendingRuntimeActions(workspaceId, sessionId)
     ) {
       throw sessionNotArchivable(sessionId, "running");
     }
@@ -593,12 +616,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
   ): Promise<void> {
     requireExistingSession(this.sessions, workspaceId, sessionId);
-    this.closedSessions.add(sessionId);
-    this.clearPendingCustomToolActions(sessionId);
-    this.clearPendingToolConfirmations(sessionId);
-    this.clearCompletedToolConfirmations(sessionId);
-    this.interruptedCustomToolActions.delete(sessionId);
-    this.interruptedToolConfirmations.delete(sessionId);
+    this.closedSessions.add(sessionScopeKey(workspaceId, sessionId));
+    this.clearPendingCustomToolActions(workspaceId, sessionId);
+    this.clearPendingToolConfirmations(workspaceId, sessionId);
+    this.clearCompletedToolConfirmations(workspaceId, sessionId);
+    this.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
+    this.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
     this.closePendingRuntimeTurnsForSession(workspaceId, sessionId, "archived");
     if (!this.hasSessionEvent(workspaceId, sessionId, "session.status_terminated")) {
       this.persistLifecycleDrafts(workspaceId, sessionId, [
@@ -606,28 +629,28 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ]);
     }
     await this.closeRuntimeBestEffort(workspaceId, sessionId);
-    this.retireLifecycleGuardsIfIdle(sessionId);
+    this.retireLifecycleGuardsIfIdle(workspaceId, sessionId);
   }
 
   async deleteSession(
     workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<void> {
-    this.closedSessions.add(sessionId);
-    this.clearPendingCustomToolActions(sessionId);
-    this.clearPendingToolConfirmations(sessionId);
-    this.clearCompletedToolConfirmations(sessionId);
-    this.interruptedCustomToolActions.delete(sessionId);
-    this.interruptedToolConfirmations.delete(sessionId);
+    this.closedSessions.add(sessionScopeKey(workspaceId, sessionId));
+    this.clearPendingCustomToolActions(workspaceId, sessionId);
+    this.clearPendingToolConfirmations(workspaceId, sessionId);
+    this.clearCompletedToolConfirmations(workspaceId, sessionId);
+    this.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
+    this.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
     this.closePendingRuntimeTurnsForSession(workspaceId, sessionId, "deleted");
     this.persistLifecycleDrafts(workspaceId, sessionId, [
       { type: "session.deleted", payload: {} },
     ]);
     this.broadcaster.closeSession(workspaceId, sessionId);
-    this.deletedSessions.add(sessionId);
+    this.deletedSessions.add(sessionScopeKey(workspaceId, sessionId));
     await this.closeRuntimeBestEffort(workspaceId, sessionId);
     this.events.deleteForSession(workspaceId, sessionId);
-    this.retireLifecycleGuardsIfIdle(sessionId);
+    this.retireLifecycleGuardsIfIdle(workspaceId, sessionId);
   }
 
   private closePendingRuntimeTurnsForSession(
@@ -656,9 +679,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     const turns = this.events.listPendingRuntimeTurns(workspaceId);
     let nextRetryAt: number | undefined;
     for (const turn of turns) {
-      if (this.closedSessions.has(turn.session_id)) continue;
-      if (this.deletedSessions.has(turn.session_id)) continue;
-      if ((this.activeRuntimeTasks.get(turn.session_id) ?? 0) > 0) continue;
+      if (this.closedSessions.has(sessionScopeKey(workspaceId, turn.session_id))) continue;
+      if (this.deletedSessions.has(sessionScopeKey(workspaceId, turn.session_id))) continue;
+      if (!this.isRecoverableSession(workspaceId, turn.session_id)) continue;
+      if (this.activeRuntimeTaskCount(workspaceId, turn.session_id) > 0) continue;
       const retryDelayMs = runtimeLeaseRetryDelayMs(turn.lease_expires_at);
       if (retryDelayMs > 0) {
         const retryAt = Date.now() + retryDelayMs;
@@ -679,14 +703,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
           );
           continue;
         }
-        this.beginRuntimeTask(claimed.session_id);
+        this.beginRuntimeTask(workspaceId, claimed.session_id);
         void this.runRuntimePrompts(
           workspaceId,
           claimed.session_id,
           prompts,
           undefined,
         ).finally(() => {
-          this.finishRuntimeTask(claimed.session_id);
+          this.finishRuntimeTask(workspaceId, claimed.session_id);
         });
         continue;
       }
@@ -710,6 +734,32 @@ export class DefaultSessionEventsService implements SessionEventsService {
       );
     }
     this.scheduleAbandonedRuntimeRecovery(workspaceId, nextRetryAt);
+  }
+
+  private isRecoverableSession(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): boolean {
+    const session = this.sessions.retrieveAny(workspaceId, sessionId);
+    if (!session) return false;
+    return session.archived_at === null && session.status !== "terminated";
+  }
+
+  private scheduleAcceptedTurnRecovery(
+    acceptedTurns: EventStoreRuntimeChanges["acceptedTurns"],
+  ): void {
+    if (!acceptedTurns || acceptedTurns.length === 0) return;
+    const earliestRetryAtByWorkspace = new Map<WorkspaceId, number>();
+    for (const turn of acceptedTurns) {
+      const retryAt = Date.now() + runtimeLeaseRetryDelayMs(turn.leaseExpiresAt);
+      const earliest = earliestRetryAtByWorkspace.get(turn.workspaceId);
+      if (earliest === undefined || retryAt < earliest) {
+        earliestRetryAtByWorkspace.set(turn.workspaceId, retryAt);
+      }
+    }
+    for (const [workspaceId, retryAt] of earliestRetryAtByWorkspace) {
+      this.scheduleAbandonedRuntimeRecovery(workspaceId, retryAt);
+    }
   }
 
   private scheduleAbandonedRuntimeRecovery(
@@ -932,36 +982,49 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (!this.runtimeRunner || !this.runtimeTranslator) return;
     if (prompts.length === 0) return;
 
-    this.beginRuntimeTask(sessionId);
+    this.beginRuntimeTask(workspaceId, sessionId);
     void this.runRuntimePrompts(workspaceId, sessionId, prompts, signal)
       .finally(() => {
-        this.finishRuntimeTask(sessionId);
+        this.finishRuntimeTask(workspaceId, sessionId);
       });
   }
 
-  private beginRuntimeTask(sessionId: string): void {
+  private beginRuntimeTask(workspaceId: WorkspaceId, sessionId: string): void {
+    const key = sessionScopeKey(workspaceId, sessionId);
     this.activeRuntimeTasks.set(
-      sessionId,
-      (this.activeRuntimeTasks.get(sessionId) ?? 0) + 1,
+      key,
+      (this.activeRuntimeTasks.get(key) ?? 0) + 1,
     );
   }
 
-  private finishRuntimeTask(sessionId: string): void {
-    const remaining = (this.activeRuntimeTasks.get(sessionId) ?? 1) - 1;
+  private finishRuntimeTask(workspaceId: WorkspaceId, sessionId: string): void {
+    const key = sessionScopeKey(workspaceId, sessionId);
+    const remaining = (this.activeRuntimeTasks.get(key) ?? 1) - 1;
     if (remaining > 0) {
-      this.activeRuntimeTasks.set(sessionId, remaining);
+      this.activeRuntimeTasks.set(key, remaining);
       return;
     }
-    this.activeRuntimeTasks.delete(sessionId);
-    this.interruptedCustomToolActions.delete(sessionId);
-    this.interruptedToolConfirmations.delete(sessionId);
-    this.retireLifecycleGuardsIfIdle(sessionId);
+    this.activeRuntimeTasks.delete(key);
+    this.interruptedCustomToolActions.delete(key);
+    this.interruptedToolConfirmations.delete(key);
+    this.retireLifecycleGuardsIfIdle(workspaceId, sessionId);
   }
 
-  private retireLifecycleGuardsIfIdle(sessionId: string): void {
-    if ((this.activeRuntimeTasks.get(sessionId) ?? 0) > 0) return;
-    this.closedSessions.delete(sessionId);
-    this.deletedSessions.delete(sessionId);
+  private retireLifecycleGuardsIfIdle(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): void {
+    const key = sessionScopeKey(workspaceId, sessionId);
+    if ((this.activeRuntimeTasks.get(key) ?? 0) > 0) return;
+    this.closedSessions.delete(key);
+    this.deletedSessions.delete(key);
+  }
+
+  private activeRuntimeTaskCount(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): number {
+    return this.activeRuntimeTasks.get(sessionScopeKey(workspaceId, sessionId)) ?? 0;
   }
 
   private async runRuntimePrompts(
@@ -1037,8 +1100,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
                 ) === true,
             });
             if (drafts.length === 0) continue;
-            if (this.closedSessions.has(sessionId)) return;
-            if (this.deletedSessions.has(sessionId)) return;
+            if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+            if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
             const now = new Date().toISOString();
             const rows = materializePersistedEvents(
               workspaceId,
@@ -1095,8 +1158,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
           ],
         };
         if (
-          !this.closedSessions.has(sessionId) &&
-          !this.deletedSessions.has(sessionId)
+          !this.closedSessions.has(sessionScopeKey(workspaceId, sessionId)) &&
+          !this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))
         ) {
           runtimeChanges.closedTurns = [
             {
@@ -1111,7 +1174,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
             },
           ];
         }
-        if (this.closedSessions.has(sessionId) || this.deletedSessions.has(sessionId)) {
+        if (
+          this.closedSessions.has(sessionScopeKey(workspaceId, sessionId)) ||
+          this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))
+        ) {
           this.events.appendBatchWithRuntimeChanges([], runtimeChanges);
           return;
         }
@@ -1144,8 +1210,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     drafts: readonly EventDraft[],
   ): void {
-    if (this.closedSessions.has(sessionId)) return;
-    if (this.deletedSessions.has(sessionId)) return;
+    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     this.persistLifecycleDrafts(workspaceId, sessionId, drafts);
   }
 
@@ -1257,7 +1323,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     drafts: readonly EventDraft[],
   ): void {
-    if (this.deletedSessions.has(sessionId)) return;
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     const now = new Date().toISOString();
     const rows = materializePersistedEvents(workspaceId, sessionId, drafts, now);
     persistAndPublish(this.events, this.broadcaster, rows);
@@ -1271,8 +1337,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     ownerGeneration: number,
     event: RuntimeCustomToolUseEvent,
   ): void {
-    if (this.closedSessions.has(sessionId)) return;
-    if (this.deletedSessions.has(sessionId)) return;
+    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     try {
       const now = new Date().toISOString();
       const useRows = materializePersistedEvents(
@@ -1298,7 +1364,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             reason,
           );
         }
-        this.removePendingCustomToolAction(sessionId, useRows[0].id);
+        this.removePendingCustomToolAction(workspaceId, sessionId, useRows[0].id);
       });
       persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
         openedActions: [
@@ -1338,8 +1404,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     ownerGeneration: number,
     event: RuntimeToolPermissionUseEvent,
   ): void {
-    if (this.closedSessions.has(sessionId)) return;
-    if (this.deletedSessions.has(sessionId)) return;
+    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     try {
       const now = new Date().toISOString();
       const useRows = materializePersistedEvents(
@@ -1366,7 +1432,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             reason,
           );
         }
-        this.removePendingToolConfirmation(sessionId, useRows[0].id);
+        this.removePendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
       });
       persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
         openedActions:
@@ -1434,7 +1500,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       if (
         interruptedInBatch ||
         this.interruptedCustomToolActions
-          .get(sessionId)
+          .get(sessionScopeKey(workspaceId, sessionId))
           ?.has(event.custom_tool_use_id) === true
       ) {
         throw notFound(`No pending custom tool call: ${event.custom_tool_use_id}`);
@@ -1459,6 +1525,15 @@ export class DefaultSessionEventsService implements SessionEventsService {
       );
       if (actionClosedWithoutResult(action)) {
         throw notFound(`No pending custom tool call: ${event.custom_tool_use_id}`);
+      }
+      if (prior && action && isAcknowledgedInFlightAction(action)) {
+        claims.push({
+          kind: "duplicate",
+          event,
+          customToolUseId: event.custom_tool_use_id,
+          row: prior,
+        });
+        continue;
       }
       if (prior && action && !isRuntimeTurnClosed(action.turn.state)) {
         if (
@@ -1619,7 +1694,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       if (
         interruptedInBatch ||
         this.interruptedToolConfirmations
-          .get(sessionId)
+          .get(sessionScopeKey(workspaceId, sessionId))
           ?.has(event.tool_use_id) === true
       ) {
         throw notFound(`No pending tool confirmation: ${event.tool_use_id}`);
@@ -1653,6 +1728,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
           );
         }
         claims.push({ event, row: durableCompleted.row });
+        continue;
+      }
+      if (persisted?.row && action && isAcknowledgedInFlightAction(action)) {
+        claims.push({ event, row: persisted.row });
         continue;
       }
       const commit = this.runtimeRunner?.claimToolConfirmation?.(
@@ -1816,10 +1895,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     customToolUseId: string,
   ): void {
-    let pending = this.pendingCustomToolActions.get(sessionId);
+    const key = sessionScopeKey(workspaceId, sessionId);
+    let pending = this.pendingCustomToolActions.get(key);
     if (!pending) {
       pending = { workspaceId, ids: [], timer: undefined };
-      this.pendingCustomToolActions.set(sessionId, pending);
+      this.pendingCustomToolActions.set(key, pending);
     }
     pending.ids.push(customToolUseId);
     if (pending.timer) return;
@@ -1833,27 +1913,39 @@ export class DefaultSessionEventsService implements SessionEventsService {
   }
 
   private removePendingCustomToolAction(
+    workspaceId: WorkspaceId,
     sessionId: string,
     customToolUseId: string,
   ): void {
-    const pending = this.pendingCustomToolActions.get(sessionId);
+    const key = sessionScopeKey(workspaceId, sessionId);
+    const pending = this.pendingCustomToolActions.get(key);
     if (!pending) return;
     pending.ids = pending.ids.filter((id) => id !== customToolUseId);
     if (pending.ids.length === 0 && pending.timer === undefined) {
-      this.pendingCustomToolActions.delete(sessionId);
+      this.pendingCustomToolActions.delete(key);
     }
   }
 
-  private clearPendingCustomToolActions(sessionId: string): string[] {
-    const pending = this.pendingCustomToolActions.get(sessionId);
+  private clearPendingCustomToolActions(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): string[] {
+    const key = sessionScopeKey(workspaceId, sessionId);
+    const pending = this.pendingCustomToolActions.get(key);
     if (!pending) return [];
     if (pending.timer) clearTimeout(pending.timer);
-    this.pendingCustomToolActions.delete(sessionId);
+    this.pendingCustomToolActions.delete(key);
     return [...pending.ids];
   }
 
-  private hasPendingCustomToolActions(sessionId: string): boolean {
-    return (this.pendingCustomToolActions.get(sessionId)?.ids.length ?? 0) > 0;
+  private hasPendingCustomToolActions(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): boolean {
+    return (
+      this.pendingCustomToolActions.get(sessionScopeKey(workspaceId, sessionId))
+        ?.ids.length ?? 0
+    ) > 0;
   }
 
   private addPendingToolConfirmation(
@@ -1861,10 +1953,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     toolUseId: string,
   ): void {
-    let pending = this.pendingToolConfirmations.get(sessionId);
+    const key = sessionScopeKey(workspaceId, sessionId);
+    let pending = this.pendingToolConfirmations.get(key);
     if (!pending) {
       pending = { workspaceId, ids: [], timer: undefined };
-      this.pendingToolConfirmations.set(sessionId, pending);
+      this.pendingToolConfirmations.set(key, pending);
     }
     pending.ids.push(toolUseId);
     if (pending.timer) return;
@@ -1874,73 +1967,99 @@ export class DefaultSessionEventsService implements SessionEventsService {
   }
 
   private removePendingToolConfirmation(
+    workspaceId: WorkspaceId,
     sessionId: string,
     toolUseId: string,
   ): void {
-    const pending = this.pendingToolConfirmations.get(sessionId);
+    const key = sessionScopeKey(workspaceId, sessionId);
+    const pending = this.pendingToolConfirmations.get(key);
     if (!pending) return;
     pending.ids = pending.ids.filter((id) => id !== toolUseId);
     if (pending.ids.length === 0 && pending.timer === undefined) {
-      this.pendingToolConfirmations.delete(sessionId);
+      this.pendingToolConfirmations.delete(key);
     }
   }
 
-  private clearPendingToolConfirmations(sessionId: string): string[] {
-    const pending = this.pendingToolConfirmations.get(sessionId);
+  private clearPendingToolConfirmations(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): string[] {
+    const key = sessionScopeKey(workspaceId, sessionId);
+    const pending = this.pendingToolConfirmations.get(key);
     if (!pending) return [];
     if (pending.timer) clearTimeout(pending.timer);
-    this.pendingToolConfirmations.delete(sessionId);
+    this.pendingToolConfirmations.delete(key);
     return [...pending.ids];
   }
 
-  private hasPendingToolConfirmations(sessionId: string): boolean {
-    return (this.pendingToolConfirmations.get(sessionId)?.ids.length ?? 0) > 0;
+  private hasPendingToolConfirmations(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): boolean {
+    return (
+      this.pendingToolConfirmations.get(sessionScopeKey(workspaceId, sessionId))
+        ?.ids.length ?? 0
+    ) > 0;
   }
 
-  private clearCompletedToolConfirmations(sessionId: string): void {
+  private clearCompletedToolConfirmations(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): void {
     for (const [id, completed] of this.completedToolConfirmations) {
-      if (completed.sessionId === sessionId) {
+      if (
+        completed.workspaceId === workspaceId &&
+        completed.sessionId === sessionId
+      ) {
         this.completedToolConfirmations.delete(id);
       }
     }
   }
 
-  private hasPendingRuntimeActions(sessionId: string): boolean {
+  private hasPendingRuntimeActions(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): boolean {
     return (
-      this.hasPendingCustomToolActions(sessionId) ||
-      this.hasPendingToolConfirmations(sessionId)
+      this.hasPendingCustomToolActions(workspaceId, sessionId) ||
+      this.hasPendingToolConfirmations(workspaceId, sessionId)
     );
   }
 
   private blockInterruptedCustomToolActions(
+    workspaceId: WorkspaceId,
     sessionId: string,
     customToolUseIds: readonly string[],
   ): void {
     if (customToolUseIds.length === 0) return;
-    let blocked = this.interruptedCustomToolActions.get(sessionId);
+    const key = sessionScopeKey(workspaceId, sessionId);
+    let blocked = this.interruptedCustomToolActions.get(key);
     if (!blocked) {
       blocked = new Set<string>();
-      this.interruptedCustomToolActions.set(sessionId, blocked);
+      this.interruptedCustomToolActions.set(key, blocked);
     }
     for (const id of customToolUseIds) blocked.add(id);
   }
 
   private blockInterruptedToolConfirmations(
+    workspaceId: WorkspaceId,
     sessionId: string,
     toolUseIds: readonly string[],
   ): void {
     if (toolUseIds.length === 0) return;
-    let blocked = this.interruptedToolConfirmations.get(sessionId);
+    const key = sessionScopeKey(workspaceId, sessionId);
+    let blocked = this.interruptedToolConfirmations.get(key);
     if (!blocked) {
       blocked = new Set<string>();
-      this.interruptedToolConfirmations.set(sessionId, blocked);
+      this.interruptedToolConfirmations.set(key, blocked);
     }
     for (const id of toolUseIds) blocked.add(id);
   }
 
   private flushPendingActions(workspaceId: WorkspaceId, sessionId: string): void {
-    const custom = this.pendingCustomToolActions.get(sessionId);
-    const confirmations = this.pendingToolConfirmations.get(sessionId);
+    const key = sessionScopeKey(workspaceId, sessionId);
+    const custom = this.pendingCustomToolActions.get(key);
+    const confirmations = this.pendingToolConfirmations.get(key);
     if (!custom && !confirmations) return;
     if (custom?.timer) {
       clearTimeout(custom.timer);
@@ -1955,10 +2074,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ...(confirmations?.ids ?? []),
     ];
     if (custom && custom.ids.length === 0) {
-      this.pendingCustomToolActions.delete(sessionId);
+      this.pendingCustomToolActions.delete(key);
     }
     if (confirmations && confirmations.ids.length === 0) {
-      this.pendingToolConfirmations.delete(sessionId);
+      this.pendingToolConfirmations.delete(key);
     }
     if (ids.length === 0) return;
     this.persistRuntimeDrafts(workspaceId, sessionId, [
@@ -2014,6 +2133,10 @@ function sessionNotArchivable(
 }
 
 function archiveGuardKey(workspaceId: WorkspaceId, sessionId: string): string {
+  return JSON.stringify([workspaceId, sessionId]);
+}
+
+function sessionScopeKey(workspaceId: WorkspaceId, sessionId: string): string {
   return JSON.stringify([workspaceId, sessionId]);
 }
 
@@ -2260,6 +2383,16 @@ function actionClosedWithoutResult(
     action?.close_reason === "interrupted" ||
     action?.close_reason === "timeout" ||
     action?.close_reason === "terminalized"
+  );
+}
+
+function isAcknowledgedInFlightAction(
+  action: PendingRuntimeActionRecord | undefined,
+): boolean {
+  return (
+    action?.state === "acknowledged" &&
+    !isRuntimeTurnClosed(action.turn.state) &&
+    action.close_reason === null
   );
 }
 

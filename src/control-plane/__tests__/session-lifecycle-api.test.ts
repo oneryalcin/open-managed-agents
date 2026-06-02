@@ -311,14 +311,19 @@ describe("session lifecycle API", () => {
     await runner.started;
 
     await service.archiveSession("wrk_default", sessionId);
-    expect(guardState(service).closedSessions.has(sessionId)).toBe(true);
-    expect(guardState(service).activeRuntimeTasks.get(sessionId)).toBe(1);
+    expect(guardState(service).closedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(true);
+    expect(guardState(service).activeRuntimeTasks.get(sessionScopeKey("wrk_default", sessionId))).toBe(1);
 
     runner.release();
-    await waitFor(() => !guardState(service).activeRuntimeTasks.has(sessionId));
+    await waitFor(
+      () =>
+        !guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+    );
 
-    expect(guardState(service).closedSessions.has(sessionId)).toBe(false);
-    expect(guardState(service).deletedSessions.has(sessionId)).toBe(false);
+    expect(guardState(service).closedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(false);
+    expect(guardState(service).deletedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(false);
     expect(eventStore.list("wrk_default", sessionId).map((event) => event.type)).toEqual([
       "user.message",
       "session.status_terminated",
@@ -336,16 +341,21 @@ describe("session lifecycle API", () => {
     await runner.started;
 
     await service.deleteSession("wrk_default", sessionId);
-    expect(guardState(service).closedSessions.has(sessionId)).toBe(true);
-    expect(guardState(service).deletedSessions.has(sessionId)).toBe(true);
-    expect(guardState(service).activeRuntimeTasks.get(sessionId)).toBe(1);
+    expect(guardState(service).closedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(true);
+    expect(guardState(service).deletedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(true);
+    expect(guardState(service).activeRuntimeTasks.get(sessionScopeKey("wrk_default", sessionId))).toBe(1);
     expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
 
     runner.release();
-    await waitFor(() => !guardState(service).activeRuntimeTasks.has(sessionId));
+    await waitFor(
+      () =>
+        !guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+    );
 
-    expect(guardState(service).closedSessions.has(sessionId)).toBe(false);
-    expect(guardState(service).deletedSessions.has(sessionId)).toBe(false);
+    expect(guardState(service).closedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(false);
+    expect(guardState(service).deletedSessions.has(sessionScopeKey("wrk_default", sessionId))).toBe(false);
     expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
   });
 
@@ -361,7 +371,12 @@ describe("session lifecycle API", () => {
     await runner.started;
 
     await service.archiveSession("wrk_default", sessionId);
-    await waitFor(() => !guardState(service).activeRuntimeTasks.has(sessionId));
+    await waitFor(
+      () =>
+        !guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+    );
 
     expect(eventStore.list("wrk_default", sessionId).map((event) => event.type))
       .toEqual(["user.message", "session.status_terminated"]);
@@ -379,7 +394,12 @@ describe("session lifecycle API", () => {
     await runner.started;
 
     await service.deleteSession("wrk_default", sessionId);
-    await waitFor(() => !guardState(service).activeRuntimeTasks.has(sessionId));
+    await waitFor(
+      () =>
+        !guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+    );
 
     expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
   });
@@ -420,7 +440,7 @@ describe("session lifecycle API", () => {
     const runner = new ClaimingRunner();
     const { broadcaster, eventStore, service, sessionId, store } =
       createArchiveGuardHarness({ runner });
-    guardState(service).pendingCustomToolActions.set(sessionId, {
+    guardState(service).pendingCustomToolActions.set(sessionScopeKey("wrk_default", sessionId), {
       ids: ["sevt_pending_tool"],
       timer: undefined,
     });
@@ -442,9 +462,15 @@ describe("session lifecycle API", () => {
       expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
       expect(broadcaster.published).toEqual([]);
       expect(runner.claimed).toEqual([]);
-      expect(guardState(service).activeRuntimeTasks.has(sessionId)).toBe(false);
       expect(
-        guardState(service).pendingCustomToolActions.get(sessionId)?.ids,
+        guardState(service).activeRuntimeTasks.has(
+          sessionScopeKey("wrk_default", sessionId),
+        ),
+      ).toBe(false);
+      expect(
+        guardState(service).pendingCustomToolActions.get(
+          sessionScopeKey("wrk_default", sessionId),
+        )?.ids,
       ).toEqual(["sevt_pending_tool"]);
     };
 
@@ -658,6 +684,10 @@ function createRuntimeFailureHarness(): {
 
 function guardState(service: DefaultSessionEventsService): GuardState {
   return service as unknown as GuardState;
+}
+
+function sessionScopeKey(workspaceId: WorkspaceId, sessionId: string): string {
+  return JSON.stringify([workspaceId, sessionId]);
 }
 
 function createArchiveGuardHarness(
