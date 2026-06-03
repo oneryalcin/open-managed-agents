@@ -40,6 +40,23 @@ OMA already supports uploaded input files and Docker-local materialization, but
 it intentionally keeps uploaded input files non-downloadable and keeps internal
 mount snapshots out of the public Files API. That boundary must remain intact.
 
+Current OMA constraints that this slice must handle:
+
+- Docker-local containers run `--read-only` and currently mount writable tmpfs
+  only at `/workspace` and `/mnt/session/uploads`; there is no writable
+  `/mnt/session/outputs` path yet.
+- The Docker container runs as uid/gid `65534:65534`, so the output mount must
+  be writable by that user.
+- Docker tmpfs memory validation currently assumes workspace + uploads tmpfs
+  only. Adding an outputs tmpfs must update that invariant.
+- `RuntimeEventRunner` has no output-collection method today. The live sandbox
+  is held inside the Pi runner handle, so the runner must own the bridge between
+  terminal-idle detection and sandbox output collection.
+- Public file metadata currently types `scope` as `string | null`. Hosted uses
+  `scope: { type: "session", id }` for session-scoped rows, so this slice must
+  update the public shape deliberately instead of creating an accidental API
+  break.
+
 Relevant existing docs:
 
 - `docs/adrs/0003-pluggable-sandbox-provider-boundary.md` names
@@ -72,6 +89,8 @@ without weakening the uploaded-input-file boundary.
 - Do not make uploaded input files downloadable.
 - Do not expose internal session mount snapshots in `GET /v1/files` or
   `GET /v1/files?scope_id=...`.
+- Do not expose hosted-style mounted input-copy rows yet, even though hosted
+  lists those rows as `downloadable: false`.
 - Do not implement full hosted file-copy semantics for mounted inputs.
 - Do not add a durable object-store backend in this slice.
 - Do not implement skills, `agents.update`, memory stores, outcomes, MCP,
@@ -109,6 +128,16 @@ Hosted does return session-scoped mounted input copies, but they are
 until input-copy semantics are designed. The output-file path should not expose
 the existing internal snapshot rows as a shortcut.
 
+Public scope shape decision:
+
+- Public output file rows should use the hosted object shape:
+  `scope: { type: "session", id: sessionId }`.
+- Storage can keep a simple internal `scope_id` string for lookup and
+  isolation. Do not force internal snapshot records to become public scoped
+  file records.
+- Update `ManagedAgentsFileMetadata` and tests for scoped public files.
+  Uploaded input files remain `scope: null`.
+
 `GET /v1/files/<file_id>/content`:
 
 - returns bytes for output files where `downloadable === true`;
@@ -117,7 +146,24 @@ the existing internal snapshot rows as a shortcut.
 
 ## Design
 
-### 1. Extend the sandbox provider boundary
+### 1. Provision the Docker-local output root
+
+Docker-local must create a writable output root before any collection can work.
+Today the root filesystem is read-only, so asking the agent to create
+`/mnt/session/outputs` would fail.
+
+Add a third tmpfs mount to Docker sandbox startup:
+
+- path: `/mnt/session/outputs`;
+- ownership/mode: writable by uid/gid `65534:65534`;
+- security: `rw,nosuid,nodev,noexec`;
+- size: explicit output tmpfs size, reviewed with the quota limits below.
+
+Update Docker memory-headroom validation so it accounts for workspace + uploads
++ outputs tmpfs. Add command-construction tests that assert the outputs mount,
+ownership, mode, and updated headroom error message.
+
+### 2. Extend the sandbox provider boundary
 
 Add a provider-owned output collection boundary beside `materializeFileResources`:
 
@@ -128,6 +174,7 @@ interface SandboxOutputFile {
   mimeType: string;
   sizeBytes: number;
   bytes: AsyncIterable<Uint8Array> | Uint8Array;
+  sha256?: string;
 }
 
 interface SandboxProvider {
@@ -144,32 +191,83 @@ For Docker-local:
 - reject or skip directories, symlinks, device files, sockets, and paths that
   escape the output root;
 - expose output `filename` as the basename, matching the hosted probe;
+- keep `relativePath` internally for identity, dedupe, and collision detection;
 - stream/copy bytes out through Docker, validating the discovered size.
 
 The control plane must not directly shell into Docker from `FileService`.
 
-### 2. Persist output files as public scoped records
+Basename collision policy:
 
-Extend `FileStorage` with an output-file creation path distinct from upload and
-internal snapshots:
+- The hosted probe only covered distinct basenames, so collision behavior is
+  still unknown.
+- OMA v1 should fail output indexing for colliding basenames within one
+  collection pass, log the collision with both relative paths, and keep the
+  previously indexed output set unchanged.
+- Do not silently overwrite `model_a/report.json` with `model_b/report.json`.
+
+### 3. Add a runner-owned output collection bridge
+
+The event service detects terminal idle, but the Pi runner owns the live sandbox
+handle. Add an optional method to `RuntimeEventRunner`:
 
 ```ts
-createSessionOutput(
+interface RuntimeEventRunner {
+  collectSessionOutputs?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<RuntimeSessionOutputCollection>;
+}
+```
+
+`RuntimeSessionOutputCollection` should distinguish these cases:
+
+- live sandbox inspected and outputs collected;
+- live sandbox inspected and output directory is empty;
+- no live sandbox / unsupported provider.
+
+The event service must collect only on terminal idle produced by the active live
+runtime owner. It must not collect, and must not replace existing outputs, from
+sandboxless terminalization paths such as abandoned-turn recovery, custom-tool
+wait terminalization, tool-confirmation wait terminalization, archive cleanup,
+or delete cleanup.
+
+This gate is load-bearing. A sandboxless recovery path that emits
+`session.status_idle` must never replace a previously indexed output set with
+an empty collection.
+
+### 4. Persist output files as public scoped records
+
+Extend `FileStorage` with output-file methods distinct from upload and internal
+snapshots:
+
+```ts
+replaceSessionOutputs(
   workspaceId: WorkspaceId,
-  input: {
+  sessionId: string,
+  files: readonly {
+    relativePath: string;
     sessionId: string;
     filename: string;
     mimeType: string;
+    sizeBytes: number;
+    sha256?: string;
     body: Uint8Array | AsyncIterable<Uint8Array>;
-  },
-): Promise<FileRecord>;
+  }[],
+): Promise<readonly FileRecord[]>;
+
+deleteSessionOutputs(
+  workspaceId: WorkspaceId,
+  sessionId: string,
+): Promise<void>;
 ```
 
 Records created this way have:
 
+- `scope_id = sessionId` internally;
 - `scope = { type: "session", id: sessionId }` at the public API boundary;
 - `downloadable = true`;
 - normal public `file_*` IDs;
+- a public-output visibility/kind distinct from uploads and internal snapshots;
 - bytes readable by `download`.
 
 Keep uploaded inputs as:
@@ -179,7 +277,37 @@ Keep uploaded inputs as:
 
 Keep internal snapshots on their existing internal-only APIs.
 
-### 3. Index outputs at terminal idle
+Implement `files.list({ scopeId })` by selecting public output files scoped to
+that session, preserving workspace isolation and pagination. Do not include
+internal snapshots or workspace-level uploads.
+
+`replaceSessionOutputs` must be atomic with respect to metadata, bytes, and
+quota accounting. A failed replacement must leave either the old complete output
+set or the new complete output set, never a half-deleted set.
+
+### 5. Define output quotas
+
+Agent-produced output bytes are untrusted data. Add explicit limits before
+collecting bytes into in-memory storage:
+
+- maximum files per collection;
+- maximum single output file bytes;
+- maximum aggregate session output bytes;
+- maximum basename length after flattening;
+- reject unsafe names and non-regular files.
+
+Recommended v1 defaults:
+
+- max files: 100;
+- max single output file: 25 MiB;
+- max aggregate session outputs: 100 MiB.
+
+If a limit is exceeded, do not partially index outputs. Log a structured warning
+with workspace/session/limit context and leave the previous indexed output set
+untouched. The session turn remains successful, but artifacts are absent or
+stale and the failure is observable.
+
+### 6. Index outputs at terminal idle
 
 Collect and persist outputs when a runtime turn reaches terminal idle after the
 agent has had a chance to write artifacts.
@@ -192,20 +320,24 @@ Important boundaries:
 
 - Do not index on `requires_action`; the session may resume and write more.
 - Do not index after the sandbox is disposed.
+- Do not index from sandboxless terminalization paths.
+- Do not replace indexed outputs when no live sandbox is available.
 - Do not let output-indexing failure erase the already-persisted session result.
   Prefer a logged warning plus no files over returning a false failure after the
   turn completed, unless review decides artifact persistence is part of turn
   success.
 - Make indexing idempotent per `(workspace_id, session_id, relative_path,
-  content hash)` or clear and replace prior generated outputs for the session.
+  content hash)` or replace prior generated outputs only after successful live
+  sandbox collection.
 
 The idempotency choice should be explicit before implementation. Conservative
-v1 recommendation: replace all indexed output records for a session at each
-terminal idle with the current contents of `/mnt/session/outputs/`. This avoids
-duplicate records on replay/recovery and matches the "current session outputs"
-mental model.
+v1 recommendation: replace the indexed output set for a session only when a live
+owner-matched sandbox collection succeeds. Never replace with an empty result
+from a path that did not inspect a live sandbox. This avoids duplicate records on
+normal replay/recovery while preventing sandboxless recovery from deleting good
+artifact metadata.
 
-### 4. Route download bytes
+### 7. Route download bytes
 
 Change `FileService.download` from unconditional rejection to:
 
@@ -216,7 +348,30 @@ Change `FileService.download` from unconditional rejection to:
 Change `GET /v1/files/:id/content` to return a binary response with the stored
 `mime_type` where available.
 
-### 5. Keep session deletes honest
+Implement a return type for downloads, for example:
+
+```ts
+interface FileDownload {
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  body: AsyncIterable<Uint8Array>;
+}
+```
+
+The route should construct a binary `Response`, set `content-type`, and avoid
+buffering unnecessarily when storage can stream.
+
+MIME detection:
+
+- Preserve explicit MIME type from the provider when available.
+- For Docker-local v1, infer from filename extension with a small allowlist for
+  common artifacts: `.txt`, `.json`, `.csv`, `.html`, `.md`, `.pptx`, `.png`,
+  `.jpg`, `.jpeg`, `.pdf`.
+- Fall back to `application/octet-stream`.
+- Add a `.pptx` test because the eval workshop depends on it.
+
+### 8. Keep session deletes honest
 
 Deleting a session should eventually remove its scoped output files or make the
 cleanup behavior explicit.
@@ -242,17 +397,29 @@ hazard, but name it as a future durable-backend precondition.
 - downloading a session output returns exact bytes and content type;
 - `files.list({ scope_id })` returns scoped outputs and not workspace uploads;
 - cross-workspace retrieve/list/download cannot see output files;
-- deleting a session removes or hides that session's output files, depending on
-  the chosen cleanup contract.
+- deleting a session removes that session's output files;
+- replace output set is atomic: failed replacement leaves the prior complete
+  output set visible;
+- quota violations leave prior outputs untouched and log/return an observable
+  indexing failure.
 
 ### Runtime/service tests
 
+- Docker command construction includes writable `/mnt/session/outputs` tmpfs
+  owned by uid/gid `65534:65534`;
+- Docker memory-headroom validation accounts for workspace + uploads + outputs
+  tmpfs;
 - Docker-local session writes one output file and terminal idle indexes it;
 - `requires_action` idle does not index outputs prematurely;
-- repeated terminalization/recovery does not duplicate output file records;
+- sandboxless terminalization/recovery does not replace existing outputs with an
+  empty set;
+- repeated live terminalization does not duplicate output file records;
 - output indexing failure after terminal idle is observable and does not corrupt
   the event log;
 - output files are not indexed for host-passthrough if unsupported.
+- basename collisions fail indexing without clobbering either file;
+- zero-byte outputs are indexed and downloadable;
+- oversized files and aggregate quota violations are not partially indexed.
 
 ### Live smoke
 
@@ -274,9 +441,9 @@ SDK/client compatibility.
 
 ## Open Questions Before Code
 
-1. Should terminal idle replace all prior output records for the session or
-   append new records over time?
-2. Should output indexing failure be terminal for the turn or only observable?
+1. Confirm final v1 quota numbers: max file count, max single-file bytes, max
+   aggregate output bytes.
+2. Confirm whether to probe hosted basename-collision behavior now or defer it.
 
 Resolved by hosted probe:
 
@@ -285,20 +452,27 @@ Resolved by hosted probe:
   `downloadable: false`; OMA v1 intentionally hides input copies rather than
   exposing internal snapshots.
 
-The remaining questions are OMA implementation-policy choices, not hosted
-contract unknowns. The plan recommends replace-on-terminal-idle and observable
-non-terminal indexing failures, but those should be reviewed before code.
+Resolved by plan revision:
+
+- Replace indexed outputs only after a successful live sandbox collection; never
+  replace from sandboxless terminalization.
+- Output indexing failures are observable and non-terminal for the session turn;
+  prior indexed outputs stay visible.
+- Basename collisions fail indexing rather than silently clobbering.
 
 ## Acceptance Criteria
 
 - Public uploaded inputs remain non-downloadable.
 - Internal mount snapshots remain unlistable and undownloadable.
+- Docker-local provisions a writable `/mnt/session/outputs` mount before the
+  agent runs.
 - Docker-local generated files under `/mnt/session/outputs/` are listed by
   `scope_id=session_id`.
 - Downloading a generated output file returns exact bytes.
 - The real Python or TypeScript Anthropic SDK can list and download a generated
   output against OMA.
-- Tests cover scope isolation, non-downloadable uploads, and no duplicate output
-  records across repeated terminalization.
+- Tests cover scope isolation, non-downloadable uploads, sandboxless recovery,
+  quota failure, basename collision, binary download content type, and no
+  duplicate output records across repeated live terminalization.
 - Docs mention that generated output files are supported, while uploaded input
   file download remains intentionally unsupported.
