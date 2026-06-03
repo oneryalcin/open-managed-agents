@@ -10,7 +10,13 @@ import { SqliteEnvironmentStore } from "../environments/store.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
-import type { RuntimeEventRunner } from "../events/types.ts";
+import type {
+  RuntimeEventRunner,
+  RuntimeSessionOutputCollection,
+  RuntimeSessionOutputFile,
+} from "../events/types.ts";
+import { DefaultFileService } from "../files/service.ts";
+import { InMemoryFileStorage } from "../files/store.ts";
 import { DefaultSessionService } from "../sessions/service.ts";
 import { translatePiEvent } from "../sessions/pi/translator.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
@@ -205,6 +211,68 @@ describe("Runtime events API", () => {
       },
     });
   });
+
+  it("indexes generated output files from a live runtime terminal idle", async () => {
+    const runner = new OutputCollectingRunner([
+      {
+        relativePath: "reports/summary.md",
+        filename: "summary.md",
+        mimeType: "text/markdown",
+        sizeBytes: 17,
+        sha256: "c59c73e280c05a9e363b88b8759655f5c6b897c2b5d2783f7b7eff39dcbb9125",
+        bytes: new TextEncoder().encode("# Session output\n"),
+      },
+    ]);
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+
+    const send = await fixture.app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.message", content: [{ type: "text", text: "write" }] }],
+      }),
+    });
+    expect(send.status).toBe(200);
+
+    const files = await eventuallyFileList(
+      fixture.app,
+      `/v1/files?scope_id=${session.id}&limit=10`,
+      (body) => body.data.length === 1,
+    );
+    expect(runner.collectCount).toBe(1);
+    expect(files.data[0]).toMatchObject({
+      type: "file",
+      filename: "summary.md",
+      mime_type: "text/markdown",
+      size_bytes: 17,
+      downloadable: true,
+      scope: { type: "session", id: session.id },
+    });
+
+    const download = await fixture.app.request(
+      `/v1/files/${files.data[0]?.id}/content`,
+    );
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-type")).toBe("text/markdown");
+    await expect(download.text()).resolves.toBe("# Session output\n");
+
+    const outputId = files.data[0]?.id as string;
+    const deleted = await fixture.app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+
+    const afterDelete = await fixture.app.request(
+      `/v1/files?scope_id=${session.id}&limit=10`,
+    );
+    expect(afterDelete.status).toBe(200);
+    await expect(afterDelete.json()).resolves.toMatchObject({ data: [] });
+    const deletedDownload = await fixture.app.request(
+      `/v1/files/${outputId}/content`,
+    );
+    expect(deletedDownload.status).toBe(404);
+  });
 });
 
 class FakeRunner implements RuntimeEventRunner {
@@ -308,6 +376,19 @@ class UnpairedStartRunner implements RuntimeEventRunner {
   }
 }
 
+class OutputCollectingRunner extends FakeRunner {
+  collectCount = 0;
+
+  constructor(private readonly files: readonly RuntimeSessionOutputFile[]) {
+    super();
+  }
+
+  async collectSessionOutputs(): Promise<RuntimeSessionOutputCollection> {
+    this.collectCount += 1;
+    return { kind: "collected", files: this.files };
+  }
+}
+
 function makeFixture(runner: RuntimeEventRunner): {
   app: ReturnType<typeof createControlPlaneApp>;
   broadcaster: SessionEventBroadcaster;
@@ -316,16 +397,24 @@ function makeFixture(runner: RuntimeEventRunner): {
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
+  const fileStorage = new InMemoryFileStorage();
   const broadcaster = new SessionEventBroadcaster(eventStore);
   return {
     broadcaster,
     app: createControlPlaneApp({
       agents: new DefaultAgentService(agentStore),
       environments: new DefaultEnvironmentService(environmentStore),
-      sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore),
+      files: new DefaultFileService(fileStorage),
+      sessions: new DefaultSessionService(
+        sessionStore,
+        agentStore,
+        environmentStore,
+        fileStorage,
+      ),
       sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {
         runner,
         translate: translatePiEvent,
+        fileStorage,
       }),
     }),
   };
@@ -398,6 +487,41 @@ async function eventuallyList(
     if (predicate(body)) return body;
     if (hasTimedOut(startedAt, STREAM_TEST_TIMEOUT_MS)) {
       throw new Error("Timed out waiting for translated runtime events in list response");
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), 25);
+    });
+  }
+}
+
+async function eventuallyFileList(
+  app: ReturnType<typeof createControlPlaneApp>,
+  path: string,
+  predicate: (body: {
+    data: Array<Record<string, unknown>>;
+    has_more: boolean;
+    first_id: string | null;
+    last_id: string | null;
+  }) => boolean,
+): Promise<{
+  data: Array<Record<string, unknown>>;
+  has_more: boolean;
+  first_id: string | null;
+  last_id: string | null;
+}> {
+  const startedAt = Date.now();
+  while (true) {
+    const res = await app.request(path);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      data: Array<Record<string, unknown>>;
+      has_more: boolean;
+      first_id: string | null;
+      last_id: string | null;
+    };
+    if (predicate(body)) return body;
+    if (hasTimedOut(startedAt, STREAM_TEST_TIMEOUT_MS)) {
+      throw new Error("Timed out waiting for indexed session output files");
     }
     await new Promise<void>((resolve) => {
       setTimeout(() => resolve(), 25);

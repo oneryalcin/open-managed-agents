@@ -64,7 +64,17 @@ export interface SandboxProvider {
   materializeFileResources?(
     mounts: readonly RuntimeSessionFileMount[],
   ): Promise<void> | void;
+  collectOutputFiles?(): Promise<readonly SandboxOutputFile[]>;
   dispose(): void;
+}
+
+export interface SandboxOutputFile {
+  relativePath: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256?: string;
+  bytes: AsyncIterable<Uint8Array> | Uint8Array;
 }
 
 export type SandboxProviderFactory = (

@@ -230,6 +230,13 @@ export class DefaultSessionService implements SessionService {
         console.warn("Pending internal snapshot delete sweep failed", error);
       },
     );
+    await this.files?.deleteSessionOutputs(workspaceId, sessionId).catch((error) => {
+      console.warn("Session output cleanup failed", {
+        workspaceId,
+        sessionId,
+        error,
+      });
+    });
     return { id: row.id, type: "session_deleted" };
   }
 

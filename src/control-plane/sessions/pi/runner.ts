@@ -9,6 +9,7 @@ import type {
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
   RuntimeSessionFileMount,
+  RuntimeSessionOutputCollection,
   RuntimeSessionPrepareOptions,
   RuntimeToolPermissionUseEvent,
   RuntimeToolPermissionWithModelEndEvent,
@@ -240,6 +241,23 @@ export class PiSessionRunner implements RuntimeEventRunner {
     piToolCallId: string,
   ): boolean {
     return this.toolPermissionBridge.suppressPiToolUse(sessionId, piToolCallId);
+  }
+
+  async collectSessionOutputs(
+    _workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<RuntimeSessionOutputCollection> {
+    const handle = this.sessions.get(sessionId);
+    if (!handle?.sandbox) {
+      return { kind: "unsupported", reason: "no_live_sandbox" };
+    }
+    if (typeof handle.sandbox.collectOutputFiles !== "function") {
+      return { kind: "unsupported", reason: "provider_unsupported" };
+    }
+    return {
+      kind: "collected",
+      files: await handle.sandbox.collectOutputFiles(),
+    };
   }
 
   close(): void {

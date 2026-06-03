@@ -15,6 +15,7 @@ import {
   type JsonValue,
 } from "../../types/json.ts";
 import { ApiError, invalidRequest, notFound } from "../errors.ts";
+import type { FileStorage } from "../files/types.ts";
 import type { SessionRow, SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { newRuntimeTurnId, newRequestId } from "../ids.ts";
@@ -112,6 +113,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly leaseTtlMs: number;
   private readonly runtimeRunner: RuntimeEventRunner | undefined;
   private readonly runtimeTranslator: RuntimeEventTranslator | undefined;
+  private readonly outputFileStorage: FileStorage | undefined;
   private readonly pendingCustomToolActions = new Map<
     string,
     {
@@ -159,12 +161,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
     runtime?: {
       runner: RuntimeEventRunner;
       translate: RuntimeEventTranslator;
+      fileStorage?: FileStorage;
       ownerId?: string;
       leaseTtlMs?: number;
     },
   ) {
     this.runtimeRunner = runtime?.runner;
     this.runtimeTranslator = runtime?.translate;
+    this.outputFileStorage = runtime?.fileStorage;
     this.ownerId = runtime?.ownerId ?? `owner_${newRequestId()}`;
     this.leaseTtlMs = runtime?.leaseTtlMs ?? 120_000;
   }
@@ -1242,6 +1246,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
             ) {
               activeOpenModelRequestStartIds.pop();
             }
+            if (hasTerminalIdleDraft(drafts)) {
+              await this.indexSessionOutputsFromLiveRuntime(
+                workspaceId,
+                sessionId,
+              );
+            }
           }
           this.closeRuntimeTurnWithSyntheticSpanEnds(
             workspaceId,
@@ -1335,6 +1345,40 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     this.persistLifecycleDrafts(workspaceId, sessionId, drafts);
+  }
+
+  private async indexSessionOutputsFromLiveRuntime(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void> {
+    if (!this.outputFileStorage || !this.runtimeRunner?.collectSessionOutputs) {
+      return;
+    }
+    try {
+      const collection = await this.runtimeRunner.collectSessionOutputs(
+        workspaceId,
+        sessionId,
+      );
+      if (collection.kind !== "collected") return;
+      await this.outputFileStorage.replaceSessionOutputs(
+        workspaceId,
+        sessionId,
+        collection.files.map((file) => ({
+          relativePath: file.relativePath,
+          filename: file.filename,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          sha256: file.sha256,
+          body: file.bytes,
+        })),
+      );
+    } catch (error) {
+      console.warn("session output indexing failed", {
+        workspaceId,
+        sessionId,
+        error,
+      });
+    }
   }
 
   private startRuntimeLeaseRenewal(
@@ -2784,6 +2828,15 @@ function isRuntimeToolPermissionWithModelEndEvent(
     Array.isArray(event.suppressedPiToolCallIds) &&
     event.suppressedPiToolCallIds.every((id) => typeof id === "string")
   );
+}
+
+function hasTerminalIdleDraft(drafts: readonly EventDraft[]): boolean {
+  return drafts.some((draft) => {
+    if (draft.type !== "session.status_idle") return false;
+    const stopReason = draft.payload.stop_reason;
+    if (!isJsonObject(stopReason)) return true;
+    return stopReason.type !== "requires_action";
+  });
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {

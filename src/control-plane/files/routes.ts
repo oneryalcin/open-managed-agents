@@ -65,7 +65,17 @@ export function filesRoutes(service: FileService): Hono {
   });
 
   app.get("/:id/content", async (c) => {
-    await service.download(DEFAULT_WORKSPACE_ID, c.req.param("id"));
+    const download = await service.download(
+      DEFAULT_WORKSPACE_ID,
+      c.req.param("id"),
+    );
+    return new Response(asyncIterableToReadableStream(download.body), {
+      status: 200,
+      headers: {
+        "content-type": download.mimeType,
+        "content-length": String(download.sizeBytes),
+      },
+    });
   });
 
   app.delete("/:id", async (c) => {
@@ -110,6 +120,25 @@ function jsonError(body: ApiErrorBody, status: number): Response {
     headers: {
       "content-type": "application/json; charset=UTF-8",
       "request-id": body.request_id,
+    },
+  });
+}
+
+function asyncIterableToReadableStream(
+  body: AsyncIterable<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  const iterator = body[Symbol.asyncIterator]();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const next = await iterator.next();
+      if (next.done) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(next.value);
+    },
+    async cancel(reason) {
+      await iterator.throw?.(reason);
     },
   });
 }

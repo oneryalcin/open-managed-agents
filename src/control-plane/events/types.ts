@@ -330,6 +330,10 @@ export interface RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<void> | void;
+  collectSessionOutputs?(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<RuntimeSessionOutputCollection>;
   closeSession?(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -349,6 +353,25 @@ export interface RuntimeEventRunner {
     piToolCallId: string,
   ): boolean;
 }
+
+export interface RuntimeSessionOutputFile {
+  relativePath: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256?: string;
+  bytes: AsyncIterable<Uint8Array> | Uint8Array;
+}
+
+export type RuntimeSessionOutputCollection =
+  | {
+      kind: "collected";
+      files: readonly RuntimeSessionOutputFile[];
+    }
+  | {
+      kind: "unsupported";
+      reason: "no_live_sandbox" | "provider_unsupported";
+    };
 
 export interface RuntimeSessionFileMount {
   mountPath: string;

@@ -19,6 +19,7 @@ import {
   recordSandboxInvocation,
   type SandboxDisposedFlag,
   type SandboxOperations,
+  type SandboxOutputFile,
   type SandboxProvider,
   type SandboxProviderFactory,
 } from "./provider.ts";
@@ -27,6 +28,7 @@ import type { RuntimeSessionFileMount } from "../../../events/types.ts";
 const DEFAULT_IMAGE = "bash:5.2";
 const DEFAULT_WORKSPACE = "/workspace";
 const DEFAULT_UPLOADS_PATH = "/mnt/session/uploads";
+const DEFAULT_OUTPUTS_PATH = "/mnt/session/outputs";
 const DEFAULT_MEMORY = "256m";
 const DEFAULT_CPUS = "1";
 const DEFAULT_PIDS_LIMIT = "64";
@@ -50,6 +52,7 @@ export interface DockerSandboxOptions {
   cpus?: string;
   pidsLimit?: string;
   tmpfsSize?: string;
+  outputsTmpfsSize?: string;
   extraLabels?: Record<string, string>;
   reapStaleContainersOlderThanMs?: number;
 }
@@ -66,6 +69,7 @@ interface DockerSandboxResolvedOptions {
   dockerCommand: string;
   workspacePath: string;
   uploadsPath: string;
+  outputsPath: string;
   envAllowlist: Set<string>;
   operationTimeoutMs: number;
   containerNamePrefix: string;
@@ -73,6 +77,7 @@ interface DockerSandboxResolvedOptions {
   cpus: string;
   pidsLimit: string;
   tmpfsSize: string;
+  outputsTmpfsSize: string;
   extraLabels: Record<string, string>;
 }
 
@@ -146,11 +151,13 @@ export async function createDockerSandboxProvider(
       containerName,
       workspacePath: resolved.workspacePath,
       uploadsPath: resolved.uploadsPath,
+      outputsPath: resolved.outputsPath,
       image: resolved.image,
       memory: resolved.memory,
       cpus: resolved.cpus,
       pidsLimit: resolved.pidsLimit,
       tmpfsSize: resolved.tmpfsSize,
+      outputsTmpfsSize: resolved.outputsTmpfsSize,
       labels: {
         [SANDBOX_LABEL_KEY]: SANDBOX_LABEL_VALUE,
         [OWNER_LABEL_KEY]: OWNER_LABEL_VALUE,
@@ -236,6 +243,29 @@ export async function createDockerSandboxProvider(
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }
+  };
+  const collectOutputFiles = async (): Promise<readonly SandboxOutputFile[]> => {
+    recordSandboxNotDisposed(disposed);
+    const listing = await dockerShell(
+      buildDockerOutputListingCommand(resolved.outputsPath),
+    );
+    const records = parseOutputListing(listing.stdout);
+    return records.map((record) => {
+      const absolutePath = assertInsideDockerOutputPath(
+        posix.join(resolved.outputsPath, record.relativePath),
+        resolved.outputsPath,
+      );
+      return {
+        relativePath: record.relativePath,
+        filename: posix.basename(record.relativePath),
+        mimeType: mimeTypeForFilename(record.relativePath),
+        sizeBytes: record.sizeBytes,
+        sha256: record.sha256,
+        bytes: dockerOutputBytes(() =>
+          dockerShell(buildDockerReadFileCommand(absolutePath)),
+        ),
+      };
+    });
   };
 
   const readOps: ReadOperations = {
@@ -441,6 +471,7 @@ export async function createDockerSandboxProvider(
 
   return {
     cwd: resolved.workspacePath,
+    collectOutputFiles,
     invocations,
     materializeFileResources,
     operations,
@@ -465,19 +496,27 @@ export function buildDockerRunArgs(opts: {
   containerName: string;
   workspacePath: string;
   uploadsPath?: string;
+  outputsPath?: string;
   image: string;
   memory: string;
   cpus: string;
   pidsLimit: string;
   tmpfsSize: string;
+  outputsTmpfsSize?: string;
   labels?: Record<string, string>;
 }): string[] {
-  assertTmpfsMemoryHeadroom(opts.memory, opts.tmpfsSize);
+  assertTmpfsMemoryHeadroom(
+    opts.memory,
+    opts.tmpfsSize,
+    opts.outputsTmpfsSize ?? opts.tmpfsSize,
+  );
   const labels = Object.entries(opts.labels ?? {}).flatMap(([key, value]) => [
     "--label",
     `${key}=${value}`,
   ]);
   const uploadsPath = opts.uploadsPath ?? DEFAULT_UPLOADS_PATH;
+  const outputsPath = opts.outputsPath ?? DEFAULT_OUTPUTS_PATH;
+  const outputsTmpfsSize = opts.outputsTmpfsSize ?? opts.tmpfsSize;
   return [
     "run",
     "-d",
@@ -501,6 +540,8 @@ export function buildDockerRunArgs(opts: {
     `${opts.workspacePath}:rw,exec,nosuid,nodev,uid=65534,gid=65534,mode=700,size=${opts.tmpfsSize}`,
     "--tmpfs",
     `${uploadsPath}:rw,nosuid,nodev,noexec,mode=755,size=${opts.tmpfsSize}`,
+    "--tmpfs",
+    `${outputsPath}:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=${outputsTmpfsSize}`,
     "--workdir",
     opts.workspacePath,
     "--user",
@@ -703,6 +744,25 @@ export function buildDockerGlobEnumerationCommand(
   };
 }
 
+export function buildDockerOutputListingCommand(
+  outputRoot: string,
+): DockerShellCommand {
+  return {
+    script: [
+      "root=\"$1\"",
+      "if [ ! -d \"$root\" ]; then exit 0; fi",
+      "cd \"$root\"",
+      "find . -type f -print0 | sort -z | while IFS= read -r -d '' file; do",
+      "  rel=\"${file#./}\"",
+      "  size=$(wc -c < \"$file\")",
+      "  sha=$(sha256sum \"$file\" | awk '{print $1}')",
+      "  printf '%s\\0%s\\0%s\\0' \"$rel\" \"$size\" \"$sha\"",
+      "done",
+    ].join("\n"),
+    args: [outputRoot],
+  };
+}
+
 export function directoryNamesPrunedByIgnoreGlobs(
   ignore: readonly string[],
 ): string[] {
@@ -745,6 +805,76 @@ export function assertInsideUploadsPath(
     return rel;
   }
   throw new Error(`Session file mount path escapes uploads root: ${absolutePath}`);
+}
+
+export function assertInsideDockerOutputPath(
+  absolutePath: string,
+  outputsPath = DEFAULT_OUTPUTS_PATH,
+): string {
+  if (!posix.isAbsolute(absolutePath)) {
+    throw new Error(`Session output path must be absolute: ${absolutePath}`);
+  }
+  const root = posix.resolve(outputsPath);
+  const path = posix.resolve(absolutePath);
+  const rel = posix.relative(root, path);
+  if (rel !== "" && !rel.startsWith("..") && !posix.isAbsolute(rel)) {
+    return path;
+  }
+  throw new Error(`Session output path escapes outputs root: ${absolutePath}`);
+}
+
+function parseOutputListing(
+  stdout: Buffer,
+): { relativePath: string; sizeBytes: number; sha256: string }[] {
+  if (stdout.length === 0) return [];
+  const fields = stdout.toString("utf8").split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  if (fields.length % 3 !== 0) {
+    throw new Error("Docker output listing returned malformed records");
+  }
+  const out: { relativePath: string; sizeBytes: number; sha256: string }[] = [];
+  for (let index = 0; index < fields.length; index += 3) {
+    const relativePath = fields[index]!;
+    const sizeBytes = Number(fields[index + 1]);
+    const sha256 = fields[index + 2]!;
+    if (
+      relativePath.length === 0 ||
+      posix.isAbsolute(relativePath) ||
+      relativePath.split("/").includes("..")
+    ) {
+      throw new Error(`Unsafe session output path: ${relativePath}`);
+    }
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
+      throw new Error(`Invalid session output size: ${relativePath}`);
+    }
+    if (!/^[0-9a-f]{64}$/i.test(sha256)) {
+      throw new Error(`Invalid session output checksum: ${relativePath}`);
+    }
+    out.push({ relativePath, sizeBytes, sha256 });
+  }
+  return out;
+}
+
+function mimeTypeForFilename(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".txt")) return "text/plain";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".csv")) return "text/csv";
+  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "text/html";
+  if (lower.endsWith(".md")) return "text/markdown";
+  if (lower.endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  return "application/octet-stream";
+}
+
+async function* dockerOutputBytes(
+  read: () => Promise<{ stdout: Buffer }>,
+): AsyncIterable<Uint8Array> {
+  yield (await read()).stdout;
 }
 
 async function writeMountFile(
@@ -863,6 +993,7 @@ function resolveDockerOptions(
     dockerCommand: opts.dockerCommand ?? "docker",
     workspacePath: opts.workspacePath ?? DEFAULT_WORKSPACE,
     uploadsPath: DEFAULT_UPLOADS_PATH,
+    outputsPath: DEFAULT_OUTPUTS_PATH,
     envAllowlist: new Set(opts.envAllowlist ?? []),
     operationTimeoutMs: opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
     containerNamePrefix: opts.containerNamePrefix ?? "oma-sandbox",
@@ -870,16 +1001,25 @@ function resolveDockerOptions(
     cpus: opts.cpus ?? DEFAULT_CPUS,
     pidsLimit: opts.pidsLimit ?? DEFAULT_PIDS_LIMIT,
     tmpfsSize: opts.tmpfsSize ?? DEFAULT_TMPFS_SIZE,
+    outputsTmpfsSize: opts.outputsTmpfsSize ?? opts.tmpfsSize ?? DEFAULT_TMPFS_SIZE,
     extraLabels: opts.extraLabels ?? {},
   };
 }
 
-function assertTmpfsMemoryHeadroom(memory: string, tmpfsSize: string): void {
+function assertTmpfsMemoryHeadroom(
+  memory: string,
+  tmpfsSize: string,
+  outputsTmpfsSize: string,
+): void {
   const memoryBytes = parseDockerByteSize(memory, "memory");
   const tmpfsBytes = parseDockerByteSize(tmpfsSize, "tmpfsSize");
-  if (tmpfsBytes * 2 < memoryBytes) return;
+  const outputTmpfsBytes = parseDockerByteSize(
+    outputsTmpfsSize,
+    "outputsTmpfsSize",
+  );
+  if (tmpfsBytes * 2 + outputTmpfsBytes < memoryBytes) return;
   throw new Error(
-    "Docker sandbox memory must exceed workspace tmpfs plus uploads tmpfs",
+    "Docker sandbox memory must exceed workspace tmpfs plus uploads tmpfs plus outputs tmpfs",
   );
 }
 
