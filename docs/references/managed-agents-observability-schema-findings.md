@@ -213,6 +213,12 @@ The samples matched the TypeScript span schema. The hosted span events did not
 include provider, model, response ID, request ID, or duration fields beyond the
 documented fields.
 
+A later focused hosted shape probe
+(`scratch/artifacts/37-managed-agents-hosted-span-shape-1780448419-13013.json`)
+confirmed that `model_usage.speed` is present with value `null` when hosted has
+no explicit speed value. OMA therefore includes the key with `null` on
+synthetic/fallback and ordinary span usage when Pi does not expose a speed.
+
 Simple assistant response ordering:
 
 ```text
