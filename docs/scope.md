@@ -67,6 +67,11 @@ Each of these is an additive feature, not a redesign:
 
 These appear in Anthropic's Managed Agents event stream but are tied to features deferred above. Documented here so the gap is explicit, not silent. When the corresponding feature lands, the event types get added to `src/types/events.ts` and the EventType alignment test (ADR 0008) gates the change.
 
+The full event-topology tracker lives in
+[`docs/references/managed-agents-event-topology.md`](references/managed-agents-event-topology.md).
+Keep that matrix, `src/types/events.ts`, and
+`src/types/__tests__/events.test.ts` aligned when event support changes.
+
 | Event type | Tied to | Deferred until |
 |---|---|---|
 | `user.define_outcome` | Outcomes | Post-MVP |
