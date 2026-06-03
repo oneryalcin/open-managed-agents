@@ -204,6 +204,9 @@ Basename collision policy:
   collection pass, log the collision with both relative paths, and keep the
   previously indexed output set unchanged.
 - Do not silently overwrite `model_a/report.json` with `model_b/report.json`.
+- This is a safe-but-strict v1 divergence. A session that writes colliding
+  basenames across directories gets no newly indexed artifacts until hosted
+  collision behavior is probed or a relative-path filename policy is chosen.
 
 ### 3. Add a runner-owned output collection bridge
 
@@ -307,6 +310,10 @@ with workspace/session/limit context and leave the previous indexed output set
 untouched. The session turn remains successful, but artifacts are absent or
 stale and the failure is observable.
 
+Enforce per-file and aggregate caps while streaming bytes out of Docker, not
+after buffering an oversized output into memory. Reuse the upload-body
+size-enforcement pattern where possible.
+
 ### 6. Index outputs at terminal idle
 
 Collect and persist outputs when a runtime turn reaches terminal idle after the
@@ -336,6 +343,11 @@ owner-matched sandbox collection succeeds. Never replace with an empty result
 from a path that did not inspect a live sandbox. This avoids duplicate records on
 normal replay/recovery while preventing sandboxless recovery from deleting good
 artifact metadata.
+
+Known v1 limitation: clients cannot distinguish "no outputs were written" from
+"output indexing failed" through the Files API alone. Indexing failures are
+observable in server logs and preserve the previous output set, but the client
+may still see stale artifacts. Do not hide this in docs or smoke reports.
 
 ### 7. Route download bytes
 
