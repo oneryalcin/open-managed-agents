@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-26T12:36:59.827Z",
+  "generated_at": "2026-06-02T22:51:41.852Z",
   "model": "anthropic/claude-haiku-4-5",
   "out_dir": "/Users/mehmetoneryalcin/dev/personal/open-managed-agents/scratch/artifacts/pi-events",
   "scenarios": [
@@ -33,13 +33,13 @@
     },
     {
       "scenario": "tool_throw",
-      "eventCount": 33,
+      "eventCount": 28,
       "eventTypes": {
         "agent_end": 1,
         "agent_start": 1,
         "message_end": 4,
         "message_start": 4,
-        "message_update": 17,
+        "message_update": 12,
         "tool_execution_end": 1,
         "tool_execution_start": 1,
         "turn_end": 2,

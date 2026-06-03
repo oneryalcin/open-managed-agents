@@ -29,6 +29,8 @@ The smallest end-to-end flow that proves the architecture **and preserves the "b
 - `POST /v1/sessions/{id}/events` — accept `user.message` and `user.custom_tool_result` (carries `custom_tool_use_id`, NOT `tool_use_id`).
 - `GET /v1/sessions/{id}/events/stream` — SSE wrapping Pi's `session.subscribe()`. Honors `Last-Event-ID` header for resume.
 - **`GET /v1/sessions/{id}/events`** — paginated list of all persisted events (the append-only event log). **Cursor query param is `?page=<token>`** (not `?after_id=...`), matching Anthropic's wire contract. Clients pass the returned `next_page` value unchanged; token internals are server-owned. Required for client reconnect-with-consolidation (see `architecture.md` → Event log).
+- Runtime model requests emit `span.model_request_start` /
+  `span.model_request_end` around Pi assistant model requests.
 
 **Cross-cutting invariants:**
 - Event IDs persisted server-side (UUIDv7); events written to SQLite on emit, not just buffered in-memory.
@@ -74,7 +76,6 @@ These appear in Anthropic's Managed Agents event stream but are tied to features
 | `agent.thread_message_sent`, `agent.thread_message_received` | Multiagent | Post-MVP |
 | `session.updated` | Session update requests | Post-MVP |
 | `session.thread_created`, `session.thread_status_*` | Multiagent | Post-MVP |
-| `span.model_request_start`, `span.model_request_end` | Model-inference observability | Post-MVP |
 | `span.outcome_evaluation_*` | Outcomes (rubric-graded loop) | Post-MVP |
 
 ## Non-goals

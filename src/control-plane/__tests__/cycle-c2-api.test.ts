@@ -58,14 +58,29 @@ describe("Cycle C.2 API", () => {
 
     const liveUser = await reader.nextEvent();
     const liveRunning = await reader.nextEvent();
+    const liveSpanStart = await reader.nextEvent();
     const liveAssistant = await reader.nextEvent();
+    const liveSpanEnd = await reader.nextEvent();
     const liveIdle = await reader.nextEvent();
     expect(liveUser?.data.type).toBe("user.message");
     expect(liveRunning?.data.type).toBe("session.status_running");
+    expect(liveSpanStart?.data.type).toBe("span.model_request_start");
     expect(liveAssistant?.data.type).toBe("agent.message");
     expect(liveAssistant?.data.content).toEqual([
       { type: "text", text: "runtime: ping" },
     ]);
+    expect(liveSpanEnd?.data).toMatchObject({
+      type: "span.model_request_end",
+      model_request_start_id: liveSpanStart?.data.id,
+      is_error: false,
+      model_usage: {
+        cache_creation_input_tokens: 7,
+        cache_read_input_tokens: 11,
+        input_tokens: 13,
+        output_tokens: 17,
+        speed: null,
+      },
+    });
     expect(liveIdle?.data.type).toBe("session.status_idle");
     expect(liveIdle?.data.stop_reason).toEqual({ type: "end_turn" });
 
@@ -79,8 +94,25 @@ describe("Cycle C.2 API", () => {
     expect(list.data.map((event) => event.type)).toEqual([
       "user.message",
       "session.status_running",
+      "span.model_request_start",
       "agent.message",
+      "span.model_request_end",
       "session.status_idle",
+    ]);
+    const spanStart = list.data.find(
+      (event) => event.type === "span.model_request_start",
+    );
+    const spanEnd = list.data.find(
+      (event) => event.type === "span.model_request_end",
+    );
+    expect(spanEnd?.model_request_start_id).toBe(spanStart?.id);
+    const filtered = await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc&types[]=span.model_request_end`,
+      (body) => body.data.length === 1,
+    );
+    expect(filtered.data.map((event) => event.type)).toEqual([
+      "span.model_request_end",
     ]);
     expect(runner.prompts).toEqual(["ping"]);
     await reader.cancel();
@@ -104,8 +136,74 @@ describe("Cycle C.2 API", () => {
       `/v1/sessions/${session.id}/events?order=asc`,
       (body) => body.data.some((event) => event.type === "session.error"),
     );
+    expect(list.data.map((event) => event.type)).toEqual([
+      "user.message",
+      "span.model_request_start",
+      "span.model_request_end",
+      "session.error",
+      "session.status_idle",
+    ]);
+    const spanStart = list.data.find(
+      (event) => event.type === "span.model_request_start",
+    );
+    const spanEnd = list.data.find(
+      (event) => event.type === "span.model_request_end",
+    );
+    expect(spanEnd).toMatchObject({
+      model_request_start_id: spanStart?.id,
+      is_error: true,
+      model_usage: {
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        speed: null,
+      },
+    });
     const errorEvent = list.data.find((event) => event.type === "session.error");
     expect(errorEvent?.message).toBe("Runtime execution failed");
+  });
+
+  it("defensively closes an open model span when runtime completes without message_end", async () => {
+    const fixture = makeFixture(new UnpairedStartRunner());
+    const session = await setupSession(fixture.app);
+
+    const send = await fixture.app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.message", content: [{ type: "text", text: "done" }] }],
+      }),
+    });
+    expect(send.status).toBe(200);
+
+    const list = await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc`,
+      (body) => body.data.some((event) => event.type === "span.model_request_end"),
+    );
+    expect(list.data.map((event) => event.type)).toEqual([
+      "user.message",
+      "span.model_request_start",
+      "span.model_request_end",
+    ]);
+    const spanStart = list.data.find(
+      (event) => event.type === "span.model_request_start",
+    );
+    const spanEnd = list.data.find(
+      (event) => event.type === "span.model_request_end",
+    );
+    expect(spanEnd).toMatchObject({
+      model_request_start_id: spanStart?.id,
+      is_error: true,
+      model_usage: {
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        speed: null,
+      },
+    });
   });
 });
 
@@ -121,10 +219,35 @@ class FakeRunner implements RuntimeEventRunner {
     await Promise.resolve();
     yield { type: "agent_start" };
     yield {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+    };
+    yield {
       type: "message_end",
       message: {
         role: "assistant",
         content: [{ type: "text", text: `runtime: ${text}` }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        usage: {
+          input: 13,
+          output: 17,
+          cacheRead: 11,
+          cacheWrite: 7,
+        },
         stopReason: "stop",
       },
     };
@@ -139,7 +262,49 @@ class ThrowingRunner implements RuntimeEventRunner {
     _text: string,
   ): AsyncIterable<unknown> {
     await Promise.resolve();
+    yield {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+    };
     throw new Error("runtime boom");
+  }
+}
+
+class UnpairedStartRunner implements RuntimeEventRunner {
+  async *runUserMessage(
+    _workspaceId: string,
+    _sessionId: string,
+    _text: string,
+  ): AsyncIterable<unknown> {
+    await Promise.resolve();
+    yield {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+    };
   }
 }
 

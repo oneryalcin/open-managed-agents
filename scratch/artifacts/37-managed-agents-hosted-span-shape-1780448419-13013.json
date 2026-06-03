@@ -1,0 +1,203 @@
+{
+  "assistant_text": "hosted span probe ok",
+  "beta": "managed-agents-2026-04-01",
+  "cleanup": [
+    {
+      "session.delete": {
+        "id": "sesn_01LnfXADknXfpWwCaUdDEWWs",
+        "type": "session_deleted"
+      }
+    },
+    {
+      "agent.archive": {
+        "archived_at": "datetime.datetime(2026, 6, 3, 1, 0, 23, 318445, tzinfo=TzInfo(0))",
+        "created_at": "datetime.datetime(2026, 6, 3, 1, 0, 19, 316170, tzinfo=datetime.timezone.utc)",
+        "description": null,
+        "id": "agent_01NZxvDcSydvoGEYwdkm2nXk",
+        "mcp_servers": [],
+        "metadata": {},
+        "model": {
+          "id": "claude-haiku-4-5",
+          "speed": "standard"
+        },
+        "multiagent": null,
+        "name": "oma-hosted-span-shape-1780448419-13013",
+        "skills": [],
+        "system": "Reply with one short sentence.",
+        "tools": [],
+        "type": "agent",
+        "updated_at": "datetime.datetime(2026, 6, 3, 1, 0, 23, 318445, tzinfo=datetime.timezone.utc)",
+        "version": 1
+      }
+    },
+    {
+      "environment.delete": {
+        "id": "env_019tZmT9Ecvf9VVPze3MMzU7",
+        "type": "environment_deleted"
+      }
+    }
+  ],
+  "created": {
+    "agent_id": "agent_01NZxvDcSydvoGEYwdkm2nXk",
+    "environment_id": "env_019tZmT9Ecvf9VVPze3MMzU7",
+    "session_id": "sesn_01LnfXADknXfpWwCaUdDEWWs"
+  },
+  "model": "claude-haiku-4-5",
+  "raw_spans": [
+    {
+      "id": "sevt_01AToBjCmCTEjqjzF55SYbfD",
+      "processed_at": "datetime.datetime(2026, 6, 3, 1, 0, 21, 780745, tzinfo=TzInfo(0))",
+      "type": "span.model_request_start"
+    },
+    {
+      "id": "sevt_016XgC19nU69mQJFgtLXxp23",
+      "is_error": false,
+      "model_request_start_id": "sevt_01AToBjCmCTEjqjzF55SYbfD",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 550,
+        "output_tokens": 57,
+        "speed": null
+      },
+      "processed_at": "datetime.datetime(2026, 6, 3, 1, 0, 21, 780749, tzinfo=TzInfo(0))",
+      "type": "span.model_request_end"
+    }
+  ],
+  "replay_types": [
+    "session.status_running",
+    "session.thread_status_running",
+    "user.message",
+    "span.model_request_start",
+    "agent.thinking",
+    "agent.message",
+    "span.model_request_end",
+    "session.thread_status_idle",
+    "session.status_idle"
+  ],
+  "run_id": "1780448419-13013",
+  "span_diff": {
+    "end_extra_vs_oma": [],
+    "end_missing_vs_oma": [],
+    "end_payload_keys": [
+      "is_error",
+      "model_request_start_id",
+      "model_usage"
+    ],
+    "linked_start_ids": [
+      {
+        "end_id": "sevt_016XgC19nU69mQJFgtLXxp23",
+        "links_to_known_start": true,
+        "model_request_start_id": "sevt_01AToBjCmCTEjqjzF55SYbfD"
+      }
+    ],
+    "model_usage_extra_vs_oma": [],
+    "model_usage_keys": [
+      "cache_creation_input_tokens",
+      "cache_read_input_tokens",
+      "input_tokens",
+      "output_tokens",
+      "speed"
+    ],
+    "model_usage_missing_vs_oma": [],
+    "span_end_count": 1,
+    "span_start_count": 1,
+    "start_extra_vs_oma": [],
+    "start_missing_vs_oma": [],
+    "start_payload_keys": []
+  },
+  "stream_seen": [
+    {
+      "id": "sevt_01LB7xrByXw5A9cRQSNi9rtQ",
+      "keys": [
+        "id",
+        "processed_at",
+        "type"
+      ],
+      "type": "session.status_running"
+    },
+    {
+      "id": "sevt_01DwZDxHSa24Hoy5i9gy8Uc7",
+      "keys": [
+        "agent_name",
+        "id",
+        "processed_at",
+        "session_thread_id",
+        "type"
+      ],
+      "type": "session.thread_status_running"
+    },
+    {
+      "id": "sevt_01WRqLWEYVy4b6mixdWLh74f",
+      "keys": [
+        "content",
+        "id",
+        "processed_at",
+        "type"
+      ],
+      "type": "user.message"
+    },
+    {
+      "id": "sevt_01AToBjCmCTEjqjzF55SYbfD",
+      "keys": [
+        "id",
+        "processed_at",
+        "type"
+      ],
+      "type": "span.model_request_start"
+    },
+    {
+      "id": "sevt_01Vir9eGVYymEbDdDa91UXTg",
+      "keys": [
+        "id",
+        "processed_at",
+        "type"
+      ],
+      "type": "agent.thinking"
+    },
+    {
+      "id": "sevt_014U7pHoyPeBW8bnMraoMiXa",
+      "keys": [
+        "content",
+        "id",
+        "processed_at",
+        "type"
+      ],
+      "type": "agent.message"
+    },
+    {
+      "id": "sevt_016XgC19nU69mQJFgtLXxp23",
+      "keys": [
+        "id",
+        "is_error",
+        "model_request_start_id",
+        "model_usage",
+        "processed_at",
+        "type"
+      ],
+      "type": "span.model_request_end"
+    },
+    {
+      "id": "sevt_011cAjvNUJWw8h7pfiXt3waC",
+      "keys": [
+        "agent_name",
+        "id",
+        "processed_at",
+        "session_thread_id",
+        "stop_reason",
+        "type"
+      ],
+      "type": "session.thread_status_idle"
+    },
+    {
+      "id": "sevt_0191CLM36t1wwDNUrNxSCoQE",
+      "keys": [
+        "id",
+        "processed_at",
+        "stop_reason",
+        "type"
+      ],
+      "type": "session.status_idle"
+    }
+  ]
+}

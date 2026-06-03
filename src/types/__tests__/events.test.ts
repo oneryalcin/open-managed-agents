@@ -45,6 +45,9 @@ const WIRE_COMPATIBLE_EVENT_TYPES = [
   "agent.tool_use",
   "agent.tool_result",
   "agent.custom_tool_use",
+  // Span observability
+  "span.model_request_start",
+  "span.model_request_end",
   // Session lifecycle
   "session.status_running",
   "session.status_idle",

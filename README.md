@@ -38,6 +38,8 @@ Working today:
 - explicit Pi runtime wiring for agent execution;
 - public custom-tool pause/resume round trips;
 - durable runtime wait ledger and restart recovery for pending waits;
+- `span.model_request_start` / `span.model_request_end` model-request
+  observability events with required `model_usage`;
 - `user.tool_confirmation` allow/deny round trips for permission-gated tools;
 - `user.interrupt` aborts active Pi turns without disposing reusable sessions;
 - file upload resources and Docker-local session file mounts;
@@ -52,7 +54,6 @@ Still missing before claiming broad Anthropic Managed Agents parity:
 
 - request-level idempotency;
 - agent update/versioning;
-- span/model request events;
 - broader event-topology parity;
 - managed remote sandbox providers such as Modal;
 - production auth, RBAC, tenancy, and billing boundaries;

@@ -165,6 +165,121 @@ describe("event store", () => {
     expect(store.findRuntimeAction(WORKSPACE_ID, sessionId, "sevt_action")).toBeUndefined();
   });
 
+  it("tracks open model request start ids on pending runtime turns", () => {
+    const store = EventStore.open(":memory:");
+    const sessionId = "sesn_store_open_spans";
+    const now = new Date().toISOString();
+
+    store.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: WORKSPACE_ID,
+          sessionId,
+          turnId: "rtun_store_open_spans",
+          ownerId: "owner_store",
+          ownerGeneration: 1,
+          leaseExpiresAt: now,
+          triggerEventIds: ["sevt_trigger"],
+          now,
+        },
+      ],
+    });
+
+    store.appendBatchWithRuntimeChanges([], {
+      openedModelRequestStarts: [
+        {
+          workspaceId: WORKSPACE_ID,
+          sessionId,
+          turnId: "rtun_store_open_spans",
+          ownerId: "owner_store",
+          ownerGeneration: 1,
+          startEventId: "sevt_model_start_1",
+          now,
+        },
+      ],
+    });
+
+    expect(store.listPendingRuntimeTurns(WORKSPACE_ID)).toMatchObject([
+      {
+        turn_id: "rtun_store_open_spans",
+        open_model_request_start_ids: ["sevt_model_start_1"],
+      },
+    ]);
+
+    store.appendBatchWithRuntimeChanges([], {
+      closedModelRequestStarts: [
+        {
+          workspaceId: WORKSPACE_ID,
+          sessionId,
+          turnId: "rtun_store_open_spans",
+          ownerId: "owner_store",
+          ownerGeneration: 1,
+          startEventId: "sevt_model_start_1",
+          now,
+        },
+      ],
+    });
+
+    expect(store.listPendingRuntimeTurns(WORKSPACE_ID)).toMatchObject([
+      {
+        turn_id: "rtun_store_open_spans",
+        open_model_request_start_ids: [],
+      },
+    ]);
+  });
+
+  it("rejects stale-owner model request span mutations", () => {
+    const store = EventStore.open(":memory:");
+    const sessionId = "sesn_store_stale_span_owner";
+    const now = new Date().toISOString();
+
+    store.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: WORKSPACE_ID,
+          sessionId,
+          turnId: "rtun_store_stale_span_owner",
+          ownerId: "owner_a",
+          ownerGeneration: 1,
+          leaseExpiresAt: now,
+          triggerEventIds: ["sevt_trigger"],
+          now,
+        },
+      ],
+    });
+    const claimed = store.claimAcceptedRuntimeTurnForRecovery({
+      workspaceId: WORKSPACE_ID,
+      sessionId,
+      turnId: "rtun_store_stale_span_owner",
+      ownerId: "owner_b",
+      leaseExpiresAt: now,
+      now,
+    });
+    expect(claimed).toMatchObject({
+      owner_id: "owner_b",
+      owner_generation: 2,
+    });
+
+    expect(() =>
+      store.appendBatchWithRuntimeChanges([], {
+        openedModelRequestStarts: [
+          {
+            workspaceId: WORKSPACE_ID,
+            sessionId,
+            turnId: "rtun_store_stale_span_owner",
+            ownerId: "owner_a",
+            ownerGeneration: 1,
+            startEventId: "sevt_stale_start",
+            now,
+          },
+        ],
+      }),
+    ).toThrow("Runtime turn ownership lost");
+    expect(store.listPendingRuntimeTurns(WORKSPACE_ID)).toMatchObject([
+      { open_model_request_start_ids: [] },
+    ]);
+  });
+
   it("ignores stale-owner runtime state and close writes after recovery claims a turn", () => {
     const store = EventStore.open(":memory:");
     const sessionId = "sesn_store_stale_owner";

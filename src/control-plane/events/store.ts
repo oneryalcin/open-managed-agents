@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS pending_runtime_turns (
   lease_expires_at TEXT NOT NULL,
   state TEXT NOT NULL,
   trigger_event_ids TEXT NOT NULL,
+  open_model_request_start_ids TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT,
@@ -102,6 +103,7 @@ interface RuntimeActionRow {
   lease_expires_at: string;
   turn_state: string;
   trigger_event_ids: string;
+  open_model_request_start_ids: string;
   turn_created_at: string;
   turn_updated_at: string;
   completed_at: string | null;
@@ -117,6 +119,7 @@ interface RuntimeTurnRow {
   lease_expires_at: string;
   state: string;
   trigger_event_ids: string;
+  open_model_request_start_ids: string;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -156,6 +159,7 @@ export class EventStore implements SessionEventStore {
   private readonly closeRuntimeActionStmt: StatementSync;
   private readonly updateRuntimeTurnStateStmt: StatementSync;
   private readonly renewRuntimeTurnLeaseStmt: StatementSync;
+  private readonly updateRuntimeTurnOpenModelRequestStartsStmt: StatementSync;
   private readonly closeRuntimeTurnStmt: StatementSync;
   private readonly closeRuntimeActionsForTurnStmt: StatementSync;
   private readonly claimAcceptedRuntimeTurnStmt: StatementSync;
@@ -167,6 +171,7 @@ export class EventStore implements SessionEventStore {
     this.db = db;
     this.db.exec(SCHEMA);
     ensureWorkspaceIdColumn(this.db);
+    ensureOpenModelRequestStartIdsColumn(this.db);
     this.db.exec(INDEXES);
     this.appendStmt = this.db.prepare(
       `INSERT INTO events (id, workspace_id, session_id, type, processed_at, payload, created_at)
@@ -194,7 +199,7 @@ export class EventStore implements SessionEventStore {
     this.listPendingRuntimeTurnsStmt = this.db.prepare(
       `SELECT workspace_id, session_id, turn_id, owner_id, owner_generation,
               lease_expires_at, state, trigger_event_ids, created_at, updated_at,
-              completed_at, terminalized_at
+              completed_at, terminalized_at, open_model_request_start_ids
        FROM pending_runtime_turns
        WHERE workspace_id = ? AND state NOT IN ('completed', 'terminalized')
        ORDER BY turn_id ASC`,
@@ -206,8 +211,9 @@ export class EventStore implements SessionEventStore {
     this.insertRuntimeTurnStmt = this.db.prepare(
       `INSERT INTO pending_runtime_turns
         (workspace_id, session_id, turn_id, owner_id, owner_generation,
-         lease_expires_at, state, trigger_event_ids, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'accepted', ?, ?, ?)`,
+         lease_expires_at, state, trigger_event_ids, open_model_request_start_ids,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'accepted', ?, '[]', ?, ?)`,
     );
     this.insertRuntimeActionStmt = this.db.prepare(
       `INSERT INTO pending_runtime_actions
@@ -248,10 +254,18 @@ export class EventStore implements SessionEventStore {
          AND state NOT IN ('completed', 'terminalized')
          AND owner_id = ? AND owner_generation = ?`,
     );
+    this.updateRuntimeTurnOpenModelRequestStartsStmt = this.db.prepare(
+      `UPDATE pending_runtime_turns
+       SET open_model_request_start_ids = ?, updated_at = ?
+       WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
+         AND state NOT IN ('completed', 'terminalized')
+         AND owner_id = ? AND owner_generation = ?`,
+    );
     this.closeRuntimeTurnStmt = this.db.prepare(
       `UPDATE pending_runtime_turns
        SET state = ?,
            updated_at = ?,
+           open_model_request_start_ids = '[]',
            completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END,
            terminalized_at = CASE WHEN ? = 'terminalized' THEN COALESCE(terminalized_at, ?) ELSE terminalized_at END
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
@@ -292,7 +306,7 @@ export class EventStore implements SessionEventStore {
     this.retrieveRuntimeTurnStmt = this.db.prepare(
       `SELECT workspace_id, session_id, turn_id, owner_id, owner_generation,
               lease_expires_at, state, trigger_event_ids, created_at, updated_at,
-              completed_at, terminalized_at
+              completed_at, terminalized_at, open_model_request_start_ids
        FROM pending_runtime_turns
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?`,
     );
@@ -559,6 +573,52 @@ export class EventStore implements SessionEventStore {
         throw new RuntimeTurnOwnershipLostError(turn.turnId);
       }
     }
+    for (const turn of changes.openedModelRequestStarts ?? []) {
+      const existing = this.retrieveRuntimeTurn(
+        turn.workspaceId,
+        turn.sessionId,
+        turn.turnId,
+      );
+      const next = [...(existing?.open_model_request_start_ids ?? [])];
+      next.push(turn.startEventId);
+      const result = this.updateRuntimeTurnOpenModelRequestStartsStmt.run(
+        JSON.stringify(next),
+        turn.now,
+        turn.workspaceId,
+        turn.sessionId,
+        turn.turnId,
+        turn.ownerId,
+        turn.ownerGeneration,
+      );
+      if (result.changes === 0) {
+        throw new RuntimeTurnOwnershipLostError(turn.turnId);
+      }
+    }
+    for (const turn of changes.closedModelRequestStarts ?? []) {
+      const existing = this.retrieveRuntimeTurn(
+        turn.workspaceId,
+        turn.sessionId,
+        turn.turnId,
+      );
+      const current = existing?.open_model_request_start_ids ?? [];
+      const index = current.lastIndexOf(turn.startEventId);
+      const next =
+        index === -1
+          ? current
+          : [...current.slice(0, index), ...current.slice(index + 1)];
+      const result = this.updateRuntimeTurnOpenModelRequestStartsStmt.run(
+        JSON.stringify(next),
+        turn.now,
+        turn.workspaceId,
+        turn.sessionId,
+        turn.turnId,
+        turn.ownerId,
+        turn.ownerGeneration,
+      );
+      if (result.changes === 0) {
+        throw new RuntimeTurnOwnershipLostError(turn.turnId);
+      }
+    }
     for (const turn of changes.closedTurns ?? []) {
       const result = this.closeRuntimeTurnStmt.run(
         turn.state,
@@ -690,6 +750,7 @@ function runtimeActionSelectSql(whereClause: string): string {
       t.lease_expires_at,
       t.state AS turn_state,
       t.trigger_event_ids,
+      t.open_model_request_start_ids,
       t.created_at AS turn_created_at,
       t.updated_at AS turn_updated_at,
       t.completed_at,
@@ -726,6 +787,9 @@ function deserializeRuntimeAction(row: RuntimeActionRow): PendingRuntimeActionRe
       lease_expires_at: row.lease_expires_at,
       state: row.turn_state as PendingRuntimeTurnRecord["state"],
       trigger_event_ids: parseTriggerEventIds(row.trigger_event_ids),
+      open_model_request_start_ids: parseStringArray(
+        row.open_model_request_start_ids,
+      ),
       created_at: row.turn_created_at,
       updated_at: row.turn_updated_at,
       completed_at: row.completed_at,
@@ -744,6 +808,9 @@ function deserializeRuntimeTurn(row: RuntimeTurnRow): PendingRuntimeTurnRecord {
     lease_expires_at: row.lease_expires_at,
     state: row.state as PendingRuntimeTurnRecord["state"],
     trigger_event_ids: parseTriggerEventIds(row.trigger_event_ids),
+    open_model_request_start_ids: parseStringArray(
+      row.open_model_request_start_ids,
+    ),
     created_at: row.created_at,
     updated_at: row.updated_at,
     completed_at: row.completed_at,
@@ -752,6 +819,10 @@ function deserializeRuntimeTurn(row: RuntimeTurnRow): PendingRuntimeTurnRecord {
 }
 
 function parseTriggerEventIds(value: string): string[] {
+  return parseStringArray(value);
+}
+
+function parseStringArray(value: string): string[] {
   const parsed = JSON.parse(value) as unknown;
   return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
     ? parsed
@@ -806,6 +877,20 @@ function ensureWorkspaceIdColumn(db: DatabaseSync): void {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+function ensureOpenModelRequestStartIdsColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(pending_runtime_turns)").all() as Array<{
+    name: string;
+  }>;
+  if (
+    columns.some((column) => column.name === "open_model_request_start_ids")
+  ) {
+    return;
+  }
+  db.exec(
+    "ALTER TABLE pending_runtime_turns ADD COLUMN open_model_request_start_ids TEXT NOT NULL DEFAULT '[]'",
+  );
 }
 
 function hasTable(db: DatabaseSync, name: string): boolean {

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-27T13:07:20.026Z",
+  "generated_at": "2026-06-02T22:52:54.634Z",
   "model": "anthropic/claude-haiku-4-5",
   "results": [
     {
@@ -32,12 +32,12 @@
       "toolEvents": [
         {
           "type": "tool_execution_start",
-          "toolCallId": "toolu_0123gdP9wPLxdnKGrU56Nuhc",
+          "toolCallId": "toolu_01VskCuWTX4VCuEd3kXSsmez",
           "toolName": "bash"
         },
         {
           "type": "tool_execution_update",
-          "toolCallId": "toolu_0123gdP9wPLxdnKGrU56Nuhc",
+          "toolCallId": "toolu_01VskCuWTX4VCuEd3kXSsmez",
           "toolName": "bash",
           "partialResult": {
             "content": [
@@ -53,7 +53,7 @@
         },
         {
           "type": "tool_execution_end",
-          "toolCallId": "toolu_0123gdP9wPLxdnKGrU56Nuhc",
+          "toolCallId": "toolu_01VskCuWTX4VCuEd3kXSsmez",
           "toolName": "bash",
           "isError": false,
           "result": {
@@ -71,7 +71,7 @@
       ],
       "calls": [
         {
-          "toolCallId": "toolu_0123gdP9wPLxdnKGrU56Nuhc",
+          "toolCallId": "toolu_01VskCuWTX4VCuEd3kXSsmez",
           "params": {
             "command": "printf probe-21"
           },
@@ -115,12 +115,12 @@
       "toolEvents": [
         {
           "type": "tool_execution_start",
-          "toolCallId": "toolu_019LvTb1DE4mQ1tWxYR3mYDB",
+          "toolCallId": "toolu_01B6TrtAWpwKJp2sx5L7Ww8y",
           "toolName": "oma_bash"
         },
         {
           "type": "tool_execution_update",
-          "toolCallId": "toolu_019LvTb1DE4mQ1tWxYR3mYDB",
+          "toolCallId": "toolu_01B6TrtAWpwKJp2sx5L7Ww8y",
           "toolName": "oma_bash",
           "partialResult": {
             "content": [
@@ -136,7 +136,7 @@
         },
         {
           "type": "tool_execution_end",
-          "toolCallId": "toolu_019LvTb1DE4mQ1tWxYR3mYDB",
+          "toolCallId": "toolu_01B6TrtAWpwKJp2sx5L7Ww8y",
           "toolName": "oma_bash",
           "isError": false,
           "result": {
@@ -154,7 +154,7 @@
       ],
       "calls": [
         {
-          "toolCallId": "toolu_019LvTb1DE4mQ1tWxYR3mYDB",
+          "toolCallId": "toolu_01B6TrtAWpwKJp2sx5L7Ww8y",
           "params": {
             "command": "printf probe-21"
           },
@@ -165,7 +165,7 @@
       "toolCalled": true,
       "updateObserved": true,
       "finalObserved": true,
-      "assistantText": "The final marker I saw is: **PROBE_21_FINAL_FROM_PROVIDER**",
+      "assistantText": "The final marker I saw was: **PROBE_21_FINAL_FROM_PROVIDER**",
       "artifact": "/Users/mehmetoneryalcin/dev/personal/open-managed-agents/scratch/artifacts/pi-sandbox/custom_tool_named_oma_bash_baseline.jsonl"
     }
   ],

@@ -81,6 +81,7 @@ export interface PendingRuntimeTurnRecord {
   lease_expires_at: string;
   state: RuntimeTurnState;
   trigger_event_ids: string[];
+  open_model_request_start_ids: string[];
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -169,6 +170,26 @@ export interface RuntimeTurnClosure {
   now: string;
 }
 
+export interface RuntimeTurnModelRequestStartOpen {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  ownerId: string;
+  ownerGeneration: number;
+  startEventId: string;
+  now: string;
+}
+
+export interface RuntimeTurnModelRequestStartClose {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  ownerId: string;
+  ownerGeneration: number;
+  startEventId: string;
+  now: string;
+}
+
 export interface RuntimeTurnRecoveryClaim {
   workspaceId: WorkspaceId;
   sessionId: string;
@@ -185,6 +206,8 @@ export interface EventStoreRuntimeChanges {
   closedActions?: RuntimeActionClosure[];
   turnStates?: RuntimeTurnStateChange[];
   leaseRenewals?: RuntimeTurnLeaseRenewal[];
+  openedModelRequestStarts?: RuntimeTurnModelRequestStartOpen[];
+  closedModelRequestStarts?: RuntimeTurnModelRequestStartClose[];
   closedTurns?: RuntimeTurnClosure[];
 }
 
