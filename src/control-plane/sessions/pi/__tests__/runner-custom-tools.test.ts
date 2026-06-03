@@ -32,6 +32,22 @@ const sdk = vi.hoisted(() => {
       this.emit({ type: "agent_start" });
       const [tool] = this.customTools;
       if (!tool) throw new Error("missing mock custom tool");
+      if (emitBuiltinToolCallMessage) {
+        this.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "toolu_mock_runner",
+                name: tool.name,
+                arguments: { question: "continue?" },
+              },
+            ],
+          },
+        });
+      }
       const result = await tool.execute(
         "toolu_mock_runner",
         { question: "continue?" },
@@ -40,6 +56,15 @@ const sdk = vi.hoisted(() => {
         {} as never,
       );
       this.results.push(result);
+      if (emitBuiltinToolCallMessage) {
+        this.emit({
+          type: "tool_execution_end",
+          toolCallId: "toolu_mock_runner",
+          toolName: tool.name,
+          result,
+          isError: false,
+        });
+      }
       this.emit({ type: "agent_end", messages: [], willRetry: false });
     }
 
@@ -85,6 +110,8 @@ const sdk = vi.hoisted(() => {
     customTools?: MockToolDefinition[];
   };
 
+  let emitBuiltinToolCallMessage = false;
+
   return {
     AuthStorage: MockAuthStorage,
     ModelRegistry: MockModelRegistry,
@@ -99,6 +126,9 @@ const sdk = vi.hoisted(() => {
     ),
     lastSession: () => lastSession,
     lastCreateOptions: () => lastCreateOptions,
+    setEmitBuiltinToolCallMessage: (value: boolean) => {
+      emitBuiltinToolCallMessage = value;
+    },
   };
 });
 
@@ -116,6 +146,7 @@ import type { SandboxProvider } from "../sandbox/provider.ts";
 describe("PiSessionRunner custom-tool bridge", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sdk.setEmitBuiltinToolCallMessage(false);
   });
 
   it("binds a public custom-tool event ID and resumes the Pi tool through the runner path", async () => {
@@ -365,6 +396,114 @@ describe("PiSessionRunner custom-tool bridge", () => {
     });
     expect((await iterator.next()).done).toBe(true);
     expect(sandboxTool.execute).toHaveBeenCalledOnce();
+  });
+
+  it("coalesces a gated sandbox tool-call message with the permission event", async () => {
+    sdk.setEmitBuiltinToolCallMessage(true);
+    const invocations = {
+      total: 0,
+      byTool: {
+        bash: 0,
+        read: 0,
+        write: 0,
+        edit: 0,
+        find: 0,
+        ls: 0,
+      },
+      toolCallIds: {
+        bash: new Set<string>(),
+        read: new Set<string>(),
+        write: new Set<string>(),
+        edit: new Set<string>(),
+        find: new Set<string>(),
+        ls: new Set<string>(),
+      },
+    };
+    const sandbox = {
+      cwd: "/workspace",
+      operations: {},
+      tools: [
+        {
+          name: "bash",
+          execute: vi.fn(async (toolCallId: string) => {
+            invocations.total += 1;
+            invocations.byTool.bash += 1;
+            invocations.toolCallIds.bash.add(toolCallId);
+            return { content: [], details: {} };
+          }),
+        },
+      ] as unknown as SandboxProvider["tools"],
+      toolNames: new Set(["bash"]),
+      invocations,
+      dispose: vi.fn(),
+    } as unknown as SandboxProvider;
+    const runner = new PiSessionRunner({
+      sandboxProviderFactory: async () => sandbox,
+      builtinToolAccess: () => ({ enabled: true, permission: "ask" }),
+      customToolTimeoutMs: 0,
+      idleTtlMs: 0,
+    });
+
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_builtin_ask", "run")
+      [Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({ type: "agent_start" });
+    const composite = (await iterator.next()).value;
+    expect(composite).toMatchObject({
+      type: "oma.tool_permission_with_model_end",
+      messageEnd: {
+        type: "message_end",
+        message: {
+          content: [
+            {
+              type: "toolCall",
+              id: "toolu_mock_runner",
+              name: "bash",
+            },
+          ],
+        },
+      },
+      permissionUse: {
+        type: "oma.tool_permission_use",
+        piToolCallId: "toolu_mock_runner",
+        name: "bash",
+        evaluatedPermission: "ask",
+      },
+      suppressedPiToolCallIds: ["toolu_mock_runner"],
+    });
+    const permissionUse = (
+      composite as {
+        permissionUse: {
+          bindToolUseId: (
+            id: string,
+            releaseToolUseId: () => void,
+          ) => void;
+        };
+      }
+    ).permissionUse;
+    permissionUse.bindToolUseId("sevt_builtin_ask", () => {});
+
+    const resumed = iterator.next();
+    await Promise.resolve();
+    const commit = runner.claimToolConfirmation("wrk_default", "sesn_builtin_ask", {
+      type: "user.tool_confirmation",
+      tool_use_id: "sevt_builtin_ask",
+      result: "allow",
+    } satisfies ManagedAgentsUserToolConfirmationEventInput);
+    expect(commit).toBeTypeOf("function");
+    commit?.();
+
+    expect((await resumed).value).toMatchObject({
+      type: "tool_execution_end",
+      toolCallId: "toolu_mock_runner",
+      toolName: "bash",
+    });
+    expect((await iterator.next()).value).toEqual({
+      type: "agent_end",
+      messages: [],
+      willRetry: false,
+    });
+    expect((await iterator.next()).done).toBe(true);
   });
 
   it("denies never_allow builtin tools without invoking the sandbox provider", async () => {

@@ -11,6 +11,7 @@ import type {
   RuntimeSessionFileMount,
   RuntimeSessionPrepareOptions,
   RuntimeToolPermissionUseEvent,
+  RuntimeToolPermissionWithModelEndEvent,
 } from "../../events/types.ts";
 import { RuntimeUnsupportedSessionFileResourcesError } from "../../events/types.ts";
 import type {
@@ -73,7 +74,12 @@ interface RuntimeHandle {
   timer: ReturnType<typeof setTimeout> | undefined;
   customToolNames: Set<string>;
   emitInternal:
-    | ((event: RuntimeCustomToolUseEvent | RuntimeToolPermissionUseEvent) => void)
+    | ((
+        event:
+          | RuntimeCustomToolUseEvent
+          | RuntimeToolPermissionUseEvent
+          | RuntimeToolPermissionWithModelEndEvent,
+      ) => void)
     | undefined;
 }
 
@@ -317,6 +323,23 @@ export class PiSessionRunner implements RuntimeEventRunner {
     const installedInternalEmitter = previousInternal === undefined;
     if (installedInternalEmitter) {
       handle.emitInternal = (event) => {
+        if (event.type === "oma.tool_permission_use") {
+          const match = takeMessageEndForToolCall(
+            handle.sandbox,
+            [gatedEvents, queue],
+            event.piToolCallId,
+          );
+          if (match !== undefined) {
+            queue.push({
+              type: "oma.tool_permission_with_model_end",
+              messageEnd: match.event,
+              permissionUse: event,
+              suppressedPiToolCallIds: match.suppressedPiToolCallIds,
+            } satisfies RuntimeToolPermissionWithModelEndEvent);
+            wake?.();
+            return;
+          }
+        }
         queue.push(event);
         wake?.();
       };
@@ -775,7 +798,11 @@ function isAlreadyProcessing(error: unknown): boolean {
 function isInternalRuntimeEvent(event: unknown): boolean {
   if (typeof event !== "object" || event === null) return false;
   const type = (event as { type?: unknown }).type;
-  return type === "oma.custom_tool_use" || type === "oma.tool_permission_use";
+  return (
+    type === "oma.custom_tool_use" ||
+    type === "oma.tool_permission_use" ||
+    type === "oma.tool_permission_with_model_end"
+  );
 }
 
 function sandboxedToolEvent(
@@ -832,6 +859,26 @@ function sandboxedToolCallsInMessage(
     });
   }
   return out;
+}
+
+function takeMessageEndForToolCall(
+  sandbox: SandboxProvider | undefined,
+  eventQueues: unknown[][],
+  piToolCallId: string,
+): { event: unknown; suppressedPiToolCallIds: string[] } | undefined {
+  for (const events of eventQueues) {
+    let suppressedPiToolCallIds: string[] = [];
+    const index = events.findIndex((event) => {
+      const calls = sandboxedToolCallsInMessage(sandbox, event);
+      if (!calls.some((call) => call.toolCallId === piToolCallId)) return false;
+      suppressedPiToolCallIds = calls.map((call) => call.toolCallId);
+      return true;
+    });
+    if (index === -1) continue;
+    const [event] = events.splice(index, 1);
+    return { event, suppressedPiToolCallIds };
+  }
+  return undefined;
 }
 
 function assertSandboxProviderHandledToolCall(opts: {

@@ -398,6 +398,13 @@ export interface RuntimeToolPermissionUseEvent {
   rejectToolUse: (error: Error) => void;
 }
 
+export interface RuntimeToolPermissionWithModelEndEvent {
+  type: "oma.tool_permission_with_model_end";
+  messageEnd: unknown;
+  permissionUse: RuntimeToolPermissionUseEvent;
+  suppressedPiToolCallIds: readonly string[];
+}
+
 export interface RuntimeTranslatorContext {
   customToolNames?: ReadonlySet<string>;
   publicToolUseIdForPiToolCallId?: (piToolCallId: string) => string | undefined;
