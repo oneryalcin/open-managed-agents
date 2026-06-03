@@ -161,6 +161,47 @@ describe("Cycle C.2 API", () => {
     const errorEvent = list.data.find((event) => event.type === "session.error");
     expect(errorEvent?.message).toBe("Runtime execution failed");
   });
+
+  it("defensively closes an open model span when runtime completes without message_end", async () => {
+    const fixture = makeFixture(new UnpairedStartRunner());
+    const session = await setupSession(fixture.app);
+
+    const send = await fixture.app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.message", content: [{ type: "text", text: "done" }] }],
+      }),
+    });
+    expect(send.status).toBe(200);
+
+    const list = await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc`,
+      (body) => body.data.some((event) => event.type === "span.model_request_end"),
+    );
+    expect(list.data.map((event) => event.type)).toEqual([
+      "user.message",
+      "span.model_request_start",
+      "span.model_request_end",
+    ]);
+    const spanStart = list.data.find(
+      (event) => event.type === "span.model_request_start",
+    );
+    const spanEnd = list.data.find(
+      (event) => event.type === "span.model_request_end",
+    );
+    expect(spanEnd).toMatchObject({
+      model_request_start_id: spanStart?.id,
+      is_error: true,
+      model_usage: {
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+      },
+    });
+  });
 });
 
 class FakeRunner implements RuntimeEventRunner {
@@ -235,6 +276,32 @@ class ThrowingRunner implements RuntimeEventRunner {
       },
     };
     throw new Error("runtime boom");
+  }
+}
+
+class UnpairedStartRunner implements RuntimeEventRunner {
+  async *runUserMessage(
+    _workspaceId: string,
+    _sessionId: string,
+    _text: string,
+  ): AsyncIterable<unknown> {
+    await Promise.resolve();
+    yield {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+    };
   }
 }
 

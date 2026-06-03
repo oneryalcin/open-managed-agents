@@ -74,6 +74,42 @@ describe("Pi span normalizer", () => {
       },
     });
   });
+
+  it("marks Pi model error stop reasons as error span ends", () => {
+    const endDrafts = spanModelRequestEndDraft(
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          usage: {
+            input: 23,
+            output: 0,
+            cacheRead: 19,
+            cacheWrite: 17,
+          },
+          stopReason: "error",
+          errorMessage: "provider failed",
+        },
+      },
+      "sevt_model_start",
+    );
+
+    expect(endDrafts).toHaveLength(1);
+    expect(endDrafts[0]?.payload).toMatchObject({
+      model_request_start_id: "sevt_model_start",
+      is_error: true,
+      model_usage: {
+        cache_creation_input_tokens: 17,
+        cache_read_input_tokens: 19,
+        input_tokens: 23,
+        output_tokens: 0,
+      },
+    });
+  });
 });
 
 function normalizeScenario(scenario: Scenario): EventDraft[] {

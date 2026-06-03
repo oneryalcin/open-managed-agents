@@ -28,7 +28,7 @@ export function spanModelRequestEndDraft(
   if (!startEventId) return [];
   const payload: ManagedAgentsSpanModelRequestEndPayload = {
     model_request_start_id: startEventId,
-    is_error: message.stopReason === "aborted",
+    is_error: message.stopReason === "aborted" || message.stopReason === "error",
     model_usage: usageFromMessage(message),
   };
   return [{ type: "span.model_request_end", payload: toJsonObject(payload) }];

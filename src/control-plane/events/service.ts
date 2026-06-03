@@ -1216,12 +1216,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
               activeOpenModelRequestStartIds.pop();
             }
           }
-          this.closeRuntimeTurn(
+          this.closeRuntimeTurnWithSyntheticSpanEnds(
             workspaceId,
             sessionId,
-            prompt.turnId,
-            prompt.ownerId,
-            prompt.ownerGeneration,
+            prompt,
+            activeOpenModelRequestStartIds,
             "completed",
             "completed",
           );
@@ -1389,6 +1388,50 @@ export class DefaultSessionEventsService implements SessionEventsService {
           reason,
           state,
           now: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  private closeRuntimeTurnWithSyntheticSpanEnds(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    prompt: RuntimePrompt,
+    openModelRequestStartIds: readonly string[],
+    state: "completed" | "terminalized",
+    reason: "completed" | "terminalized" | "interrupted" | "archived" | "deleted",
+  ): void {
+    if (openModelRequestStartIds.length === 0) {
+      this.closeRuntimeTurn(
+        workspaceId,
+        sessionId,
+        prompt.turnId,
+        prompt.ownerId,
+        prompt.ownerGeneration,
+        state,
+        reason,
+      );
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const rows = materializePersistedEvents(
+      workspaceId,
+      sessionId,
+      syntheticSpanModelRequestEndDrafts(openModelRequestStartIds),
+      now,
+    );
+    persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
+      closedTurns: [
+        {
+          workspaceId,
+          sessionId,
+          turnId: prompt.turnId,
+          ownerId: prompt.ownerId,
+          ownerGeneration: prompt.ownerGeneration,
+          reason,
+          state,
+          now,
         },
       ],
     });
