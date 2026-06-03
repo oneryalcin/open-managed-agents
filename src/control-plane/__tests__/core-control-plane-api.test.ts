@@ -24,7 +24,7 @@ const VALID_ENVIRONMENT = {
   },
 };
 
-describe("Cycle B.1 API", () => {
+describe("Core control-plane API", () => {
   it("parses managed-agents beta headers without rejecting future betas", () => {
     expect(parseBetaFeatures(undefined)).toEqual(new Set());
     expect(parseBetaFeatures(MANAGED_AGENTS_BETA)).toEqual(

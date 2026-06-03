@@ -684,6 +684,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
     opts: { includeTerminatedStatus?: boolean } = {},
   ): void {
     const now = new Date().toISOString();
+    // Keep list-and-close synchronous. These archive closes intentionally do
+    // not owner-fence individual turns; introducing an await here would allow a
+    // runtime owner to close the same turn between the list and the batch.
     const turns = this.events
       .listPendingRuntimeTurns(workspaceId)
       .filter((turn) => turn.session_id === sessionId);
@@ -1161,6 +1164,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
               drafts,
               now,
             );
+            if (spanStartDrafts.length > 1) {
+              throw new Error("Expected at most one model request start draft");
+            }
             const openedModelRequestStartId =
               spanStartDrafts.length > 0 ? rows[0]?.id : undefined;
             persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
@@ -1421,6 +1427,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
       syntheticSpanModelRequestEndDrafts(openModelRequestStartIds),
       now,
     );
+    // This is a defensive cleanup path for an impossible or provider-buggy
+    // stream shape. If it runs on clean completion, the synthetic end may land
+    // after status_idle; preserving closure is more important than timeline
+    // aesthetics for this fallback.
     persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
       closedTurns: [
         {

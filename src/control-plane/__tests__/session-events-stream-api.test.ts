@@ -29,7 +29,7 @@ const VALID_ENVIRONMENT = {
   },
 };
 
-describe("Cycle B.3 API", () => {
+describe("Session events stream API", () => {
   it("streams SSE frames with id/event/data and receives live events after replay barrier", async () => {
     const fixture = makeFixture();
     const session = await setupSession(fixture.app);

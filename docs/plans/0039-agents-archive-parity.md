@@ -206,7 +206,7 @@ Add focused tests in the existing test layers:
    - retrieve-after-archive parity.
    - list/default vs `include_archived=true`.
    - missing archive route error envelope.
-3. `src/control-plane/__tests__/cycle-b1-api.test.ts` or a narrow session API
+3. `src/control-plane/__tests__/core-control-plane-api.test.ts` or a narrow session API
    test:
    - session create with archived agent rejects with the hosted message.
    - versioned archived-agent create rejects with the same hosted message.

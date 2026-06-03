@@ -19,7 +19,7 @@ const VALID_ENVIRONMENT = {
   },
 };
 
-describe("Cycle B.2 API", () => {
+describe("Session events API", () => {
   it("sends supported user events and lists persisted history with public shape", async () => {
     const app = createInMemoryControlPlaneApp();
     const session = await setupSession(app);
