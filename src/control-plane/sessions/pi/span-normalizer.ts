@@ -10,6 +10,7 @@ export const zeroModelUsage: ManagedAgentsSpanModelUsage = {
   cache_read_input_tokens: 0,
   input_tokens: 0,
   output_tokens: 0,
+  speed: null,
 };
 
 export function spanModelRequestStartDraft(input: unknown): EventDraft[] {
@@ -71,7 +72,21 @@ function usageFromMessage(message: JsonObject): ManagedAgentsSpanModelUsage {
     cache_read_input_tokens: numberField(message.usage.cacheRead),
     input_tokens: numberField(message.usage.input),
     output_tokens: numberField(message.usage.output),
+    speed: speedField(message),
   };
+}
+
+function speedField(
+  message: JsonObject,
+): ManagedAgentsSpanModelUsage["speed"] {
+  if (message.speed === "standard" || message.speed === "fast") {
+    return message.speed;
+  }
+  if (isObject(message.model)) {
+    const speed = message.model.speed;
+    if (speed === "standard" || speed === "fast") return speed;
+  }
+  return null;
 }
 
 function numberField(value: unknown): number {

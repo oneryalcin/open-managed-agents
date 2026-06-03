@@ -112,7 +112,8 @@ const pass =
   end?.is_error === true &&
   end?.model_usage?.input_tokens === 31 &&
   end?.model_usage?.cache_read_input_tokens === 11 &&
-  end?.model_usage?.cache_creation_input_tokens === 13;
+  end?.model_usage?.cache_creation_input_tokens === 13 &&
+  end?.model_usage?.speed === null;
 
 console.log(
   JSON.stringify(

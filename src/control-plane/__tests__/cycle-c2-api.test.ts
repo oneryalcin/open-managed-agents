@@ -78,6 +78,7 @@ describe("Cycle C.2 API", () => {
         cache_read_input_tokens: 11,
         input_tokens: 13,
         output_tokens: 17,
+        speed: null,
       },
     });
     expect(liveIdle?.data.type).toBe("session.status_idle");
@@ -156,6 +157,7 @@ describe("Cycle C.2 API", () => {
         cache_read_input_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
+        speed: null,
       },
     });
     const errorEvent = list.data.find((event) => event.type === "session.error");
@@ -199,6 +201,7 @@ describe("Cycle C.2 API", () => {
         cache_read_input_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
+        speed: null,
       },
     });
   });

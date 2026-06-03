@@ -643,6 +643,7 @@ describe("Cycle D custom tool round trip", () => {
         cache_read_input_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
+        speed: null,
       },
     });
     expect(fixture.eventStore.listPendingRuntimeTurns("wrk_default")).toEqual([]);

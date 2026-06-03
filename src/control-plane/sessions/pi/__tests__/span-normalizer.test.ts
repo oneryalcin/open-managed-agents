@@ -28,6 +28,7 @@ describe("Pi span normalizer", () => {
         cache_read_input_tokens: expect.any(Number),
         input_tokens: expect.any(Number),
         output_tokens: expect.any(Number),
+        speed: null,
       },
     });
   });
@@ -71,6 +72,7 @@ describe("Pi span normalizer", () => {
         cache_read_input_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
+        speed: null,
       },
     });
   });
@@ -107,7 +109,36 @@ describe("Pi span normalizer", () => {
         cache_read_input_tokens: 19,
         input_tokens: 23,
         output_tokens: 0,
+        speed: null,
       },
+    });
+  });
+
+  it("passes through Pi model speed when available", () => {
+    const endDrafts = spanModelRequestEndDraft(
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          speed: "fast",
+          usage: {
+            input: 1,
+            output: 2,
+            cacheRead: 3,
+            cacheWrite: 4,
+          },
+          stopReason: "stop",
+        },
+      },
+      "sevt_model_start",
+    );
+
+    expect(endDrafts[0]?.payload.model_usage).toMatchObject({
+      speed: "fast",
     });
   });
 });
