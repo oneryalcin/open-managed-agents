@@ -50,4 +50,4 @@ This is also why an `appendAndPublish` convenience method was *removed* during B
 
 ## Validation
 
-Empirically verified on branch `feat/cycle-b3-events-stream`: `npm run typecheck`, `npm test` (48 tests / 11 files), `scratch/05-event-store.ts`, and `scratch/09-events-stream.ts` all pass. The fail-open cursor states (malformed / nonexistent / foreign-session / valid) and the idle-cancel subscriber-teardown are each covered by a focused test in `cycle-b3-api.test.ts`.
+Empirically verified on branch `feat/cycle-b3-events-stream`: `npm run typecheck`, `npm test` (48 tests / 11 files), `scratch/05-event-store.ts`, and `scratch/09-events-stream.ts` all pass. The fail-open cursor states (malformed / nonexistent / foreign-session / valid) and the idle-cancel subscriber-teardown are each covered by a focused test in `session-events-stream-api.test.ts`.

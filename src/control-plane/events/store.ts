@@ -574,50 +574,18 @@ export class EventStore implements SessionEventStore {
       }
     }
     for (const turn of changes.openedModelRequestStarts ?? []) {
-      const existing = this.retrieveRuntimeTurn(
-        turn.workspaceId,
-        turn.sessionId,
-        turn.turnId,
-      );
-      const next = [...(existing?.open_model_request_start_ids ?? [])];
-      next.push(turn.startEventId);
-      const result = this.updateRuntimeTurnOpenModelRequestStartsStmt.run(
-        JSON.stringify(next),
-        turn.now,
-        turn.workspaceId,
-        turn.sessionId,
-        turn.turnId,
-        turn.ownerId,
-        turn.ownerGeneration,
-      );
-      if (result.changes === 0) {
-        throw new RuntimeTurnOwnershipLostError(turn.turnId);
-      }
+      this.updateRuntimeTurnOpenModelRequestStarts(turn, (current) => [
+        ...current,
+        turn.startEventId,
+      ]);
     }
     for (const turn of changes.closedModelRequestStarts ?? []) {
-      const existing = this.retrieveRuntimeTurn(
-        turn.workspaceId,
-        turn.sessionId,
-        turn.turnId,
-      );
-      const current = existing?.open_model_request_start_ids ?? [];
-      const index = current.lastIndexOf(turn.startEventId);
-      const next =
-        index === -1
+      this.updateRuntimeTurnOpenModelRequestStarts(turn, (current) => {
+        const index = current.lastIndexOf(turn.startEventId);
+        return index === -1
           ? current
           : [...current.slice(0, index), ...current.slice(index + 1)];
-      const result = this.updateRuntimeTurnOpenModelRequestStartsStmt.run(
-        JSON.stringify(next),
-        turn.now,
-        turn.workspaceId,
-        turn.sessionId,
-        turn.turnId,
-        turn.ownerId,
-        turn.ownerGeneration,
-      );
-      if (result.changes === 0) {
-        throw new RuntimeTurnOwnershipLostError(turn.turnId);
-      }
+      });
     }
     for (const turn of changes.closedTurns ?? []) {
       const result = this.closeRuntimeTurnStmt.run(
@@ -645,6 +613,38 @@ export class EventStore implements SessionEventStore {
         turn.sessionId,
         turn.turnId,
       );
+    }
+  }
+
+  private updateRuntimeTurnOpenModelRequestStarts(
+    turn: {
+      workspaceId: WorkspaceId;
+      sessionId: string;
+      turnId: string;
+      ownerId: string;
+      ownerGeneration: number;
+      now: string;
+    },
+    update: (current: readonly string[]) => readonly string[],
+  ): void {
+    const existing = this.retrieveRuntimeTurn(
+      turn.workspaceId,
+      turn.sessionId,
+      turn.turnId,
+    );
+    const current = existing?.open_model_request_start_ids ?? [];
+    const next = update(current);
+    const result = this.updateRuntimeTurnOpenModelRequestStartsStmt.run(
+      JSON.stringify(next),
+      turn.now,
+      turn.workspaceId,
+      turn.sessionId,
+      turn.turnId,
+      turn.ownerId,
+      turn.ownerGeneration,
+    );
+    if (result.changes === 0) {
+      throw new RuntimeTurnOwnershipLostError(turn.turnId);
     }
   }
 

@@ -77,6 +77,42 @@ describe("Pi span normalizer", () => {
     });
   });
 
+  it("uses Pi abort usage when a natural abort close is available", () => {
+    const endDrafts = spanModelRequestEndDraft(
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          usage: {
+            input: 31,
+            output: 7,
+            cacheRead: 11,
+            cacheWrite: 13,
+          },
+          stopReason: "aborted",
+        },
+      },
+      "sevt_model_start",
+    );
+
+    expect(endDrafts).toHaveLength(1);
+    expect(endDrafts[0]?.payload).toMatchObject({
+      model_request_start_id: "sevt_model_start",
+      is_error: true,
+      model_usage: {
+        cache_creation_input_tokens: 13,
+        cache_read_input_tokens: 11,
+        input_tokens: 31,
+        output_tokens: 7,
+        speed: null,
+      },
+    });
+  });
+
   it("marks Pi model error stop reasons as error span ends", () => {
     const endDrafts = spanModelRequestEndDraft(
       {

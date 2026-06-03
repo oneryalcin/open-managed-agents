@@ -30,7 +30,7 @@ const VALID_ENVIRONMENT = {
   },
 };
 
-describe("Cycle C.2 API", () => {
+describe("Runtime events API", () => {
   it("persists translated runtime events and delivers them on existing list/stream routes", async () => {
     const runner = new FakeRunner();
     const fixture = makeFixture(runner);

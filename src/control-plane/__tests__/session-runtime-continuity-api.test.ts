@@ -30,7 +30,7 @@ const VALID_ENVIRONMENT = {
   },
 };
 
-describe("Cycle C.3 API", () => {
+describe("Session runtime continuity API", () => {
   it("does not persist idle before a queued follow-up response drains", async () => {
     const gate = deferred<void>();
     const fixture = makeFixture(new FakeQueuedSessionFactory(gate.promise));

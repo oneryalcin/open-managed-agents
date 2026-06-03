@@ -52,7 +52,7 @@ const VALID_ENVIRONMENT = {
   },
 };
 
-describe("Cycle D custom tool round trip", () => {
+describe("Custom tool API round trip", () => {
   it("emits requires_action, accepts custom_tool_result, and resumes the runtime", async () => {
     const runner = new FakeCustomToolRunner();
     const fixture = makeFixture(runner);
@@ -123,6 +123,96 @@ describe("Cycle D custom tool round trip", () => {
       { type: "text", text: "runtime saw: external answer" },
     ]);
     expect(final[7]?.stop_reason).toEqual({ type: "end_turn" });
+  });
+
+  it("emits model request spans across a live custom-tool wait", async () => {
+    const runner = new ModelSpanningCustomToolRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) =>
+        events.some((event) => event.type === "agent.custom_tool_use") &&
+        events.some(
+          (event) =>
+            event.type === "span.model_request_end" &&
+            event.model_request_start_id !== undefined,
+        ) &&
+        events.some(
+          (event) =>
+            event.type === "session.status_idle" &&
+            (event.stop_reason as { type?: unknown } | undefined)?.type ===
+              "requires_action",
+        ),
+    );
+
+    const customUse = waiting.find(
+      (event) => event.type === "agent.custom_tool_use",
+    );
+    expect(customUse?.id).toEqual(expect.stringMatching(/^sevt_/));
+
+    await sendCustomToolResult(fixture.app, session.id, customUse?.id as string, [
+      { type: "text", text: "external answer" },
+    ]);
+
+    const final = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) =>
+        events.some((event) => event.type === "agent.message") &&
+        events.filter((event) => event.type === "span.model_request_end").length ===
+          2,
+    );
+
+    expect(types(final)).toEqual([
+      "user.message",
+      "session.status_running",
+      "span.model_request_start",
+      "agent.custom_tool_use",
+      "span.model_request_end",
+      "session.status_idle",
+      "user.custom_tool_result",
+      "session.status_running",
+      "span.model_request_start",
+      "agent.message",
+      "span.model_request_end",
+      "session.status_idle",
+    ]);
+    const spanStarts = final.filter(
+      (event) => event.type === "span.model_request_start",
+    );
+    const spanEnds = final.filter(
+      (event) => event.type === "span.model_request_end",
+    );
+    expect(spanEnds).toHaveLength(2);
+    expect(spanEnds[0]).toMatchObject({
+      model_request_start_id: spanStarts[0]?.id,
+      is_error: false,
+      model_usage: {
+        cache_creation_input_tokens: 3,
+        cache_read_input_tokens: 2,
+        input_tokens: 101,
+        output_tokens: 11,
+        speed: null,
+      },
+    });
+    expect(spanEnds[1]).toMatchObject({
+      model_request_start_id: spanStarts[1]?.id,
+      is_error: false,
+      model_usage: {
+        cache_creation_input_tokens: 7,
+        cache_read_input_tokens: 5,
+        input_tokens: 103,
+        output_tokens: 13,
+        speed: null,
+      },
+    });
+    expect(final[9]?.content).toEqual([
+      { type: "text", text: "runtime saw: external answer" },
+    ]);
   });
 
   it("rejects a custom tool result when no pending runtime tool owns the ID", async () => {
@@ -1026,6 +1116,63 @@ class FakeCustomToolRunner implements RuntimeEventRunner {
   }
 }
 
+class ModelSpanningCustomToolRunner implements RuntimeEventRunner {
+  boundCustomToolUseId: string | undefined;
+  private resolveResult:
+    | ((event: ManagedAgentsUserCustomToolResultEventInput) => void)
+    | undefined;
+
+  async *runUserMessage(): AsyncIterable<unknown> {
+    yield { type: "agent_start" };
+    yield assistantModelRequestStart();
+    const result = new Promise<ManagedAgentsUserCustomToolResultEventInput>(
+      (resolve) => {
+        this.resolveResult = resolve;
+      },
+    );
+    yield {
+      type: "oma.custom_tool_use",
+      piToolCallId: "toolu_fake_custom_span",
+      name: "ask_user",
+      input: { question: "probe?" },
+      bindCustomToolUseId: (id) => {
+        this.boundCustomToolUseId = id;
+      },
+      rejectCustomToolUse: () => {},
+    } satisfies RuntimeCustomToolUseEvent;
+    yield assistantModelRequestEnd({
+      content: [],
+      stopReason: "toolUse",
+      usage: { input: 101, output: 11, cacheRead: 2, cacheWrite: 3 },
+    });
+
+    const toolResult = await result;
+    const text = textContent(toolResult);
+    yield assistantModelRequestStart();
+    yield assistantModelRequestEnd({
+      content: [{ type: "text", text: `runtime saw: ${text}` }],
+      stopReason: "stop",
+      usage: { input: 103, output: 13, cacheRead: 5, cacheWrite: 7 },
+    });
+    yield { type: "agent_end", messages: [], willRetry: false };
+  }
+
+  claimCustomToolResult(
+    _workspaceId: string,
+    _sessionId: string,
+    event: ManagedAgentsUserCustomToolResultEventInput,
+  ): (() => void) | undefined {
+    if (event.custom_tool_use_id !== this.boundCustomToolUseId) return undefined;
+    return () => {
+      this.resolveResult?.(event);
+    };
+  }
+
+  customToolNames(): ReadonlySet<string> {
+    return new Set(["ask_user"]);
+  }
+}
+
 class DelayedResumeCustomToolRunner implements RuntimeEventRunner {
   boundCustomToolUseId: string | undefined;
   claimCount = 0;
@@ -1602,6 +1749,37 @@ function textContent(
     )
     .map((block) => block.text)
     .join("\n");
+}
+
+function assistantModelRequestStart(): Record<string, unknown> {
+  return {
+    type: "message_start",
+    message: {
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    },
+  };
+}
+
+function assistantModelRequestEnd(opts: {
+  content: ManagedAgentsContentBlock[];
+  stopReason: string;
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number };
+}): Record<string, unknown> {
+  return {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: opts.content,
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      usage: opts.usage,
+      stopReason: opts.stopReason,
+    },
+  };
 }
 
 function delay(ms: number): Promise<void> {
