@@ -1250,6 +1250,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
               await this.indexSessionOutputsFromLiveRuntime(
                 workspaceId,
                 sessionId,
+                prompt,
               );
             }
           }
@@ -1350,6 +1351,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private async indexSessionOutputsFromLiveRuntime(
     workspaceId: WorkspaceId,
     sessionId: string,
+    prompt: RuntimePrompt,
   ): Promise<void> {
     if (!this.outputFileStorage || !this.runtimeRunner?.collectSessionOutputs) {
       return;
@@ -1360,6 +1362,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
         sessionId,
       );
       if (collection.kind !== "collected") return;
+      if (collection.files.length === 0) return;
+      if (
+        !this.canCommitSessionOutputsFromRuntimeTurn(
+          workspaceId,
+          sessionId,
+          prompt,
+        )
+      ) {
+        return;
+      }
       await this.outputFileStorage.replaceSessionOutputs(
         workspaceId,
         sessionId,
@@ -1379,6 +1391,27 @@ export class DefaultSessionEventsService implements SessionEventsService {
         error,
       });
     }
+  }
+
+  private canCommitSessionOutputsFromRuntimeTurn(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    prompt: RuntimePrompt,
+  ): boolean {
+    const key = sessionScopeKey(workspaceId, sessionId);
+    if (this.closedSessions.has(key) || this.deletedSessions.has(key)) return false;
+    const turn = this.events
+      .listPendingRuntimeTurns(workspaceId)
+      .find(
+        (candidate) =>
+          candidate.session_id === sessionId &&
+          candidate.turn_id === prompt.turnId,
+      );
+    return (
+      turn !== undefined &&
+      turn.owner_id === prompt.ownerId &&
+      turn.owner_generation === prompt.ownerGeneration
+    );
   }
 
   private startRuntimeLeaseRenewal(

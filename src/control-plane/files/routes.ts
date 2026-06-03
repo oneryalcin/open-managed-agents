@@ -13,8 +13,14 @@ import type { FileService } from "./types.ts";
 
 export const MAX_FILE_UPLOAD_REQUEST_BYTES = 24 * 1024 * 1024;
 
-export function filesRoutes(service: FileService): Hono {
-  const app = new Hono();
+interface FilesRouteEnv {
+  Variables: {
+    requestId: string;
+  };
+}
+
+export function filesRoutes(service: FileService): Hono<FilesRouteEnv> {
+  const app = new Hono<FilesRouteEnv>();
 
   app.use(
     "/",
@@ -74,6 +80,7 @@ export function filesRoutes(service: FileService): Hono {
       headers: {
         "content-type": download.mimeType,
         "content-length": String(download.sizeBytes),
+        "request-id": c.get("requestId"),
       },
     });
   });

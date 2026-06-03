@@ -59,7 +59,7 @@ describe("Docker sandbox provider command construction", () => {
       "/mnt/session/uploads:rw,nosuid,nodev,noexec,mode=755,size=64m",
     );
     expect(args).toContain(
-      "/mnt/session/outputs:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=64m",
+      "/mnt/session/outputs:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=100m",
     );
     expect(args).not.toContain("/var/run/docker.sock");
   });
@@ -188,10 +188,18 @@ describe("Docker sandbox provider command construction", () => {
   });
 
   it("builds output listing commands under the mounted outputs root", () => {
-    const command = buildDockerOutputListingCommand("/mnt/session/outputs");
+    const command = buildDockerOutputListingCommand("/mnt/session/outputs", {
+      maxFiles: 7,
+      maxFileBytes: 1024,
+      maxBytes: 4096,
+    });
 
-    expect(command.args).toEqual(["/mnt/session/outputs"]);
+    expect(command.args).toEqual(["/mnt/session/outputs", "7", "1024", "4096"]);
     expect(command.script).toContain("find . -type f -print0");
+    expect(command.script).toContain("count=$((count + 1))");
+    expect(command.script).toContain("size=$(wc -c < \"$file\")");
+    expect(command.script).toContain("session output file count exceeds");
+    expect(command.script).toContain("session output bytes exceed");
     expect(command.script).toContain("sha256sum");
   });
 

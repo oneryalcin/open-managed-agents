@@ -24,6 +24,11 @@ import {
   type SandboxProviderFactory,
 } from "./provider.ts";
 import type { RuntimeSessionFileMount } from "../../../events/types.ts";
+import {
+  MAX_SESSION_OUTPUT_BYTES,
+  MAX_SESSION_OUTPUT_FILE_BYTES,
+  MAX_SESSION_OUTPUT_FILES,
+} from "../../../files/types.ts";
 
 const DEFAULT_IMAGE = "bash:5.2";
 const DEFAULT_WORKSPACE = "/workspace";
@@ -33,6 +38,7 @@ const DEFAULT_MEMORY = "256m";
 const DEFAULT_CPUS = "1";
 const DEFAULT_PIDS_LIMIT = "64";
 const DEFAULT_TMPFS_SIZE = "64m";
+const DEFAULT_OUTPUTS_TMPFS_SIZE = "100m";
 const DEFAULT_OPERATION_TIMEOUT_MS = 10_000;
 const SANDBOX_LABEL_KEY = "open-managed-agents.sandbox";
 const SANDBOX_LABEL_VALUE = "docker-local";
@@ -53,6 +59,9 @@ export interface DockerSandboxOptions {
   pidsLimit?: string;
   tmpfsSize?: string;
   outputsTmpfsSize?: string;
+  maxOutputFiles?: number;
+  maxOutputFileBytes?: number;
+  maxOutputBytes?: number;
   extraLabels?: Record<string, string>;
   reapStaleContainersOlderThanMs?: number;
 }
@@ -78,6 +87,9 @@ interface DockerSandboxResolvedOptions {
   pidsLimit: string;
   tmpfsSize: string;
   outputsTmpfsSize: string;
+  maxOutputFiles: number;
+  maxOutputFileBytes: number;
+  maxOutputBytes: number;
   extraLabels: Record<string, string>;
 }
 
@@ -90,6 +102,7 @@ interface DockerExecOptions {
   onAbort?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
+  maxStdoutBytes?: number;
 }
 
 interface DockerExecResult {
@@ -247,7 +260,11 @@ export async function createDockerSandboxProvider(
   const collectOutputFiles = async (): Promise<readonly SandboxOutputFile[]> => {
     recordSandboxNotDisposed(disposed);
     const listing = await dockerShell(
-      buildDockerOutputListingCommand(resolved.outputsPath),
+      buildDockerOutputListingCommand(resolved.outputsPath, {
+        maxFiles: resolved.maxOutputFiles,
+        maxFileBytes: resolved.maxOutputFileBytes,
+        maxBytes: resolved.maxOutputBytes,
+      }),
     );
     const records = parseOutputListing(listing.stdout);
     return records.map((record) => {
@@ -262,7 +279,9 @@ export async function createDockerSandboxProvider(
         sizeBytes: record.sizeBytes,
         sha256: record.sha256,
         bytes: dockerOutputBytes(() =>
-          dockerShell(buildDockerReadFileCommand(absolutePath)),
+          dockerShell(buildDockerReadFileCommand(absolutePath), {
+            maxStdoutBytes: resolved.maxOutputFileBytes,
+          }),
         ),
       };
     });
@@ -516,7 +535,8 @@ export function buildDockerRunArgs(opts: {
   ]);
   const uploadsPath = opts.uploadsPath ?? DEFAULT_UPLOADS_PATH;
   const outputsPath = opts.outputsPath ?? DEFAULT_OUTPUTS_PATH;
-  const outputsTmpfsSize = opts.outputsTmpfsSize ?? opts.tmpfsSize;
+  const outputsTmpfsSize =
+    opts.outputsTmpfsSize ?? DEFAULT_OUTPUTS_TMPFS_SIZE;
   return [
     "run",
     "-d",
@@ -746,20 +766,53 @@ export function buildDockerGlobEnumerationCommand(
 
 export function buildDockerOutputListingCommand(
   outputRoot: string,
+  limits: {
+    maxFiles: number;
+    maxFileBytes: number;
+    maxBytes: number;
+  } = {
+    maxFiles: MAX_SESSION_OUTPUT_FILES,
+    maxFileBytes: MAX_SESSION_OUTPUT_FILE_BYTES,
+    maxBytes: MAX_SESSION_OUTPUT_BYTES,
+  },
 ): DockerShellCommand {
   return {
     script: [
       "root=\"$1\"",
+      "max_files=\"$2\"",
+      "max_file_bytes=\"$3\"",
+      "max_bytes=\"$4\"",
       "if [ ! -d \"$root\" ]; then exit 0; fi",
       "cd \"$root\"",
+      "count=0",
+      "total=0",
       "find . -type f -print0 | sort -z | while IFS= read -r -d '' file; do",
       "  rel=\"${file#./}\"",
       "  size=$(wc -c < \"$file\")",
+      "  count=$((count + 1))",
+      "  if [ \"$count\" -gt \"$max_files\" ]; then",
+      "    printf 'session output file count exceeds %s\\n' \"$max_files\" >&2",
+      "    exit 42",
+      "  fi",
+      "  if [ \"$size\" -gt \"$max_file_bytes\" ]; then",
+      "    printf 'session output file exceeds %s bytes: %s\\n' \"$max_file_bytes\" \"$rel\" >&2",
+      "    exit 42",
+      "  fi",
+      "  total=$((total + size))",
+      "  if [ \"$total\" -gt \"$max_bytes\" ]; then",
+      "    printf 'session output bytes exceed %s\\n' \"$max_bytes\" >&2",
+      "    exit 42",
+      "  fi",
       "  sha=$(sha256sum \"$file\" | awk '{print $1}')",
       "  printf '%s\\0%s\\0%s\\0' \"$rel\" \"$size\" \"$sha\"",
       "done",
     ].join("\n"),
-    args: [outputRoot],
+    args: [
+      outputRoot,
+      String(limits.maxFiles),
+      String(limits.maxFileBytes),
+      String(limits.maxBytes),
+    ],
   };
 }
 
@@ -1001,7 +1054,11 @@ function resolveDockerOptions(
     cpus: opts.cpus ?? DEFAULT_CPUS,
     pidsLimit: opts.pidsLimit ?? DEFAULT_PIDS_LIMIT,
     tmpfsSize: opts.tmpfsSize ?? DEFAULT_TMPFS_SIZE,
-    outputsTmpfsSize: opts.outputsTmpfsSize ?? opts.tmpfsSize ?? DEFAULT_TMPFS_SIZE,
+    outputsTmpfsSize: opts.outputsTmpfsSize ?? DEFAULT_OUTPUTS_TMPFS_SIZE,
+    maxOutputFiles: opts.maxOutputFiles ?? MAX_SESSION_OUTPUT_FILES,
+    maxOutputFileBytes:
+      opts.maxOutputFileBytes ?? MAX_SESSION_OUTPUT_FILE_BYTES,
+    maxOutputBytes: opts.maxOutputBytes ?? MAX_SESSION_OUTPUT_BYTES,
     extraLabels: opts.extraLabels ?? {},
   };
 }
@@ -1267,6 +1324,7 @@ async function dockerExec(
     if (child.pid !== undefined) opts.activePids?.add(child.pid);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -1290,6 +1348,21 @@ async function dockerExec(
     };
 
     child.stdout.on("data", (chunk: Buffer) => {
+      const maxStdoutBytes = opts.maxStdoutBytes;
+      const nextStdoutBytes = stdoutBytes + chunk.byteLength;
+      if (
+        maxStdoutBytes !== undefined &&
+        nextStdoutBytes > maxStdoutBytes
+      ) {
+        kill();
+        settle(() =>
+          reject(
+            new Error(`docker stdout exceeded ${maxStdoutBytes} bytes`),
+          ),
+        );
+        return;
+      }
+      stdoutBytes = nextStdoutBytes;
       stdout.push(chunk);
       opts.onStdout?.(chunk);
       opts.onData?.(chunk);
