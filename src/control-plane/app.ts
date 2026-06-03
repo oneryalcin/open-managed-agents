@@ -163,7 +163,7 @@ export function createDeploymentControlPlaneApp(
     eventStore,
     sessionStore,
     broadcaster,
-    runtime,
+    { ...runtime, fileStorage },
   );
   sessionEvents.recoverAbandonedRuntimeTurns("wrk_default");
   return createControlPlaneApp({
@@ -205,7 +205,7 @@ export function createInMemoryControlPlaneApp(
       eventStore,
       sessionStore,
       broadcaster,
-      opts.runtime,
+      opts.runtime ? { ...opts.runtime, fileStorage } : undefined,
     ),
   });
 }

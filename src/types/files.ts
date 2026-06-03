@@ -1,3 +1,10 @@
+export interface ManagedAgentsFileSessionScope {
+  type: "session";
+  id: string;
+}
+
+export type ManagedAgentsFileScope = ManagedAgentsFileSessionScope | null;
+
 export interface ManagedAgentsFileMetadata {
   id: string;
   type: "file";
@@ -6,7 +13,7 @@ export interface ManagedAgentsFileMetadata {
   size_bytes: number;
   created_at: string;
   downloadable: boolean;
-  scope: string | null;
+  scope: ManagedAgentsFileScope;
 }
 
 export interface ManagedAgentsDeletedFile {

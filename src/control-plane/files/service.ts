@@ -1,6 +1,7 @@
 import { invalidRequest, notFound } from "../errors.ts";
 import type {
   FileListOptions,
+  FileDownload,
   FileService,
   FileStorage,
   ManagedAgentsDeletedFile,
@@ -36,9 +37,21 @@ export class DefaultFileService implements FileService {
     return record.metadata;
   }
 
-  async download(workspaceId: WorkspaceId, fileId: string): Promise<never> {
-    await this.retrieveMetadata(workspaceId, fileId);
-    throw invalidRequest(`File '${fileId}' is not downloadable`);
+  async download(workspaceId: WorkspaceId, fileId: string): Promise<FileDownload> {
+    const metadata = await this.retrieveMetadata(workspaceId, fileId);
+    if (!metadata.downloadable) {
+      throw invalidRequest(`File '${fileId}' is not downloadable`);
+    }
+    const body = await this.storage.openBytes(workspaceId, fileId);
+    if (!body) {
+      throw notFound(`File ${fileId} not found`);
+    }
+    return {
+      filename: metadata.filename,
+      mimeType: metadata.mime_type,
+      sizeBytes: metadata.size_bytes,
+      body,
+    };
   }
 
   async delete(

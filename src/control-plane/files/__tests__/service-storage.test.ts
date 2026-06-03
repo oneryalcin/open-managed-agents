@@ -203,7 +203,7 @@ describe("FileService + InMemoryFileStorage", () => {
     });
 
     expect(snapshot.metadata.id).toBe("file_precomputed_snapshot");
-    expect(snapshot.metadata.scope).toBe("sesn_123");
+    expect(snapshot.metadata.scope).toEqual({ type: "session", id: "sesn_123" });
     expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(9);
     await expect(service.list(WORKSPACE_A)).resolves.toMatchObject({
       data: [uploaded],
@@ -250,6 +250,149 @@ describe("FileService + InMemoryFileStorage", () => {
       storage.deleteInternalSnapshot(WORKSPACE_A, snapshot.metadata.id),
     ).resolves.toBe(true);
     expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(5);
+  });
+
+  it("lists and downloads session output files without exposing uploads", async () => {
+    const storage = new InMemoryFileStorage();
+    const service = new DefaultFileService(storage);
+    const uploaded = await service.upload(WORKSPACE_A, {
+      filename: "input.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    const [output] = await storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+      {
+        relativePath: "reports/output.txt",
+        filename: "output.txt",
+        mimeType: "text/plain",
+        body: bytes("artifact"),
+      },
+    ]);
+
+    expect(output!.metadata).toMatchObject({
+      downloadable: true,
+      scope: { type: "session", id: "sesn_123" },
+    });
+    await expect(service.list(WORKSPACE_A)).resolves.toMatchObject({
+      data: [uploaded],
+    });
+    await expect(service.list(WORKSPACE_A, { scopeId: "sesn_123" })).resolves.toMatchObject({
+      data: [output!.metadata],
+    });
+
+    const download = await service.download(WORKSPACE_A, output!.metadata.id);
+    expect(download).toMatchObject({
+      filename: "output.txt",
+      mimeType: "text/plain",
+      sizeBytes: 8,
+    });
+    const chunks = [];
+    for await (const chunk of download.body) chunks.push(chunk);
+    expect(new TextDecoder().decode(concat(chunks))).toBe("artifact");
+  });
+
+  it("replaces session outputs atomically and keeps prior outputs on invalid replacement", async () => {
+    const storage = new InMemoryFileStorage({
+      maxSessionOutputFileBytes: 5,
+      maxSessionOutputBytes: 10,
+    });
+    const [first] = await storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+      {
+        relativePath: "first.txt",
+        filename: "first.txt",
+        mimeType: "text/plain",
+        body: bytes("first"),
+      },
+    ]);
+
+    await expect(
+      storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+        {
+          relativePath: "too-large.txt",
+          filename: "too-large.txt",
+          mimeType: "text/plain",
+          body: bytes("toolarge"),
+        },
+      ]),
+    ).rejects.toThrow("5 bytes per-file limit");
+
+    expect(storage.getSessionOutputRecordsForTest(WORKSPACE_A, "sesn_123")).toEqual([
+      first,
+    ]);
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(5);
+
+    await expect(
+      storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+        {
+          relativePath: "one.txt",
+          filename: "one.txt",
+          mimeType: "text/plain",
+          body: bytes("11111"),
+        },
+        {
+          relativePath: "two.txt",
+          filename: "two.txt",
+          mimeType: "text/plain",
+          body: bytes("22222"),
+        },
+        {
+          relativePath: "three.txt",
+          filename: "three.txt",
+          mimeType: "text/plain",
+          body: bytes("33333"),
+        },
+      ]),
+    ).rejects.toThrow("10 bytes aggregate limit");
+    expect(storage.getSessionOutputRecordsForTest(WORKSPACE_A, "sesn_123")).toEqual([
+      first,
+    ]);
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(5);
+
+    const [second] = await storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+      {
+        relativePath: "second.txt",
+        filename: "second.txt",
+        mimeType: "text/plain",
+        body: bytes("two"),
+      },
+    ]);
+    expect(storage.getSessionOutputRecordsForTest(WORKSPACE_A, "sesn_123")).toEqual([
+      second,
+    ]);
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(3);
+  });
+
+  it("rejects colliding output basenames without clobbering prior outputs", async () => {
+    const storage = new InMemoryFileStorage();
+    const [first] = await storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+      {
+        relativePath: "good/report.txt",
+        filename: "report.txt",
+        mimeType: "text/plain",
+        body: bytes("good"),
+      },
+    ]);
+
+    await expect(
+      storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+        {
+          relativePath: "model-a/report.txt",
+          filename: "report.txt",
+          mimeType: "text/plain",
+          body: bytes("a"),
+        },
+        {
+          relativePath: "model-b/report.txt",
+          filename: "report.txt",
+          mimeType: "text/plain",
+          body: bytes("b"),
+        },
+      ]),
+    ).rejects.toThrow("filename collision");
+    expect(storage.getSessionOutputRecordsForTest(WORKSPACE_A, "sesn_123")).toEqual([
+      first,
+    ]);
   });
 });
 

@@ -14,6 +14,10 @@ export type {
 
 export const MAX_UPLOADED_FILE_BYTES = 20 * 1024 * 1024;
 export const MAX_WORKSPACE_FILE_BYTES = 100 * 1024 * 1024;
+export const MAX_SESSION_OUTPUT_FILES = 100;
+export const MAX_SESSION_OUTPUT_FILE_BYTES = 25 * 1024 * 1024;
+export const MAX_SESSION_OUTPUT_BYTES = 100 * 1024 * 1024;
+export const MAX_SESSION_OUTPUT_FILENAME_BYTES = 255;
 
 export interface UploadedFileInput {
   filename: string;
@@ -31,6 +35,12 @@ export interface InternalFileSnapshotInput extends UploadedFileInput {
   fileId: string;
 }
 
+export interface SessionOutputFileInput extends UploadedFileInput {
+  relativePath: string;
+  sizeBytes?: number;
+  sha256?: string;
+}
+
 export interface FileStorageRecord {
   metadata: ManagedAgentsFileMetadata;
   workspace_id: WorkspaceId;
@@ -41,6 +51,16 @@ export interface FileStorageRecord {
 export interface StoredFile extends FileStorageRecord {
   bytes: Uint8Array;
   visibility: "public" | "internal";
+  kind: "upload" | "internal_snapshot" | "session_output";
+  scope_id: string | null;
+  relative_path?: string;
+}
+
+export interface FileDownload {
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  body: AsyncIterable<Uint8Array>;
 }
 
 export interface FileListOptions {
@@ -92,6 +112,15 @@ export interface FileStorage {
     workspaceId: WorkspaceId,
     fileId: string,
   ): Promise<boolean>;
+  replaceSessionOutputs(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    files: readonly SessionOutputFileInput[],
+  ): Promise<readonly FileStorageRecord[]>;
+  deleteSessionOutputs(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void>;
   delete(workspaceId: WorkspaceId, fileId: string): Promise<boolean>;
   list(
     workspaceId: WorkspaceId,
@@ -108,7 +137,7 @@ export interface FileService {
     workspaceId: WorkspaceId,
     fileId: string,
   ): Promise<ManagedAgentsFileMetadata>;
-  download(workspaceId: WorkspaceId, fileId: string): Promise<never>;
+  download(workspaceId: WorkspaceId, fileId: string): Promise<FileDownload>;
   delete(
     workspaceId: WorkspaceId,
     fileId: string,

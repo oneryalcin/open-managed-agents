@@ -13,8 +13,14 @@ import type { FileService } from "./types.ts";
 
 export const MAX_FILE_UPLOAD_REQUEST_BYTES = 24 * 1024 * 1024;
 
-export function filesRoutes(service: FileService): Hono {
-  const app = new Hono();
+interface FilesRouteEnv {
+  Variables: {
+    requestId: string;
+  };
+}
+
+export function filesRoutes(service: FileService): Hono<FilesRouteEnv> {
+  const app = new Hono<FilesRouteEnv>();
 
   app.use(
     "/",
@@ -65,7 +71,18 @@ export function filesRoutes(service: FileService): Hono {
   });
 
   app.get("/:id/content", async (c) => {
-    await service.download(DEFAULT_WORKSPACE_ID, c.req.param("id"));
+    const download = await service.download(
+      DEFAULT_WORKSPACE_ID,
+      c.req.param("id"),
+    );
+    return new Response(asyncIterableToReadableStream(download.body), {
+      status: 200,
+      headers: {
+        "content-type": download.mimeType,
+        "content-length": String(download.sizeBytes),
+        "request-id": c.get("requestId"),
+      },
+    });
   });
 
   app.delete("/:id", async (c) => {
@@ -110,6 +127,25 @@ function jsonError(body: ApiErrorBody, status: number): Response {
     headers: {
       "content-type": "application/json; charset=UTF-8",
       "request-id": body.request_id,
+    },
+  });
+}
+
+function asyncIterableToReadableStream(
+  body: AsyncIterable<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  const iterator = body[Symbol.asyncIterator]();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const next = await iterator.next();
+      if (next.done) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(next.value);
+    },
+    async cancel(reason) {
+      await iterator.throw?.(reason);
     },
   });
 }

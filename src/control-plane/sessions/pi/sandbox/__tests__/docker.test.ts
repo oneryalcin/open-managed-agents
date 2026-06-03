@@ -13,6 +13,7 @@ import {
   buildDockerGlobEnumerationCommand,
   buildDockerMkdirCommand,
   buildDockerNormalizeUploadsArgs,
+  buildDockerOutputListingCommand,
   buildDockerReadFileCommand,
   buildDockerReaddirCommand,
   buildDockerRunArgs,
@@ -57,6 +58,9 @@ describe("Docker sandbox provider command construction", () => {
     expect(args).toContain(
       "/mnt/session/uploads:rw,nosuid,nodev,noexec,mode=755,size=64m",
     );
+    expect(args).toContain(
+      "/mnt/session/outputs:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=100m",
+    );
     expect(args).not.toContain("/var/run/docker.sock");
   });
 
@@ -66,12 +70,14 @@ describe("Docker sandbox provider command construction", () => {
         containerName: "oma-test",
         workspacePath: "/workspace",
         image: "alpine:3.19",
-        memory: "128m",
+        memory: "192m",
         cpus: "1",
         pidsLimit: "64",
         tmpfsSize: "64m",
       }),
-    ).toThrow("memory must exceed workspace tmpfs plus uploads tmpfs");
+    ).toThrow(
+      "memory must exceed workspace tmpfs plus uploads tmpfs plus outputs tmpfs",
+    );
     expect(() =>
       buildDockerRunArgs({
         containerName: "oma-test",
@@ -83,6 +89,23 @@ describe("Docker sandbox provider command construction", () => {
         tmpfsSize: "64m",
       }),
     ).toThrow("must use bytes or a k/m/g suffix");
+  });
+
+  it("allows a separately sized outputs tmpfs", () => {
+    const args = buildDockerRunArgs({
+      containerName: "oma-test",
+      workspacePath: "/workspace",
+      image: "alpine:3.19",
+      memory: "256m",
+      cpus: "1",
+      pidsLimit: "64",
+      tmpfsSize: "64m",
+      outputsTmpfsSize: "16m",
+    });
+
+    expect(args).toContain(
+      "/mnt/session/outputs:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=16m",
+    );
   });
 
   it("passes shell script arguments separately from the script body", () => {
@@ -162,6 +185,22 @@ describe("Docker sandbox provider command construction", () => {
       "sh",
       "/mnt/session/uploads",
     ]);
+  });
+
+  it("builds output listing commands under the mounted outputs root", () => {
+    const command = buildDockerOutputListingCommand("/mnt/session/outputs", {
+      maxFiles: 7,
+      maxFileBytes: 1024,
+      maxBytes: 4096,
+    });
+
+    expect(command.args).toEqual(["/mnt/session/outputs", "7", "1024", "4096"]);
+    expect(command.script).toContain("find . -type f -print0");
+    expect(command.script).toContain("count=$((count + 1))");
+    expect(command.script).toContain("size=$(wc -c < \"$file\")");
+    expect(command.script).toContain("session output file count exceeds");
+    expect(command.script).toContain("session output bytes exceed");
+    expect(command.script).toContain("sha256sum");
   });
 
   it("builds bash commands with in-container timeout and pid tracking", () => {
