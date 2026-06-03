@@ -33,7 +33,7 @@ describe("Pi translator (Cycle C.1)", () => {
     expect(drafts[2]?.payload.tool_use_id).toBe(drafts[1]?.payload.tool_use_id);
     expect(drafts[2]?.payload.is_error).toBe(false);
     expect(drafts[3]?.payload.content).toEqual([
-      { type: "text", text: "The phrase is: **PROBE_10_TOOL_CALL_OK**" },
+      { type: "text", text: "The phrase returned is: **PROBE_10_TOOL_CALL_OK**" },
     ]);
   });
 
@@ -41,17 +41,16 @@ describe("Pi translator (Cycle C.1)", () => {
     const drafts = translateScenario("tool_throw");
     expect(types(drafts)).toEqual([
       "session.status_running",
-      "agent.message",
       "agent.tool_use",
       "agent.tool_result",
       "agent.message",
       "session.status_idle",
     ]);
-    expect(drafts[3]?.payload.is_error).toBe(true);
-    expect(drafts[3]?.payload.content).toEqual([
+    expect(drafts[2]?.payload.is_error).toBe(true);
+    expect(drafts[2]?.payload.content).toEqual([
       { type: "text", text: "synthetic test error from probe-10" },
     ]);
-    expect(drafts[4]?.payload.content).toEqual([
+    expect(drafts[3]?.payload.content).toEqual([
       expect.objectContaining({ type: "text" }),
     ]);
   });

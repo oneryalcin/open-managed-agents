@@ -23,6 +23,9 @@ export const EVENT_TYPES = [
   "agent.tool_use",
   "agent.tool_result",
   "agent.custom_tool_use",
+  // Span observability
+  "span.model_request_start",
+  "span.model_request_end",
   // Session lifecycle
   "session.status_running",
   "session.status_idle",
@@ -88,6 +91,20 @@ export interface ManagedAgentsUserToolConfirmationEventInput {
 
 export interface ManagedAgentsUserInterruptEventInput {
   type: "user.interrupt";
+}
+
+export interface ManagedAgentsSpanModelUsage {
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  speed?: "standard" | "fast" | null;
+}
+
+export interface ManagedAgentsSpanModelRequestEndPayload {
+  model_request_start_id: string;
+  is_error: boolean | null;
+  model_usage: ManagedAgentsSpanModelUsage;
 }
 
 export type ManagedAgentsUserEventInput =

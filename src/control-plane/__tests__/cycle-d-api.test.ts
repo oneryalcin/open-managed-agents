@@ -420,6 +420,68 @@ describe("Cycle D custom tool round trip", () => {
     expect(after.map((event) => event.type)).toEqual(before.map((event) => event.type));
   });
 
+  it("closes open model request spans before archive termination", async () => {
+    const fixture = makeFixture(new FakeImmediateRunner());
+    const session = await setupSession(fixture.app);
+    const now = new Date().toISOString();
+    const [userRow, spanStartRow] = materializePersistedEvents(
+      "wrk_default",
+      session.id,
+      [
+        {
+          type: "user.message",
+          payload: { content: [{ type: "text", text: "archive with open span" }] },
+        },
+        { type: "span.model_request_start", payload: {} },
+      ],
+      now,
+    );
+    fixture.eventStore.appendBatchWithRuntimeChanges([userRow, spanStartRow], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId: session.id,
+          turnId: "rtun_archive_open_span",
+          ownerId: "owner_crashed",
+          ownerGeneration: 1,
+          leaseExpiresAt: now,
+          triggerEventIds: [userRow.id],
+          now,
+        },
+      ],
+    });
+    fixture.eventStore.appendBatchWithRuntimeChanges([], {
+      openedModelRequestStarts: [
+        {
+          workspaceId: "wrk_default",
+          sessionId: session.id,
+          turnId: "rtun_archive_open_span",
+          ownerId: "owner_crashed",
+          ownerGeneration: 1,
+          startEventId: spanStartRow.id,
+          now,
+        },
+      ],
+    });
+
+    await fixture.service.archiveSession("wrk_default", session.id);
+
+    const final = fixture.eventStore.list("wrk_default", session.id, {
+      order: "asc",
+    });
+    expect(final.map((event) => event.type)).toEqual([
+      "user.message",
+      "span.model_request_start",
+      "span.model_request_end",
+      "session.status_terminated",
+    ]);
+    expect(final[2]?.payload).toMatchObject({
+      model_request_start_id: spanStartRow.id,
+      is_error: true,
+    });
+    expect(fixture.eventStore.listPendingRuntimeTurns("wrk_default")).toEqual([]);
+  });
+
   it("skips recovery for deleted sessions left with pending runtime turns after restart", async () => {
     const fixture = makeFixture(new FakeImmediateRunner());
     const session = await setupSession(fixture.app);
@@ -504,6 +566,86 @@ describe("Cycle D custom tool round trip", () => {
       "agent.message",
       "session.status_idle",
     ]);
+  });
+
+  it("closes open model request spans when terminalizing an abandoned running turn", async () => {
+    const fixture = makeFixture(new FakeImmediateRunner());
+    const session = await setupSession(fixture.app);
+    const now = new Date().toISOString();
+    const [userRow, spanStartRow] = materializePersistedEvents(
+      "wrk_default",
+      session.id,
+      [
+        {
+          type: "user.message",
+          payload: { content: [{ type: "text", text: "lost running turn" }] },
+        },
+        { type: "span.model_request_start", payload: {} },
+      ],
+      now,
+    );
+    fixture.eventStore.appendBatchWithRuntimeChanges([userRow, spanStartRow], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId: session.id,
+          turnId: "rtun_abandoned_open_span",
+          ownerId: "owner_crashed",
+          ownerGeneration: 1,
+          leaseExpiresAt: now,
+          triggerEventIds: [userRow.id],
+          now,
+        },
+      ],
+    });
+    fixture.eventStore.appendBatchWithRuntimeChanges([], {
+      turnStates: [
+        {
+          workspaceId: "wrk_default",
+          sessionId: session.id,
+          turnId: "rtun_abandoned_open_span",
+          ownerId: "owner_crashed",
+          ownerGeneration: 1,
+          state: "running",
+          now,
+        },
+      ],
+      openedModelRequestStarts: [
+        {
+          workspaceId: "wrk_default",
+          sessionId: session.id,
+          turnId: "rtun_abandoned_open_span",
+          ownerId: "owner_crashed",
+          ownerGeneration: 1,
+          startEventId: spanStartRow.id,
+          now,
+        },
+      ],
+    });
+
+    fixture.service.recoverAbandonedRuntimeTurns("wrk_default");
+
+    const final = fixture.eventStore.list("wrk_default", session.id, {
+      order: "asc",
+    });
+    expect(final.map((event) => event.type)).toEqual([
+      "user.message",
+      "span.model_request_start",
+      "span.model_request_end",
+      "session.error",
+      "session.status_idle",
+    ]);
+    expect(final[2]?.payload).toEqual({
+      model_request_start_id: spanStartRow.id,
+      is_error: true,
+      model_usage: {
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+      },
+    });
+    expect(fixture.eventStore.listPendingRuntimeTurns("wrk_default")).toEqual([]);
   });
 
   it("retries startup recovery after a foreign runtime lease expires", async () => {

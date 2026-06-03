@@ -20,6 +20,11 @@ import type { WorkspaceId } from "../workspace.ts";
 import { newRuntimeTurnId, newRequestId } from "../ids.ts";
 import { MAX_EVENTS_PER_REQUEST } from "./constants.ts";
 import {
+  spanModelRequestEndDraft,
+  spanModelRequestStartDraft,
+  syntheticSpanModelRequestEndDrafts,
+} from "../sessions/pi/span-normalizer.ts";
+import {
   materializePersistedEvents,
   persistAndPublish,
   persistRuntimeChangesAndPublish,
@@ -29,6 +34,7 @@ import type {
   EventStoreRuntimeChanges,
   ListSessionEventsOptions,
   PendingRuntimeActionRecord,
+  PendingRuntimeTurnRecord,
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
   RuntimeEventTranslator,
@@ -402,17 +408,25 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): string[] {
     if (actionIds.length === 0) return [];
     const now = new Date().toISOString();
-    const turnIds = new Set<string>();
+    const turns = new Map<string, PendingRuntimeTurnRecord>();
     for (const actionId of actionIds) {
       const action = this.events.findRuntimeAction(workspaceId, sessionId, actionId);
-      if (action) turnIds.add(action.turn_id);
+      if (action) turns.set(action.turn_id, action.turn);
     }
-    if (turnIds.size > 0) {
-      this.events.appendBatchWithRuntimeChanges([], {
-        closedTurns: [...turnIds].map((turnId) => ({
+    if (turns.size > 0) {
+      const drafts = [...turns.values()].flatMap((turn) =>
+        syntheticSpanModelRequestEndDrafts(
+          turn.open_model_request_start_ids,
+        ),
+      );
+      const rows = materializePersistedEvents(workspaceId, sessionId, drafts, now);
+      persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
+        closedTurns: [...turns.values()].map((turn) => ({
           workspaceId,
           sessionId,
-          turnId,
+          turnId: turn.turn_id,
+          ownerId: turn.owner_id,
+          ownerGeneration: turn.owner_generation,
           reason: "interrupted",
           state: "terminalized",
           now,
@@ -473,6 +487,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     const drafts: EventDraft[] = [];
     for (const claim of claims) {
       if (claim.kind !== "terminalize") continue;
+      const turn = claim.action.turn;
       (runtimeChanges.acknowledgedActions ??= []).push({
         workspaceId,
         sessionId,
@@ -485,11 +500,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
         workspaceId,
         sessionId,
         turnId: claim.action.turn_id,
+        ownerId: turn.owner_id,
+        ownerGeneration: turn.owner_generation,
         reason: "terminalized",
         state: "terminalized",
         now,
       });
       drafts.push(
+        ...syntheticSpanModelRequestEndDrafts(
+          turn.open_model_request_start_ids,
+        ),
         {
           type: "session.error",
           payload: {
@@ -517,6 +537,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     const drafts: EventDraft[] = [];
     for (const claim of claims) {
       if (!("action" in claim)) continue;
+      const turn = claim.action.turn;
       (runtimeChanges.acknowledgedActions ??= []).push({
         workspaceId,
         sessionId,
@@ -529,11 +550,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
         workspaceId,
         sessionId,
         turnId: claim.action.turn_id,
+        ownerId: turn.owner_id,
+        ownerGeneration: turn.owner_generation,
         reason: "terminalized",
         state: "terminalized",
         now,
       });
       drafts.push(
+        ...syntheticSpanModelRequestEndDrafts(
+          turn.open_model_request_start_ids,
+        ),
         {
           type: "agent.tool_result",
           payload: lostToolConfirmationPayload(claim.toolUseId),
@@ -622,12 +648,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     this.clearCompletedToolConfirmations(workspaceId, sessionId);
     this.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
     this.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
-    this.closePendingRuntimeTurnsForSession(workspaceId, sessionId, "archived");
-    if (!this.hasSessionEvent(workspaceId, sessionId, "session.status_terminated")) {
-      this.persistLifecycleDrafts(workspaceId, sessionId, [
-        { type: "session.status_terminated", payload: {} },
-      ]);
-    }
+    this.closePendingRuntimeTurnsForSession(workspaceId, sessionId, "archived", {
+      includeTerminatedStatus:
+        !this.hasSessionEvent(workspaceId, sessionId, "session.status_terminated"),
+    });
     await this.closeRuntimeBestEffort(workspaceId, sessionId);
     this.retireLifecycleGuardsIfIdle(workspaceId, sessionId);
   }
@@ -657,13 +681,26 @@ export class DefaultSessionEventsService implements SessionEventsService {
     workspaceId: WorkspaceId,
     sessionId: string,
     reason: "archived" | "deleted",
+    opts: { includeTerminatedStatus?: boolean } = {},
   ): void {
     const now = new Date().toISOString();
     const turns = this.events
       .listPendingRuntimeTurns(workspaceId)
       .filter((turn) => turn.session_id === sessionId);
-    if (turns.length === 0) return;
-    this.events.appendBatchWithRuntimeChanges([], {
+    const drafts =
+      reason === "archived"
+        ? turns.flatMap((turn) =>
+            syntheticSpanModelRequestEndDrafts(
+              turn.open_model_request_start_ids,
+            ),
+          )
+        : [];
+    if (opts.includeTerminatedStatus === true) {
+      drafts.push({ type: "session.status_terminated", payload: {} });
+    }
+    if (turns.length === 0 && drafts.length === 0) return;
+    const rows = materializePersistedEvents(workspaceId, sessionId, drafts, now);
+    persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
       closedTurns: turns.map((turn) => ({
         workspaceId,
         sessionId,
@@ -696,9 +733,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         const prompts = this.promptsFromAcceptedTurn(claimed);
         if (prompts.length === 0) {
           this.terminalizeAbandonedRuntimeTurn(
-            workspaceId,
-            claimed.session_id,
-            claimed.turn_id,
+            claimed,
             "Accepted runtime turn has no recoverable trigger event.",
           );
           continue;
@@ -727,9 +762,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       const claimed = this.claimTurnForTerminalization(turn);
       if (!claimed) continue;
       this.terminalizeAbandonedRuntimeTurn(
-        workspaceId,
-        claimed.session_id,
-        claimed.turn_id,
+        claimed,
         "Runtime state is no longer available and the turn outcome is unknown.",
       );
     }
@@ -839,16 +872,17 @@ export class DefaultSessionEventsService implements SessionEventsService {
   }
 
   private terminalizeAbandonedRuntimeTurn(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
+    turn: PendingRuntimeTurnRecord,
     message: string,
   ): void {
     const now = new Date().toISOString();
     const rows = materializePersistedEvents(
-      workspaceId,
-      sessionId,
+      turn.workspace_id,
+      turn.session_id,
       [
+        ...syntheticSpanModelRequestEndDrafts(
+          turn.open_model_request_start_ids,
+        ),
         { type: "session.error", payload: { message } },
         {
           type: "session.status_idle",
@@ -860,9 +894,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
     persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
       closedTurns: [
         {
-          workspaceId,
-          sessionId,
-          turnId,
+          workspaceId: turn.workspace_id,
+          sessionId: turn.session_id,
+          turnId: turn.turn_id,
+          ownerId: turn.owner_id,
+          ownerGeneration: turn.owner_generation,
           reason: "terminalized",
           state: "terminalized",
           now,
@@ -1035,9 +1071,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): Promise<void> {
     if (!this.runtimeRunner || !this.runtimeTranslator) return;
     let activePrompt: RuntimePrompt | undefined;
+    let activeOpenModelRequestStartIds: string[] = [];
     try {
       for (const prompt of prompts) {
         activePrompt = prompt;
+        activeOpenModelRequestStartIds = [];
         const stopRenewing = this.startRuntimeLeaseRenewal(
           workspaceId,
           sessionId,
@@ -1081,7 +1119,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
               );
               continue;
             }
-            const drafts = this.runtimeTranslator(piEvent, {
+            const spanStartDrafts = spanModelRequestStartDraft(piEvent);
+            const transcriptDrafts = this.runtimeTranslator(piEvent, {
               customToolNames: this.runtimeRunner.customToolNames?.(
                 workspaceId,
                 sessionId,
@@ -1099,6 +1138,19 @@ export class DefaultSessionEventsService implements SessionEventsService {
                   piToolCallId,
                 ) === true,
             });
+            const closingModelRequestStartId =
+              activeOpenModelRequestStartIds[
+                activeOpenModelRequestStartIds.length - 1
+              ];
+            const spanEndDrafts = spanModelRequestEndDraft(
+              piEvent,
+              closingModelRequestStartId,
+            );
+            const drafts = [
+              ...spanStartDrafts,
+              ...transcriptDrafts,
+              ...spanEndDrafts,
+            ];
             if (drafts.length === 0) continue;
             if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
             if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
@@ -1109,7 +1161,38 @@ export class DefaultSessionEventsService implements SessionEventsService {
               drafts,
               now,
             );
+            const openedModelRequestStartId =
+              spanStartDrafts.length > 0 ? rows[0]?.id : undefined;
             persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
+              openedModelRequestStarts:
+                openedModelRequestStartId === undefined
+                  ? []
+                  : [
+                      {
+                        workspaceId,
+                        sessionId,
+                        turnId: prompt.turnId,
+                        ownerId: prompt.ownerId,
+                        ownerGeneration: prompt.ownerGeneration,
+                        startEventId: openedModelRequestStartId,
+                        now,
+                      },
+                    ],
+              closedModelRequestStarts:
+                spanEndDrafts.length === 0 ||
+                closingModelRequestStartId === undefined
+                  ? []
+                  : [
+                      {
+                        workspaceId,
+                        sessionId,
+                        turnId: prompt.turnId,
+                        ownerId: prompt.ownerId,
+                        ownerGeneration: prompt.ownerGeneration,
+                        startEventId: closingModelRequestStartId,
+                        now,
+                      },
+                    ],
               turnStates: [
                 {
                   workspaceId,
@@ -1123,6 +1206,15 @@ export class DefaultSessionEventsService implements SessionEventsService {
                 },
               ],
             });
+            if (openedModelRequestStartId !== undefined) {
+              activeOpenModelRequestStartIds.push(openedModelRequestStartId);
+            }
+            if (
+              spanEndDrafts.length > 0 &&
+              closingModelRequestStartId !== undefined
+            ) {
+              activeOpenModelRequestStartIds.pop();
+            }
           }
           this.closeRuntimeTurn(
             workspaceId,
@@ -1137,6 +1229,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           stopRenewing();
         }
         activePrompt = undefined;
+        activeOpenModelRequestStartIds = [];
       }
     } catch (error) {
       if (error instanceof RuntimeTurnOwnershipLostError) {
@@ -1185,6 +1278,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
           workspaceId,
           sessionId,
           [
+            ...syntheticSpanModelRequestEndDrafts(
+              activeOpenModelRequestStartIds,
+            ),
             runtimeErrorDraft(error),
             {
               type: "session.status_idle",
@@ -1550,7 +1646,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           kind: "terminalize",
           event,
           customToolUseId: event.custom_tool_use_id,
-          action,
+          action: { ...action, turn: claimed },
         });
         continue;
       }
@@ -1592,7 +1688,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             kind: "terminalize",
             event,
             customToolUseId: event.custom_tool_use_id,
-            action,
+            action: { ...action, turn: claimed },
           });
           continue;
         }
@@ -1754,7 +1850,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           claims.push({
             event,
             toolUseId: event.tool_use_id,
-            action,
+            action: { ...action, turn: claimed },
             ...(persisted?.row === undefined ? {} : { row: persisted.row }),
           });
           continue;

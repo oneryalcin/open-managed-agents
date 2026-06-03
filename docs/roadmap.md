@@ -747,13 +747,13 @@ Current checkpoint:
 
 - Open Managed Agents has a working self-hosted control-plane MVP shape.
 - The REST/SSE surface covers persisted agents, environments, sessions, session events, event listing, and stream replay.
-- Runtime integration is real: user messages can flow through Pi, custom tools can pause/resume, and sandbox-backed builtin tool calls can be translated into `agent.tool_use` / `agent.tool_result` events.
+- Runtime integration is real: user messages can flow through Pi, custom tools can pause/resume, sandbox-backed builtin tool calls can be translated into `agent.tool_use` / `agent.tool_result` events, and model requests are wrapped in `span.model_request_start` / `span.model_request_end` events with usage.
 - Docker-local is the first real isolation provider. It is deployment-gated, default-closed, and live-smoked through the served deployment app path with `bash` executing in-container at `/workspace`.
 
 This is enough to call the project an MVP control plane with proven Docker-local execution.
 It is not enough to claim full Anthropic Managed Agents compatibility or canonical tutorial parity.
 
-Remaining parity gaps include archive-running-session behavior, evaluated permissions/tool confirmations, durable custom-tool recovery, request idempotency, agent update/versioning, span/model request events, managed remote sandbox providers, and production auth/RBAC/tenancy.
+Remaining parity gaps include archive-running-session behavior, durable custom-tool recovery, request idempotency, agent update/versioning, broader event-topology parity, managed remote sandbox providers, and production auth/RBAC/tenancy.
 
 ## Canonical Tutorial Compatibility Backlog
 
@@ -769,7 +769,6 @@ These items were found by tracing Anthropic's public Managed Agents workshop tut
 | Memory-store resources | File resources are mounted today; memory resources remain unsupported. | Resources follow-up |
 | Agent update/versioning | Tutorials update agents with optimistic version checks and rely on sessions using latest-version semantics. | MVP+1 agent lifecycle |
 | `evaluated_permission` on tool-use events | UIs show confirmation controls when a tool call evaluates to ask. | Runtime tool gating |
-| `span.model_request_start` / `span.model_request_end` | Some UIs use span boundaries for transcript grouping and usage display. | Cycle C translation or explicit deferral |
 
 ## Later Work
 
