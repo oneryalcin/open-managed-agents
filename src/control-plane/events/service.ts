@@ -39,6 +39,7 @@ import type {
   RuntimeEventRunner,
   RuntimeEventTranslator,
   RuntimeToolPermissionUseEvent,
+  RuntimeToolPermissionWithModelEndEvent,
   PersistedSessionEvent,
   SessionEventBroadcaster,
   SessionEventStore,
@@ -1122,6 +1123,26 @@ export class DefaultSessionEventsService implements SessionEventsService {
               );
               continue;
             }
+            if (isRuntimeToolPermissionWithModelEndEvent(piEvent)) {
+              const closingModelRequestStartId =
+                activeOpenModelRequestStartIds[
+                  activeOpenModelRequestStartIds.length - 1
+                ];
+              const closedModelRequestStartId =
+                this.persistToolPermissionUseWithModelEnd(
+                  workspaceId,
+                  sessionId,
+                  prompt.turnId,
+                  prompt.ownerId,
+                  prompt.ownerGeneration,
+                  piEvent,
+                  closingModelRequestStartId,
+                );
+              if (closedModelRequestStartId !== undefined) {
+                activeOpenModelRequestStartIds.pop();
+              }
+              continue;
+            }
             const spanStartDrafts = spanModelRequestStartDraft(piEvent);
             const transcriptDrafts = this.runtimeTranslator(piEvent, {
               customToolNames: this.runtimeRunner.customToolNames?.(
@@ -1557,70 +1578,23 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     try {
       const now = new Date().toISOString();
-      const useRows = materializePersistedEvents(
+      const useRows = this.materializeToolPermissionUseRows(
         workspaceId,
         sessionId,
-        [
-          {
-            type: "agent.tool_use",
-            payload: {
-              name: event.name,
-              input: event.input,
-              evaluated_permission: event.evaluatedPermission,
-            },
-          },
-        ],
+        event,
         now,
       );
-      event.bindToolUseId(useRows[0].id, (reason) => {
-        if (reason !== undefined) {
-          this.closeReleasedRuntimeAction(
-            workspaceId,
-            sessionId,
-            useRows[0].id,
-            reason,
-          );
-        }
-        this.removePendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
-      });
       persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
-        openedActions:
-          event.evaluatedPermission === "ask"
-            ? [
-                {
-                  workspaceId,
-                  sessionId,
-                  turnId,
-                  actionId: useRows[0].id,
-                  actionType: "tool_confirmation",
-                  now,
-                },
-              ]
-            : [],
-        turnStates:
-          event.evaluatedPermission === "ask"
-            ? [
-                {
-                  workspaceId,
-                  sessionId,
-                  turnId,
-                  ownerId,
-                  ownerGeneration,
-                  state: "paused",
-                  now,
-                },
-              ]
-            : [
-                {
-                  workspaceId,
-                  sessionId,
-                  turnId,
-                  ownerId,
-                  ownerGeneration,
-                  state: "running",
-                  now,
-                },
-              ],
+        ...this.toolPermissionRuntimeChanges(
+          workspaceId,
+          sessionId,
+          turnId,
+          ownerId,
+          ownerGeneration,
+          event,
+          useRows[0].id,
+          now,
+        ),
       });
       if (event.evaluatedPermission === "ask") {
         this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
@@ -1629,6 +1603,191 @@ export class DefaultSessionEventsService implements SessionEventsService {
       event.rejectToolUse(toError(error));
       throw error;
     }
+  }
+
+  private persistToolPermissionUseWithModelEnd(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    turnId: string,
+    ownerId: string,
+    ownerGeneration: number,
+    event: RuntimeToolPermissionWithModelEndEvent,
+    closingModelRequestStartId: string | undefined,
+  ): string | undefined {
+    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) {
+      return undefined;
+    }
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) {
+      return undefined;
+    }
+    const permission = event.permissionUse;
+    try {
+      const now = new Date().toISOString();
+      const useRows = this.materializeToolPermissionUseRows(
+        workspaceId,
+        sessionId,
+        permission,
+        now,
+      );
+      const suppressedPiToolCallIds = new Set([
+        permission.piToolCallId,
+        ...event.suppressedPiToolCallIds,
+      ]);
+      const transcriptDrafts = this.runtimeTranslator?.(event.messageEnd, {
+        customToolNames: this.runtimeRunner?.customToolNames?.(
+          workspaceId,
+          sessionId,
+        ),
+        publicToolUseIdForPiToolCallId: (piToolCallId) =>
+          this.runtimeRunner?.publicToolUseIdForPiToolCallId?.(
+            workspaceId,
+            sessionId,
+            piToolCallId,
+        ),
+        suppressPiToolUse: (piToolCallId) =>
+          suppressedPiToolCallIds.has(piToolCallId) ||
+          this.runtimeRunner?.suppressPiToolUse?.(
+            workspaceId,
+            sessionId,
+            piToolCallId,
+          ) === true,
+      }) ?? [];
+      const spanEndDrafts = spanModelRequestEndDraft(
+        event.messageEnd,
+        closingModelRequestStartId,
+      );
+      const remainingRows = materializePersistedEvents(
+        workspaceId,
+        sessionId,
+        [...transcriptDrafts, ...spanEndDrafts],
+        now,
+      );
+      persistRuntimeChangesAndPublish(
+        this.events,
+        this.broadcaster,
+        [...useRows, ...remainingRows],
+        {
+          ...this.toolPermissionRuntimeChanges(
+            workspaceId,
+            sessionId,
+            turnId,
+            ownerId,
+            ownerGeneration,
+            permission,
+            useRows[0].id,
+            now,
+          ),
+          closedModelRequestStarts:
+            spanEndDrafts.length === 0 ||
+            closingModelRequestStartId === undefined
+              ? []
+              : [
+                  {
+                    workspaceId,
+                    sessionId,
+                    turnId,
+                    ownerId,
+                    ownerGeneration,
+                    startEventId: closingModelRequestStartId,
+                    now,
+                  },
+                ],
+        },
+      );
+      if (permission.evaluatedPermission === "ask") {
+        this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+      }
+      return spanEndDrafts.length > 0 ? closingModelRequestStartId : undefined;
+    } catch (error) {
+      permission.rejectToolUse(toError(error));
+      throw error;
+    }
+  }
+
+  private materializeToolPermissionUseRows(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    event: RuntimeToolPermissionUseEvent,
+    now: string,
+  ): PersistedSessionEvent[] {
+    const useRows = materializePersistedEvents(
+      workspaceId,
+      sessionId,
+      [
+        {
+          type: "agent.tool_use",
+          payload: {
+            name: event.name,
+            input: event.input,
+            evaluated_permission: event.evaluatedPermission,
+          },
+        },
+      ],
+      now,
+    );
+    event.bindToolUseId(useRows[0].id, (reason) => {
+      if (reason !== undefined) {
+        this.closeReleasedRuntimeAction(
+          workspaceId,
+          sessionId,
+          useRows[0].id,
+          reason,
+        );
+      }
+      this.removePendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+    });
+    return useRows;
+  }
+
+  private toolPermissionRuntimeChanges(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    turnId: string,
+    ownerId: string,
+    ownerGeneration: number,
+    event: RuntimeToolPermissionUseEvent,
+    toolUseId: string,
+    now: string,
+  ): Pick<EventStoreRuntimeChanges, "openedActions" | "turnStates"> {
+    return {
+      openedActions:
+        event.evaluatedPermission === "ask"
+          ? [
+              {
+                workspaceId,
+                sessionId,
+                turnId,
+                actionId: toolUseId,
+                actionType: "tool_confirmation",
+                now,
+              },
+            ]
+          : [],
+      turnStates:
+        event.evaluatedPermission === "ask"
+          ? [
+              {
+                workspaceId,
+                sessionId,
+                turnId,
+                ownerId,
+                ownerGeneration,
+                state: "paused",
+                now,
+              },
+            ]
+          : [
+              {
+                workspaceId,
+                sessionId,
+                turnId,
+                ownerId,
+                ownerGeneration,
+                state: "running",
+                now,
+              },
+            ],
+    };
   }
 
   private claimCustomToolResults(
@@ -2611,6 +2770,19 @@ function isRuntimeToolPermissionUseEvent(
       event.evaluatedPermission === "deny") &&
     typeof event.bindToolUseId === "function" &&
     typeof event.rejectToolUse === "function"
+  );
+}
+
+function isRuntimeToolPermissionWithModelEndEvent(
+  event: unknown,
+): event is RuntimeToolPermissionWithModelEndEvent {
+  if (!isObjectRecord(event)) return false;
+  return (
+    event.type === "oma.tool_permission_with_model_end" &&
+    "messageEnd" in event &&
+    isRuntimeToolPermissionUseEvent(event.permissionUse) &&
+    Array.isArray(event.suppressedPiToolCallIds) &&
+    event.suppressedPiToolCallIds.every((id) => typeof id === "string")
   );
 }
 

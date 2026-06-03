@@ -110,15 +110,20 @@ Known remaining unknown:
   `is_error: true`, and uses synthetic zero-usage error ends when a turn
   terminalizes with an open model request.
 
-Known hardening gap:
+Permission-gated sandbox note:
 
-- Permission-gated sandboxed builtin tools can currently emit the public
-  permission wait before the gated Pi `message_end` is released. That can make
-  the event order `span.model_request_start -> agent.tool_use ->
-  span.model_request_end` drift for the ask-gated sandbox path, with the
-  permission event appearing inside the open model span. This does not corrupt
-  the durable span ledger, but it is a trace-fidelity gap and should be fixed in
-  a focused permission-flow span-ordering slice.
+- Ask-gated sandboxed builtin tools coalesce the public permission wait with
+  the gated Pi `message_end`, so OMA emits
+  `span.model_request_start -> agent.tool_use -> span.model_request_end ->
+  session.status_idle(requires_action)` with real `message_end` usage and one
+  public `agent.tool_use` ID. This is pinned by
+  `src/control-plane/__tests__/tool-confirmation-api.test.ts`.
+- If one Pi `message_end` contains multiple sandboxed builtin tool calls, OMA
+  suppresses every tool call in the consumed message to avoid duplicate or
+  non-actionable `agent.tool_use` rows. Sibling tool uses are then emitted from
+  their own permission events and may appear after the shared
+  `span.model_request_end`; this is a bounded trace-nesting gap, not a
+  correlation or confirmation gap.
 
 ## Maintenance Rules
 

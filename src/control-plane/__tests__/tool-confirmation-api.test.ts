@@ -14,6 +14,7 @@ import type {
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
   RuntimeToolPermissionUseEvent,
+  RuntimeToolPermissionWithModelEndEvent,
 } from "../events/types.ts";
 import { DefaultAgentService } from "../agents/service.ts";
 import { SqliteAgentStore } from "../agents/store.ts";
@@ -137,6 +138,99 @@ describe("builtin tool confirmations", () => {
       }),
     });
     expect(conflict.status).toBe(400);
+  });
+
+  it("closes the model span before the requires_action wait for ask-gated builtin tools", async () => {
+    const runner = new SpanAwareToolPermissionRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: translatePiEvent },
+    });
+    const session = await setupSession(app);
+
+    await sendMessage(app, session.id, "write a file");
+    const waiting = await eventuallyEvents(
+      app,
+      session.id,
+      (events) =>
+        events.some((event) => event.type === "span.model_request_start") &&
+        events.some((event) => event.type === "agent.tool_use") &&
+        events.some((event) => event.type === "span.model_request_end") &&
+        events.some(
+          (event) =>
+            event.type === "session.status_idle" &&
+            (event.stop_reason as { type?: unknown } | undefined)?.type ===
+              "requires_action",
+        ),
+    );
+
+    const types = waiting.map((event) => event.type);
+    const spanStartIndex = types.indexOf("span.model_request_start");
+    const toolUseIndex = types.indexOf("agent.tool_use");
+    const spanEndIndex = types.indexOf("span.model_request_end");
+    const requiresActionIndex = waiting.findIndex(
+      (event) =>
+        event.type === "session.status_idle" &&
+        (event.stop_reason as { type?: unknown } | undefined)?.type ===
+          "requires_action",
+    );
+
+    expect(spanStartIndex).toBeGreaterThan(-1);
+    expect(toolUseIndex).toBeGreaterThan(spanStartIndex);
+    expect(spanEndIndex).toBeGreaterThan(toolUseIndex);
+    expect(requiresActionIndex).toBeGreaterThan(spanEndIndex);
+
+    const spanStart = waiting[spanStartIndex];
+    const spanEnd = waiting[spanEndIndex];
+    expect(spanEnd).toMatchObject({
+      model_request_start_id: spanStart.id,
+      is_error: false,
+      model_usage: {
+        input_tokens: 17,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        speed: null,
+      },
+    });
+
+    const toolUse = waiting[toolUseIndex];
+    expect(toolUse).toMatchObject({
+      name: "bash",
+      input: { command: "touch /workspace/probe" },
+      evaluated_permission: "ask",
+    });
+    expect(waiting[requiresActionIndex]?.stop_reason).toEqual({
+      type: "requires_action",
+      event_ids: [toolUse.id],
+    });
+  });
+
+  it("does not duplicate agent.tool_use for sibling sandboxed calls sharing one message_end", async () => {
+    const runner = new MultiSandboxToolPermissionRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: translatePiEvent },
+    });
+    const session = await setupSession(app);
+
+    await sendMessage(app, session.id, "do two things");
+    const waiting = await eventuallyEvents(app, session.id, (events) =>
+      events.some(
+        (event) =>
+          event.type === "session.status_idle" &&
+          (event.stop_reason as { type?: unknown } | undefined)?.type ===
+            "requires_action",
+      ),
+    );
+
+    const readUses = waiting.filter(
+      (event) =>
+        event.type === "agent.tool_use" &&
+        (event as { name?: unknown }).name === "read",
+    );
+    // The sibling "read" tool call is emitted exactly once (canonically via its
+    // own permission path). A duplicate here means the coalesced message_end was
+    // translated while the sibling was still unbound/unsuppressed.
+    expect(readUses).toHaveLength(1);
   });
 
   it("accepts deny without executing the builtin and publishes an error result", async () => {
@@ -679,6 +773,177 @@ class FakeToolPermissionRunner implements RuntimeEventRunner {
 
   suppressPiToolUse(): boolean {
     return true;
+  }
+}
+
+class SpanAwareToolPermissionRunner extends FakeToolPermissionRunner {
+  constructor() {
+    super("ask");
+  }
+
+  override async *runUserMessage(): AsyncIterable<unknown> {
+    yield {
+      type: "message_start",
+      message: {
+        id: "msg_builtin_permission",
+        role: "assistant",
+        api: "messages",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      },
+    };
+    const confirmation = new Promise<ManagedAgentsUserToolConfirmationEventInput>(
+      (resolve) => {
+        this.resolveConfirmation = resolve;
+      },
+    );
+    const permissionUse = {
+      type: "oma.tool_permission_use",
+      piToolCallId: "toolu_builtin",
+      name: "bash",
+      input: { command: "touch /workspace/probe" },
+      evaluatedPermission: "ask",
+      bindToolUseId: (id) => {
+        this.boundToolUseId = id;
+      },
+      rejectToolUse: () => {},
+    } satisfies RuntimeToolPermissionUseEvent;
+    yield {
+      type: "oma.tool_permission_with_model_end",
+      permissionUse,
+      suppressedPiToolCallIds: ["toolu_builtin"],
+      messageEnd: {
+        type: "message_end",
+        message: {
+          id: "msg_builtin_permission",
+          role: "assistant",
+          api: "messages",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          stopReason: "toolUse",
+          usage: {
+            input: 17,
+            output: 5,
+            cacheWrite: 0,
+            cacheRead: 0,
+          },
+          content: [
+            {
+              type: "toolCall",
+              id: "toolu_builtin",
+              name: "bash",
+              input: { command: "touch /workspace/probe" },
+            },
+          ],
+        },
+      },
+    } satisfies RuntimeToolPermissionWithModelEndEvent;
+    await confirmation;
+    yield {
+      type: "tool_execution_end",
+      toolCallId: "toolu_builtin",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "tool ok" }] },
+      isError: false,
+    };
+    yield { type: "agent_end", messages: [], willRetry: false };
+  }
+}
+
+class MultiSandboxToolPermissionRunner extends FakeToolPermissionRunner {
+  // Mirrors the real PiToolPermissionBridge: a piToolCallId is only suppressed
+  // (and resolvable) AFTER its permission event's bindToolUseId has fired, which
+  // happens when the service processes that event. The base fake suppresses
+  // everything unconditionally, which masks the duplicate-emit window.
+  private readonly bound = new Set<string>();
+  private readonly publicIds = new Map<string, string>();
+
+  constructor() {
+    super("ask");
+  }
+
+  override async *runUserMessage(): AsyncIterable<unknown> {
+    yield {
+      type: "message_start",
+      message: {
+        id: "msg_multi",
+        role: "assistant",
+        api: "messages",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      },
+    };
+    const messageEnd = {
+      type: "message_end",
+      message: {
+        id: "msg_multi",
+        role: "assistant",
+        api: "messages",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        stopReason: "toolUse",
+        usage: { input: 17, output: 5, cacheWrite: 0, cacheRead: 0 },
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_bash",
+            name: "bash",
+            input: { command: "touch /workspace/a" },
+          },
+          {
+            type: "toolCall",
+            id: "toolu_read",
+            name: "read",
+            input: { path: "/workspace/b" },
+          },
+        ],
+      },
+    };
+    // The first-emitted permission coalesces the shared message_end (which still
+    // carries BOTH tool calls); the sibling arrives as a plain permission event.
+    yield {
+      type: "oma.tool_permission_with_model_end",
+      permissionUse: this.permissionEvent("toolu_bash", "bash", "ask"),
+      suppressedPiToolCallIds: ["toolu_bash", "toolu_read"],
+      messageEnd,
+    } satisfies RuntimeToolPermissionWithModelEndEvent;
+    yield this.permissionEvent("toolu_read", "read", "allow");
+    await new Promise(() => {});
+  }
+
+  private permissionEvent(
+    piToolCallId: string,
+    name: string,
+    permission: "allow" | "ask" | "deny",
+  ): RuntimeToolPermissionUseEvent {
+    return {
+      type: "oma.tool_permission_use",
+      piToolCallId,
+      name,
+      input: {},
+      evaluatedPermission: permission,
+      bindToolUseId: (id) => {
+        this.bound.add(piToolCallId);
+        this.publicIds.set(piToolCallId, id);
+      },
+      rejectToolUse: () => {},
+    } satisfies RuntimeToolPermissionUseEvent;
+  }
+
+  override suppressPiToolUse(
+    _workspaceId?: string,
+    _sessionId?: string,
+    piToolCallId?: string,
+  ): boolean {
+    return piToolCallId !== undefined && this.bound.has(piToolCallId);
+  }
+
+  override publicToolUseIdForPiToolCallId(
+    _workspaceId: string,
+    _sessionId: string,
+    piToolCallId: string,
+  ): string | undefined {
+    return this.publicIds.get(piToolCallId);
   }
 }
 
