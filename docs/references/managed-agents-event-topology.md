@@ -10,9 +10,46 @@ Source references:
 - `src/types/__tests__/events.test.ts`
 - `docs/references/managed-agents-observability-schema-findings.md`
 - `scratch/artifacts/37-managed-agents-hosted-span-shape-1780448419-13013.json`
+- `/tmp/open-ma-compare/packages/api-types/src/types.ts` at `f72a33f`
+  (`SPEC_EVENT_TYPES` cross-check, 2026-06-04)
 
 Use this as the tracker for event names. `EVENT_TYPES` should include only event
 types OMA can currently accept, emit, list, or stream with a defensible shape.
+
+## Open-ma SPEC_EVENT_TYPES Cross-check
+
+On 2026-06-04, we diffed OMA's `EVENT_TYPES` against the independent open-ma /
+openma.dev implementation's `SPEC_EVENT_TYPES` at clone commit `f72a33f`.
+
+Result: OMA's current `EVENT_TYPES` is a strict subset of open-ma's official
+spec allowlist. There are **no OMA-only event names** relative to that set, and
+the 14 open-ma-only spec names are already represented below as deferred
+features. This audit does not justify adding any new names to `EVENT_TYPES`
+until the corresponding behavior exists.
+
+| open-ma-only spec event | OMA tracker status |
+|---|---|
+| `user.define_outcome` | Deferred: outcomes/rubric loop |
+| `agent.mcp_tool_use` | Deferred: MCP server support |
+| `agent.mcp_tool_result` | Deferred: MCP server support |
+| `agent.thread_message_received` | Deferred: multiagent sessions |
+| `agent.thread_message_sent` | Deferred: multiagent sessions |
+| `agent.thread_context_compacted` | Deferred: compaction/thread-context exposure |
+| `session.thread_created` | Deferred: multiagent sessions |
+| `session.thread_status_running` | Deferred: multiagent sessions |
+| `session.thread_status_idle` | Deferred: multiagent sessions |
+| `session.thread_status_terminated` | Deferred: multiagent sessions |
+| `session.thread_status_rescheduled` | Deferred: multiagent sessions |
+| `span.outcome_evaluation_start` | Deferred: outcomes/rubric loop |
+| `span.outcome_evaluation_end` | Deferred: outcomes/rubric loop |
+| `span.outcome_evaluation_ongoing` | Deferred: outcomes/rubric loop |
+
+Open-ma also defines non-spec/product extension event names, including streaming
+message/thinking/tool-input frames, `span.model_first_token`, compaction spans,
+`session.warning`, `session.outcome_evaluated`, and `system.user_message_*`.
+Their own source keeps these outside `SPEC_EVENT_TYPES` and gates some of them
+behind opt-in streaming behavior. Treat these as future feature references, not
+wire-compatible spec events to add by default.
 
 ## Status Legend
 
