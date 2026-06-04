@@ -118,6 +118,29 @@ A passing run emits `## verdict` with:
 - `a3f9c21`
 - N+1 diagnosis
 
+## 5. Run The Ask-Gated Builtin Smoke
+
+The gated smoke is the repeatable proof path for the builtin-tool confirmation
+flow:
+
+```bash
+cd examples/ship-your-first-managed-agent
+set -a
+source .env
+set +a
+
+uv run --with-requirements requirements.txt python smoke_tool_confirmation.py
+```
+
+A passing run emits `## verdict` with:
+
+- `pass: true`
+- `agent.tool_use` with `evaluated_permission: ask`
+- `span.model_request_end` before `session.status_idle` / `requires_action`
+- `user.tool_confirmation`
+- `agent.tool_result`
+- final `session.status_idle` / `end_turn`
+
 ## Notes
 
 - This example intentionally uses Docker-local because OMA's host-passthrough
