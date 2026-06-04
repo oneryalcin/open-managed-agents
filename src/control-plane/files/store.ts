@@ -230,6 +230,12 @@ export class InMemoryFileStorage implements FileStorage {
         `Session output collection exceeds the ${this.maxSessionOutputFiles} file limit`,
       );
     }
+    const oldOutputs = this.sessionOutputFiles(workspaceId, sessionId);
+    const reusableOutputByRelativePath = new Map(
+      oldOutputs
+        .filter((stored) => stored.relative_path !== undefined)
+        .map((stored) => [stored.relative_path!, stored]),
+    );
     const basenameOwners = new Map<string, string>();
     const prepared: StoredFile[] = [];
     let totalOutputBytes = 0;
@@ -282,13 +288,21 @@ export class InMemoryFileStorage implements FileStorage {
           `Session outputs exceed the ${limitLabel(this.maxSessionOutputBytes)} aggregate limit`,
         );
       }
-      const id = newFileId();
-      const now = new Date().toISOString();
+      const reusable = reusableOutput(
+        reusableOutputByRelativePath.get(file.relativePath),
+        file,
+        sizeBytes,
+        sha256,
+      );
+      const id = reusable?.metadata.id ?? newFileId();
+      const createdAt = reusable?.metadata.created_at ?? new Date().toISOString();
       prepared.push({
         visibility: "public",
         kind: "session_output",
         workspace_id: workspaceId,
-        storage_key: `memory://${workspaceId}/outputs/${sessionId}/${id}/${randomUUID()}`,
+        storage_key:
+          reusable?.storage_key ??
+          `memory://${workspaceId}/outputs/${sessionId}/${id}/${randomUUID()}`,
         sha256,
         bytes,
         scope_id: sessionId,
@@ -299,14 +313,13 @@ export class InMemoryFileStorage implements FileStorage {
           filename: file.filename,
           mime_type: file.mimeType,
           size_bytes: sizeBytes,
-          created_at: now,
+          created_at: createdAt,
           downloadable: true,
           scope: { type: "session", id: sessionId },
         },
       });
     }
 
-    const oldOutputs = this.sessionOutputFiles(workspaceId, sessionId);
     const oldBytes = oldOutputs.reduce(
       (sum, stored) => sum + stored.metadata.size_bytes,
       0,
@@ -419,6 +432,19 @@ export class InMemoryFileStorage implements FileStorage {
         file.scope_id === sessionId,
     );
   }
+}
+
+function reusableOutput(
+  stored: StoredFile | undefined,
+  file: SessionOutputFileInput,
+  sizeBytes: number,
+  sha256: string,
+): StoredFile | undefined {
+  if (!stored) return undefined;
+  if (stored.sha256 !== sha256) return undefined;
+  if (stored.metadata.size_bytes !== sizeBytes) return undefined;
+  if (stored.metadata.filename !== file.filename) return undefined;
+  return stored;
 }
 
 async function consumeUploadBody(

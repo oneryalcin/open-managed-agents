@@ -363,6 +363,45 @@ describe("FileService + InMemoryFileStorage", () => {
     expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(3);
   });
 
+  it("preserves file identity for unchanged session outputs", async () => {
+    const storage = new InMemoryFileStorage();
+    const [first] = await storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+      {
+        relativePath: "reports/output.txt",
+        filename: "output.txt",
+        mimeType: "text/plain",
+        body: bytes("artifact"),
+      },
+    ]);
+
+    const [unchanged] = await storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+      {
+        relativePath: "reports/output.txt",
+        filename: "output.txt",
+        mimeType: "text/plain",
+        body: bytes("artifact"),
+      },
+    ]);
+
+    expect(unchanged?.metadata.id).toBe(first?.metadata.id);
+    expect(unchanged?.metadata.created_at).toBe(first?.metadata.created_at);
+    expect(unchanged?.sha256).toBe(first?.sha256);
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(8);
+
+    const [changed] = await storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
+      {
+        relativePath: "reports/output.txt",
+        filename: "output.txt",
+        mimeType: "text/plain",
+        body: bytes("changed"),
+      },
+    ]);
+
+    expect(changed?.metadata.id).not.toBe(first?.metadata.id);
+    expect(changed?.sha256).not.toBe(first?.sha256);
+    expect(storage.getWorkspaceBytesForTest(WORKSPACE_A)).toBe(7);
+  });
+
   it("rejects colliding output basenames without clobbering prior outputs", async () => {
     const storage = new InMemoryFileStorage();
     const [first] = await storage.replaceSessionOutputs(WORKSPACE_A, "sesn_123", [
