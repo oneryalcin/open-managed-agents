@@ -403,6 +403,13 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
         </div>
       </div>
 
+      {Array.isArray(s.warnings) && s.warnings.length > 0 && (
+        <div className="inline-warn">
+          <Icon name="alert" size={14} />
+          <span>{s.warnings.join(' ')}</span>
+        </div>
+      )}
+
       {dialog === 'archive' &&
         <ConfirmDialog icon="archive" title="Archive this session?"
           message={<>Archiving <b>{s.title}</b> hides it from the default list. Its events stay intact and it can be restored. </>}
