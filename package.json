@@ -10,7 +10,8 @@
   "license": "UNLICENSED",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ui:dev": "node ui/managed-agents-console/serve.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.75.4",
