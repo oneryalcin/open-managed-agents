@@ -63,12 +63,12 @@ function Inspector({ e, onClose }) {
   );
 }
 
-function SpansView({ onPick }) {
+function SpansView({ spans = SPANS, onPick }) {
   return (
     <div className="panel" style={{ padding:'18px 18px 16px' }}>
       <div className="axis">{['0s','7s','14s','20s','26s'].map((t) => <span key={t} className="mono">{t}</span>)}</div>
       <div style={{ display:'flex', flexDirection:'column', gap:13 }}>
-        {SPANS.map((s, i) => (
+        {spans.map((s, i) => (
           <div className="span-row" key={i}>
             <div className="span-label"><Role r={s.role} /><span className="mono" style={{ fontSize:11.5, color:'var(--soft)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{s.label}</span></div>
             <div className="span-track">
@@ -89,7 +89,7 @@ function SpansView({ onPick }) {
   );
 }
 
-function FilesPanel() {
+function FilesPanel({ files = FILES }) {
   return (
     <div className="panel">
       <div className="thead">
@@ -100,7 +100,7 @@ function FilesPanel() {
         <span className="th" style={{ width:70 }}>Created</span>
         <span className="th" style={{ width:110 }}>Download</span>
       </div>
-      {FILES.map((f, i) => (
+      {files.map((f, i) => (
         <div className={'trow' + (f.dl ? '' : ' inert-row')} key={i}>
           <span className="file-ico" style={{ marginRight:-4 }}>{f.ext}</span>
           <span className="td grow cell-strong">{f.name}</span>
@@ -108,7 +108,7 @@ function FilesPanel() {
           <span className="td mono" style={{ width:80, color:'var(--soft)' }}>{f.size}</span>
           <span className="td mono" style={{ width:70, color:'var(--faint)' }}>{f.created}</span>
           <span className="td" style={{ width:110 }}>
-            {f.dl ? <span className="dl"><Icon name="download" size={14} />Download</span> : <span className="inert">— mounted input</span>}
+            {f.dl ? <a className="dl" href={f.href || '#'}><Icon name="download" size={14} />Download</a> : <span className="inert">— mounted input</span>}
           </span>
         </div>
       ))}
@@ -116,7 +116,7 @@ function FilesPanel() {
   );
 }
 
-function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = 'loaded' }) {
+function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = 'loaded', apiMode = 'mock', readOnly = false }) {
   const s = session;
   const isLive = s.status === 'running';
   const isConfirm = !!s.confirm;
@@ -126,9 +126,12 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const threecol = layout === 'threecol';
 
   // ── live stream state ──
-  const [shown, setShown] = useStateD(() => isLive ? RUN_EVENTS.slice(0, 1) : isConfirm ? CONFIRM_EVENTS : EVENTS);
+  const baseEvents = s.events || EVENTS;
+  const baseFiles = s.files || FILES;
+  const baseSpans = s.spans || SPANS;
+  const [shown, setShown] = useStateD(() => isLive && apiMode !== 'api' ? RUN_EVENTS.slice(0, 1) : isConfirm && apiMode !== 'api' ? CONFIRM_EVENTS : baseEvents);
   const [status, setStatus] = useStateD(s.status);
-  const [working, setWorking] = useStateD(isLive);
+  const [working, setWorking] = useStateD(isLive && apiMode !== 'api');
   const [confirmState, setConfirmState] = useStateD(isConfirm ? 'pending' : null);
   const [menuOpen, setMenuOpen] = useStateD(false);
   const [dialog, setDialog] = useStateD(null);               // 'archive' | 'delete'
@@ -138,7 +141,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const streamRef = useRefD(null);
 
   useEffectD(() => {
-    if (!isLive) return;
+    if (!isLive || apiMode === 'api') return;
     aliveRef.current = true;
     idxRef.current = 1;
     const tick = () => {
@@ -156,7 +159,13 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
     setWorking(true);
     tick();
     return () => { aliveRef.current = false; clearTimeout(timerRef.current); };
-  }, [isLive]);
+  }, [isLive, apiMode]);
+
+  useEffectD(() => {
+    if (isLive && apiMode !== 'api') return;
+    if (isConfirm && apiMode !== 'api') return;
+    setShown(baseEvents);
+  }, [s.id, s.events, apiMode]);
 
   // auto-scroll the live stream as events arrive (no scrollIntoView)
   useEffectD(() => {
@@ -185,7 +194,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   };
 
   const running = status === 'running';
-  const pool = (isLive || isConfirm) ? shown : EVENTS;
+  const pool = (isLive || isConfirm || s.events) ? shown : EVENTS;
   const sel = pool.find((e) => e.id === selId) || EVENTS.find((e) => e.id === selId);
   const txEvents = pool.filter((e) => e.transcript);
   const dbgEvents = pool;
@@ -288,12 +297,12 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   );
 
   const renderStream = () => {
-    if (dataState === 'loading') return <SkeletonStream rows={6} />;
-    if (dataState === 'error') return <ErrorState resource="events" onRetry={() => {}} />;
+    if (dataState === 'loading' || s.loadingEvents) return <SkeletonStream rows={6} />;
+    if (dataState === 'error' || s.eventError) return <ErrorState resource="events" onRetry={() => {}} />;
     if (view === 'files') return (dataState === 'empty')
       ? <EmptyState icon="folder" title="No output files" message="This session hasn’t produced any output files yet. Generated files appear here with download links." />
-      : <FilesPanel />;
-    if (view === 'spans') return <SpansView onPick={setSel} />;
+      : <FilesPanel files={baseFiles} />;
+    if (view === 'spans') return <SpansView spans={baseSpans} onPick={setSel} />;
     if (view === 'debug') return (
       <div>
         <div className="chips">
@@ -377,16 +386,20 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
                 <div className="menu">
                   <div className="menu-item" onClick={() => { setMenuOpen(false); }}><Icon name="copy" />Copy session ID</div>
                   <div className="menu-item" onClick={() => { setMenuOpen(false); }}><Icon name="download" />Export events (JSON)</div>
-                  <div className="menu-sep" />
-                  <div className="menu-item" onClick={() => { setMenuOpen(false); setDialog('archive'); }}><Icon name="archive" />Archive session</div>
-                  <div className="menu-item danger" onClick={() => { setMenuOpen(false); setDialog('delete'); }}><Icon name="x" />Delete session</div>
+                  {!readOnly && <>
+                    <div className="menu-sep" />
+                    <div className="menu-item" onClick={() => { setMenuOpen(false); setDialog('archive'); }}><Icon name="archive" />Archive session</div>
+                    <div className="menu-item danger" onClick={() => { setMenuOpen(false); setDialog('delete'); }}><Icon name="x" />Delete session</div>
+                  </>}
                 </div>
               </>
             )}
           </div>
           {running
-            ? <button className="btn btn-danger" onClick={interrupt}><Icon name="stop" size={14} />Interrupt</button>
-            : <button className="btn btn-accent"><Icon name="sparkles" size={15} />Ask Claude</button>}
+            ? <button className="btn btn-danger" disabled={readOnly} title={readOnly ? 'Read-only API mode' : undefined}
+                onClick={() => !readOnly && interrupt()}><Icon name="stop" size={14} />Interrupt</button>
+            : <button className="btn btn-accent" disabled={readOnly} title={readOnly ? 'Read-only API mode' : undefined}>
+                <Icon name="sparkles" size={15} />Ask Claude</button>}
         </div>
       </div>
 
@@ -414,10 +427,10 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
       {view !== 'files' && (
         <div className="composer">
           <Icon name="terminal" size={16} style={{ color:'var(--faint)' }} />
-          <input placeholder={running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'} disabled={running} />
+          <input placeholder={readOnly ? 'Read-only API mode — messages are disabled.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'} disabled={running || readOnly} />
           {running
-            ? <button className="btn btn-sm btn-danger" onClick={interrupt}><Icon name="stop" size={13} />Interrupt</button>
-            : <button className="btn btn-sm btn-primary"><Icon name="send" size={13} />Send</button>}
+            ? <button className="btn btn-sm btn-danger" disabled={readOnly} onClick={() => !readOnly && interrupt()}><Icon name="stop" size={13} />Interrupt</button>
+            : <button className="btn btn-sm btn-primary" disabled={readOnly}><Icon name="send" size={13} />Send</button>}
         </div>
       )}
     </div>

@@ -7,7 +7,7 @@ function AgentsList({ agents, openAgent, onCreate, dataState = 'loaded' }) {
   const empty = dataState === 'empty' || agents.length === 0;
   return (
     <div className="main-scroll scroll fade-in">
-      <PageHead title="Agents" sub="Templates that define model + prompt. Create and manage Managed Agents." action="Create agent" onAction={onCreate} />
+      <PageHead title="Agents" sub="Templates that define model + prompt. Create and manage Managed Agents." action={onCreate ? "Create agent" : null} onAction={onCreate} />
       <div className="toolbar">
         <Field wide placeholder="Search by agent ID" />
         <Select label="Created" value="All time" />
@@ -17,7 +17,7 @@ function AgentsList({ agents, openAgent, onCreate, dataState = 'loaded' }) {
        : error ? <ErrorState resource="agents" onRetry={() => {}} />
        : empty ? <EmptyState icon="bot" title="No agents yet"
             message="Agents are reusable templates that define a model, system prompt, and tools. Create one to get started."
-            actionLabel="Create agent" onAction={onCreate} />
+            actionLabel={onCreate ? "Create agent" : null} onAction={onCreate} />
        : <>
       <div className="panel">
         <div className="thead">
@@ -47,7 +47,7 @@ function AgentsList({ agents, openAgent, onCreate, dataState = 'loaded' }) {
   );
 }
 
-function AgentDetail({ agent, go, onCreateSession, onArchive }) {
+function AgentDetail({ agent, go, onCreateSession, onArchive, readOnly = false }) {
   const a = agent;
   const [tab, setTab] = useStateA('agent');
   const [dialog, setDialog] = useStateA(false);
@@ -61,8 +61,14 @@ function AgentDetail({ agent, go, onCreateSession, onArchive }) {
           <div className="meta-row mono" style={{ fontSize:12.5, color:'var(--faint)' }}>{a.id} · Last updated {a.updated}</div>
         </div>
         <div style={{ display:'flex', gap:9 }}>
-          <button className="btn" disabled={archived} style={{ opacity: archived ? .5 : 1 }} onClick={() => setDialog(true)}><Icon name="archive" size={14} />{archived ? 'Archived' : 'Archive'}</button>
-          <button className="btn btn-primary" onClick={onCreateSession}><Icon name="plus" size={15} />Create session</button>
+          <button className="btn" disabled={archived || readOnly} title={readOnly ? 'Read-only API mode' : undefined}
+            style={{ opacity: archived || readOnly ? .5 : 1 }} onClick={() => !readOnly && setDialog(true)}>
+            <Icon name="archive" size={14} />{archived ? 'Archived' : 'Archive'}
+          </button>
+          <button className="btn btn-primary" disabled={readOnly} title={readOnly ? 'Read-only API mode' : undefined}
+            onClick={() => !readOnly && onCreateSession()}>
+            <Icon name="plus" size={15} />Create session
+          </button>
         </div>
       </div>
 
@@ -137,7 +143,7 @@ function AgentDetail({ agent, go, onCreateSession, onArchive }) {
   );
 }
 
-function FilesView({ dataState = 'loaded' }) {
+function FilesView({ files = FILES, dataState = 'loaded' }) {
   const [scoped, setScoped] = useStateA(true);
   const loading = dataState === 'loading';
   const error = dataState === 'error';
@@ -169,7 +175,7 @@ function FilesView({ dataState = 'loaded' }) {
           <span className="th" style={{ width:70 }}>Created</span>
           <span className="th" style={{ width:110 }}>Download</span>
         </div>
-        {FILES.map((f, i) => (
+        {files.map((f, i) => (
           <div className={'trow' + (f.dl ? '' : ' inert-row')} key={i}>
             <span className="td" style={{ width:15 }}><span className="checkbox" /></span>
             <span className="td grow" style={{ display:'flex', alignItems:'center', gap:11 }}>
@@ -178,7 +184,7 @@ function FilesView({ dataState = 'loaded' }) {
             <span className="td mono" style={{ width:80, color:'var(--soft)' }}>{f.size}</span>
             <span className="td mono" style={{ width:70, color:'var(--faint)' }}>{f.created}</span>
             <span className="td" style={{ width:110 }}>
-              {f.dl ? <span className="dl"><Icon name="download" size={14} />Download</span> : <span className="inert">— mounted input</span>}
+              {f.dl ? <a className="dl" href={f.href || '#'}><Icon name="download" size={14} />Download</a> : <span className="inert">— mounted input</span>}
             </span>
           </div>
         ))}

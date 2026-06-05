@@ -32,11 +32,11 @@ function Labeled({ label, opt, hint, children }) {
 }
 
 // ─────────── Create session ───────────
-function CreateSession({ agents = AGENTS, presetAgent, onClose, onCreate }) {
+function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAgent, onClose, onCreate }) {
   // active agents, plus the preset agent even if archived/just-created
   const choices = agents.filter((a) => a.status === 'active' || (presetAgent && a.id === presetAgent.id));
   const [agentId, setAgentId] = useStateF((presetAgent && presetAgent.id) || (choices[0] && choices[0].id));
-  const [env, setEnv] = useStateF(ENVIRONMENTS[0].id);
+  const [env, setEnv] = useStateF(environments[0]?.id || ENVIRONMENTS[0].id);
   const [customEnv, setCustomEnv] = useStateF('');
   const [title, setTitle] = useStateF('');
   const [msg, setMsg] = useStateF('');
@@ -77,7 +77,7 @@ function CreateSession({ agents = AGENTS, presetAgent, onClose, onCreate }) {
 
       <Labeled label="Environment" hint="Pick an existing environment or enter an ID manually.">
         <select className="selectbox" value={env} onChange={(e) => setEnv(e.target.value)}>
-          {ENVIRONMENTS.map((en) => <option key={en.id} value={en.id}>{en.label} — {en.image}</option>)}
+          {environments.map((en) => <option key={en.id} value={en.id}>{en.label} — {en.image}</option>)}
           <option value="__custom">Enter an environment ID manually…</option>
         </select>
       </Labeled>
