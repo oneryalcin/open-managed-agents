@@ -215,6 +215,7 @@ function toUiSpans(events) {
         left: 4 + spans.length * 18,
         width: 14,
         info: event.tokens ?? "model",
+        eventId: event.id,
       });
       if (start) modelStarts.delete(start.id);
     }
@@ -227,6 +228,7 @@ function toUiSpans(events) {
       left: 4 + spans.length * 18,
       width: 12,
       info: "open — no end",
+      eventId: start.id,
     });
   }
   return spans;

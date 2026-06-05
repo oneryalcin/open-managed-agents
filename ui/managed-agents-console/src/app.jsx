@@ -68,6 +68,43 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "dataState": "loaded"
 }/*EDITMODE-END*/;
 
+function routeHash(route) {
+  if (route.name === 'session') return `#session=${encodeURIComponent(route.session.id)}`;
+  if (route.name === 'agent') return `#agent=${encodeURIComponent(route.agent.id)}`;
+  if (route.name === 'agents') return '#agents';
+  if (route.name === 'files') return '#files';
+  return '#sessions';
+}
+
+function writeRouteHash(route) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('session_id');
+  url.searchParams.delete('agent_id');
+  url.hash = routeHash(route);
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (current !== next) window.history.replaceState(null, '', next);
+}
+
+function readRouteTarget(sessions, agents) {
+  const params = new URLSearchParams(window.location.search);
+  const rawHash = window.location.hash.replace(/^#/, '');
+  const hashParams = new URLSearchParams(rawHash.includes('=') ? rawHash : '');
+  const sessionId = params.get('session_id') || hashParams.get('session');
+  if (sessionId) {
+    const session = sessions.find((item) => item.id === sessionId || item.short === sessionId);
+    if (session) return { name:'session', session };
+  }
+  const agentId = params.get('agent_id') || hashParams.get('agent');
+  if (agentId) {
+    const agent = agents.find((item) => item.id === agentId || item.short === agentId);
+    if (agent) return { name:'agent', agent };
+  }
+  if (rawHash === 'agents') return { name:'agents' };
+  if (rawHash === 'files') return { name:'files' };
+  return null;
+}
+
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [route, setRoute] = useState({ name:'sessions' });
@@ -92,23 +129,34 @@ function App() {
     OmaConsoleApi.loadConsoleData()
       .then((data) => {
         if (!alive) return;
-        setAgents(linkSessionsToAgents(data.agents, data.sessions));
+        const linkedAgents = linkSessionsToAgents(data.agents, data.sessions);
+        setAgents(linkedAgents);
         setSessions(data.sessions);
         setEnvironments(data.environments);
         setFiles(data.files);
         setApiState({ state:'loaded', mode:'api', error:null, warnings:data.warnings || [] });
+        const target = readRouteTarget(data.sessions, linkedAgents);
+        if (target?.name === 'session') openSession(target.session, 'api');
+        else if (target) setRoute(target);
       })
       .catch((error) => {
         if (!alive) return;
         setApiState({ state:'loaded', mode:'mock', error, warnings:[] });
+        const target = readRouteTarget(SESSIONS, AGENTS);
+        if (target) setRoute(target);
       });
     return () => { alive = false; };
   }, []);
 
-  const go = (name) => setRoute({ name });
-  const openSession = (session) => {
+  const go = (name) => {
+    const next = { name };
+    setRoute(next);
+    writeRouteHash(next);
+  };
+  const openSession = (session, mode = apiState.mode) => {
+    writeRouteHash({ name:'session', session });
     setRoute({ name:'session', session: { ...session, loadingEvents:true } });
-    if (apiState.mode !== 'api') {
+    if (mode !== 'api') {
       setRoute({ name:'session', session });
       return;
     }
@@ -124,7 +172,11 @@ function App() {
           : current);
       });
   };
-  const openAgent = (agent) => setRoute({ name:'agent', agent });
+  const openAgent = (agent) => {
+    const next = { name:'agent', agent };
+    setRoute(next);
+    writeRouteHash(next);
+  };
   const apiReadOnly = apiState.mode === 'api';
 
   const createSession = (preset) => {

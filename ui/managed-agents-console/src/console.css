@@ -152,6 +152,7 @@ body {
 .field svg { width:15px; height:15px; color:var(--faint); flex:0 0 auto; }
 .field input { background:none; border:none; outline:none; color:var(--ink); font:inherit; font-size:13px; width:100%; }
 .field input::placeholder { color:var(--faint); }
+.result-count { color:var(--faint); font-size:11.5px; white-space:nowrap; }
 .select { cursor:pointer; gap:6px; }
 .select b { color:var(--ink); font-weight:500; }
 .select .chev { margin-left:auto; color:var(--faint); }
