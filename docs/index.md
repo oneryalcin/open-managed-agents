@@ -38,6 +38,9 @@ still tracked separately in the roadmap.
 - [Session file-resource control plane](plans/0043-session-file-resource-control-plane.md) — PR-A plan for issue #43, covering session resource parsing,
   mount-path normalization, internal snapshots, and non-Docker acceptance
   tests.
+- [Managed Agents UI parity](plans/0097-managed-agents-ui-parity.md) — first
+  repo-local console plan for agents, sessions, transcript/debug views, spans,
+  and session output downloads.
 
 ## Current smoke checks
 
