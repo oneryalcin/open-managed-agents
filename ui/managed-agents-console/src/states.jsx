@@ -63,6 +63,15 @@ function ErrorState({ resource = 'data', onRetry }) {
   );
 }
 
+function PartialNotice({ resource = 'data' }) {
+  return (
+    <div className="inline-warn">
+      <Icon name="alert" size={14} />
+      <span>{resource} reached the 100-page safety cap; this view may be incomplete.</span>
+    </div>
+  );
+}
+
 // inline stream skeleton (event rows)
 function SkeletonStream({ rows = 5 }) {
   return (
@@ -78,4 +87,4 @@ function SkeletonStream({ rows = 5 }) {
   );
 }
 
-Object.assign(window, { SkeletonTable, SkeletonStream, EmptyState, ErrorState });
+Object.assign(window, { SkeletonTable, SkeletonStream, EmptyState, ErrorState, PartialNotice });

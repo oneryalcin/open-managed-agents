@@ -1,9 +1,23 @@
 // ui.jsx — shared console chrome (status, sidebar, toolbar bits). → window
 const { useState } = React;
 
-const STLABEL = { running:'Running', active:'Active', idle:'Idle', error:'Error', archived:'Archived', terminated:'Terminated', open:'open', action:'Needs action' };
+const STLABEL = {
+  running:'Running',
+  rescheduling:'Rescheduling',
+  active:'Active',
+  idle:'Idle',
+  error:'Error',
+  archived:'Archived',
+  terminated:'Terminated',
+  open:'open',
+  action:'Needs action'
+};
 function St({ k }) {
   return <span className={'badge st-' + k}><i className="dot" />{STLABEL[k] || k}</span>;
+}
+
+function NeedsAction() {
+  return <span className="badge st-action"><i className="dot" />Needs action</span>;
 }
 
 function Pill({ icon, children }) {
@@ -86,16 +100,45 @@ function Sidebar({ route, go }) {
   );
 }
 
-function PageHead({ title, sub, action, onAction }) {
+function PageHead({ title, sub, action, onAction, readOnly = false, endpoint }) {
+  const disabled = Boolean(action && readOnly);
   return (
     <div className="page-head">
       <div>
         <h1 className="page-title">{title}</h1>
         {sub && <div className="page-sub">{sub}</div>}
       </div>
-      {action && <button className="btn btn-primary" onClick={onAction}><Icon name="plus" size={15} />{action}</button>}
+      {action && <div className="action-wrap" title={disabled && endpoint ? `Read-only API mode · ${endpoint}` : undefined}>
+        <button className={'btn btn-primary' + (disabled ? ' ro' : '')}
+          disabled={disabled}
+          onClick={disabled ? undefined : onAction}>
+          <Icon name="plus" size={15} />{action}
+        </button>
+        {disabled && endpoint && <span className="endpoint-hint mono">{endpoint}</span>}
+      </div>}
     </div>
   );
 }
 
-Object.assign(window, { St, Pill, Field, Select, Kebab, Pager, Crumbs, Sidebar, PageHead });
+function ModeBar({ mode, warnings = [] }) {
+  const label = mode === 'demo'
+    ? 'Demo review mode'
+    : mode === 'mock'
+      ? 'Offline — bundled demo data'
+      : 'Read-only API mode';
+  const copy = mode === 'demo'
+    ? 'Local interactions mutate bundled demo data only.'
+    : mode === 'mock'
+      ? 'The API is unavailable; writes are disabled and demo data is clearly marked.'
+      : 'Live API data is inspectable; create, send, archive, delete, and confirm actions are disabled.';
+  return (
+    <div className={'modebar mode-' + mode}>
+      <Icon name={mode === 'api' ? 'database' : 'alert'} size={14} />
+      <span className="mode-main">{label}</span>
+      <span className="mode-copy">{copy}</span>
+      {warnings.length > 0 && <span className="mode-warn">{warnings.join(' ')}</span>}
+    </div>
+  );
+}
+
+Object.assign(window, { St, NeedsAction, Pill, Field, Select, Kebab, Pager, Crumbs, Sidebar, PageHead, ModeBar });
