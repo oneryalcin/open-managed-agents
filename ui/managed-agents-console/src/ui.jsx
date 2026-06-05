@@ -1,7 +1,7 @@
 // ui.jsx — shared console chrome (status, sidebar, toolbar bits). → window
 const { useState } = React;
 
-const STLABEL = { running:'Running', active:'Active', idle:'Idle', error:'Error', archived:'Archived', open:'open', action:'Needs action' };
+const STLABEL = { running:'Running', active:'Active', idle:'Idle', error:'Error', archived:'Archived', terminated:'Terminated', open:'open', action:'Needs action' };
 function St({ k }) {
   return <span className={'badge st-' + k}><i className="dot" />{STLABEL[k] || k}</span>;
 }
@@ -80,7 +80,7 @@ function Sidebar({ route, go }) {
       <div className="sidebar-spacer" />
       <div className="sidebar-foot">
         <div className="nav-item dim"><Icon name="fileText" size={16} />Documentation</div>
-        <div className="nav-item dim"><Icon name="terminal" size={16} />localhost:4000</div>
+        <div className="nav-item dim"><Icon name="terminal" size={16} />proxy /v1</div>
       </div>
     </aside>
   );

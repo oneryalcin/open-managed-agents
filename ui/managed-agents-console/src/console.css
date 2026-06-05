@@ -127,6 +127,10 @@ body {
 }
 .btn:hover { background:var(--raised); border-color:var(--border-2); }
 .btn:active { transform:translateY(1px); }
+.btn:disabled,.btn:disabled:hover {
+  opacity:.5; cursor:not-allowed; transform:none; background:var(--surface-2);
+  border-color:var(--border-2);
+}
 .btn svg { width:15px; height:15px; }
 .btn-primary { background:#f1f2f4; color:#1a1d23; border-color:transparent; font-weight:600; }
 .btn-primary:hover { background:#fff; }
@@ -172,8 +176,8 @@ body {
 .st-idle .dot { background:var(--idle); }
 .st-error { color:var(--red); background:var(--red-wash); }
 .st-error .dot { background:var(--red); }
-.st-archived { color:var(--faint); background:var(--idle-wash); }
-.st-archived .dot { background:var(--faint); }
+.st-archived,.st-terminated { color:var(--faint); background:var(--idle-wash); }
+.st-archived .dot,.st-terminated .dot { background:var(--faint); }
 .st-open { color:var(--accent); background:var(--accent-wash); }
 .st-open .dot { background:var(--accent); }
 .st-action { color:var(--accent); background:var(--accent-wash); }
@@ -312,11 +316,21 @@ body {
 
 /* files */
 .dl { display:inline-flex; align-items:center; gap:6px; color:var(--accent); font-size:13px; cursor:pointer; font-weight:500; white-space:nowrap; }
+a.dl { text-decoration:none; }
 .dl:hover { text-decoration:underline; }
 .file-ico { width:22px; height:26px; border-radius:4px; border:1px solid var(--border-2); background:var(--surface-2); flex:0 0 auto; display:flex; align-items:center; justify-content:center; color:var(--faint); font-size:9px; font-weight:700; }
 .inert { color:var(--faint); font-size:12px; }
 .trow.inert-row { opacity:.5; cursor:default; }
 .trow.inert-row:hover { background:transparent; }
+
+.api-banner {
+  position:fixed; right:18px; bottom:18px; z-index:30;
+  display:flex; align-items:center; gap:8px;
+  max-width:360px; padding:9px 12px; border-radius:var(--r-md);
+  border:1px solid var(--accent-line); background:var(--accent-wash);
+  color:var(--accent); font-size:12.5px; font-weight:550;
+  box-shadow:var(--shadow);
+}
 
 /* misc */
 .fade-in { }

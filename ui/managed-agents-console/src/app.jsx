@@ -7,7 +7,7 @@ function SessionsList({ sessions, openSession, onCreate, dataState = 'loaded' })
   const empty = dataState === 'empty' || sessions.length === 0;
   return (
     <div className="main-scroll scroll fade-in">
-      <PageHead title="Sessions" sub="Trace and debug Managed Agents sessions." action="Create session" onAction={onCreate} />
+      <PageHead title="Sessions" sub="Trace and debug Managed Agents sessions." action={onCreate ? "Create session" : null} onAction={onCreate} />
       <div className="toolbar">
         <Field wide placeholder="Search by session ID" />
         <Select label="Created" value="All time" />
@@ -18,7 +18,7 @@ function SessionsList({ sessions, openSession, onCreate, dataState = 'loaded' })
        : error ? <ErrorState resource="sessions" onRetry={() => {}} />
        : empty ? <EmptyState icon="activity" title="No sessions yet"
             message="Sessions appear here as agents run. Create one to start a local Managed Agents session."
-            actionLabel="Create session" onAction={onCreate} />
+            actionLabel={onCreate ? "Create session" : null} onAction={onCreate} />
        : <>
       <div className="panel">
         <div className="thead">
@@ -73,6 +73,9 @@ function App() {
   const [route, setRoute] = useState({ name:'sessions' });
   const [sessions, setSessions] = useState(SESSIONS);
   const [agents, setAgents] = useState(AGENTS);
+  const [environments, setEnvironments] = useState(ENVIRONMENTS);
+  const [files, setFiles] = useState(FILES);
+  const [apiState, setApiState] = useState({ state:'loading', mode:'api', error:null });
   const [modal, setModal] = useState(null);   // { kind:'session', presetAgent } | { kind:'agent' }
 
   useEffect(() => {
@@ -84,46 +87,103 @@ function App() {
     r.style.setProperty('--mono', MONO_FONTS[t.mono] || MONO_FONTS.geist);
   }, [t]);
 
-  const go = (name) => setRoute({ name });
-  const openSession = (session) => setRoute({ name:'session', session });
-  const openAgent = (agent) => setRoute({ name:'agent', agent });
+  useEffect(() => {
+    let alive = true;
+    OmaConsoleApi.loadConsoleData()
+      .then((data) => {
+        if (!alive) return;
+        setAgents(linkSessionsToAgents(data.agents, data.sessions));
+        setSessions(data.sessions);
+        setEnvironments(data.environments);
+        setFiles(data.files);
+        setApiState({ state:'loaded', mode:'api', error:null });
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setApiState({ state:'loaded', mode:'mock', error });
+      });
+    return () => { alive = false; };
+  }, []);
 
-  const createSession = (preset) => setModal({ kind:'session', presetAgent: preset });
-  const createAgent = () => setModal({ kind:'agent' });
+  const go = (name) => setRoute({ name });
+  const openSession = (session) => {
+    setRoute({ name:'session', session: { ...session, loadingEvents:true } });
+    if (apiState.mode !== 'api') {
+      setRoute({ name:'session', session });
+      return;
+    }
+    OmaConsoleApi.hydrateSession(session)
+      .then((hydrated) => {
+        setRoute((current) => current.name === 'session' && current.session.id === session.id
+          ? { name:'session', session: hydrated }
+          : current);
+      })
+      .catch((error) => {
+        setRoute((current) => current.name === 'session' && current.session.id === session.id
+          ? { name:'session', session: { ...session, eventError:error } }
+          : current);
+      });
+  };
+  const openAgent = (agent) => setRoute({ name:'agent', agent });
+  const apiReadOnly = apiState.mode === 'api';
+
+  const createSession = (preset) => {
+    if (apiReadOnly) return;
+    setModal({ kind:'session', presetAgent: preset });
+  };
+  const createAgent = () => {
+    if (apiReadOnly) return;
+    setModal({ kind:'agent' });
+  };
 
   const onSessionCreated = (s) => {
+    if (apiReadOnly) return;
     setSessions((prev) => [s, ...prev]);
     setModal(null);
     openSession(s);
   };
   const onAgentCreated = (a) => {
+    if (apiReadOnly) return;
     setAgents((prev) => [a, ...prev]);
     setModal(null);
     openAgent(a);
   };
 
-  const archiveSession = (s) => setSessions((prev) => prev.map((x) => x.id === s.id ? { ...x, status:'archived' } : x));
-  const deleteSession = (s) => { setSessions((prev) => prev.filter((x) => x.id !== s.id)); go('sessions'); };
+  const archiveSession = (s) => {
+    if (apiReadOnly) return;
+    setSessions((prev) => prev.map((x) => x.id === s.id ? { ...x, status:'archived' } : x));
+  };
+  const deleteSession = (s) => {
+    if (apiReadOnly) return;
+    setSessions((prev) => prev.filter((x) => x.id !== s.id));
+    go('sessions');
+  };
   const archiveAgent = (a) => {
+    if (apiReadOnly) return;
     const upd = { ...a, status:'archived' };
     setAgents((prev) => prev.map((x) => x.id === a.id ? upd : x));
     setRoute({ name:'agent', agent: upd });
   };
 
   let view;
-  if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={t.dataState} />;
-  else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={t.dataState} />;
-  else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={t.dataState} />;
-  else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} />;
-  else if (route.name === 'files') view = <FilesView dataState={t.dataState} />;
+  const dataState = apiState.state === 'loading' ? 'loading' : t.dataState;
+  if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={apiReadOnly ? null : () => createSession(null)} dataState={dataState} />;
+  else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={dataState} apiMode={apiState.mode} readOnly={apiReadOnly} />;
+  else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={apiReadOnly ? null : createAgent} dataState={dataState} />;
+  else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} readOnly={apiReadOnly} />;
+  else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} />;
 
   return (
     <div className="app">
       <Sidebar route={route.name} go={go} />
       <main className="main">{view}</main>
+      {apiState.mode === 'mock' && <div className="api-banner">
+        <Icon name="alert" size={14} />
+        API unavailable — showing bundled demo data.
+      </div>}
 
       {modal && modal.kind === 'session' &&
-        <CreateSession agents={agents} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} />}
+        <CreateSession agents={agents} environments={environments} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} />}
       {modal && modal.kind === 'agent' &&
         <CreateAgent onClose={() => setModal(null)} onCreate={onAgentCreated} />}
 
@@ -157,6 +217,21 @@ function App() {
       </TweaksPanel>
     </div>
   );
+}
+
+function linkSessionsToAgents(agents, sessions) {
+  const titlesByAgent = new Map();
+  for (const session of sessions) {
+    const key = session.agentId;
+    if (!key) continue;
+    const list = titlesByAgent.get(key) || [];
+    list.push(session.title);
+    titlesByAgent.set(key, list.slice(0, 5));
+  }
+  return agents.map((agent) => ({
+    ...agent,
+    sessions: titlesByAgent.get(agent.id) ?? agent.sessions ?? [],
+  }));
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
