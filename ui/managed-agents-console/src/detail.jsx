@@ -73,7 +73,7 @@ function SpansView({ spans = SPANS, onPick }) {
             <div className="span-label"><Role r={s.role} /><span className="mono" style={{ fontSize:11.5, color:'var(--soft)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{s.label}</span></div>
             <div className="span-track">
               <div className={'span-bar ' + s.kind} style={{ left:s.left + '%', width:s.width + '%' }}
-                onClick={() => onPick && onPick(s.kind === 'tool' ? 'sevt_…a06' : 'sevt_…a03')}>
+                onClick={() => onPick && onPick(s.eventId || (s.kind === 'tool' ? 'sevt_…a06' : 'sevt_…a03'))}>
                 <span className="mono">{s.info}</span>
               </div>
             </div>
@@ -90,6 +90,9 @@ function SpansView({ spans = SPANS, onPick }) {
 }
 
 function FilesPanel({ files = FILES }) {
+  if (files.length === 0) {
+    return <EmptyState icon="folder" title="No output files" message="This session hasn’t produced any output files yet. Generated files appear here with download links." />;
+  }
   return (
     <div className="panel">
       <div className="thead">
@@ -123,12 +126,13 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const [view, setView] = useStateD('transcript');           // transcript | debug | spans | files
   const [selId, setSel] = useStateD(isLive || isConfirm ? null : 'sevt_…a05');
   const [filters, setFilters] = useStateD([]);
+  const [query, setQuery] = useStateD('');
   const threecol = layout === 'threecol';
 
   // ── live stream state ──
-  const baseEvents = s.events || EVENTS;
-  const baseFiles = s.files || FILES;
-  const baseSpans = s.spans || SPANS;
+  const baseEvents = s.events ?? (apiMode === 'api' ? [] : EVENTS);
+  const baseFiles = s.files ?? (apiMode === 'api' ? [] : FILES);
+  const baseSpans = s.spans ?? (apiMode === 'api' ? [] : SPANS);
   const [shown, setShown] = useStateD(() => isLive && apiMode !== 'api' ? RUN_EVENTS.slice(0, 1) : isConfirm && apiMode !== 'api' ? CONFIRM_EVENTS : baseEvents);
   const [status, setStatus] = useStateD(s.status);
   const [working, setWorking] = useStateD(isLive && apiMode !== 'api');
@@ -195,10 +199,26 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
 
   const running = status === 'running';
   const pool = (isLive || isConfirm || s.events) ? shown : EVENTS;
-  const sel = pool.find((e) => e.id === selId) || EVENTS.find((e) => e.id === selId);
-  const txEvents = pool.filter((e) => e.transcript);
-  const dbgEvents = pool;
+  const usesSessionEvents = Array.isArray(s.events);
+  const sel = pool.find((e) => e.id === selId) ||
+    (!usesSessionEvents ? EVENTS.find((e) => e.id === selId) : null);
+  const queryText = query.trim().toLowerCase();
+  const eventMatchesQuery = (event) => {
+    if (!queryText) return true;
+    return [event.id, event.type, event.tag, event.text, event.content, event.raw]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(queryText));
+  };
+  const eventMatchesType = (event) =>
+    filters.length === 0 || filters.some((filter) => event.type.includes(filter));
+  const filteredPool = pool.filter((event) =>
+    eventMatchesQuery(event) && (view === 'debug' ? eventMatchesType(event) : true));
+  const txEvents = filteredPool.filter((e) => e.transcript);
+  const dbgEvents = filteredPool;
   const tabFor = (view === 'spans' || view === 'debug') ? 'debug' : view;
+  const fileCount = Array.isArray(baseFiles) ? baseFiles.length : 0;
+  const resultCount = view === 'debug' ? dbgEvents.length : txEvents.length;
+  const eventSearchVisible = view !== 'files' && view !== 'spans';
 
   // resolve a pending tool confirmation → emit user.tool_confirmation + follow-up
   const resolveConfirm = (decision) => {
@@ -268,7 +288,9 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
           <div className="tabs">
             {['transcript','debug','files'].map((t) => (
               <div key={t} className={'tab' + (tabFor === t ? ' active' : '')}
-                onClick={() => setView(t)} style={{ textTransform:'capitalize' }}>{t}</div>
+                onClick={() => setView(t)} style={{ textTransform:'capitalize' }}>
+                {t}{t === 'files' && fileCount > 0 ? ` (${fileCount})` : ''}
+              </div>
             ))}
           </div>
           {tabFor === 'debug' && (
@@ -278,8 +300,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
             </div>
           )}
           <span style={{ width:1, height:22, background:'var(--border)' }} />
-          {view !== 'files' && <Select label="Type" value="all" w={120} />}
-          <button className="btn btn-icon btn-ghost"><Icon name="search" size={15} /></button>
+          {eventSearchVisible && <Field icon="search" placeholder="Search events" value={query} onChange={setQuery} style={{ width:260, maxWidth:260 }} />}
+          {eventSearchVisible && <span className="mono result-count">{resultCount} events</span>}
           <span className="grow" />
           <button className="btn btn-icon btn-ghost"><Icon name="copy" size={15} /></button>
           <button className="btn btn-icon btn-ghost"><Icon name="download" size={15} /></button>
@@ -299,9 +321,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const renderStream = () => {
     if (dataState === 'loading' || s.loadingEvents) return <SkeletonStream rows={6} />;
     if (dataState === 'error' || s.eventError) return <ErrorState resource="events" onRetry={() => {}} />;
-    if (view === 'files') return (dataState === 'empty')
-      ? <EmptyState icon="folder" title="No output files" message="This session hasn’t produced any output files yet. Generated files appear here with download links." />
-      : <FilesPanel files={baseFiles} />;
+    if (view === 'files') return <FilesPanel files={baseFiles} />;
     if (view === 'spans') return <SpansView spans={baseSpans} onPick={setSel} />;
     if (view === 'debug') return (
       <div>
@@ -313,10 +333,11 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
               <span className="x" />{t}</div>;
           })}
           {filters.length > 0 && <div className="chip" onClick={() => setFilters([])} style={{ color:'var(--faint)' }}>clear</div>}
+          {query && <div className="chip" onClick={() => setQuery('')} style={{ color:'var(--faint)' }}>clear search</div>}
         </div>
         <div className="panel">
-          {dbgEvents.filter((e) => !filters.length || filters.some((f) => e.type.includes(f)))
-            .map((e) => <EvRow key={e.id} e={e} mode="debug" sel={e.id === selId} onClick={() => setSel(e.id)} />)}
+          {dbgEvents.map((e) => <EvRow key={e.id} e={e} mode="debug" sel={e.id === selId} onClick={() => setSel(e.id)} />)}
+          {dbgEvents.length === 0 && <div className="empty">No events match the current filters.</div>}
           {working && running && WorkingRow()}
         </div>
         {renderConfirmCard()}
@@ -328,6 +349,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
         <div className="scrubber"><div className="fill" style={{ width: running ? '100%' : '54%' }} /><div className="hd" style={{ left: running ? 'calc(100% - 3px)' : '54%' }} /></div>
         <div className="panel">
           {txEvents.map((e) => <EvRow key={e.id} e={e} mode="transcript" sel={e.id === selId} onClick={() => setSel(e.id)} />)}
+          {txEvents.length === 0 && <div className="empty">No transcript events match the current search.</div>}
           {working && running && WorkingRow()}
         </div>
         {renderConfirmCard()}
@@ -340,7 +362,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
       ['transcript','Transcript','activity'],
       ['debug','Debug events','terminal'],
       ['spans','Spans · timing','zap'],
-      ['files','Files · output','folder'],
+      ['files',`Files · output${fileCount > 0 ? ` (${fileCount})` : ''}`,'folder'],
     ];
     return (
       <div>
@@ -352,8 +374,15 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
           ))}
         </div>
         <div className="divider" style={{ margin:'12px 6px' }} />
-        {view !== 'files' && <Select label="Type" value="all" w="100%" />}
-        <div className="field" style={{ marginTop:8 }}><Icon name="search" size={15} /><input placeholder="Search events" /></div>
+        {view === 'debug' && <div className="chips" style={{ marginTop:0 }}>
+          {EVENT_TYPES.map((t) => {
+            const on = filters.includes(t);
+            return <div key={t} className={'chip' + (on ? ' on' : '')}
+              onClick={() => setFilters(on ? filters.filter((x) => x !== t) : [...filters, t])}>
+              <span className="x" />{t}</div>;
+          })}
+        </div>}
+        {eventSearchVisible && <Field icon="search" placeholder="Search events" value={query} onChange={setQuery} style={{ marginTop:8, maxWidth:'none' }} />}
       </div>
     );
   };
@@ -371,6 +400,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
             <Pill icon="bot">{s.agent}</Pill>
             <span className="dotsep">·</span>
             <Pill icon="database">{s.env}</Pill>
+            <span className="dotsep">·</span>
+            <Pill icon="folder">{fileCount} files</Pill>
             <span className="dotsep">·</span>
             <span className="m"><Icon name="clock" />{running ? 'running…' : s.dur}</span>
             <span className="m"><Icon name="layers" />{s.tokens}</span>
