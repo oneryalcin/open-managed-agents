@@ -105,9 +105,25 @@ npm run typecheck
 npm test
 ```
 
+Common tasks are also available through thin Make targets:
+
+```bash
+make typecheck
+make test
+make ui
+make server
+make parallel-docker-smoke
+```
+
+`make server` runs the local CWC example server with Docker-local enabled.
+`make parallel-docker-smoke` starts several Docker-local sandboxes concurrently
+without calling a model, so it is the cheap check for the current local worker
+shape. See [Development and deployment setup](docs/dev-deployment.md).
+
 The detailed roadmap, architecture notes, and compatibility decisions live in
 the docs:
 
+- [Development and deployment setup](docs/dev-deployment.md)
 - [First Docker-local run](docs/tutorials/docker-local-first-run.md)
 - [Examples](docs/examples.md)
 - [CWC-style Streamlit Managed Agents example](examples/ship-your-first-managed-agent/README.md)
