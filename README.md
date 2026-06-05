@@ -43,6 +43,9 @@ Working today:
 - `user.tool_confirmation` allow/deny round trips for permission-gated tools;
 - `user.interrupt` aborts active Pi turns without disposing reusable sessions;
 - file upload resources and Docker-local session file mounts;
+- Docker session output file collection and indexing;
+- browser-based Managed Agents Console for read-only inspection of agents,
+  sessions, events, spans, and output files;
 - guarded local passthrough provider for development tests;
 - Docker-local sandbox provider as the first real isolation provider;
 - fail-closed provider selection;
@@ -115,6 +118,8 @@ make server
 make parallel-docker-smoke
 ```
 
+`make ui` serves the browser-based Managed Agents Console against a local OMA
+server for read-only inspection of sessions, events, spans, and output files.
 `make server` runs the local CWC example server with Docker-local enabled.
 `make parallel-docker-smoke` starts several Docker-local sandboxes concurrently
 without calling a model, so it is the cheap check for the current local worker
@@ -124,6 +129,7 @@ The detailed roadmap, architecture notes, and compatibility decisions live in
 the docs:
 
 - [Development and deployment setup](docs/dev-deployment.md)
+- [Managed Agents Console](ui/managed-agents-console/README.md)
 - [First Docker-local run](docs/tutorials/docker-local-first-run.md)
 - [Examples](docs/examples.md)
 - [CWC-style Streamlit Managed Agents example](examples/ship-your-first-managed-agent/README.md)
