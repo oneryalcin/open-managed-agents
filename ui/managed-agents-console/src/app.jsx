@@ -1,24 +1,28 @@
 // app.jsx — root: sessions list, routing, theme tweaks. Mounts everything.
 const { useState, useEffect } = React;
 
-function SessionsList({ sessions, openSession, onCreate, dataState = 'loaded' }) {
+function SessionsList({ sessions, openSession, onCreate, dataState = 'loaded', readOnly = false }) {
   const loading = dataState === 'loading';
   const error = dataState === 'error';
+  const partial = dataState === 'partial';
   const empty = dataState === 'empty' || sessions.length === 0;
   return (
     <div className="main-scroll scroll fade-in">
-      <PageHead title="Sessions" sub="Trace and debug Managed Agents sessions." action={onCreate ? "Create session" : null} onAction={onCreate} />
+      <PageHead title="Sessions" sub="Trace and debug Managed Agents sessions."
+        action="Create session" onAction={onCreate} readOnly={readOnly}
+        endpoint="POST /v1/sessions" />
       <div className="toolbar">
         <Field wide placeholder="Search by session ID" />
         <Select label="Created" value="All time" />
         <Select label="Agent" value="All" w={120} />
         <Select label="Status" value="Active" w={120} />
       </div>
+      {partial && <PartialNotice resource="sessions" />}
       {loading ? <SkeletonTable rows={7} cols={[140, 'grow', 'pill', 160, 64]} />
        : error ? <ErrorState resource="sessions" onRetry={() => {}} />
        : empty ? <EmptyState icon="activity" title="No sessions yet"
             message="Sessions appear here as agents run. Create one to start a local Managed Agents session."
-            actionLabel={onCreate ? "Create session" : null} onAction={onCreate} />
+            actionLabel={!readOnly ? "Create session" : null} onAction={onCreate} />
        : <>
       <div className="panel">
         <div className="thead">
@@ -35,7 +39,9 @@ function SessionsList({ sessions, openSession, onCreate, dataState = 'loaded' })
             <span className="td" style={{ width:15 }}><span className="checkbox" /></span>
             <span className="td mono" style={{ width:140, fontSize:12, color:'var(--soft)' }}>{s.short}</span>
             <span className="td grow ell cell-strong">{s.title}</span>
-            <span className="td" style={{ width:96 }}><St k={s.status} /></span>
+            <span className="td" style={{ width:96, display:'flex', gap:6, flexWrap:'wrap' }}>
+              <St k={s.status} />{(s.requiresAction || s.confirm) && <NeedsAction />}
+            </span>
             <span className="td" style={{ width:200 }}><Pill icon="bot">{s.agent}</Pill></span>
             <span className="td mono" style={{ width:64, color:'var(--faint)' }}>{s.created}</span>
             <span className="td" style={{ width:20 }}><Kebab /></span>
@@ -107,12 +113,13 @@ function readRouteTarget(sessions, agents) {
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const demoMode = new URLSearchParams(window.location.search).get('mode') === 'demo';
   const [route, setRoute] = useState({ name:'sessions' });
   const [sessions, setSessions] = useState(SESSIONS);
   const [agents, setAgents] = useState(AGENTS);
   const [environments, setEnvironments] = useState(ENVIRONMENTS);
   const [files, setFiles] = useState(FILES);
-  const [apiState, setApiState] = useState({ state:'loading', mode:'api', error:null, warnings:[] });
+  const [apiState, setApiState] = useState({ state:'loading', mode: demoMode ? 'demo' : 'api', error:null, warnings:[] });
   const [modal, setModal] = useState(null);   // { kind:'session', presetAgent } | { kind:'agent' }
 
   useEffect(() => {
@@ -126,6 +133,12 @@ function App() {
 
   useEffect(() => {
     let alive = true;
+    if (demoMode) {
+      setApiState({ state:'loaded', mode:'demo', error:null, warnings:[] });
+      const target = readRouteTarget(SESSIONS, AGENTS);
+      if (target) setRoute(target);
+      return () => { alive = false; };
+    }
     OmaConsoleApi.loadConsoleData()
       .then((data) => {
         if (!alive) return;
@@ -146,7 +159,7 @@ function App() {
         if (target) setRoute(target);
       });
     return () => { alive = false; };
-  }, []);
+  }, [demoMode]);
 
   const go = (name) => {
     const next = { name };
@@ -177,41 +190,41 @@ function App() {
     setRoute(next);
     writeRouteHash(next);
   };
-  const apiReadOnly = apiState.mode === 'api';
+  const readOnly = apiState.mode !== 'demo';
 
   const createSession = (preset) => {
-    if (apiReadOnly) return;
+    if (readOnly) return;
     setModal({ kind:'session', presetAgent: preset });
   };
   const createAgent = () => {
-    if (apiReadOnly) return;
+    if (readOnly) return;
     setModal({ kind:'agent' });
   };
 
   const onSessionCreated = (s) => {
-    if (apiReadOnly) return;
+    if (readOnly) return;
     setSessions((prev) => [s, ...prev]);
     setModal(null);
     openSession(s);
   };
   const onAgentCreated = (a) => {
-    if (apiReadOnly) return;
+    if (readOnly) return;
     setAgents((prev) => [a, ...prev]);
     setModal(null);
     openAgent(a);
   };
 
   const archiveSession = (s) => {
-    if (apiReadOnly) return;
+    if (readOnly) return;
     setSessions((prev) => prev.map((x) => x.id === s.id ? { ...x, status:'archived' } : x));
   };
   const deleteSession = (s) => {
-    if (apiReadOnly) return;
+    if (readOnly) return;
     setSessions((prev) => prev.filter((x) => x.id !== s.id));
     go('sessions');
   };
   const archiveAgent = (a) => {
-    if (apiReadOnly) return;
+    if (readOnly) return;
     const upd = { ...a, status:'archived' };
     setAgents((prev) => prev.map((x) => x.id === a.id ? upd : x));
     setRoute({ name:'agent', agent: upd });
@@ -219,24 +232,19 @@ function App() {
 
   let view;
   const dataState = apiState.state === 'loading' ? 'loading' : t.dataState;
-  if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={apiReadOnly ? null : () => createSession(null)} dataState={dataState} />;
-  else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={dataState} apiMode={apiState.mode} readOnly={apiReadOnly} />;
-  else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={apiReadOnly ? null : createAgent} dataState={dataState} />;
-  else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} readOnly={apiReadOnly} />;
-  else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} />;
+  if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={readOnly} />;
+  else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={dataState} apiMode={apiState.mode} readOnly={readOnly} />;
+  else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={dataState} readOnly={readOnly} />;
+  else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} readOnly={readOnly} />;
+  else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} readOnly={readOnly} />;
 
   return (
     <div className="app">
       <Sidebar route={route.name} go={go} />
-      <main className="main">{view}</main>
-      {apiState.mode === 'mock' && <div className="api-banner">
-        <Icon name="alert" size={14} />
-        API unavailable — showing bundled demo data.
-      </div>}
-      {apiState.mode === 'api' && apiState.warnings.length > 0 && <div className="api-banner warn">
-        <Icon name="alert" size={14} />
-        {apiState.warnings.join(' ')}
-      </div>}
+      <main className="main">
+        {apiState.state !== 'loading' && <ModeBar mode={apiState.mode} warnings={apiState.warnings} />}
+        {view}
+      </main>
 
       {modal && modal.kind === 'session' &&
         <CreateSession agents={agents} environments={environments} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} />}
@@ -257,7 +265,7 @@ function App() {
           onChange={(v) => setTweak('layout', v)} />
 
         <TweakSection label="Data state" />
-        <TweakSelect label="Preview" value={t.dataState} options={['loaded', 'loading', 'empty', 'error']}
+        <TweakSelect label="Preview" value={t.dataState} options={['loaded', 'loading', 'partial', 'empty', 'error']}
           onChange={(v) => setTweak('dataState', v)} />
 
         <TweakSection label="Typeface" />

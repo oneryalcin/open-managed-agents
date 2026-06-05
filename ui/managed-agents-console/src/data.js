@@ -29,7 +29,7 @@ window.SESSIONS = [
     status:'idle', agent:'oma-span-probe', env:'oma-span-probe-env',
     created:'Jun 2', updated:'Jun 2', dur:'9.1s', tokens:'11.0k / 410', resources:1 },
   { id:'sesn_01QB1k…QB11BH', short:'sesn_…QB11BH', title:'Clean build directory & re-export',
-    status:'action', agent:'oma-tool-confirm', env:'oma-tool-confirm-env', confirm:true,
+    status:'idle', agent:'oma-tool-confirm', env:'oma-tool-confirm-env', confirm:true, requiresAction:true,
     created:'May 29', updated:'May 29', dur:'4.2s', tokens:'5.4k / 120', resources:0 },
   { id:'sesn_017Ajs…7AjsFV', short:'sesn_…7AjsFV', title:'oma-tool-confirmation-deny',
     status:'idle', agent:'oma-tool-confirm-deny', env:'oma-tool-confirm-deny-env',
@@ -175,7 +175,7 @@ window.FILES = [
   { name:'input-corpus.zip', ext:'zip', type:'application/zip', size:'1.2 MB', created:'May 29', dl:false },
 ];
 
-window.EVENT_TYPES = ['message','tool_use','tool_result','model_request','status'];
+window.EVENT_TYPES = ['message','thinking','tool_use','tool_result','custom_tool','model_request','status','error'];
 
 window.ENVIRONMENTS = [
   { id:'cwc-env', label:'cwc-env', image:'docker-local · python-3.12' },

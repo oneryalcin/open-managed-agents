@@ -88,9 +88,11 @@ async function hydrateSession(session) {
     fetchCursorPages(`/v1/sessions/${encodeURIComponent(session.id)}/events?order=asc`, { limit: EVENT_PAGE_LIMIT }),
     fetchFilePages(`/v1/files?scope_id=${encodeURIComponent(session.id)}`),
   ]);
+  const sessionSignals = sessionSignalsFromEvents(eventsPage.data);
   const events = toUiEvents(eventsPage.data);
   return {
     ...session,
+    ...sessionSignals,
     events,
     files: filesPage.data.map(toUiFile),
     spans: toUiSpans(events),
@@ -140,6 +142,7 @@ function toUiSession(session, agentNames) {
     dur: "—",
     tokens: usageLabel(session.usage),
     resources: Array.isArray(session.resources) ? session.resources.length : 0,
+    requiresAction: stopReasonType(session.stop_reason) === "requires_action",
   };
 }
 
@@ -189,7 +192,7 @@ function toUiEvent(event, firstTime) {
     text: eventSummary(event, content),
     content,
     raw: JSON.stringify(event, null, 2),
-    ok: event.is_error !== true,
+    ok: event.type !== "session.error" && event.is_error !== true,
     open: false,
     tokens: usage ? `${usage.input} / ${usage.output}` : undefined,
     dur: undefined,
@@ -210,7 +213,7 @@ function toUiSpans(events) {
       const start = modelStarts.get(event.pairedStart);
       spans.push({
         role: "span",
-        kind: event.ok ? "model" : "open",
+        kind: event.ok ? "model" : "error",
         label: "model_request",
         left: 4 + spans.length * 18,
         width: 14,
@@ -253,12 +256,14 @@ function eventTag(event) {
   if (event.type === "agent.tool_use") return event.name ?? "tool";
   if (event.type === "agent.tool_result") return event.is_error ? "error" : "exit 0";
   if (event.type === "span.model_request_end") return event.is_error ? "error" : "model";
+  if (event.type === "session.error") return "error";
   if (event.type.startsWith("session.status_")) return event.type.slice("session.status_".length);
   return event.type.split(".").pop();
 }
 
 function eventSummary(event, content) {
   if (content) return content.split("\n")[0];
+  if (event.type === "session.error") return event.error?.message ?? event.message ?? "session.error";
   if (event.type === "agent.tool_use") return `agent.tool_use · ${event.name ?? "tool"}`;
   if (event.type === "agent.tool_result") return `agent.tool_result · ${event.is_error ? "error" : "ok"}`;
   if (event.type === "span.model_request_start") return "model_request_start";
@@ -307,8 +312,26 @@ function usageLabel(usage) {
 
 function toUiStatus(session) {
   if (session.archived_at) return "archived";
-  if (session.status === "rescheduling") return "running";
   return session.status;
+}
+
+function sessionSignalsFromEvents(events) {
+  const latestIdle = [...events].reverse()
+    .find((event) => event.type === "session.status_idle");
+  const sessionError = [...events].reverse()
+    .find((event) => event.type === "session.error");
+  return {
+    requiresAction: stopReasonType(latestIdle?.stop_reason) === "requires_action",
+    sessionError: sessionError ? {
+      id: sessionError.id,
+      type: sessionError.error?.type ?? sessionError.type,
+      message: sessionError.error?.message ?? sessionError.message ?? "The session emitted an error.",
+    } : null,
+  };
+}
+
+function stopReasonType(stopReason) {
+  return stopReason && typeof stopReason === "object" ? stopReason.type : undefined;
 }
 
 function firstProcessedAt(events) {

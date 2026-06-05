@@ -7,6 +7,7 @@ function Role({ r }) {
 }
 
 function EvRow({ e, sel, onClick, mode }) {
+  const errored = e.ok === false;
   return (
     <div className={'ev' + (sel ? ' sel' : '')} onClick={onClick}>
       <Role r={e.role} />
@@ -15,6 +16,7 @@ function EvRow({ e, sel, onClick, mode }) {
             <span className="mono ev-type" style={{ width:186, flex:'0 0 auto', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{e.type}</span>
             <Pill>{e.tag}</Pill>
             {e.ok && <span className="badge st-active"><i className="dot" />ok</span>}
+            {errored && <span className="badge st-error"><i className="dot" />error</span>}
             {e.open && <span className="badge st-open"><i className="dot" />open</span>}
             <span className="grow" />
           </>
@@ -36,6 +38,7 @@ function Inspector({ e, onClose }) {
         <h3 className="mono" style={{ fontSize:14 }}>{e.type.split('.').pop()}</h3>
         <span className="grow" />
         {e.ok && <span className="badge st-active"><i className="dot" />ok</span>}
+        {e.ok === false && <span className="badge st-error"><i className="dot" />error</span>}
         {e.open && <span className="badge st-open"><i className="dot" />open</span>}
         <span className="kebab" onClick={onClose}><Icon name="x" size={16} /></span>
       </div>
@@ -66,6 +69,10 @@ function Inspector({ e, onClose }) {
 function SpansView({ spans = SPANS, onPick }) {
   return (
     <div className="panel" style={{ padding:'18px 18px 16px' }}>
+      <div className="span-note">
+        <span>Ordered by <span className="mono">processed_at</span>.</span>
+        <span>Widths are approximate until per-span timing lands.</span>
+      </div>
       <div className="axis">{['0s','7s','14s','20s','26s'].map((t) => <span key={t} className="mono">{t}</span>)}</div>
       <div style={{ display:'flex', flexDirection:'column', gap:13 }}>
         {spans.map((s, i) => (
@@ -84,6 +91,7 @@ function SpansView({ spans = SPANS, onPick }) {
         <span><i style={{ background:'var(--r-agent-bg)', borderColor:'var(--r-agent)' }} />model request</span>
         <span><i style={{ background:'var(--r-tool-bg)', borderColor:'var(--r-tool)' }} />tool</span>
         <span><i style={{ background:'var(--accent-wash)', borderColor:'var(--accent-line)' }} />open / unpaired</span>
+        <span><i style={{ background:'var(--red-wash)', borderColor:'var(--red)' }} />error</span>
       </div>
     </div>
   );
@@ -121,7 +129,8 @@ function FilesPanel({ files = FILES }) {
 
 function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = 'loaded', apiMode = 'mock', readOnly = false }) {
   const s = session;
-  const isLive = s.status === 'running';
+  const displayStatus = s.status === 'action' ? 'idle' : s.status;
+  const isLive = displayStatus === 'running';
   const isConfirm = !!s.confirm;
   const [view, setView] = useStateD('transcript');           // transcript | debug | spans | files
   const [selId, setSel] = useStateD(isLive || isConfirm ? null : 'sevt_…a05');
@@ -134,7 +143,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const baseFiles = s.files ?? (apiMode === 'api' ? [] : FILES);
   const baseSpans = s.spans ?? (apiMode === 'api' ? [] : SPANS);
   const [shown, setShown] = useStateD(() => isLive && apiMode !== 'api' ? RUN_EVENTS.slice(0, 1) : isConfirm && apiMode !== 'api' ? CONFIRM_EVENTS : baseEvents);
-  const [status, setStatus] = useStateD(s.status);
+  const [status, setStatus] = useStateD(displayStatus);
   const [working, setWorking] = useStateD(isLive && apiMode !== 'api');
   const [confirmState, setConfirmState] = useStateD(isConfirm ? 'pending' : null);
   const [menuOpen, setMenuOpen] = useStateD(false);
@@ -143,6 +152,15 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const idxRef = useRefD(1);
   const timerRef = useRefD(null);
   const streamRef = useRefD(null);
+
+  useEffectD(() => {
+    setStatus(displayStatus);
+    setConfirmState(isConfirm ? 'pending' : null);
+    setSel(isLive || isConfirm ? null : 'sevt_…a05');
+    setView('transcript');
+    setFilters([]);
+    setQuery('');
+  }, [s.id]);
 
   useEffectD(() => {
     if (!isLive || apiMode === 'api') return;
@@ -217,6 +235,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const dbgEvents = filteredPool;
   const tabFor = (view === 'spans' || view === 'debug') ? 'debug' : view;
   const fileCount = Array.isArray(baseFiles) ? baseFiles.length : 0;
+  const needsAction = Boolean(s.requiresAction || (isConfirm && confirmState === 'pending'));
   const resultCount = view === 'debug' ? dbgEvents.length : txEvents.length;
   const eventSearchVisible = view !== 'files' && view !== 'spans';
 
@@ -257,6 +276,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const pendingTool = isConfirm ? CONFIRM_EVENTS.find((e) => e.confirm) : null;
   const renderConfirmCard = () => {
     if (confirmState !== 'pending') return null;
+    const endpoint = 'POST /v1/sessions/:id/events';
     return (
       <div className="confirm-card">
         <div className="cc-head">
@@ -270,10 +290,20 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
           <div className="cc-tool"><span className="tn">{pendingTool.tool}</span><span style={{ color:'var(--faint)' }}>$</span>{pendingTool.cmd}</div>
         </div>
         <div className="cc-actions">
-          <button className="btn btn-accent" onClick={() => resolveConfirm('allow')}><Icon name="checkCircle" size={14} />Allow</button>
-          <button className="btn btn-danger" onClick={() => resolveConfirm('deny')}><Icon name="x" size={14} />Deny</button>
+          <button className="btn btn-accent" disabled={readOnly}
+            title={readOnly ? `Read-only API mode · ${endpoint}` : undefined}
+            onClick={() => !readOnly && resolveConfirm('allow')}>
+            <Icon name="checkCircle" size={14} />Allow
+          </button>
+          <button className="btn btn-danger" disabled={readOnly}
+            title={readOnly ? `Read-only API mode · ${endpoint}` : undefined}
+            onClick={() => !readOnly && resolveConfirm('deny')}>
+            <Icon name="x" size={14} />Deny
+          </button>
           <span style={{ flex:1 }} />
-          <span className="field-hint" style={{ alignSelf:'center' }}>Emits <span className="mono">user.tool_confirmation</span></span>
+          <span className="field-hint" style={{ alignSelf:'center' }}>
+            {readOnly ? <>Disabled · <span className="mono">{endpoint}</span></> : <>Emits <span className="mono">user.tool_confirmation</span></>}
+          </span>
         </div>
       </div>
     );
@@ -395,6 +425,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
           <div className="sess-title">
             <h1>{s.title}</h1>
             {running ? <span className="badge st-running live"><i className="dot" />Live</span> : <St k={status} />}
+            {needsAction && <NeedsAction />}
           </div>
           <div className="meta-row">
             <Pill icon="bot">{s.agent}</Pill>
@@ -403,8 +434,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
             <span className="dotsep">·</span>
             <Pill icon="folder">{fileCount} files</Pill>
             <span className="dotsep">·</span>
-            <span className="m"><Icon name="clock" />{running ? 'running…' : s.dur}</span>
-            <span className="m"><Icon name="layers" />{s.tokens}</span>
+            <span className="m" title="Session-level duration is not reported by the API. Per-request timing appears on model span events."><Icon name="clock" />{running ? 'running…' : s.dur}</span>
+            <span className="m" title="Session-level usage is not reported by the API. Per-request tokens appear on span.model_request_end.model_usage."><Icon name="layers" />{s.tokens}</span>
             <span className="m mono" style={{ color:'var(--faint)' }}>{s.id}</span>
           </div>
         </div>
@@ -427,12 +458,22 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
             )}
           </div>
           {running
-            ? <button className="btn btn-danger" disabled={readOnly} title={readOnly ? 'Read-only API mode' : undefined}
+            ? <button className="btn btn-danger" disabled={readOnly} title={readOnly ? 'Read-only API mode · POST /v1/sessions/:id/events' : undefined}
                 onClick={() => !readOnly && interrupt()}><Icon name="stop" size={14} />Interrupt</button>
-            : <button className="btn btn-accent" disabled={readOnly} title={readOnly ? 'Read-only API mode' : undefined}>
+            : <button className="btn btn-accent" disabled={readOnly} title={readOnly ? 'Read-only API mode · POST /v1/sessions/:id/events' : undefined}>
                 <Icon name="sparkles" size={15} />Ask Claude</button>}
         </div>
       </div>
+
+      {s.sessionError && (
+        <div className="banner">
+          <Icon name="alert" size={16} />
+          <div>
+            <div className="b-main">Session emitted <span className="mono">{s.sessionError.type}</span></div>
+            <div className="b-sub">{s.sessionError.message}</div>
+          </div>
+        </div>
+      )}
 
       {Array.isArray(s.warnings) && s.warnings.length > 0 && (
         <div className="inline-warn">
@@ -463,12 +504,12 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
       </div>
 
       {view !== 'files' && (
-        <div className="composer">
+        <div className={'composer' + (readOnly ? ' ro' : '')}>
           <Icon name="terminal" size={16} style={{ color:'var(--faint)' }} />
-          <input placeholder={readOnly ? 'Read-only API mode — messages are disabled.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'} disabled={running || readOnly} />
+          <input placeholder={readOnly ? 'Read-only API mode — POST /v1/sessions/:id/events is disabled.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'} disabled={running || readOnly} />
           {running
-            ? <button className="btn btn-sm btn-danger" disabled={readOnly} onClick={() => !readOnly && interrupt()}><Icon name="stop" size={13} />Interrupt</button>
-            : <button className="btn btn-sm btn-primary" disabled={readOnly}><Icon name="send" size={13} />Send</button>}
+            ? <button className="btn btn-sm btn-danger" disabled={readOnly} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={() => !readOnly && interrupt()}><Icon name="stop" size={13} />Interrupt</button>
+            : <button className="btn btn-sm btn-primary" disabled={readOnly} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined}><Icon name="send" size={13} />Send</button>}
         </div>
       )}
     </div>
