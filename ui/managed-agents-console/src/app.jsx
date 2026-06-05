@@ -75,7 +75,7 @@ function App() {
   const [agents, setAgents] = useState(AGENTS);
   const [environments, setEnvironments] = useState(ENVIRONMENTS);
   const [files, setFiles] = useState(FILES);
-  const [apiState, setApiState] = useState({ state:'loading', mode:'api', error:null });
+  const [apiState, setApiState] = useState({ state:'loading', mode:'api', error:null, warnings:[] });
   const [modal, setModal] = useState(null);   // { kind:'session', presetAgent } | { kind:'agent' }
 
   useEffect(() => {
@@ -96,11 +96,11 @@ function App() {
         setSessions(data.sessions);
         setEnvironments(data.environments);
         setFiles(data.files);
-        setApiState({ state:'loaded', mode:'api', error:null });
+        setApiState({ state:'loaded', mode:'api', error:null, warnings:data.warnings || [] });
       })
       .catch((error) => {
         if (!alive) return;
-        setApiState({ state:'loaded', mode:'mock', error });
+        setApiState({ state:'loaded', mode:'mock', error, warnings:[] });
       });
     return () => { alive = false; };
   }, []);
@@ -180,6 +180,10 @@ function App() {
       {apiState.mode === 'mock' && <div className="api-banner">
         <Icon name="alert" size={14} />
         API unavailable — showing bundled demo data.
+      </div>}
+      {apiState.mode === 'api' && apiState.warnings.length > 0 && <div className="api-banner warn">
+        <Icon name="alert" size={14} />
+        {apiState.warnings.join(' ')}
       </div>}
 
       {modal && modal.kind === 'session' &&

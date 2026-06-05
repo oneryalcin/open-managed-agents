@@ -5,6 +5,7 @@ const FILES_API_BETA = "files-api-2025-04-14";
 const BETA_HEADER = `${MANAGED_AGENTS_BETA}, ${FILES_API_BETA}`;
 const PAGE_LIMIT = 100;
 const EVENT_PAGE_LIMIT = 1000;
+const MAX_AUTO_PAGES = 100;
 
 async function fetchJson(path) {
   const response = await fetch(path, {
@@ -28,37 +29,37 @@ async function fetchJson(path) {
 async function fetchCursorPages(path, { limit = PAGE_LIMIT, cursorParam = "page" } = {}) {
   const data = [];
   let cursor = null;
-  for (let pageCount = 0; pageCount < 100; pageCount += 1) {
+  for (let pageCount = 0; pageCount < MAX_AUTO_PAGES; pageCount += 1) {
     const url = new URL(path, window.location.origin);
     url.searchParams.set("limit", String(limit));
     if (cursor) url.searchParams.set(cursorParam, cursor);
     const page = await fetchJson(url.pathname + url.search);
     data.push(...(Array.isArray(page?.data) ? page.data : []));
     cursor = page.next_page;
-    if (!page?.has_more && !cursor) return data;
-    if (!cursor) return data;
+    if (!page?.has_more && !cursor) return { data, truncated: false };
+    if (!cursor) return { data, truncated: true };
   }
-  throw new Error(`Pagination limit exceeded for ${path}`);
+  return { data, truncated: true };
 }
 
 async function fetchFilePages(path, { limit = PAGE_LIMIT } = {}) {
   const data = [];
   let afterId = null;
-  for (let pageCount = 0; pageCount < 100; pageCount += 1) {
+  for (let pageCount = 0; pageCount < MAX_AUTO_PAGES; pageCount += 1) {
     const url = new URL(path, window.location.origin);
     url.searchParams.set("limit", String(limit));
     if (afterId) url.searchParams.set("after_id", afterId);
     const page = await fetchJson(url.pathname + url.search);
     data.push(...(Array.isArray(page?.data) ? page.data : []));
-    if (!page?.has_more) return data;
+    if (!page?.has_more) return { data, truncated: false };
     afterId = page.last_id;
-    if (!afterId) return data;
+    if (!afterId) return { data, truncated: true };
   }
-  throw new Error(`Pagination limit exceeded for ${path}`);
+  return { data, truncated: true };
 }
 
 async function loadConsoleData() {
-  const [agentsRaw, sessionsRaw, environmentsRaw, filesRaw] =
+  const [agentsPage, sessionsPage, environmentsPage, filesPage] =
     await Promise.all([
       fetchCursorPages("/v1/agents?include_archived=true"),
       fetchCursorPages("/v1/sessions?include_archived=true&order=desc"),
@@ -66,28 +67,45 @@ async function loadConsoleData() {
       fetchFilePages("/v1/files"),
     ]);
 
-  const agents = agentsRaw.map(toUiAgent);
+  const agents = agentsPage.data.map(toUiAgent);
   const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
-  const sessions = sessionsRaw.map((session) =>
+  const sessions = sessionsPage.data.map((session) =>
     toUiSession(session, agentNames));
-  const environments = environmentsRaw.map(toUiEnvironment);
-  const files = filesRaw.map(toUiFile);
+  const environments = environmentsPage.data.map(toUiEnvironment);
+  const files = filesPage.data.map(toUiFile);
+  const warnings = paginationWarnings([
+    ["agents", agentsPage],
+    ["sessions", sessionsPage],
+    ["environments", environmentsPage],
+    ["files", filesPage],
+  ]);
 
-  return { agents, sessions, environments, files };
+  return { agents, sessions, environments, files, warnings };
 }
 
 async function hydrateSession(session) {
-  const [eventsRaw, filesRaw] = await Promise.all([
+  const [eventsPage, filesPage] = await Promise.all([
     fetchCursorPages(`/v1/sessions/${encodeURIComponent(session.id)}/events?order=asc`, { limit: EVENT_PAGE_LIMIT }),
     fetchFilePages(`/v1/files?scope_id=${encodeURIComponent(session.id)}`),
   ]);
-  const events = toUiEvents(eventsRaw);
+  const events = toUiEvents(eventsPage.data);
   return {
     ...session,
     events,
-    files: filesRaw.map(toUiFile),
+    files: filesPage.data.map(toUiFile),
     spans: toUiSpans(events),
+    warnings: paginationWarnings([
+      ["events", eventsPage],
+      ["files", filesPage],
+    ]),
   };
+}
+
+function paginationWarnings(pages) {
+  return pages
+    .filter(([, page]) => page.truncated)
+    .map(([name]) =>
+      `${name} reached the ${MAX_AUTO_PAGES}-page safety cap; this view may be partial.`);
 }
 
 function toUiAgent(agent) {
