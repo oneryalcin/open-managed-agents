@@ -15,6 +15,8 @@ still tracked separately in the roadmap.
 3. [Roadmap](roadmap.md) — current implementation state and the next cycles
 4. [References](references.md) — upstream docs, SDK docs, related projects we evaluated
 5. [Examples](examples.md) — executable parity examples against external tutorial flows
+6. [Development and deployment setup](dev-deployment.md) — Make targets,
+   Docker-local's role, parallel-session smoke, and production deployment shape
 
 ## Tutorials
 
@@ -53,6 +55,15 @@ npx tsx scratch/05-event-store.ts
 npx tsx scratch/06-agents-api.ts
 npx tsx scratch/07-b1-api.ts
 npx tsx scratch/23-e3-deployment-docker-smoke.ts
+npx tsx scratch/40-docker-parallel-sessions-smoke.ts
+```
+
+The Makefile wraps the common checks:
+
+```bash
+make check
+make docker-smoke
+make parallel-docker-smoke
 ```
 
 ## Architecture Decision Records
