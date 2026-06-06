@@ -1,5 +1,6 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type { ManagedAgentsListPage } from "../../types/common.ts";
+import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type {
   CreateSessionRecord,
   ListSessionsOptions,
@@ -270,8 +271,7 @@ export class SqliteSessionStore implements SessionStore {
 
   create(record: CreateSessionRecord): SessionRow {
     const s = record.row;
-    this.db.exec("BEGIN");
-    try {
+    return this.withTransaction(() => {
       this.insertStmt.run(
         s.id,
         s.workspace_id,
@@ -313,12 +313,8 @@ export class SqliteSessionStore implements SessionStore {
         );
       }
       this.clearPendingSnapshotCreateRollbacksBySessionStmt.run(s.workspace_id, s.id);
-      this.db.exec("COMMIT");
       return s;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   retrieve(workspaceId: string, sessionId: string): SessionRow | undefined {
@@ -350,18 +346,17 @@ export class SqliteSessionStore implements SessionStore {
     const existing = this.retrieveAny(workspaceId, sessionId);
     if (!existing) return undefined;
     const now = new Date().toISOString();
-    this.db.exec("BEGIN");
-    try {
+    return this.withTransaction(() => {
       this.insertPendingSnapshotDeletesStmt.run(now, workspaceId, sessionId);
       this.deleteSnapshotsStmt.run(workspaceId, sessionId);
       this.deleteResourcesStmt.run(workspaceId, sessionId);
       this.deleteStmt.run(workspaceId, sessionId);
-      this.db.exec("COMMIT");
       return existing;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
+  }
+
+  withTransaction<T>(fn: () => T): T {
+    return withSqliteTransaction(this.db, fn);
   }
 
   getFileMountSnapshots(

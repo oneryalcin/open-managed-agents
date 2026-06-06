@@ -55,10 +55,19 @@ interface PendingSnapshotCleanupRetryContext {
   error: string;
 }
 
+interface DeleteSessionRowsResult {
+  row: SessionRow;
+  deletedSessionOutputFiles?: readonly FileStorageRecord[];
+}
+
 export interface DefaultSessionServiceOptions {
   maxFileResources?: number;
   maxMountedBytes?: number;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
+  deleteSessionRows?: (
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ) => DeleteSessionRowsResult | undefined;
   pendingSnapshotCleanupRetryDelayMs?: number;
   pendingSnapshotCleanupMaxAttempts?: number;
 }
@@ -72,6 +81,12 @@ export class DefaultSessionService implements SessionService {
   private readonly startupSnapshotDeleteSweep: Promise<void>;
   private readonly startupSnapshotCreateRollbackSweep: Promise<void>;
   private readonly startedAt = new Date().toISOString();
+  private readonly deleteSessionRows:
+    | ((
+        workspaceId: WorkspaceId,
+        sessionId: string,
+      ) => DeleteSessionRowsResult | undefined)
+    | undefined;
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
@@ -93,6 +108,7 @@ export class DefaultSessionService implements SessionService {
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.runtime = opts.runtime;
+    this.deleteSessionRows = opts.deleteSessionRows;
     this.pendingSnapshotCleanupRetryDelayMs =
       opts.pendingSnapshotCleanupRetryDelayMs ??
       DEFAULT_PENDING_SNAPSHOT_CLEANUP_RETRY_DELAY_MS;
@@ -221,8 +237,10 @@ export class DefaultSessionService implements SessionService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<ManagedAgentsDeletedSession> {
-    const row = this.store.delete(workspaceId, sessionId);
-    if (!row) {
+    const result =
+      this.deleteSessionRows?.(workspaceId, sessionId) ??
+      this.deleteSessionRowsWithDefaultStore(workspaceId, sessionId);
+    if (!result) {
       throw notFound(`Session ${sessionId} not found`);
     }
     await this.sweepPendingInternalSnapshotDeletes(workspaceId, sessionId).catch(
@@ -230,14 +248,40 @@ export class DefaultSessionService implements SessionService {
         console.warn("Pending internal snapshot delete sweep failed", error);
       },
     );
-    await this.files?.deleteSessionOutputs(workspaceId, sessionId).catch((error) => {
+    await this.cleanupDeletedSessionOutputs(
+      workspaceId,
+      sessionId,
+      result.deletedSessionOutputFiles,
+    );
+    return { id: result.row.id, type: "session_deleted" };
+  }
+
+  private deleteSessionRowsWithDefaultStore(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): DeleteSessionRowsResult | undefined {
+    const row = this.store.delete(workspaceId, sessionId);
+    return row ? { row } : undefined;
+  }
+
+  private async cleanupDeletedSessionOutputs(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    deletedFiles: readonly FileStorageRecord[] | undefined,
+  ): Promise<void> {
+    try {
+      if (deletedFiles !== undefined && hasRecordObjectDelete(this.files)) {
+        await this.files.deleteObjectsForRecords(deletedFiles);
+        return;
+      }
+      await this.files?.deleteSessionOutputs(workspaceId, sessionId);
+    } catch (error) {
       console.warn("Session output cleanup failed", {
         workspaceId,
         sessionId,
         error,
       });
-    });
-    return { id: row.id, type: "session_deleted" };
+    }
   }
 
   async sweepPendingInternalSnapshotDeletes(
@@ -815,6 +859,16 @@ function limitLabel(bytes: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function hasRecordObjectDelete(
+  files: FileStorage | undefined,
+): files is FileStorage & {
+  deleteObjectsForRecords(records: readonly FileStorageRecord[]): Promise<void>;
+} {
+  return typeof (
+    files as { deleteObjectsForRecords?: unknown } | undefined
+  )?.deleteObjectsForRecords === "function";
 }
 
 function isUnsupportedFileResourceRuntime(error: unknown): boolean {

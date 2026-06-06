@@ -30,6 +30,10 @@ import {
   type DeploymentRuntimeEnv,
 } from "./deployment-runtime-config.ts";
 import {
+  createDeploymentStoresFromEnv,
+  type DeploymentStorageEnv,
+} from "./deployment-storage.ts";
+import {
   ApiError,
   type ApiErrorBody,
   ensureApiError,
@@ -76,6 +80,9 @@ export interface InMemoryControlPlaneAppOptions {
 export interface DeploymentControlPlaneAppOptions {
   runner?: DeploymentPiSessionRunnerOptions;
 }
+
+export type DeploymentControlPlaneEnv =
+  DeploymentRuntimeEnv & DeploymentStorageEnv;
 
 export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -134,48 +141,44 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
 }
 
 export function createDeploymentControlPlaneApp(
-  env: DeploymentRuntimeEnv = process.env,
+  env: DeploymentControlPlaneEnv = process.env,
   opts: DeploymentControlPlaneAppOptions = {},
 ): Hono<AppEnv> {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
-  const agentStore = SqliteAgentStore.open(":memory:");
-  const environmentStore = SqliteEnvironmentStore.open(":memory:");
-  const sessionStore = SqliteSessionStore.open(":memory:");
-  const eventStore = EventStore.open(":memory:");
-  const fileStorage = new InMemoryFileStorage();
-  const broadcaster = new SessionEventBroadcaster(eventStore);
+  const stores = createDeploymentStoresFromEnv(env);
+  const broadcaster = new SessionEventBroadcaster(stores.events);
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
-    fileMountResolver: createFileMountResolver(sessionStore, fileStorage),
+    fileMountResolver: createFileMountResolver(stores.sessions, stores.files),
     customTools:
       opts.runner?.customTools ??
       createStoreBackedCustomToolsProvider({
-        sessions: sessionStore,
-        agents: agentStore,
+        sessions: stores.sessions,
+        agents: stores.agents,
       }),
     builtinToolAccess: createStoreBackedBuiltinToolAccessResolver({
-      sessions: sessionStore,
-      agents: agentStore,
+      sessions: stores.sessions,
+      agents: stores.agents,
     }),
   });
   const runtime = { runner, translate: translatePiEvent };
   const sessionEvents = new DefaultSessionEventsService(
-    eventStore,
-    sessionStore,
+    stores.events,
+    stores.sessions,
     broadcaster,
-    { ...runtime, fileStorage },
+    { ...runtime, fileStorage: stores.files },
   );
   sessionEvents.recoverAbandonedRuntimeTurns("wrk_default");
   return createControlPlaneApp({
-    agents: new DefaultAgentService(agentStore),
-    environments: new DefaultEnvironmentService(environmentStore),
-    files: new DefaultFileService(fileStorage),
+    agents: new DefaultAgentService(stores.agents),
+    environments: new DefaultEnvironmentService(stores.environments),
+    files: new DefaultFileService(stores.files),
     sessions: new DefaultSessionService(
-      sessionStore,
-      agentStore,
-      environmentStore,
-      fileStorage,
-      { runtime: runner },
+      stores.sessions,
+      stores.agents,
+      stores.environments,
+      stores.files,
+      { runtime: runner, deleteSessionRows: stores.deleteSessionRows },
     ),
     sessionEvents,
   });

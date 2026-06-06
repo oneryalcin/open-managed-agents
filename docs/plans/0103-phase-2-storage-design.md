@@ -39,12 +39,22 @@ Add a **single-node durable deployment store**:
   runtime metadata;
 - one local object-storage directory for file bytes;
 - one process still owns live Pi runtime handles and Docker-local containers;
+- one process has exclusive access to the SQLite/object-root pair while it is
+  running;
 - no worker process extraction;
 - no admission controls yet.
 
 The durable mode should be opt-in through deployment config. The existing
 in-memory helpers should remain available for isolated tests and cheap scratch
 probes.
+
+The exclusive-access rule is load-bearing. The deployment factory should take a
+lock derived from the SQLite database path and persist the object-root binding
+inside that database. A second process must fail closed if it tries to reuse the
+same database concurrently, or if it tries to reopen the same database with a
+different object root. Rolling-overlap restarts against the same durable root
+are not supported in Phase 2; stop the old process before starting the new one,
+or move to a future worker/coordinator design.
 
 ## Storage Composition
 
@@ -173,6 +183,14 @@ failure windows it accepts:
 For Phase 2, it is acceptable to preserve current in-memory file storage for
 test helpers. Durable deployment mode should not use it.
 
+Phase 2's local-object implementation is durable enough for a single-node
+developer/operator deployment, not a power-loss-perfect object store. With
+SQLite WAL `synchronous=NORMAL`, the most recent metadata transaction can be
+lost during host power loss. File bytes are also outside SQLite, so startup
+reconciliation must treat temp files and unreferenced object files as cleanup
+targets, and tests should pin that public APIs do not expose temp/orphan bytes.
+Do not describe this as distributed or crash-perfect storage.
+
 ## Tests That Matter
 
 The storage PR should include focused tests, not only broad API coverage.
@@ -188,11 +206,12 @@ Required tests:
    Exercise at least one path that combines session liveness and event/runtime
    mutation in one transaction. The test should fail if the session row is
    archived/deleted before the commit.
-3. **Two-writer contention.**
-   Open two app/store instances against the same SQLite path. Hold or create a
-   short write on one connection and verify the other either waits within
-   `busy_timeout` and succeeds or returns a deliberate, documented error. This
-   proves the single-node concurrency posture instead of assuming it.
+3. **Exclusive process access.**
+   Open one durable store against a SQLite/object-root pair, then verify a
+   second deployment store for the same pair fails with a deliberate lock error.
+   Close the first store and verify a restart succeeds. This pins the Phase 2
+   concurrency posture instead of implying rolling-overlap or multi-process
+   support.
 4. **Byte/metadata crash-window guard.**
    Simulate a failure after writing temp bytes but before metadata commit, or
    after metadata commit but before final byte placement, and verify startup or
