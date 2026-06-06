@@ -1,8 +1,15 @@
 # Threat model (stub)
 
-**Status:** Stub. Sections listed below are placeholders to be filled in before any deployment that handles real tenant data or runs untrusted prompts. For the MVP scope (single developer, single tenant, single trusted user), the threat model is "Modal handles container isolation; everything else is trust-the-operator."
+**Status:** Stub. Sections listed below are placeholders to be filled in before
+any deployment that handles real tenant data or runs untrusted prompts. For the
+MVP scope (single developer, single tenant, single trusted user), the threat
+model is "Docker-local contains sandbox execution for the current dev/demo
+path; everything else is trust-the-operator."
 
 This doc exists primarily so the threat-model gap can't be silently overlooked — see code-review finding MEDIUM 7.
+
+Deployment-mode terminology and sequencing are defined in
+[0103 - Deployment Hardening](plans/0103-deployment-hardening.md).
 
 ---
 
@@ -20,16 +27,36 @@ This doc exists primarily so the threat-model gap can't be silently overlooked �
 
 **Question to answer:** What containment does the sandbox provide, and what assumes we don't have?
 
-- Modal Sandboxes provide gVisor-style container isolation by default — kernel-level boundary, separate filesystem, no host shell access. Document this as load-bearing.
-- We do NOT assume: full hardware-level isolation (Modal sandboxes share infrastructure), perfect side-channel resistance, protection against denial-of-service via runaway loops (we'll need timeouts).
-- Open: what's our sandbox-escape incident response plan? (Probably: terminate via Modal API, mark session terminated, alert.)
+- Current Docker-local path: sandbox containers run without the Docker socket,
+  with `--network none`, `--read-only`, dropped capabilities,
+  `no-new-privileges`, tmpfs workspace/uploads/outputs mounts, memory/PID/CPU
+  limits, and a non-root uid/gid. These are load-bearing for local isolation.
+- The Docker socket must not be mounted into sandbox containers.
+- A future Docker Compose setup that mounts the Docker socket into the
+  control-plane container is a dev-only host-control shortcut, not a production
+  deployment shape.
+- `host-passthrough` is not a sandbox. It executes agent-directed shell/file
+  operations on the host filesystem under an explicitly configured workspace
+  root. It is acceptable only for trusted local tests behind unsafe env gates.
+- Future Modal Sandboxes may provide a stronger remote isolation boundary, but
+  Modal is not the current deployed provider.
+- We do NOT assume: full hardware-level isolation, perfect side-channel
+  resistance, protection against denial-of-service via runaway loops, or live
+  compute continuation after a Docker-local worker/container dies.
+- Open: what's our sandbox-escape incident response plan? For Docker-local
+  dev/demo, the likely action is terminate the labelled container, mark the
+  session terminated, and alert the operator.
 
 ### 3. Network egress
 
 **Question to answer:** Where can a sandbox connect, and how do we enforce that?
 
-- MVP: unrestricted egress from sandboxes (Modal default). Document this prominently.
-- Post-MVP: per-session egress allowlist passed through to Modal. Maps to Managed Agents' `environment.config.networking: { type: "limited", allowed_hosts: [...] }`.
+- Current Docker-local path: sandbox containers use `--network none`.
+- Host-passthrough has host network access because it is host execution, not a
+  sandbox. Do not use it for untrusted prompts.
+- Future remote providers need an explicit egress decision. Per-session egress
+  allowlists should map to Managed Agents'
+  `environment.config.networking: { type: "limited", allowed_hosts: [...] }`.
 - Threat: prompt injection that exfiltrates context to attacker-controlled domain via `web_fetch` or `bash` curl. Mitigation: egress allowlist + secret-free sandbox (see §4).
 
 ### 4. Secret injection paths
@@ -53,27 +80,44 @@ This doc exists primarily so the threat-model gap can't be silently overlooked �
 
 **Question to answer:** When does a sandbox get destroyed, and what state survives?
 
-- MVP: sandbox destroyed when session ends (`session.status_terminated`, explicit delete, or timeout).
-- Open: what's the session-idle timeout? (Cost-bearing — Modal bills per second.) Recommendation: 1 hour idle → terminate sandbox, mark session needs-resume.
-- Open: persistent state across sandbox restarts? MVP says no (ephemeral); future memory-store work changes this.
-- Open: what guarantees teardown actually runs? A crashed control plane leaves orphan Modal sandboxes. Mitigation: Modal-side TTL on sandboxes, periodic reconciliation sweep.
+- Current Docker-local path: one sandbox container is tied to a live session
+  handle. It is disposed on explicit close/delete, runner close, and idle
+  eviction. A startup stale-container sweep exists for labelled Docker-local
+  containers.
+- Current demo storage is in-memory. If the control plane restarts, live
+  sandbox state is not durable. Docker-local tmpfs workspace/output state is not
+  a resumable compute context.
+- Intended next target: single-node durable metadata and local object storage.
+  This preserves control-plane state across restart, but still does not promise
+  continuation of a killed in-container process.
+- Future multi-worker target: workers may terminalize or restart future work
+  after a crash; they must not claim to continue the same Docker-local tmpfs
+  compute context.
+- Open: persistent state across sandbox restarts? MVP says no (ephemeral);
+  future memory-store work changes this.
 
 ### 7. Authentication & authorization
 
 **Question to answer:** Who can call what?
 
 - MVP: TBD — likely a single shared bearer token in `.env`. Acceptable for solo experiment.
-- Post-MVP: per-workspace API keys, RBAC for environment/agent create vs. read, rate limits per workspace.
+- Post-MVP: per-workspace API keys, RBAC for environment/agent create vs. read,
+  and authenticated workspace identity for any per-workspace admission limits.
 - Open: do we sign session IDs / event IDs to prevent guessing? Probably yes once multi-tenant.
 
 ### 8. Denial of service
 
 **Question to answer:** What stops a single session from monopolizing resources?
 
-- Open: max concurrent sandboxes per workspace.
+- Current Docker-local path has per-container memory/PID/CPU/operation/output
+  limits, but no global admission controller.
+- Open: max concurrent sandboxes per process and per authenticated workspace.
 - Open: max sandbox runtime per session (kill switch).
 - Open: max token-budget per session (Anthropic's `task_budgets` analogue).
 - Open: max event-log size per session (10MB? 100MB?).
+- Do not treat per-workspace admission limits as security controls until
+  workspace identity is authenticated. Header-trusted workspace selection is
+  only acceptable for local/trusted modes.
 
 ---
 

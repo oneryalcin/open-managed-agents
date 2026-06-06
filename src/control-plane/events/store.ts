@@ -23,6 +23,7 @@ import type {
   SessionEventRecordPage,
   SessionEventStore,
 } from "./types.ts";
+import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
 const SCHEMA = `
@@ -329,30 +330,24 @@ export class EventStore implements SessionEventStore {
     events: readonly PersistedSessionEvent[],
     changes: EventStoreRuntimeChanges,
   ): void {
-    this.db.exec("BEGIN");
-    try {
+    this.withTransaction(() => {
       for (const event of events) {
         this.appendEvent(event);
       }
       this.applyRuntimeChanges(changes);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   deleteForSession(workspaceId: WorkspaceId, sessionId: string): void {
-    this.db.exec("BEGIN");
-    try {
+    this.withTransaction(() => {
       this.deleteRuntimeActionsForSessionStmt.run(workspaceId, sessionId);
       this.deleteRuntimeTurnsForSessionStmt.run(workspaceId, sessionId);
       this.deleteForSessionStmt.run(workspaceId, sessionId);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
+  }
+
+  withTransaction<T>(fn: () => T): T {
+    return withSqliteTransaction(this.db, fn);
   }
 
   list(

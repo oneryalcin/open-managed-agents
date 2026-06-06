@@ -18,6 +18,7 @@
 - Resources live-probe notes: [managed-agents-resources-notes.md](references/managed-agents-resources-notes.md)
 - File storage prior-art notes: [file-storage-prior-art.md](references/file-storage-prior-art.md)
 - Competing OMA implementations (open-ma / openma.dev) prior-art: [oma-implementations-prior-art.md](references/oma-implementations-prior-art.md)
+- just-bash (simulated-bash sandbox) prior-art: [just-bash-prior-art.md](references/just-bash-prior-art.md)
 
 ## Anthropic SDK source (for endpoint shapes and types)
 

@@ -15,7 +15,11 @@ import {
   type JsonValue,
 } from "../../types/json.ts";
 import { ApiError, invalidRequest, notFound } from "../errors.ts";
-import type { FileStorage } from "../files/types.ts";
+import type {
+  FileStorage,
+  FileStorageRecord,
+  SessionOutputFileInput,
+} from "../files/types.ts";
 import type { SessionRow, SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { newRuntimeTurnId, newRequestId } from "../ids.ts";
@@ -1372,17 +1376,32 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ) {
         return;
       }
-      await this.outputFileStorage.replaceSessionOutputs(
-        workspaceId,
-        sessionId,
-        collection.files.map((file) => ({
+      const files = collection.files.map((file) => ({
           relativePath: file.relativePath,
           filename: file.filename,
           mimeType: file.mimeType,
           sizeBytes: file.sizeBytes,
           sha256: file.sha256,
           body: file.bytes,
-        })),
+        }));
+      if (hasLivenessFencedSessionOutputReplace(this.outputFileStorage)) {
+        await this.outputFileStorage.replaceSessionOutputsIfLive(
+          workspaceId,
+          sessionId,
+          files,
+          () =>
+            this.canCommitSessionOutputsFromRuntimeTurn(
+              workspaceId,
+              sessionId,
+              prompt,
+            ),
+        );
+        return;
+      }
+      await this.outputFileStorage.replaceSessionOutputs(
+        workspaceId,
+        sessionId,
+        files,
       );
     } catch (error) {
       console.warn("session output indexing failed", {
@@ -2870,6 +2889,25 @@ function hasTerminalIdleDraft(drafts: readonly EventDraft[]): boolean {
     if (!isJsonObject(stopReason)) return true;
     return stopReason.type !== "requires_action";
   });
+}
+
+type LivenessFencedSessionOutputStorage = FileStorage & {
+  replaceSessionOutputsIfLive(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    files: readonly SessionOutputFileInput[],
+    canCommit: () => boolean,
+  ): Promise<readonly FileStorageRecord[]>;
+};
+
+function hasLivenessFencedSessionOutputReplace(
+  storage: FileStorage,
+): storage is LivenessFencedSessionOutputStorage {
+  return typeof (
+    storage as {
+      replaceSessionOutputsIfLive?: unknown;
+    }
+  ).replaceSessionOutputsIfLive === "function";
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {

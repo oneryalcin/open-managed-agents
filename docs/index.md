@@ -46,6 +46,8 @@ still tracked separately in the roadmap.
 - [Deployment hardening](plans/0103-deployment-hardening.md) — production
   shape for API/control-plane, runtime workers, Docker-local, durable stores,
   and admission limits.
+- [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
+  implementation design for #103 Phase 2 storage consolidation.
 
 ## Current smoke checks
 
