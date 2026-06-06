@@ -43,6 +43,9 @@ still tracked separately in the roadmap.
 - [Managed Agents UI parity](plans/0097-managed-agents-ui-parity.md) — first
   repo-local console plan for agents, sessions, transcript/debug views, spans,
   and session output downloads.
+- [Deployment hardening](plans/0103-deployment-hardening.md) — production
+  shape for API/control-plane, runtime workers, Docker-local, durable stores,
+  and admission limits.
 
 ## Current smoke checks
 
