@@ -520,6 +520,8 @@ For durable-store/worker PRs:
 ## Follow-ups
 
 - Promote this plan to an ADR after review.
+- Use [0103 Phase 2 - Single-Node Durable Storage Design](0103-phase-2-storage-design.md)
+  as the implementation design for the storage consolidation commit.
 - Add a scoped issue for Phase 2 single-node durable storage.
 - Add a scoped issue for Phase 3 auth-aware admission controls.
 - Add a scoped issue for Phase 4 API-level parallel smoke.
