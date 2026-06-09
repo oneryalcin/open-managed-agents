@@ -178,7 +178,10 @@ export function createDeploymentControlPlaneApp(
       stores.agents,
       stores.environments,
       stores.files,
-      { runtime: runner, deleteSessionRows: stores.deleteSessionRows },
+      {
+        runtime: runner,
+        deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,
+      },
     ),
     sessionEvents,
   });
