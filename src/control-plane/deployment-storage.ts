@@ -12,12 +12,16 @@ import {
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { SqliteAgentStore } from "./agents/store.ts";
+import {
+  createInMemorySessionCoordinator,
+  createSingleDatabaseSessionCoordinator,
+  type DeploymentSessionCoordinator,
+} from "./deployment-session-coordinator.ts";
 import { SqliteEnvironmentStore } from "./environments/store.ts";
 import { EventStore } from "./events/store.ts";
 import { InMemoryFileStorage, LocalObjectFileStorage } from "./files/store.ts";
-import type { FileStorage, FileStorageRecord } from "./files/types.ts";
+import type { FileStorage } from "./files/types.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
-import type { SessionRow } from "./sessions/types.ts";
 
 export interface DeploymentStorageEnv {
   OMA_SQLITE_PATH?: string;
@@ -31,10 +35,7 @@ export interface DeploymentStores {
   events: EventStore;
   files: FileStorage;
   mode: "memory" | "durable";
-  deleteSessionRows(
-    workspaceId: string,
-    sessionId: string,
-  ): DeleteSessionRowsResult | undefined;
+  sessionCoordinator: DeploymentSessionCoordinator;
   sqlitePragmas?(): SqlitePragmaSnapshot;
   close(): void;
 }
@@ -44,11 +45,6 @@ export interface SqlitePragmaSnapshot {
   busyTimeout: number;
   foreignKeys: number;
   synchronous: number;
-}
-
-interface DeleteSessionRowsResult {
-  row: SessionRow;
-  deletedSessionOutputFiles?: readonly FileStorageRecord[];
 }
 
 export function createDeploymentStoresFromEnv(
@@ -76,6 +72,10 @@ function createInMemoryDeploymentStores(): DeploymentStores {
   const sessions = SqliteSessionStore.open(":memory:");
   const events = EventStore.open(":memory:");
   const files = new InMemoryFileStorage();
+  const sessionCoordinator = createInMemorySessionCoordinator({
+    sessions,
+    events,
+  });
   return {
     agents,
     environments,
@@ -83,10 +83,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
     events,
     files,
     mode: "memory",
-    deleteSessionRows: (workspaceId, sessionId) => {
-      const row = sessions.delete(workspaceId, sessionId);
-      return row ? { row } : undefined;
-    },
+    sessionCoordinator,
     close: () => {
       agents.close();
       environments.close();
@@ -117,6 +114,11 @@ function createDurableDeploymentStores(
     const sessions = new SqliteSessionStore(db);
     const events = new EventStore(db);
     const files = new LocalObjectFileStorage(db, resolvedObjectRoot);
+    const sessionCoordinator = createSingleDatabaseSessionCoordinator({
+      sessions,
+      events,
+      files,
+    });
     return {
       agents,
       environments,
@@ -124,17 +126,7 @@ function createDurableDeploymentStores(
       events,
       files,
       mode: "durable",
-      deleteSessionRows: (workspaceId, sessionId) =>
-        events.withTransaction(() => {
-          const row = sessions.delete(workspaceId, sessionId);
-          if (!row) return undefined;
-          events.deleteForSession(workspaceId, sessionId);
-          const deletedSessionOutputFiles = files.deleteSessionOutputRows(
-            workspaceId,
-            sessionId,
-          );
-          return { row, deletedSessionOutputFiles };
-        }),
+      sessionCoordinator,
       sqlitePragmas: () => readSqlitePragmas(db),
       close: () => {
         try {

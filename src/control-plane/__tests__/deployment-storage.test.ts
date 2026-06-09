@@ -63,7 +63,7 @@ describe("deployment storage", () => {
       stores.agents,
       stores.environments,
       stores.files,
-      { deleteSessionRows: stores.deleteSessionRows },
+      { deleteSessionRows: stores.sessionCoordinator.deleteSessionRows },
     );
     const agent = agents.create("wrk_default", {
       name: "Durable Agent",
@@ -195,7 +195,7 @@ describe("deployment storage", () => {
       stores.agents,
       stores.environments,
       stores.files,
-      { deleteSessionRows: stores.deleteSessionRows },
+      { deleteSessionRows: stores.sessionCoordinator.deleteSessionRows },
     );
 
     await expect(sessions.delete("wrk_default", sessionId)).resolves.toEqual({
@@ -204,6 +204,46 @@ describe("deployment storage", () => {
     });
     expect(stores.events.listPendingRuntimeTurns("wrk_default")).toEqual([]);
     expect(stores.sessions.retrieveAny("wrk_default", sessionId)).toBeUndefined();
+    stores.close();
+  });
+
+  it("cleans in-memory session events and runtime turns on session delete", () => {
+    const stores = createDeploymentStoresFromEnv({});
+    const sessionId = "sesn_memory_delete";
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.append({
+      id: "sevt_memory_delete",
+      workspace_id: "wrk_default",
+      session_id: sessionId,
+      type: "user.message",
+      processed_at: new Date().toISOString(),
+      payload: { content: [{ type: "text", text: "remove me" }] },
+      created_at: new Date().toISOString(),
+    });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_memory_delete",
+          ownerId: "wrk_default",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const deleted = stores.sessionCoordinator.deleteSessionRows(
+      "wrk_default",
+      sessionId,
+    );
+
+    expect(deleted?.row.id).toBe(sessionId);
+    expect(stores.sessions.retrieveAny("wrk_default", sessionId)).toBeUndefined();
+    expect(stores.events.list("wrk_default", sessionId)).toEqual([]);
+    expect(stores.events.listPendingRuntimeTurns("wrk_default")).toEqual([]);
     stores.close();
   });
 
@@ -228,7 +268,7 @@ describe("deployment storage", () => {
       ],
     );
 
-    const deleted = stores.deleteSessionRows(
+    const deleted = stores.sessionCoordinator.deleteSessionRows(
       "wrk_default",
       "sesn_delete_outputs",
     );
@@ -239,6 +279,82 @@ describe("deployment storage", () => {
     await expect(
       stores.files.retrieveMetadata("wrk_default", output!.metadata.id),
     ).resolves.toBeUndefined();
+    stores.close();
+  });
+
+  it("rolls back durable deployment delete when session-output metadata deletion fails", async () => {
+    const paths = await durablePaths();
+    const schemaDb = new DatabaseSync(paths.sqlitePath);
+    new LocalObjectFileStorage(schemaDb, paths.objectRoot);
+    schemaDb.exec(`
+      CREATE TRIGGER fail_session_output_delete
+      BEFORE DELETE ON files
+      WHEN OLD.kind = 'session_output' AND OLD.scope_id = 'sesn_delete_rollback'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected session output delete failure');
+      END;
+    `);
+    schemaDb.close();
+
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    const sessionId = "sesn_delete_rollback";
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.append({
+      id: "sevt_delete_rollback",
+      workspace_id: "wrk_default",
+      session_id: sessionId,
+      type: "user.message",
+      processed_at: new Date().toISOString(),
+      payload: { content: [{ type: "text", text: "keep me" }] },
+      created_at: new Date().toISOString(),
+    });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_delete_rollback",
+          ownerId: "wrk_default",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now: new Date().toISOString(),
+        },
+      ],
+    });
+    const [output] = await stores.files.replaceSessionOutputs(
+      "wrk_default",
+      sessionId,
+      [
+        {
+          relativePath: "output.txt",
+          filename: "output.txt",
+          mimeType: "text/plain",
+          body: new TextEncoder().encode("still visible"),
+          sizeBytes: 13,
+        },
+      ],
+    );
+
+    expect(() =>
+      stores.sessionCoordinator.deleteSessionRows("wrk_default", sessionId),
+    ).toThrow("injected session output delete failure");
+
+    expect(stores.sessions.retrieveAny("wrk_default", sessionId)?.id).toBe(
+      sessionId,
+    );
+    expect(stores.events.list("wrk_default", sessionId, { order: "asc" }))
+      .toMatchObject([{ id: "sevt_delete_rollback" }]);
+    expect(stores.events.listPendingRuntimeTurns("wrk_default"))
+      .toMatchObject([
+        { session_id: sessionId, turn_id: "turn_delete_rollback" },
+      ]);
+    await expect(
+      stores.files.retrieveMetadata("wrk_default", output!.metadata.id),
+    ).resolves.toMatchObject({ metadata: { id: output!.metadata.id } });
     stores.close();
   });
 
