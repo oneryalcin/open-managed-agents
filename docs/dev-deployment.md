@@ -132,8 +132,9 @@ The future multi-worker target splits responsibilities further:
    append/replay, custom-tool and confirmation orchestration.
 2. **Durable metadata store:** agents, environments, sessions, event rows, file
    metadata, runtime ownership, and pending waits. SQLite is fine for local
-   single-node work; a multi-instance deployment needs a durable store with the
-   same owner/generation fencing semantics.
+   single-node work; [ADR 0014](adrs/0014-storage-engine-strategy.md) chooses
+   Postgres as the managed-SaaS metadata target for multi-instance deployments
+   with the same owner/generation fencing semantics.
 3. **Object storage:** uploaded files, internal snapshots, and session outputs.
 4. **Runtime workers:** a pool that owns live turns and talks to the sandbox
    provider. Docker-local is the single-node provider. Remote providers such as

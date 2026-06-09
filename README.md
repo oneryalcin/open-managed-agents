@@ -96,7 +96,7 @@ Details and intentional deviations are tracked in
 | --- | --- |
 | Control plane | TypeScript + Hono |
 | Runtime engine | Pi Agent SDK |
-| Persistence | SQLite now, Postgres later |
+| Persistence | SQLite for local/single-node; Postgres is the managed-SaaS target |
 | First isolation provider | Docker-local |
 | First managed remote target | Modal Sandboxes |
 
