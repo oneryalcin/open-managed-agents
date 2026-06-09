@@ -207,6 +207,46 @@ describe("deployment storage", () => {
     stores.close();
   });
 
+  it("cleans in-memory session events and runtime turns on session delete", () => {
+    const stores = createDeploymentStoresFromEnv({});
+    const sessionId = "sesn_memory_delete";
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.append({
+      id: "sevt_memory_delete",
+      workspace_id: "wrk_default",
+      session_id: sessionId,
+      type: "user.message",
+      processed_at: new Date().toISOString(),
+      payload: { content: [{ type: "text", text: "remove me" }] },
+      created_at: new Date().toISOString(),
+    });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_memory_delete",
+          ownerId: "wrk_default",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const deleted = stores.sessionCoordinator.deleteSessionRows(
+      "wrk_default",
+      sessionId,
+    );
+
+    expect(deleted?.row.id).toBe(sessionId);
+    expect(stores.sessions.retrieveAny("wrk_default", sessionId)).toBeUndefined();
+    expect(stores.events.list("wrk_default", sessionId)).toEqual([]);
+    expect(stores.events.listPendingRuntimeTurns("wrk_default")).toEqual([]);
+    stores.close();
+  });
+
   it("deletes session-output metadata in the same deployment delete transaction", async () => {
     const paths = await durablePaths();
     const stores = createDeploymentStoresFromEnv({

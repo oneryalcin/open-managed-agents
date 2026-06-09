@@ -15,6 +15,9 @@ export interface DeploymentSessionDeleteResult {
 }
 
 interface TransactionBoundary {
+  // SQLite-era seam: this callback is synchronous because node:sqlite is
+  // synchronous. A Postgres-backed coordinator should make the transaction
+  // boundary async and re-express these invariants with database locks.
   withTransaction<T>(fn: () => T): T;
 }
 
@@ -53,6 +56,8 @@ export function createInMemorySessionCoordinator(opts: {
     deleteSessionRows: (workspaceId, sessionId) => {
       const row = opts.sessions.delete(workspaceId, sessionId);
       if (!row) return undefined;
+      // The in-memory deployment stores are separate :memory: databases, so
+      // this cleanup is best-effort parity with durable mode, not atomic.
       opts.events.deleteForSession(workspaceId, sessionId);
       return { row };
     },
