@@ -17,6 +17,11 @@ import {
   createSingleDatabaseSessionCoordinator,
   type DeploymentSessionCoordinator,
 } from "./deployment-session-coordinator.ts";
+import {
+  createBestEffortSessionOutputCoordinator,
+  createSingleDatabaseSessionOutputCoordinator,
+  type DeploymentSessionOutputCoordinator,
+} from "./deployment-session-output-coordinator.ts";
 import { SqliteEnvironmentStore } from "./environments/store.ts";
 import { EventStore } from "./events/store.ts";
 import { InMemoryFileStorage, LocalObjectFileStorage } from "./files/store.ts";
@@ -36,6 +41,7 @@ export interface DeploymentStores {
   files: FileStorage;
   mode: "memory" | "durable";
   sessionCoordinator: DeploymentSessionCoordinator;
+  sessionOutputCoordinator: DeploymentSessionOutputCoordinator;
   sqlitePragmas?(): SqlitePragmaSnapshot;
   close(): void;
 }
@@ -76,6 +82,11 @@ function createInMemoryDeploymentStores(): DeploymentStores {
     sessions,
     events,
   });
+  const sessionOutputCoordinator = createBestEffortSessionOutputCoordinator({
+    sessions,
+    events,
+    files,
+  });
   return {
     agents,
     environments,
@@ -84,6 +95,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
     files,
     mode: "memory",
     sessionCoordinator,
+    sessionOutputCoordinator,
     close: () => {
       agents.close();
       environments.close();
@@ -119,6 +131,11 @@ function createDurableDeploymentStores(
       events,
       files,
     });
+    const sessionOutputCoordinator = createSingleDatabaseSessionOutputCoordinator({
+      sessions,
+      events,
+      files,
+    });
     return {
       agents,
       environments,
@@ -127,6 +144,7 @@ function createDurableDeploymentStores(
       files,
       mode: "durable",
       sessionCoordinator,
+      sessionOutputCoordinator,
       sqlitePragmas: () => readSqlitePragmas(db),
       close: () => {
         try {

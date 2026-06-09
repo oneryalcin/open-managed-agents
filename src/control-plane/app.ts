@@ -166,7 +166,11 @@ export function createDeploymentControlPlaneApp(
     stores.events,
     stores.sessions,
     broadcaster,
-    { ...runtime, fileStorage: stores.files },
+    {
+      ...runtime,
+      fileStorage: stores.files,
+      sessionOutputCoordinator: stores.sessionOutputCoordinator,
+    },
   );
   sessionEvents.recoverAbandonedRuntimeTurns("wrk_default");
   return createControlPlaneApp({

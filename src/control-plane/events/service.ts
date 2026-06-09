@@ -15,11 +15,11 @@ import {
   type JsonValue,
 } from "../../types/json.ts";
 import { ApiError, invalidRequest, notFound } from "../errors.ts";
-import type {
-  FileStorage,
-  FileStorageRecord,
-  SessionOutputFileInput,
-} from "../files/types.ts";
+import {
+  createBestEffortSessionOutputCoordinator,
+  type DeploymentSessionOutputCoordinator,
+} from "../deployment-session-output-coordinator.ts";
+import type { FileStorage } from "../files/types.ts";
 import type { SessionRow, SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { newRuntimeTurnId, newRequestId } from "../ids.ts";
@@ -117,7 +117,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly leaseTtlMs: number;
   private readonly runtimeRunner: RuntimeEventRunner | undefined;
   private readonly runtimeTranslator: RuntimeEventTranslator | undefined;
-  private readonly outputFileStorage: FileStorage | undefined;
+  private readonly sessionOutputCoordinator:
+    | DeploymentSessionOutputCoordinator
+    | undefined;
   private readonly pendingCustomToolActions = new Map<
     string,
     {
@@ -166,13 +168,22 @@ export class DefaultSessionEventsService implements SessionEventsService {
       runner: RuntimeEventRunner;
       translate: RuntimeEventTranslator;
       fileStorage?: FileStorage;
+      sessionOutputCoordinator?: DeploymentSessionOutputCoordinator;
       ownerId?: string;
       leaseTtlMs?: number;
     },
   ) {
     this.runtimeRunner = runtime?.runner;
     this.runtimeTranslator = runtime?.translate;
-    this.outputFileStorage = runtime?.fileStorage;
+    this.sessionOutputCoordinator =
+      runtime?.sessionOutputCoordinator ??
+      (runtime?.fileStorage
+        ? createBestEffortSessionOutputCoordinator({
+            sessions: this.sessions,
+            events: this.events,
+            files: runtime.fileStorage,
+          })
+        : undefined);
     this.ownerId = runtime?.ownerId ?? `owner_${newRequestId()}`;
     this.leaseTtlMs = runtime?.leaseTtlMs ?? 120_000;
   }
@@ -1357,7 +1368,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     prompt: RuntimePrompt,
   ): Promise<void> {
-    if (!this.outputFileStorage || !this.runtimeRunner?.collectSessionOutputs) {
+    if (
+      !this.sessionOutputCoordinator ||
+      !this.runtimeRunner?.collectSessionOutputs
+    ) {
       return;
     }
     try {
@@ -1384,25 +1398,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
           sha256: file.sha256,
           body: file.bytes,
         }));
-      if (hasLivenessFencedSessionOutputReplace(this.outputFileStorage)) {
-        await this.outputFileStorage.replaceSessionOutputsIfLive(
-          workspaceId,
-          sessionId,
-          files,
-          () =>
-            this.canCommitSessionOutputsFromRuntimeTurn(
-              workspaceId,
-              sessionId,
-              prompt,
-            ),
-        );
-        return;
-      }
-      await this.outputFileStorage.replaceSessionOutputs(
+      await this.sessionOutputCoordinator.replaceSessionOutputsForRuntimeTurn({
         workspaceId,
         sessionId,
+        turnId: prompt.turnId,
+        ownerId: prompt.ownerId,
+        ownerGeneration: prompt.ownerGeneration,
         files,
-      );
+      });
     } catch (error) {
       console.warn("session output indexing failed", {
         workspaceId,
@@ -2889,25 +2892,6 @@ function hasTerminalIdleDraft(drafts: readonly EventDraft[]): boolean {
     if (!isJsonObject(stopReason)) return true;
     return stopReason.type !== "requires_action";
   });
-}
-
-type LivenessFencedSessionOutputStorage = FileStorage & {
-  replaceSessionOutputsIfLive(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    files: readonly SessionOutputFileInput[],
-    canCommit: () => boolean,
-  ): Promise<readonly FileStorageRecord[]>;
-};
-
-function hasLivenessFencedSessionOutputReplace(
-  storage: FileStorage,
-): storage is LivenessFencedSessionOutputStorage {
-  return typeof (
-    storage as {
-      replaceSessionOutputsIfLive?: unknown;
-    }
-  ).replaceSessionOutputsIfLive === "function";
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
