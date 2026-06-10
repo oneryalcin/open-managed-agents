@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryControlPlaneApp } from "./helpers.ts";
+import { createBestEffortRuntimeEventCoordinator } from "../deployment-runtime-event-coordinator.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
@@ -619,6 +620,10 @@ function createGuardHarness(
               },
             ]
           : [],
+      runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+        sessions: sessionStore,
+        events: eventStore,
+      }),
     },
   );
   const now = new Date().toISOString();
@@ -659,6 +664,10 @@ function createRuntimeFailureHarness(): {
     {
       runner,
       translate: () => [],
+      runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+        sessions: sessionStore,
+        events: eventStore,
+      }),
     },
   );
   const now = new Date().toISOString();
@@ -712,6 +721,10 @@ function createArchiveGuardHarness(
       : {
           runner: opts.runner,
           translate: () => [],
+          runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+            sessions: store,
+            events: eventStore,
+          }),
         },
   );
   for (const workspaceId of opts.workspaces ?? ["wrk_default"]) {

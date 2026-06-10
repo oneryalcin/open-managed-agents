@@ -18,6 +18,7 @@ import { DefaultFileService } from "./files/service.ts";
 import { InMemoryFileStorage } from "./files/store.ts";
 import type { FileService } from "./files/types.ts";
 import { createBestEffortSessionOutputCoordinator } from "./deployment-session-output-coordinator.ts";
+import { createBestEffortRuntimeEventCoordinator } from "./deployment-runtime-event-coordinator.ts";
 import type {
   RuntimeEventRunner,
   RuntimeEventTranslator,
@@ -170,6 +171,7 @@ export function createDeploymentControlPlaneApp(
     {
       ...runtime,
       sessionOutputCoordinator: stores.sessionOutputCoordinator,
+      runtimeEventCoordinator: stores.runtimeEventCoordinator,
     },
   );
   sessionEvents.recoverAbandonedRuntimeTurns("wrk_default");
@@ -204,6 +206,10 @@ export function createInMemoryControlPlaneApp(
     events: eventStore,
     files: fileStorage,
   });
+  const runtimeEventCoordinator = createBestEffortRuntimeEventCoordinator({
+    sessions: sessionStore,
+    events: eventStore,
+  });
   const broadcaster = new SessionEventBroadcaster(eventStore);
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore),
@@ -221,7 +227,7 @@ export function createInMemoryControlPlaneApp(
       sessionStore,
       broadcaster,
       opts.runtime
-        ? { ...opts.runtime, sessionOutputCoordinator }
+        ? { ...opts.runtime, sessionOutputCoordinator, runtimeEventCoordinator }
         : undefined,
     ),
   });

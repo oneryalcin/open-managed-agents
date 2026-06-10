@@ -331,11 +331,18 @@ export class EventStore implements SessionEventStore {
     changes: EventStoreRuntimeChanges,
   ): void {
     this.withTransaction(() => {
-      for (const event of events) {
-        this.appendEvent(event);
-      }
-      this.applyRuntimeChanges(changes);
+      this.appendBatchWithRuntimeChangesInTransaction(events, changes);
     });
+  }
+
+  appendBatchWithRuntimeChangesInTransaction(
+    events: readonly PersistedSessionEvent[],
+    changes: EventStoreRuntimeChanges,
+  ): void {
+    for (const event of events) {
+      this.appendEvent(event);
+    }
+    this.applyRuntimeChanges(changes);
   }
 
   deleteForSession(workspaceId: WorkspaceId, sessionId: string): void {

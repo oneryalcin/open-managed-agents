@@ -218,6 +218,12 @@ export interface SessionEventStore {
     events: readonly PersistedSessionEvent[],
     changes: EventStoreRuntimeChanges,
   ): void;
+  // Coordinator-only hook. Callers must already hold the transaction that owns
+  // any required cross-store predicates.
+  appendBatchWithRuntimeChangesInTransaction(
+    events: readonly PersistedSessionEvent[],
+    changes: EventStoreRuntimeChanges,
+  ): void;
   deleteForSession(workspaceId: WorkspaceId, sessionId: string): void;
   list(
     workspaceId: WorkspaceId,

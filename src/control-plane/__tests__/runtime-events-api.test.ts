@@ -10,11 +10,17 @@ import { SqliteEnvironmentStore } from "../environments/store.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
+import {
+  createBestEffortRuntimeEventCoordinator,
+  type DeploymentRuntimeEventCoordinator,
+  type RuntimeTurnEventCommit,
+} from "../deployment-runtime-event-coordinator.ts";
 import { createBestEffortSessionOutputCoordinator } from "../deployment-session-output-coordinator.ts";
-import type {
-  RuntimeEventRunner,
-  RuntimeSessionOutputCollection,
-  RuntimeSessionOutputFile,
+import {
+  RuntimeTurnOwnershipLostError,
+  type RuntimeEventRunner,
+  type RuntimeSessionOutputCollection,
+  type RuntimeSessionOutputFile,
 } from "../events/types.ts";
 import { DefaultFileService } from "../files/service.ts";
 import { InMemoryFileStorage } from "../files/store.ts";
@@ -344,6 +350,35 @@ describe("Runtime events API", () => {
     expect(outputs.status).toBe(200);
     await expect(outputs.json()).resolves.toMatchObject({ data: [] });
   });
+
+  it("interrupts the local runner when runtime turn ownership is lost", async () => {
+    const runner = new InterruptTrackingRunner();
+    const fixture = makeFixture(runner, {
+      runtimeEventCoordinator: new OwnershipLostRuntimeEventCoordinator(),
+    });
+    const session = await setupSession(fixture.app);
+
+    const send = await fixture.app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.message", content: [{ type: "text", text: "lost" }] }],
+      }),
+    });
+    expect(send.status).toBe(200);
+
+    await until(
+      () => runner.interruptedSessionIds.includes(session.id),
+      "Timed out waiting for ownership-loss interrupt",
+    );
+    const list = await fixture.app.request(
+      `/v1/sessions/${session.id}/events?order=asc`,
+    );
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({
+      data: [{ type: "user.message" }],
+    });
+  });
 });
 
 class FakeRunner implements RuntimeEventRunner {
@@ -391,6 +426,22 @@ class FakeRunner implements RuntimeEventRunner {
       },
     };
     yield { type: "agent_end", messages: [], willRetry: false };
+  }
+}
+
+class InterruptTrackingRunner extends FakeRunner {
+  readonly interruptedSessionIds: string[] = [];
+
+  interruptSession(_workspaceId: string, sessionId: string): void {
+    this.interruptedSessionIds.push(sessionId);
+  }
+}
+
+class OwnershipLostRuntimeEventCoordinator
+  implements DeploymentRuntimeEventCoordinator
+{
+  commitRuntimeEventsForTurn(input: RuntimeTurnEventCommit): void {
+    throw new RuntimeTurnOwnershipLostError(input.turnId);
   }
 }
 
@@ -481,7 +532,12 @@ class DelayedOutputCollectingRunner extends OutputCollectingRunner {
   }
 }
 
-function makeFixture(runner: RuntimeEventRunner): {
+function makeFixture(
+  runner: RuntimeEventRunner,
+  opts: {
+    runtimeEventCoordinator?: DeploymentRuntimeEventCoordinator;
+  } = {},
+): {
   app: ReturnType<typeof createControlPlaneApp>;
   broadcaster: SessionEventBroadcaster;
 } {
@@ -495,6 +551,10 @@ function makeFixture(runner: RuntimeEventRunner): {
     sessions: sessionStore,
     events: eventStore,
     files: fileStorage,
+  });
+  const runtimeEventCoordinator = createBestEffortRuntimeEventCoordinator({
+    sessions: sessionStore,
+    events: eventStore,
   });
   return {
     broadcaster,
@@ -512,6 +572,8 @@ function makeFixture(runner: RuntimeEventRunner): {
         runner,
         translate: translatePiEvent,
         sessionOutputCoordinator,
+        runtimeEventCoordinator:
+          opts.runtimeEventCoordinator ?? runtimeEventCoordinator,
       }),
     }),
   };

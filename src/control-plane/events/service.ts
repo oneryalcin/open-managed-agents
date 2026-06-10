@@ -18,6 +18,7 @@ import { ApiError, invalidRequest, notFound } from "../errors.ts";
 import {
   type DeploymentSessionOutputCoordinator,
 } from "../deployment-session-output-coordinator.ts";
+import type { DeploymentRuntimeEventCoordinator } from "../deployment-runtime-event-coordinator.ts";
 import type { SessionRow, SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { newRuntimeTurnId, newRequestId } from "../ids.ts";
@@ -118,6 +119,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly sessionOutputCoordinator:
     | DeploymentSessionOutputCoordinator
     | undefined;
+  private readonly runtimeEventCoordinator:
+    | DeploymentRuntimeEventCoordinator
+    | undefined;
   private readonly pendingCustomToolActions = new Map<
     string,
     {
@@ -166,6 +170,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       runner: RuntimeEventRunner;
       translate: RuntimeEventTranslator;
       sessionOutputCoordinator?: DeploymentSessionOutputCoordinator;
+      runtimeEventCoordinator: DeploymentRuntimeEventCoordinator;
       ownerId?: string;
       leaseTtlMs?: number;
     },
@@ -173,6 +178,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     this.runtimeRunner = runtime?.runner;
     this.runtimeTranslator = runtime?.translate;
     this.sessionOutputCoordinator = runtime?.sessionOutputCoordinator;
+    this.runtimeEventCoordinator = runtime?.runtimeEventCoordinator;
     this.ownerId = runtime?.ownerId ?? `owner_${newRequestId()}`;
     this.leaseTtlMs = runtime?.leaseTtlMs ?? 120_000;
   }
@@ -1198,49 +1204,62 @@ export class DefaultSessionEventsService implements SessionEventsService {
             }
             const openedModelRequestStartId =
               spanStartDrafts.length > 0 ? rows[0]?.id : undefined;
-            persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
-              openedModelRequestStarts:
-                openedModelRequestStartId === undefined
-                  ? []
-                  : [
-                      {
-                        workspaceId,
-                        sessionId,
-                        turnId: prompt.turnId,
-                        ownerId: prompt.ownerId,
-                        ownerGeneration: prompt.ownerGeneration,
-                        startEventId: openedModelRequestStartId,
-                        now,
-                      },
-                    ],
-              closedModelRequestStarts:
-                spanEndDrafts.length === 0 ||
-                closingModelRequestStartId === undefined
-                  ? []
-                  : [
-                      {
-                        workspaceId,
-                        sessionId,
-                        turnId: prompt.turnId,
-                        ownerId: prompt.ownerId,
-                        ownerGeneration: prompt.ownerGeneration,
-                        startEventId: closingModelRequestStartId,
-                        now,
-                      },
-                    ],
-              turnStates: [
-                {
-                  workspaceId,
-                  sessionId,
-                  turnId: prompt.turnId,
-                  ownerId: prompt.ownerId,
-                  ownerGeneration: prompt.ownerGeneration,
-                  leaseExpiresAt: leaseExpiresAt(now, this.leaseTtlMs),
-                  state: "running",
-                  now,
-                },
-              ],
+            // First coordinator slice: fence the general translated runtime
+            // transcript path. Custom tool, tool-permission, renewal, and
+            // error-cleanup paths still use their existing store-level owner
+            // checks; track the remaining seam audit in GitHub issue #113.
+            this.runtimeEventCoordinator!.commitRuntimeEventsForTurn({
+              workspaceId,
+              sessionId,
+              turnId: prompt.turnId,
+              ownerId: prompt.ownerId,
+              ownerGeneration: prompt.ownerGeneration,
+              events: rows,
+              changes: {
+                openedModelRequestStarts:
+                  openedModelRequestStartId === undefined
+                    ? []
+                    : [
+                        {
+                          workspaceId,
+                          sessionId,
+                          turnId: prompt.turnId,
+                          ownerId: prompt.ownerId,
+                          ownerGeneration: prompt.ownerGeneration,
+                          startEventId: openedModelRequestStartId,
+                          now,
+                        },
+                      ],
+                closedModelRequestStarts:
+                  spanEndDrafts.length === 0 ||
+                  closingModelRequestStartId === undefined
+                    ? []
+                    : [
+                        {
+                          workspaceId,
+                          sessionId,
+                          turnId: prompt.turnId,
+                          ownerId: prompt.ownerId,
+                          ownerGeneration: prompt.ownerGeneration,
+                          startEventId: closingModelRequestStartId,
+                          now,
+                        },
+                      ],
+                turnStates: [
+                  {
+                    workspaceId,
+                    sessionId,
+                    turnId: prompt.turnId,
+                    ownerId: prompt.ownerId,
+                    ownerGeneration: prompt.ownerGeneration,
+                    leaseExpiresAt: leaseExpiresAt(now, this.leaseTtlMs),
+                    state: "running",
+                    now,
+                  },
+                ],
+              },
             });
+            this.broadcaster.publishPersisted(rows);
             if (openedModelRequestStartId !== undefined) {
               activeOpenModelRequestStartIds.push(openedModelRequestStartId);
             }
@@ -1274,6 +1293,19 @@ export class DefaultSessionEventsService implements SessionEventsService {
       }
     } catch (error) {
       if (error instanceof RuntimeTurnOwnershipLostError) {
+        console.debug("runtime turn ownership lost; interrupting local runner", {
+          workspaceId,
+          sessionId,
+          turnId: error.turnId,
+        });
+        void Promise.resolve(
+          this.runtimeRunner?.interruptSession?.(workspaceId, sessionId),
+        ).catch((interruptError) => {
+          console.error("runtime ownership-loss interrupt failed", {
+            sessionId,
+            error: interruptError,
+          });
+        });
         return;
       }
       console.error("runtime ingestion failed", { sessionId, error });
@@ -1450,7 +1482,13 @@ export class DefaultSessionEventsService implements SessionEventsService {
           ],
         });
       } catch (error) {
-        if (!(error instanceof RuntimeTurnOwnershipLostError)) {
+        if (error instanceof RuntimeTurnOwnershipLostError) {
+          console.debug("runtime lease renewal ownership lost", {
+            workspaceId,
+            sessionId,
+            turnId: error.turnId,
+          });
+        } else {
           console.error("runtime lease renewal failed", { sessionId, error });
         }
         clearInterval(timer);
