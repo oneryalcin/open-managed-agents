@@ -24,6 +24,12 @@ still tracked separately in the roadmap.
   current MVP path with deployment config, Pi, Docker-local bash, translated
   tool events, and cleanup verification.
 
+## Cookbooks
+
+- [Retry-safe `events.send`](cookbooks/retry-safe-events-send.md) — use
+  `Idempotency-Key` with the official Python and TypeScript SDKs so client
+  retries do not duplicate session events or runtime work.
+
 ## Examples
 
 - [Ship Your First Managed Agent](examples/ship-your-first-managed-agent.md) —
