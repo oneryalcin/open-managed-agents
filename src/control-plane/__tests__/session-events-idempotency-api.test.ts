@@ -127,6 +127,27 @@ describe("Session events idempotency", () => {
     fixture.close();
   });
 
+  it("purges idempotency responses when the session is deleted", async () => {
+    const fixture = makeFixture();
+    const session = await setupSession(fixture.app);
+    const body = messageBody("delete me");
+    const first = await postEvents(fixture.app, session.id, body, "delete-key");
+    expect(first.status).toBe(200);
+
+    const deleted = await fixture.app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+
+    await expectError(
+      await postEvents(fixture.app, session.id, body, "delete-key"),
+      404,
+      "not_found_error",
+      `Session ${session.id} not found`,
+    );
+    fixture.close();
+  });
+
   it("rolls back event rows when idempotency completion aborts in the transaction", async () => {
     const fixture = makeFixture();
     const session = await setupSession(fixture.app);

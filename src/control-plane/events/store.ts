@@ -181,6 +181,7 @@ export class EventStore implements SessionEventStore {
   private readonly db: DatabaseSync;
   private readonly appendStmt: StatementSync;
   private readonly deleteForSessionStmt: StatementSync;
+  private readonly deleteIdempotencyKeysForSessionStmt: StatementSync;
   private readonly deleteRuntimeActionsForSessionStmt: StatementSync;
   private readonly deleteRuntimeTurnsForSessionStmt: StatementSync;
   private readonly retrieveStmt: StatementSync;
@@ -218,6 +219,10 @@ export class EventStore implements SessionEventStore {
     );
     this.deleteForSessionStmt = this.db.prepare(
       `DELETE FROM events WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.deleteIdempotencyKeysForSessionStmt = this.db.prepare(
+      `DELETE FROM idempotency_keys
+       WHERE workspace_id = ? AND concrete_path = ?`,
     );
     this.deleteRuntimeActionsForSessionStmt = this.db.prepare(
       `DELETE FROM pending_runtime_actions
@@ -457,6 +462,8 @@ export class EventStore implements SessionEventStore {
   reserveIdempotencyKey(
     input: IdempotencyReservationInput,
   ): IdempotencyReservationResult {
+    // Policy lives here because this store owns the durable ledger rows. The
+    // service currently passes a conservative five-minute abandoned threshold.
     this.purgeExpiredIdempotencyKeysStmt.run(input.now);
     const inserted = this.reserveIdempotencyKeyStmt.run(
       input.workspaceId,
@@ -507,6 +514,10 @@ export class EventStore implements SessionEventStore {
       this.deleteRuntimeActionsForSessionStmt.run(workspaceId, sessionId);
       this.deleteRuntimeTurnsForSessionStmt.run(workspaceId, sessionId);
       this.deleteForSessionStmt.run(workspaceId, sessionId);
+      this.deleteIdempotencyKeysForSessionStmt.run(
+        workspaceId,
+        `/v1/sessions/${sessionId}/events`,
+      );
     });
   }
 

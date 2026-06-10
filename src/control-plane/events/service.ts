@@ -68,9 +68,6 @@ const SUPPORTED_USER_EVENT_TYPES = new Set([
 ] as const);
 
 const IDEMPOTENCY_RESPONSE_TTL_MS = 24 * 60 * 60 * 1000;
-// Stale in-progress rows older than this may be reacquired. Because reservation
-// commits before the domain transaction, an abandoned row past this threshold
-// cannot imply a committed side effect unless the completed response committed too.
 const IDEMPOTENCY_ABANDONED_IN_PROGRESS_MS = 5 * 60 * 1000;
 
 function idempotencyCompletion(
@@ -436,13 +433,31 @@ export class DefaultSessionEventsService implements SessionEventsService {
       this.persistRuntimeDrafts(workspaceId, sessionId, [
         { type: "session.status_running", payload: {} },
       ]);
-      for (const { commit } of liveCustomToolResultClaims) commit();
+      for (const { commit, customToolUseId } of liveCustomToolResultClaims) {
+        try {
+          commit();
+        } catch (error) {
+          console.error("custom tool result callback failed after commit", {
+            sessionId,
+            customToolUseId,
+            error,
+          });
+        }
+      }
       for (const claim of committedToolConfirmations) {
         const row = claim.row ?? rowsByInput.get(claim.event);
         if (!row) {
           throw new Error("Persisted tool confirmation row missing");
         }
-        claim.commit();
+        try {
+          claim.commit();
+        } catch (error) {
+          console.error("tool confirmation callback failed after commit", {
+            sessionId,
+            toolUseId: claim.toolUseId,
+            error,
+          });
+        }
         this.completedToolConfirmations.set(claim.event.tool_use_id, {
           workspaceId,
           sessionId,
