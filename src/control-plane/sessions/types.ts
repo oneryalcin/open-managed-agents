@@ -1,5 +1,9 @@
 import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type {
+  JsonHttpResponse,
+  RequestIdempotencyKey,
+} from "../request-idempotency.ts";
+import type {
   CreateManagedSessionRequest,
   ManagedAgentsDeletedSession,
   ManagedAgentsSession,
@@ -57,6 +61,10 @@ export interface CreateSessionRecord {
   snapshots?: SessionFileMountSnapshotRow[];
 }
 
+export interface CreateSessionIdempotencyCommit {
+  complete(): void;
+}
+
 export interface ListSessionsOptions {
   agentId?: string;
   page?: string;
@@ -67,6 +75,10 @@ export interface ListSessionsOptions {
 
 export interface SessionStore {
   create(record: CreateSessionRecord): SessionRow;
+  createAndCompleteIdempotency?(
+    record: CreateSessionRecord,
+    idempotency: CreateSessionIdempotencyCommit,
+  ): SessionRow;
   retrieve(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -138,6 +150,12 @@ export interface SessionService {
     workspaceId: WorkspaceId,
     input: unknown,
   ): Promise<ManagedAgentsSession>;
+  createIdempotent(
+    workspaceId: WorkspaceId,
+    input: unknown,
+    idempotency: RequestIdempotencyKey,
+    opts?: { requestId?: string },
+  ): Promise<JsonHttpResponse>;
   retrieve(
     workspaceId: WorkspaceId,
     sessionId: string,

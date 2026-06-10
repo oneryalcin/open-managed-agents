@@ -26,6 +26,7 @@ import type {
   SessionEventRecordPage,
   SessionEventStore,
 } from "./types.ts";
+import type { RequestIdempotencyKey } from "../request-idempotency.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
@@ -81,6 +82,8 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   status TEXT NOT NULL,
   response_status INTEGER,
   response_body TEXT,
+  resource_type TEXT,
+  resource_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
@@ -95,6 +98,8 @@ CREATE INDEX IF NOT EXISTS pending_runtime_actions_by_turn
   ON pending_runtime_actions (workspace_id, session_id, turn_id);
 CREATE INDEX IF NOT EXISTS idempotency_keys_by_status_expiry
   ON idempotency_keys (status, expires_at);
+CREATE INDEX IF NOT EXISTS idempotency_keys_by_resource
+  ON idempotency_keys (workspace_id, resource_type, resource_id);
 `;
 
 interface EventRow {
@@ -157,6 +162,8 @@ interface IdempotencyKeyRow {
   status: string;
   response_status: number | null;
   response_body: string | null;
+  resource_type: string | null;
+  resource_id: string | null;
   created_at: string;
   updated_at: string;
   expires_at: string;
@@ -207,6 +214,8 @@ export class EventStore implements SessionEventStore {
   private readonly retrieveIdempotencyKeyStmt: StatementSync;
   private readonly acquireAbandonedIdempotencyKeyStmt: StatementSync;
   private readonly completeIdempotencyKeyStmt: StatementSync;
+  private readonly releaseIdempotencyReservationStmt: StatementSync;
+  private readonly deleteIdempotencyKeysForResourceStmt: StatementSync;
   private readonly listStmts = new Map<string, StatementSync>();
 
   constructor(db: DatabaseSync) {
@@ -214,6 +223,7 @@ export class EventStore implements SessionEventStore {
     this.db.exec(SCHEMA);
     ensureWorkspaceIdColumn(this.db);
     ensureOpenModelRequestStartIdsColumn(this.db);
+    ensureIdempotencyResourceColumns(this.db);
     this.db.exec(INDEXES);
     this.appendStmt = this.db.prepare(
       `INSERT INTO events (id, workspace_id, session_id, type, processed_at, payload, created_at)
@@ -225,6 +235,10 @@ export class EventStore implements SessionEventStore {
     this.deleteIdempotencyKeysForSessionStmt = this.db.prepare(
       `DELETE FROM idempotency_keys
        WHERE workspace_id = ? AND concrete_path = ?`,
+    );
+    this.deleteIdempotencyKeysForResourceStmt = this.db.prepare(
+      `DELETE FROM idempotency_keys
+       WHERE workspace_id = ? AND resource_type = ? AND resource_id = ?`,
     );
     this.deleteRuntimeActionsForSessionStmt = this.db.prepare(
       `DELETE FROM pending_runtime_actions
@@ -370,7 +384,7 @@ export class EventStore implements SessionEventStore {
     this.retrieveIdempotencyKeyStmt = this.db.prepare(
       `SELECT workspace_id, method, concrete_path, idempotency_key, route_label,
               fingerprint_sha256, status, response_status, response_body,
-              created_at, updated_at, expires_at
+              resource_type, resource_id, created_at, updated_at, expires_at
        FROM idempotency_keys
        WHERE workspace_id = ? AND method = ? AND concrete_path = ?
          AND idempotency_key = ?`,
@@ -387,8 +401,16 @@ export class EventStore implements SessionEventStore {
        SET status = 'completed',
            response_status = ?,
            response_body = ?,
+           resource_type = ?,
+           resource_id = ?,
            updated_at = ?,
            expires_at = ?
+       WHERE workspace_id = ? AND method = ? AND concrete_path = ?
+         AND idempotency_key = ? AND fingerprint_sha256 = ?
+         AND status = 'in_progress'`,
+    );
+    this.releaseIdempotencyReservationStmt = this.db.prepare(
+      `DELETE FROM idempotency_keys
        WHERE workspace_id = ? AND method = ? AND concrete_path = ?
          AND idempotency_key = ? AND fingerprint_sha256 = ?
          AND status = 'in_progress'`,
@@ -442,6 +464,8 @@ export class EventStore implements SessionEventStore {
     const result = this.completeIdempotencyKeyStmt.run(
       completion.responseStatus,
       JSON.stringify(completion.responseBody),
+      completion.resourceType ?? null,
+      completion.resourceId ?? null,
       completion.now,
       completion.expiresAt,
       completion.workspaceId,
@@ -459,6 +483,18 @@ export class EventStore implements SessionEventStore {
     this.withTransaction(() => {
       this.completeIdempotencyInTransaction(completion);
     });
+  }
+
+  releaseIdempotencyReservation(
+    input: RequestIdempotencyKey & { workspaceId: WorkspaceId },
+  ): void {
+    this.releaseIdempotencyReservationStmt.run(
+      input.workspaceId,
+      input.method,
+      input.concretePath,
+      input.key,
+      input.fingerprintSha256,
+    );
   }
 
   reserveIdempotencyKey(
@@ -522,6 +558,11 @@ export class EventStore implements SessionEventStore {
       this.deleteIdempotencyKeysForSessionStmt.run(
         workspaceId,
         `/v1/sessions/${sessionId}/events`,
+      );
+      this.deleteIdempotencyKeysForResourceStmt.run(
+        workspaceId,
+        "session",
+        sessionId,
       );
     });
   }
@@ -1080,6 +1121,18 @@ function ensureOpenModelRequestStartIdsColumn(db: DatabaseSync): void {
   db.exec(
     "ALTER TABLE pending_runtime_turns ADD COLUMN open_model_request_start_ids TEXT NOT NULL DEFAULT '[]'",
   );
+}
+
+function ensureIdempotencyResourceColumns(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(idempotency_keys)").all() as Array<{
+    name: string;
+  }>;
+  if (!columns.some((column) => column.name === "resource_type")) {
+    db.exec("ALTER TABLE idempotency_keys ADD COLUMN resource_type TEXT");
+  }
+  if (!columns.some((column) => column.name === "resource_id")) {
+    db.exec("ALTER TABLE idempotency_keys ADD COLUMN resource_id TEXT");
+  }
 }
 
 function hasTable(db: DatabaseSync, name: string): boolean {

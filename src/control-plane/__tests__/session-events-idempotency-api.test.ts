@@ -195,6 +195,223 @@ describe("Session events idempotency", () => {
   });
 });
 
+describe("Session create idempotency", () => {
+  it("replays the same created session for the same key and body", async () => {
+    const fixture = makeFixture();
+    const agent = await createAgent(fixture.app);
+    const environment = await createEnvironment(fixture.app);
+    const body = sessionBody(agent.id, environment.id);
+
+    const first = await postSession(fixture.app, body, "session-create");
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as ManagedAgentsSession;
+
+    const second = await postSession(fixture.app, body, "session-create");
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toEqual(firstBody);
+
+    const listed = await fixture.app.request("/v1/sessions?include_archived=true");
+    expect(listed.status).toBe(200);
+    const listBody = (await listed.json()) as { data: ManagedAgentsSession[] };
+    expect(listBody.data.map((session) => session.id)).toEqual([firstBody.id]);
+    fixture.close();
+  });
+
+  it("rejects session create key reuse with a different body", async () => {
+    const fixture = makeFixture();
+    const agent = await createAgent(fixture.app);
+    const environment = await createEnvironment(fixture.app);
+    const firstBody = sessionBody(agent.id, environment.id);
+    const secondBody = JSON.stringify({
+      agent: agent.id,
+      environment_id: environment.id,
+      title: "different",
+    });
+    expect(await postSession(fixture.app, firstBody, "mismatch")).toHaveProperty(
+      "status",
+      200,
+    );
+
+    await expectError(
+      await postSession(fixture.app, secondBody, "mismatch"),
+      400,
+      "invalid_request_error",
+      "`Idempotency-Key` was already used for a different request",
+    );
+    fixture.close();
+  });
+
+  it("returns shared 409 Retry-After for fresh in-progress session creates", async () => {
+    const fixture = makeFixture();
+    const agent = await createAgent(fixture.app);
+    const environment = await createEnvironment(fixture.app);
+    const body = sessionBody(agent.id, environment.id);
+    reserveForPath(fixture.eventStore, {
+      concretePath: "/v1/sessions",
+      key: "session-busy",
+      routeLabel: "POST /v1/sessions",
+      body,
+      now: new Date(),
+    });
+
+    const res = await postSession(fixture.app, body, "session-busy");
+
+    expect(res.headers.get("retry-after")).toBe("5");
+    await expectError(
+      res,
+      409,
+      "invalid_request_error",
+      "A request with this `Idempotency-Key` is already in progress; retry later",
+    );
+    fixture.close();
+  });
+
+  it("adds Retry-After to events.send in-progress conflicts through the shared contract", async () => {
+    const fixture = makeFixture();
+    const session = await setupSession(fixture.app);
+    const body = messageBody("busy");
+    reserve(fixture.eventStore, {
+      sessionId: session.id,
+      key: "events-busy-header",
+      body,
+      now: new Date(),
+    });
+
+    const res = await postEvents(
+      fixture.app,
+      session.id,
+      body,
+      "events-busy-header",
+    );
+
+    expect(res.headers.get("retry-after")).toBe("5");
+    await expectError(
+      res,
+      409,
+      "invalid_request_error",
+      "A request with this `Idempotency-Key` is already in progress; retry later",
+    );
+    fixture.close();
+  });
+
+  it("replays completed session create responses after reopening the SQLite database", async () => {
+    const root = mkdtempSync(join(tmpdir(), "oma-session-create-idempotency-"));
+    tempRoots.push(root);
+    const path = join(root, "oma.sqlite");
+    const firstFixture = makeFixture(path);
+    const agent = await createAgent(firstFixture.app);
+    const environment = await createEnvironment(firstFixture.app);
+    const body = sessionBody(agent.id, environment.id);
+    const first = await postSession(firstFixture.app, body, "session-restart");
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as ManagedAgentsSession;
+    firstFixture.close();
+
+    const secondFixture = makeFixture(path);
+    const second = await postSession(secondFixture.app, body, "session-restart");
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toEqual(firstBody);
+    secondFixture.close();
+  });
+
+  it("releases the reservation when session create completion aborts", async () => {
+    const fixture = makeFixture();
+    const agent = await createAgent(fixture.app);
+    const environment = await createEnvironment(fixture.app);
+    const body = sessionBody(agent.id, environment.id);
+    fixture.db.exec(`
+      CREATE TRIGGER abort_session_idempotency_completion
+      BEFORE UPDATE OF status ON idempotency_keys
+      WHEN NEW.status = 'completed'
+      BEGIN
+        SELECT RAISE(ABORT, 'abort session idempotency completion');
+      END;
+    `);
+
+    const failed = await postSession(fixture.app, body, "session-abort");
+    expect(failed.status).toBe(500);
+    fixture.db.exec("DROP TRIGGER abort_session_idempotency_completion");
+
+    const retry = await postSession(fixture.app, body, "session-abort");
+    expect(retry.status).toBe(200);
+    const retryBody = (await retry.json()) as ManagedAgentsSession;
+    expect(retryBody.id).toEqual(expect.stringMatching(/^sesn_/));
+    fixture.close();
+  });
+
+  it("deleting a session removes its session-create idempotency replay", async () => {
+    const fixture = makeFixture();
+    const agent = await createAgent(fixture.app);
+    const environment = await createEnvironment(fixture.app);
+    const body = sessionBody(agent.id, environment.id);
+    const first = await postSession(fixture.app, body, "session-delete");
+    expect(first.status).toBe(200);
+    const created = (await first.json()) as ManagedAgentsSession;
+
+    const deleted = await fixture.app.request(`/v1/sessions/${created.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+
+    const retry = await postSession(fixture.app, body, "session-delete");
+    expect(retry.status).toBe(200);
+    const fresh = (await retry.json()) as ManagedAgentsSession;
+    expect(fresh.id).not.toBe(created.id);
+    fixture.close();
+  });
+
+  it("replays resource-backed session creates without duplicating mount snapshots", async () => {
+    const fixture = makeFixture();
+    const agent = await createAgent(fixture.app);
+    const environment = await createEnvironment(fixture.app);
+    const file = await uploadFile(fixture.app, "probe.txt", "hello");
+    const body = JSON.stringify({
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: file.id, mount_path: "probe.txt" }],
+    });
+
+    const first = await postSession(fixture.app, body, "session-resource");
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as ManagedAgentsSession;
+
+    const second = await postSession(fixture.app, body, "session-resource");
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toEqual(firstBody);
+
+    expect(firstBody.resources).toHaveLength(1);
+    const snapshots = fixture.sessionStore.getFileMountSnapshots(
+      "wrk_default",
+      firstBody.id,
+    );
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.resource_id).toBe(firstBody.resources[0]?.id);
+    fixture.close();
+  });
+
+  it("replays session create validation errors after reservation", async () => {
+    const fixture = makeFixture();
+    const agent = await createAgent(fixture.app);
+    const environment = await createEnvironment(fixture.app);
+    const body = JSON.stringify({
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: "file_missing" }],
+    });
+
+    const first = await postSession(fixture.app, body, "session-4xx");
+    expect(first.status).toBe(400);
+    const firstBody = await first.json();
+
+    const second = await postSession(fixture.app, body, "session-4xx");
+    expect(second.status).toBe(400);
+    await expect(second.json()).resolves.toEqual(firstBody);
+    expect(fixture.sessionStore.list("wrk_default", { includeArchived: true }).data)
+      .toEqual([]);
+    fixture.close();
+  });
+});
+
 function makeFixture(path = ":memory:") {
   const db = new DatabaseSync(path);
   const agentStore = new SqliteAgentStore(db);
@@ -212,6 +429,7 @@ function makeFixture(path = ":memory:") {
       agentStore,
       environmentStore,
       fileStorage,
+      { idempotencyLedger: eventStore },
     ),
     sessionEvents: new DefaultSessionEventsService(
       eventStore,
@@ -223,6 +441,7 @@ function makeFixture(path = ":memory:") {
     app,
     db,
     eventStore,
+    sessionStore,
     close: () => {
       db.close();
     },
@@ -242,6 +461,31 @@ function reserve(
     key: input.key,
     routeLabel: ROUTE_LABEL,
     fingerprintSha256: requestFingerprint(method, concretePath, input.body),
+    now: input.now.toISOString(),
+    expiresAt: new Date(input.now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+    abandonedBefore: new Date(input.now.getTime() - 5 * 60 * 1000).toISOString(),
+  });
+  expect(result).toEqual({ kind: "reserved" });
+}
+
+function reserveForPath(
+  store: EventStore,
+  input: {
+    concretePath: string;
+    key: string;
+    routeLabel: string;
+    body: string;
+    now: Date;
+  },
+): void {
+  const method = "POST";
+  const result = store.reserveIdempotencyKey({
+    workspaceId: "wrk_default",
+    method,
+    concretePath: input.concretePath,
+    key: input.key,
+    routeLabel: input.routeLabel,
+    fingerprintSha256: requestFingerprint(method, input.concretePath, input.body),
     now: input.now.toISOString(),
     expiresAt: new Date(input.now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
     abandonedBefore: new Date(input.now.getTime() - 5 * 60 * 1000).toISOString(),
@@ -269,6 +513,13 @@ function messageBody(text: string): string {
   });
 }
 
+function sessionBody(agentId: string, environmentId: string): string {
+  return JSON.stringify({
+    agent: agentId,
+    environment_id: environmentId,
+  });
+}
+
 async function setupSession(
   app: ReturnType<typeof createControlPlaneApp>,
 ): Promise<ManagedAgentsSession> {
@@ -287,6 +538,21 @@ async function postEvents(
   idempotencyKey: string,
 ): Promise<Response> {
   return app.request(`/v1/sessions/${sessionId}/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": idempotencyKey,
+    },
+    body,
+  });
+}
+
+async function postSession(
+  app: ReturnType<typeof createControlPlaneApp>,
+  body: string,
+  idempotencyKey: string,
+): Promise<Response> {
+  return app.request("/v1/sessions", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -331,6 +597,25 @@ async function createSession(
   });
   expect(res.status).toBe(200);
   return (await res.json()) as ManagedAgentsSession;
+}
+
+async function uploadFile(
+  app: ReturnType<typeof createControlPlaneApp>,
+  filename: string,
+  content: string,
+): Promise<{ id: string }> {
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([content], { type: "text/plain" }),
+    filename,
+  );
+  const res = await app.request("/v1/files", {
+    method: "POST",
+    body: form,
+  });
+  expect(res.status).toBe(200);
+  return (await res.json()) as { id: string };
 }
 
 async function expectError(

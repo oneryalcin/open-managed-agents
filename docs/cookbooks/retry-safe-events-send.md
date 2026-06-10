@@ -33,9 +33,9 @@ Completed idempotency keys expire after 24 hours. After expiry, reusing the
 same key is treated as a brand-new request and may execute again. Do not rely on
 idempotency replay beyond that window.
 
-The header currently applies only to JSON `events.send` requests. Do not use it
-yet for `POST /v1/sessions`, file uploads, multipart bodies, or streaming
-response replay.
+The header also applies to JSON `POST /v1/sessions` requests. See
+[Retry-safe `sessions.create`](retry-safe-session-create.md). Do not use it yet
+for file uploads, multipart bodies, or streaming response replay.
 
 ## Key format
 

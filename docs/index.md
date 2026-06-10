@@ -29,6 +29,9 @@ still tracked separately in the roadmap.
 - [Retry-safe `events.send`](cookbooks/retry-safe-events-send.md) — use
   `Idempotency-Key` with the official Python and TypeScript SDKs so client
   retries do not duplicate session events or runtime work.
+- [Retry-safe `sessions.create`](cookbooks/retry-safe-session-create.md) — use
+  `Idempotency-Key` so client retries do not create duplicate sessions,
+  session resources, or internal mount snapshots.
 - [Client retry and cleanup loop](cookbooks/client-retry-and-cleanup.md) —
   combine retry-safe `events.send`, SSE reconnect, list backfill, event dedupe,
   and session deletion.

@@ -2,6 +2,19 @@
 
 Date: 2026-06-10
 
+## Implementation Status
+
+Implemented in `dev/session-create-idempotency`:
+
+- shared request-idempotency helpers and ledger contract;
+- `POST /v1/sessions` route integration;
+- session-store create plus idempotency completion in one transaction for
+  single-database SQLite deployments;
+- best-effort in-memory parity;
+- delete cleanup by created session ID;
+- user-facing cookbook at
+  [Retry-safe `sessions.create`](../cookbooks/retry-safe-session-create.md).
+
 ## Purpose
 
 Plan the second request-idempotency endpoint before implementation:

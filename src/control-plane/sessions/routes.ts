@@ -1,18 +1,53 @@
 import { Hono } from "hono";
 import { parseJsonBody, parseLimit, parseOrder } from "../http.ts";
 import { invalidRequest } from "../errors.ts";
+import {
+  requestFingerprint,
+  validateIdempotencyKey,
+} from "../request-idempotency.ts";
 import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import type { SessionEventsService } from "../events/types.ts";
 import { toManagedSession } from "./serialize.ts";
 import type { SessionService } from "./types.ts";
 
+interface AppEnv {
+  Variables: {
+    requestId: string;
+  };
+}
+
 export function sessionsRoutes(
   service: SessionService,
   events: SessionEventsService,
-): Hono {
-  const app = new Hono();
+): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
 
   app.post("/", async (c) => {
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey !== undefined) {
+      const rawBody = new Uint8Array(await c.req.raw.arrayBuffer());
+      const body = parseJsonBytes(rawBody);
+      const method = c.req.method.toUpperCase();
+      const concretePath = new URL(c.req.url).pathname;
+      const response = await service.createIdempotent(
+        DEFAULT_WORKSPACE_ID,
+        body,
+        {
+          method,
+          concretePath,
+          key: validateIdempotencyKey(idempotencyKey),
+          routeLabel: "POST /v1/sessions",
+          fingerprintSha256: requestFingerprint(method, concretePath, rawBody),
+        },
+        { requestId: c.get("requestId") },
+      );
+      return jsonResponse(
+        response.body,
+        response.status,
+        c.get("requestId"),
+        response.headers,
+      );
+    }
     const body = await parseJsonBody(c.req);
     const session = await service.create(DEFAULT_WORKSPACE_ID, body);
     return c.json(session, 200);
@@ -61,6 +96,30 @@ export function sessionsRoutes(
   });
 
   return app;
+}
+
+function parseJsonBytes(bytes: Uint8Array): unknown {
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch (error) {
+    throw invalidRequest("Request body must be valid JSON", String(error));
+  }
+}
+
+function jsonResponse(
+  body: unknown,
+  status: number,
+  requestId: string,
+  extraHeaders: Record<string, string> = {},
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "request-id": requestId,
+      ...extraHeaders,
+    },
+  });
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {

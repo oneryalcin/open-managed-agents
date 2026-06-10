@@ -14,8 +14,13 @@ import {
   type JsonObject,
   type JsonValue,
 } from "../../types/json.ts";
-import { ApiError, invalidRequest, notFound } from "../errors.ts";
-import { conflict, toApiErrorBody } from "../errors.ts";
+import { ApiError, invalidRequest, notFound, toApiErrorBody } from "../errors.ts";
+import {
+  idempotencyCompletion,
+  idempotencyConflictResponse,
+  idempotencyMismatchError,
+  reserveWindow,
+} from "../request-idempotency.ts";
 import {
   type DeploymentSessionOutputCoordinator,
 } from "../deployment-session-output-coordinator.ts";
@@ -39,7 +44,6 @@ import {
 import type {
   EventsSendIdempotencyKey,
   EventStoreRuntimeChanges,
-  IdempotencyCompletionInput,
   ListSessionEventsOptions,
   PendingRuntimeActionRecord,
   PendingRuntimeTurnRecord,
@@ -66,25 +70,6 @@ const SUPPORTED_USER_EVENT_TYPES = new Set([
   "user.custom_tool_result",
   "user.tool_confirmation",
 ] as const);
-
-const IDEMPOTENCY_RESPONSE_TTL_MS = 24 * 60 * 60 * 1000;
-const IDEMPOTENCY_ABANDONED_IN_PROGRESS_MS = 5 * 60 * 1000;
-
-function idempotencyCompletion(
-  workspaceId: WorkspaceId,
-  idempotency: EventsSendIdempotencyKey,
-  response: { status: number; body: unknown },
-): IdempotencyCompletionInput {
-  const now = new Date();
-  return {
-    ...idempotency,
-    workspaceId,
-    responseStatus: response.status,
-    responseBody: response.body,
-    now: now.toISOString(),
-    expiresAt: new Date(now.getTime() + IDEMPOTENCY_RESPONSE_TTL_MS).toISOString(),
-  };
-}
 
 interface ToolConfirmationCommit {
   event: ManagedAgentsUserToolConfirmationEventInput;
@@ -223,18 +208,13 @@ export class DefaultSessionEventsService implements SessionEventsService {
     idempotency: EventsSendIdempotencyKey,
     opts: { signal?: AbortSignal; requestId?: string } = {},
   ): SessionEventsHttpResponse {
-    const now = new Date();
     // Keep reservation and domain execution in one synchronous call path after
     // the route has read the raw body. Adding an await here would reopen the
     // same-key interleaving ADR 0015 is designed to avoid.
     const reservation = this.events.reserveIdempotencyKey({
       ...idempotency,
       workspaceId,
-      now: now.toISOString(),
-      expiresAt: new Date(now.getTime() + IDEMPOTENCY_RESPONSE_TTL_MS).toISOString(),
-      abandonedBefore: new Date(
-        now.getTime() - IDEMPOTENCY_ABANDONED_IN_PROGRESS_MS,
-      ).toISOString(),
+      ...reserveWindow(),
     });
     if (reservation.kind === "replay") {
       return {
@@ -243,14 +223,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
       };
     }
     if (reservation.kind === "fingerprint_mismatch") {
-      throw invalidRequest(
-        "`Idempotency-Key` was already used for a different request",
-      );
+      throw idempotencyMismatchError();
     }
     if (reservation.kind === "in_progress") {
-      throw conflict(
-        "A request with this `Idempotency-Key` is already in progress; retry later",
-      );
+      return idempotencyConflictResponse(opts.requestId);
     }
     try {
       const events = this.sendInternal(workspaceId, sessionId, input, {
@@ -263,17 +239,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
         // Replay returns the original error envelope, including request_id.
         // The fresh HTTP header still carries the retry attempt's request id.
         const body = toApiErrorBody(error, opts.requestId);
-        const completionClock = new Date();
-        this.events.completeIdempotency({
-          ...idempotency,
-          workspaceId,
-          responseStatus: error.status,
-          responseBody: body,
-          now: completionClock.toISOString(),
-          expiresAt: new Date(
-            completionClock.getTime() + IDEMPOTENCY_RESPONSE_TTL_MS,
-          ).toISOString(),
-        });
+        this.events.completeIdempotency(
+          idempotencyCompletion(workspaceId, idempotency, {
+            status: error.status,
+            body,
+          }),
+        );
         return { status: error.status, body };
       }
       throw error;

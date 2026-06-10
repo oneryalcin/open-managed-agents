@@ -10,7 +10,18 @@ import type {
 import { isJsonObject } from "../../types/json.ts";
 import type { AgentStore } from "../agents/types.ts";
 import type { EnvironmentStore } from "../environments/types.ts";
-import { invalidRequest, notFound } from "../errors.ts";
+import { ApiError, invalidRequest, notFound, toApiErrorBody } from "../errors.ts";
+import type {
+  JsonHttpResponse,
+  RequestIdempotencyKey,
+  RequestIdempotencyLedger,
+} from "../request-idempotency.ts";
+import {
+  idempotencyCompletion,
+  idempotencyConflictResponse,
+  idempotencyMismatchError,
+  reserveWindow,
+} from "../request-idempotency.ts";
 import type {
   RuntimeEventRunner,
   RuntimeSessionFileMount,
@@ -68,6 +79,7 @@ export interface DefaultSessionServiceOptions {
     workspaceId: WorkspaceId,
     sessionId: string,
   ) => DeleteSessionRowsResult | undefined;
+  idempotencyLedger?: RequestIdempotencyLedger;
   pendingSnapshotCleanupRetryDelayMs?: number;
   pendingSnapshotCleanupMaxAttempts?: number;
 }
@@ -87,6 +99,7 @@ export class DefaultSessionService implements SessionService {
         sessionId: string,
       ) => DeleteSessionRowsResult | undefined)
     | undefined;
+  private readonly idempotencyLedger: RequestIdempotencyLedger | undefined;
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
@@ -109,6 +122,7 @@ export class DefaultSessionService implements SessionService {
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.runtime = opts.runtime;
     this.deleteSessionRows = opts.deleteSessionRows;
+    this.idempotencyLedger = opts.idempotencyLedger;
     this.pendingSnapshotCleanupRetryDelayMs =
       opts.pendingSnapshotCleanupRetryDelayMs ??
       DEFAULT_PENDING_SNAPSHOT_CLEANUP_RETRY_DELAY_MS;
@@ -138,6 +152,68 @@ export class DefaultSessionService implements SessionService {
     workspaceId: WorkspaceId,
     input: unknown,
   ): Promise<ManagedAgentsSession> {
+    return this.createInternal(workspaceId, input);
+  }
+
+  async createIdempotent(
+    workspaceId: WorkspaceId,
+    input: unknown,
+    idempotency: RequestIdempotencyKey,
+    opts: { requestId?: string } = {},
+  ): Promise<JsonHttpResponse> {
+    if (!this.idempotencyLedger) {
+      return { status: 200, body: await this.createInternal(workspaceId, input) };
+    }
+    const reservation = this.idempotencyLedger.reserveIdempotencyKey({
+      ...idempotency,
+      workspaceId,
+      ...reserveWindow(),
+    });
+    if (reservation.kind === "replay") {
+      return {
+        status: reservation.responseStatus,
+        body: reservation.responseBody,
+      };
+    }
+    if (reservation.kind === "fingerprint_mismatch") {
+      throw idempotencyMismatchError();
+    }
+    if (reservation.kind === "in_progress") {
+      return idempotencyConflictResponse(opts.requestId);
+    }
+
+    try {
+      const session = await this.createInternal(workspaceId, input, {
+        idempotency,
+      });
+      return { status: 200, body: session };
+    } catch (error) {
+      if (shouldReleaseIdempotencyReservation(error)) {
+        this.idempotencyLedger.releaseIdempotencyReservation({
+          ...idempotency,
+          workspaceId,
+        });
+        throw unwrapIdempotentCreateError(error);
+      }
+      if (error instanceof ApiError && error.status < 500) {
+        const body = toApiErrorBody(error, opts.requestId);
+        this.idempotencyLedger.completeIdempotency(
+          idempotencyCompletion(workspaceId, idempotency, {
+            status: error.status,
+            body,
+          }),
+        );
+        return { status: error.status, body };
+      }
+      throw error;
+    }
+  }
+
+  private async createInternal(
+    workspaceId: WorkspaceId,
+    input: unknown,
+    opts: { idempotency?: RequestIdempotencyKey } = {},
+  ): Promise<ManagedAgentsSession> {
     const req = parseCreateSession(input);
     const agentRef = parseAgentRef(req.agent);
     const agent = this.agents.retrieveAny(workspaceId, agentRef.id);
@@ -161,11 +237,17 @@ export class DefaultSessionService implements SessionService {
 
     const now = new Date().toISOString();
     const sessionId = newSessionId();
+    let externalSideEffectsStarted = false;
     const { resources, snapshots, mounts } = await this.prepareFileResources(
       workspaceId,
       sessionId,
       req.resources ?? [],
       now,
+      {
+        onExternalSideEffect: () => {
+          externalSideEffectsStarted = true;
+        },
+      },
     );
     const row: SessionRow = {
       id: sessionId,
@@ -193,13 +275,32 @@ export class DefaultSessionService implements SessionService {
     let runtimePrepared = false;
     try {
       if (mounts.length > 0 && this.runtime?.prepareSession) {
+        externalSideEffectsStarted = true;
         await this.runtime.prepareSession(workspaceId, row.id, {
           fileMounts: mounts,
           agent: row.agent,
         });
         runtimePrepared = true;
       }
-      return toManagedSession(this.store.create({ row, snapshots: sessionSnapshots }));
+      const record = { row, snapshots: sessionSnapshots };
+      if (opts.idempotency && this.idempotencyLedger) {
+        const response = toManagedSession(row);
+        const completion = idempotencyCompletion(
+          workspaceId,
+          opts.idempotency,
+          { status: 200, body: response },
+          { type: "session", id: row.id },
+        );
+        const created =
+          this.store.createAndCompleteIdempotency?.(record, {
+            complete: () => {
+              this.idempotencyLedger?.completeIdempotencyInTransaction(completion);
+            },
+          }) ??
+          this.createAndCompleteIdempotencyBestEffort(record, completion);
+        return toManagedSession(created);
+      }
+      return toManagedSession(this.store.create(record));
     } catch (error) {
       if (runtimePrepared || mounts.length > 0) {
         await this.closeRuntimeBestEffort(workspaceId, row.id);
@@ -214,12 +315,28 @@ export class DefaultSessionService implements SessionService {
         );
       });
       if (isUnsupportedFileResourceRuntime(error)) {
-        throw invalidRequest(
+        const unsupported = invalidRequest(
           "Session file resources are not supported by the configured runtime.",
         );
+        if (opts.idempotency) {
+          throw new ReleaseIdempotencyReservationError(unsupported);
+        }
+        throw unsupported;
+      }
+      if (opts.idempotency && externalSideEffectsStarted) {
+        throw new ReleaseIdempotencyReservationError(error);
       }
       throw error;
     }
+  }
+
+  private createAndCompleteIdempotencyBestEffort(
+    record: Parameters<SessionStore["create"]>[0],
+    completion: Parameters<RequestIdempotencyLedger["completeIdempotency"]>[0],
+  ): SessionRow {
+    const created = this.store.create(record);
+    this.idempotencyLedger?.completeIdempotency(completion);
+    return created;
   }
 
   retrieve(
@@ -519,6 +636,7 @@ export class DefaultSessionService implements SessionService {
     sessionId: string,
     resources: CreateManagedSessionResourceInput[],
     now: string,
+    opts: { onExternalSideEffect?: () => void } = {},
   ): Promise<{
     resources: ManagedAgentsSessionFileResource[];
     snapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">>;
@@ -599,6 +717,7 @@ export class DefaultSessionService implements SessionService {
           rollbackRow,
           now,
         );
+        opts.onExternalSideEffect?.();
         const snapshot = await this.files.createInternalSnapshot(workspaceId, {
           fileId: snapshotFileId,
           filename: item.source.metadata.filename,
@@ -666,6 +785,25 @@ export class DefaultSessionService implements SessionService {
     }
   }
 
+}
+
+class ReleaseIdempotencyReservationError extends Error {
+  constructor(readonly inner: unknown) {
+    super(errorMessage(inner));
+    this.name = "ReleaseIdempotencyReservationError";
+  }
+}
+
+function shouldReleaseIdempotencyReservation(error: unknown): boolean {
+  if (error instanceof ReleaseIdempotencyReservationError) return true;
+  if (error instanceof ApiError && error.status < 500) return false;
+  return true;
+}
+
+function unwrapIdempotentCreateError(error: unknown): unknown {
+  return error instanceof ReleaseIdempotencyReservationError
+    ? error.inner
+    : error;
 }
 
 function parseCreateSession(input: unknown): CreateManagedSessionRequest {

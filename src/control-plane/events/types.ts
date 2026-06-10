@@ -6,9 +6,21 @@ import type {
   ManagedAgentsUserToolConfirmationEventInput,
 } from "../../types/events.ts";
 import type { JsonObject } from "../../types/json.ts";
-import type { ApiErrorStatus } from "../errors.ts";
+import type {
+  IdempotencyCompletionInput,
+  IdempotencyReservationInput,
+  IdempotencyReservationResult,
+  JsonHttpResponse,
+  RequestIdempotencyKey,
+} from "../request-idempotency.ts";
 import type { SessionRow } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
+
+export type {
+  IdempotencyCompletionInput,
+  IdempotencyReservationInput,
+  IdempotencyReservationResult,
+} from "../request-idempotency.ts";
 
 /**
  * Internal persisted event row shape.
@@ -45,43 +57,8 @@ export interface SessionEventRecordPage {
   next_page: string | null;
 }
 
-export interface EventsSendIdempotencyKey {
-  method: string;
-  concretePath: string;
-  key: string;
-  routeLabel: string;
-  fingerprintSha256: string;
-}
-
-export interface IdempotencyReservationInput extends EventsSendIdempotencyKey {
-  workspaceId: WorkspaceId;
-  now: string;
-  expiresAt: string;
-  abandonedBefore: string;
-}
-
-export type IdempotencyReservationResult =
-  | { kind: "reserved" }
-  | {
-      kind: "replay";
-      responseStatus: number;
-      responseBody: unknown;
-    }
-  | { kind: "in_progress" }
-  | { kind: "fingerprint_mismatch" };
-
-export interface IdempotencyCompletionInput extends EventsSendIdempotencyKey {
-  workspaceId: WorkspaceId;
-  responseStatus: number;
-  responseBody: unknown;
-  now: string;
-  expiresAt: string;
-}
-
-export interface SessionEventsHttpResponse {
-  status: 200 | ApiErrorStatus;
-  body: unknown;
-}
+export type EventsSendIdempotencyKey = RequestIdempotencyKey;
+export type SessionEventsHttpResponse = JsonHttpResponse;
 
 export type RuntimeTurnState =
   | "accepted"
@@ -273,6 +250,9 @@ export interface SessionEventStore {
   reserveIdempotencyKey(
     input: IdempotencyReservationInput,
   ): IdempotencyReservationResult;
+  releaseIdempotencyReservation(
+    input: RequestIdempotencyKey & { workspaceId: WorkspaceId },
+  ): void;
   deleteForSession(workspaceId: WorkspaceId, sessionId: string): void;
   list(
     workspaceId: WorkspaceId,

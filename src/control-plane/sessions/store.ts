@@ -3,6 +3,7 @@ import type { ManagedAgentsListPage } from "../../types/common.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type {
   CreateSessionRecord,
+  CreateSessionIdempotencyCommit,
   ListSessionsOptions,
   PendingInternalSnapshotCreateRollbackRow,
   PendingInternalSnapshotDeleteRow,
@@ -270,6 +271,20 @@ export class SqliteSessionStore implements SessionStore {
   }
 
   create(record: CreateSessionRecord): SessionRow {
+    return this.createInTransaction(record);
+  }
+
+  createAndCompleteIdempotency(
+    record: CreateSessionRecord,
+    idempotency: CreateSessionIdempotencyCommit,
+  ): SessionRow {
+    return this.createInTransaction(record, idempotency);
+  }
+
+  private createInTransaction(
+    record: CreateSessionRecord,
+    idempotency?: CreateSessionIdempotencyCommit,
+  ): SessionRow {
     const s = record.row;
     return this.withTransaction(() => {
       this.insertStmt.run(
@@ -312,6 +327,7 @@ export class SqliteSessionStore implements SessionStore {
           snapshot.size_bytes,
         );
       }
+      idempotency?.complete();
       this.clearPendingSnapshotCreateRollbacksBySessionStmt.run(s.workspace_id, s.id);
       return s;
     });
