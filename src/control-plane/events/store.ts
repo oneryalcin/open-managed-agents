@@ -466,6 +466,9 @@ export class EventStore implements SessionEventStore {
   ): IdempotencyReservationResult {
     // Policy lives here because this store owns the durable ledger rows. The
     // service currently passes a conservative five-minute abandoned threshold.
+    // Reacquiring an abandoned in-progress row is safe because reservation
+    // commits before the domain transaction; if the completed response did not
+    // commit, the event/runtime side effect could not have committed either.
     this.purgeExpiredIdempotencyKeysStmt.run(input.now);
     const inserted = this.reserveIdempotencyKeyStmt.run(
       input.workspaceId,
