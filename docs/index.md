@@ -35,6 +35,9 @@ still tracked separately in the roadmap.
 - [Client retry and cleanup loop](cookbooks/client-retry-and-cleanup.md) —
   combine retry-safe `events.send`, SSE reconnect, list backfill, event dedupe,
   and session deletion.
+- [Session lifecycle flow](cookbooks/session-lifecycle-flow.md) — wire the
+  SDK-style create, stream/list, retry-safe send, interrupt, archive, and delete
+  path with terminal event handling.
 
 ## Examples
 

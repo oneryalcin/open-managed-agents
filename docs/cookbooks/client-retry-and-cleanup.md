@@ -7,6 +7,10 @@ robust in normal network conditions:
 2. reconnect by combining SSE with `events.list`;
 3. clean up sessions when the client is done.
 
+For the full SDK-style lifecycle, including retry-safe `sessions.create`,
+`user.interrupt`, archive, delete, and terminal stream handling, see
+[Session lifecycle flow](session-lifecycle-flow.md).
+
 ## Recommended loop
 
 For each user action:
