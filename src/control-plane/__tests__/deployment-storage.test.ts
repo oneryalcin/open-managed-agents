@@ -248,6 +248,135 @@ describe("deployment storage", () => {
     stores.close();
   });
 
+  it("commits runtime events through the deployment runtime event coordinator", () => {
+    const stores = createDeploymentStoresFromEnv({});
+    const sessionId = "sesn_runtime_event_commit";
+    const now = new Date().toISOString();
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_runtime_event_commit",
+          ownerId: "owner_runtime",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now,
+        },
+      ],
+    });
+
+    stores.runtimeEventCoordinator.commitRuntimeEventsForTurn({
+      workspaceId: "wrk_default",
+      sessionId,
+      turnId: "turn_runtime_event_commit",
+      ownerId: "owner_runtime",
+      ownerGeneration: 1,
+      events: [
+        {
+          id: "sevt_runtime_event_commit",
+          workspace_id: "wrk_default",
+          session_id: sessionId,
+          type: "agent.message",
+          processed_at: now,
+          payload: { content: [{ type: "text", text: "committed" }] },
+          created_at: now,
+        },
+      ],
+      changes: {
+        turnStates: [
+          {
+            workspaceId: "wrk_default",
+            sessionId,
+            turnId: "turn_runtime_event_commit",
+            ownerId: "owner_runtime",
+            ownerGeneration: 1,
+            state: "running",
+            now,
+          },
+        ],
+      },
+    });
+
+    expect(stores.events.list("wrk_default", sessionId)).toMatchObject([
+      { id: "sevt_runtime_event_commit", type: "agent.message" },
+    ]);
+    expect(stores.events.listPendingRuntimeTurns("wrk_default")).toMatchObject([
+      { turn_id: "turn_runtime_event_commit", state: "running" },
+    ]);
+    stores.close();
+  });
+
+  it("rejects stale runtime event commits before appending transcript rows", async () => {
+    const paths = await durablePaths();
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    const sessionId = "sesn_runtime_event_stale_owner";
+    const now = new Date().toISOString();
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_runtime_event_stale_owner",
+          ownerId: "owner_runtime",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now,
+        },
+      ],
+    });
+
+    expect(() =>
+      stores.runtimeEventCoordinator.commitRuntimeEventsForTurn({
+        workspaceId: "wrk_default",
+        sessionId,
+        turnId: "turn_runtime_event_stale_owner",
+        ownerId: "owner_runtime",
+        ownerGeneration: 2,
+        events: [
+          {
+            id: "sevt_runtime_event_stale_owner",
+            workspace_id: "wrk_default",
+            session_id: sessionId,
+            type: "agent.message",
+            processed_at: now,
+            payload: { content: [{ type: "text", text: "stale" }] },
+            created_at: now,
+          },
+        ],
+        changes: {
+          turnStates: [
+            {
+              workspaceId: "wrk_default",
+              sessionId,
+              turnId: "turn_runtime_event_stale_owner",
+              ownerId: "owner_runtime",
+              ownerGeneration: 2,
+              state: "running",
+              now,
+            },
+          ],
+        },
+      }),
+    ).toThrow("Runtime turn ownership lost: turn_runtime_event_stale_owner");
+    expect(stores.events.list("wrk_default", sessionId)).toEqual([]);
+    expect(stores.events.listPendingRuntimeTurns("wrk_default")).toMatchObject([
+      {
+        turn_id: "turn_runtime_event_stale_owner",
+        owner_generation: 1,
+        state: "accepted",
+      },
+    ]);
+    stores.close();
+  });
+
   it("deletes session-output metadata in the same deployment delete transaction", async () => {
     const paths = await durablePaths();
     const stores = createDeploymentStoresFromEnv({

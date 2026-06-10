@@ -19,6 +19,7 @@ import { DefaultAgentService } from "../src/control-plane/agents/service.ts";
 import { SqliteAgentStore } from "../src/control-plane/agents/store.ts";
 import { DefaultEnvironmentService } from "../src/control-plane/environments/service.ts";
 import { SqliteEnvironmentStore } from "../src/control-plane/environments/store.ts";
+import { createBestEffortRuntimeEventCoordinator } from "../src/control-plane/deployment-runtime-event-coordinator.ts";
 import { SessionEventBroadcaster } from "../src/control-plane/events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../src/control-plane/events/service.ts";
 import { EventStore } from "../src/control-plane/events/store.ts";
@@ -44,6 +45,10 @@ const app = createControlPlaneApp({
   sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {
     runner,
     translate: translatePiEvent,
+    runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+      sessions: sessionStore,
+      events: eventStore,
+    }),
   }),
 });
 

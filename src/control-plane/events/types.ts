@@ -218,6 +218,10 @@ export interface SessionEventStore {
     events: readonly PersistedSessionEvent[],
     changes: EventStoreRuntimeChanges,
   ): void;
+  appendBatchWithRuntimeChangesInTransaction(
+    events: readonly PersistedSessionEvent[],
+    changes: EventStoreRuntimeChanges,
+  ): void;
   deleteForSession(workspaceId: WorkspaceId, sessionId: string): void;
   list(
     workspaceId: WorkspaceId,

@@ -20,6 +20,7 @@ import { DefaultAgentService } from "../agents/service.ts";
 import { SqliteAgentStore } from "../agents/store.ts";
 import { DefaultEnvironmentService } from "../environments/service.ts";
 import { SqliteEnvironmentStore } from "../environments/store.ts";
+import { createBestEffortRuntimeEventCoordinator } from "../deployment-runtime-event-coordinator.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { materializePersistedEvents } from "../events/persist.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
@@ -1071,6 +1072,10 @@ function makeSharedFixture(
         {
           runner: nextRunner,
           translate: translatePiEvent,
+          runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+            sessions: sessionStore,
+            events: eventStore,
+          }),
           ...(opts.leaseTtlMs === undefined
             ? {}
             : { leaseTtlMs: opts.leaseTtlMs }),

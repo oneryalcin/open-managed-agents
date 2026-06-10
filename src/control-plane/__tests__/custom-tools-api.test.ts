@@ -5,6 +5,7 @@ import { SqliteAgentStore } from "../agents/store.ts";
 import { DefaultEnvironmentService } from "../environments/service.ts";
 import { SqliteEnvironmentStore } from "../environments/store.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
+import { createBestEffortRuntimeEventCoordinator } from "../deployment-runtime-event-coordinator.ts";
 import { materializePersistedEvents } from "../events/persist.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
@@ -797,7 +798,14 @@ describe("Custom tool API round trip", () => {
       eventStore,
       sessionStore,
       new SessionEventBroadcaster(eventStore),
-      { runner, translate: translatePiEvent },
+      {
+        runner,
+        translate: translatePiEvent,
+        runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+          sessions: sessionStore,
+          events: eventStore,
+        }),
+      },
     );
 
     const now = new Date().toISOString();
@@ -1588,6 +1596,10 @@ function makeFixture(
       {
         runner: runtimeRunner,
         translate: translatePiEvent,
+        runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+          sessions: sessionStore,
+          events: eventStore,
+        }),
         ...(opts.leaseTtlMs === undefined ? {} : { leaseTtlMs: opts.leaseTtlMs }),
       },
     );

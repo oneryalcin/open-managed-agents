@@ -4,6 +4,7 @@ import { DefaultAgentService } from "../agents/service.ts";
 import { SqliteAgentStore } from "../agents/store.ts";
 import { DefaultEnvironmentService } from "../environments/service.ts";
 import { SqliteEnvironmentStore } from "../environments/store.ts";
+import { createBestEffortRuntimeEventCoordinator } from "../deployment-runtime-event-coordinator.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
@@ -222,6 +223,10 @@ function makeFixture(factory: FakeQueuedSessionFactory): {
       sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {
         runner,
         translate: translatePiEvent,
+        runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+          sessions: sessionStore,
+          events: eventStore,
+        }),
       }),
     }),
   };

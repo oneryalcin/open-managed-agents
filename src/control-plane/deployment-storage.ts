@@ -13,6 +13,11 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { SqliteAgentStore } from "./agents/store.ts";
 import {
+  createBestEffortRuntimeEventCoordinator,
+  createSingleDatabaseRuntimeEventCoordinator,
+  type DeploymentRuntimeEventCoordinator,
+} from "./deployment-runtime-event-coordinator.ts";
+import {
   createInMemorySessionCoordinator,
   createSingleDatabaseSessionCoordinator,
   type DeploymentSessionCoordinator,
@@ -42,6 +47,7 @@ export interface DeploymentStores {
   mode: "memory" | "durable";
   sessionCoordinator: DeploymentSessionCoordinator;
   sessionOutputCoordinator: DeploymentSessionOutputCoordinator;
+  runtimeEventCoordinator: DeploymentRuntimeEventCoordinator;
   sqlitePragmas?(): SqlitePragmaSnapshot;
   close(): void;
 }
@@ -87,6 +93,10 @@ function createInMemoryDeploymentStores(): DeploymentStores {
     events,
     files,
   });
+  const runtimeEventCoordinator = createBestEffortRuntimeEventCoordinator({
+    sessions,
+    events,
+  });
   return {
     agents,
     environments,
@@ -96,6 +106,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
     mode: "memory",
     sessionCoordinator,
     sessionOutputCoordinator,
+    runtimeEventCoordinator,
     close: () => {
       agents.close();
       environments.close();
@@ -136,6 +147,10 @@ function createDurableDeploymentStores(
       events,
       files,
     });
+    const runtimeEventCoordinator = createSingleDatabaseRuntimeEventCoordinator({
+      sessions,
+      events,
+    });
     return {
       agents,
       environments,
@@ -145,6 +160,7 @@ function createDurableDeploymentStores(
       mode: "durable",
       sessionCoordinator,
       sessionOutputCoordinator,
+      runtimeEventCoordinator,
       sqlitePragmas: () => readSqlitePragmas(db),
       close: () => {
         try {
