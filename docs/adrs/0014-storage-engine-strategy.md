@@ -246,6 +246,33 @@ shape:
 9. Add concurrency tests that use at least two store instances/processes against
    the same Postgres database.
 
+### Current implementation status
+
+As of PRs #111, #112, and #114, the main SQLite-era cross-store invariants are
+now named deployment coordinators:
+
+- session deletion: delete the session, event log rows, runtime turns, and
+  session-output metadata in one durable operation;
+- session output commits: commit output metadata only while the session and
+  runtime turn owner/generation still match;
+- runtime event commits: append translated runtime transcript rows only while
+  the session and runtime turn owner/generation still match.
+
+This completes the prerequisite coordinator-shape work for the current
+single-process SQLite backend. It does not start the Postgres migration. Resume
+that work only when a concrete managed-SaaS or multi-process dependency needs
+it, starting with:
+
+1. async store interfaces for service-used metadata operations;
+2. a query-layer decision for explicit Postgres transactions;
+3. Postgres schema and migrations;
+4. Postgres implementations of the deployment coordinators using row locks,
+   advisory locks, or equivalent transaction semantics;
+5. multi-instance concurrency tests against a real Postgres database.
+
+Issue #113 tracks the remaining audit of runtime-change call sites that still
+use store-level owner/generation checks rather than a deployment coordinator.
+
 ## Open questions
 
 - Which Postgres provider should managed OMA use first?
