@@ -89,6 +89,7 @@ The decisions we've already made, with the alternatives we rejected and why:
 - [ADR 0012: Session continuity keyed by `sesn_*` before C.3 live validation](adrs/0012-session-continuity-before-c3-live.md)
 - [ADR 0013: File resources and session mounts](adrs/0013-file-resources-and-session-mounts.md)
 - [ADR 0014: Storage engine strategy for managed SaaS](adrs/0014-storage-engine-strategy.md)
+- [ADR 0015: Request idempotency for retry-safe writes](adrs/0015-request-idempotency.md)
 
 ## How this is organized
 
