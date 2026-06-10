@@ -17,6 +17,9 @@ export function canCommitRuntimeTurn(
   },
   input: RuntimeTurnCommitFence,
 ): boolean {
+  // Cross-store session + runtime-turn predicate shared by deployment
+  // coordinators. Some legacy store updates still enforce only owner/generation
+  // in their WHERE clauses until their call sites get coordinator seams.
   if (!opts.sessions.retrieve(input.workspaceId, input.sessionId)) return false;
   const turn = opts.events
     .listPendingRuntimeTurns(input.workspaceId)

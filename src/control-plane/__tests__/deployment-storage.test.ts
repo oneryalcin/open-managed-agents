@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { DefaultAgentService } from "../agents/service.ts";
+import { createBestEffortRuntimeEventCoordinator } from "../deployment-runtime-event-coordinator.ts";
 import { createBestEffortSessionOutputCoordinator } from "../deployment-session-output-coordinator.ts";
 import {
   createDeploymentStoresFromEnv,
@@ -370,6 +371,74 @@ describe("deployment storage", () => {
     expect(stores.events.listPendingRuntimeTurns("wrk_default")).toMatchObject([
       {
         turn_id: "turn_runtime_event_stale_owner",
+        owner_generation: 1,
+        state: "accepted",
+      },
+    ]);
+    stores.close();
+  });
+
+  it("rejects best-effort stale runtime event commits before appending transcript rows", () => {
+    const stores = createDeploymentStoresFromEnv({});
+    const coordinator = createBestEffortRuntimeEventCoordinator({
+      sessions: stores.sessions,
+      events: stores.events,
+    });
+    const sessionId = "sesn_runtime_event_best_effort_stale";
+    const now = new Date().toISOString();
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_runtime_event_best_effort_stale",
+          ownerId: "owner_runtime",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now,
+        },
+      ],
+    });
+
+    expect(() =>
+      coordinator.commitRuntimeEventsForTurn({
+        workspaceId: "wrk_default",
+        sessionId,
+        turnId: "turn_runtime_event_best_effort_stale",
+        ownerId: "owner_runtime",
+        ownerGeneration: 2,
+        events: [
+          {
+            id: "sevt_runtime_event_best_effort_stale",
+            workspace_id: "wrk_default",
+            session_id: sessionId,
+            type: "agent.message",
+            processed_at: now,
+            payload: { content: [{ type: "text", text: "stale" }] },
+            created_at: now,
+          },
+        ],
+        changes: {
+          turnStates: [
+            {
+              workspaceId: "wrk_default",
+              sessionId,
+              turnId: "turn_runtime_event_best_effort_stale",
+              ownerId: "owner_runtime",
+              ownerGeneration: 2,
+              state: "running",
+              now,
+            },
+          ],
+        },
+      }),
+    ).toThrow("Runtime turn ownership lost: turn_runtime_event_best_effort_stale");
+    expect(stores.events.list("wrk_default", sessionId)).toEqual([]);
+    expect(stores.events.listPendingRuntimeTurns("wrk_default")).toMatchObject([
+      {
+        turn_id: "turn_runtime_event_best_effort_stale",
         owner_generation: 1,
         state: "accepted",
       },

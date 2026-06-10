@@ -1204,6 +1204,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
             }
             const openedModelRequestStartId =
               spanStartDrafts.length > 0 ? rows[0]?.id : undefined;
+            // First coordinator slice: fence the general translated runtime
+            // transcript path. Custom tool, tool-permission, renewal, and
+            // error-cleanup paths still use their existing store-level owner
+            // checks; track the remaining seam audit in GitHub issue #113.
             this.runtimeEventCoordinator!.commitRuntimeEventsForTurn({
               workspaceId,
               sessionId,
@@ -1289,6 +1293,19 @@ export class DefaultSessionEventsService implements SessionEventsService {
       }
     } catch (error) {
       if (error instanceof RuntimeTurnOwnershipLostError) {
+        console.debug("runtime turn ownership lost; interrupting local runner", {
+          workspaceId,
+          sessionId,
+          turnId: error.turnId,
+        });
+        void Promise.resolve(
+          this.runtimeRunner?.interruptSession?.(workspaceId, sessionId),
+        ).catch((interruptError) => {
+          console.error("runtime ownership-loss interrupt failed", {
+            sessionId,
+            error: interruptError,
+          });
+        });
         return;
       }
       console.error("runtime ingestion failed", { sessionId, error });
@@ -1465,7 +1482,13 @@ export class DefaultSessionEventsService implements SessionEventsService {
           ],
         });
       } catch (error) {
-        if (!(error instanceof RuntimeTurnOwnershipLostError)) {
+        if (error instanceof RuntimeTurnOwnershipLostError) {
+          console.debug("runtime lease renewal ownership lost", {
+            workspaceId,
+            sessionId,
+            turnId: error.turnId,
+          });
+        } else {
           console.error("runtime lease renewal failed", { sessionId, error });
         }
         clearInterval(timer);
