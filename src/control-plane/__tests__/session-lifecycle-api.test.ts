@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createInMemoryControlPlaneApp } from "./helpers.ts";
+import {
+  createControlPlaneApp,
+  createInMemoryControlPlaneApp,
+} from "./helpers.ts";
+import { DefaultAgentService } from "../agents/service.ts";
+import { SqliteAgentStore } from "../agents/store.ts";
 import { createBestEffortRuntimeEventCoordinator } from "../deployment-runtime-event-coordinator.ts";
+import { DefaultEnvironmentService } from "../environments/service.ts";
+import { SqliteEnvironmentStore } from "../environments/store.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
@@ -8,6 +15,7 @@ import type {
   PersistedSessionEvent,
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
+  RuntimeEventTranslator,
   SessionEventBroadcaster as SessionEventBroadcasterContract,
 } from "../events/types.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
@@ -26,6 +34,7 @@ import type {
   ManagedAgentsSession,
   ManagedAgentsSessionStatus,
 } from "../../types/sessions.ts";
+import { DefaultSessionService } from "../sessions/service.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
 const VALID_AGENT = {
@@ -192,6 +201,31 @@ describe("session lifecycle API", () => {
     expect(events.at(-1)).toBe("event: session.deleted");
   });
 
+  it("publishes archive terminal event to live streams without closing them", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "before stream archive");
+
+    const streamRes = await app.request(
+      `/v1/sessions/${session.id}/events/stream`,
+    );
+    expect(streamRes.status).toBe(200);
+    const reader = createSseReader(streamRes);
+    const first = await reader.nextEvent();
+    expect(first?.event).toBe("user.message");
+
+    const archiveRes = await app.request(`/v1/sessions/${session.id}/archive`, {
+      method: "POST",
+    });
+    expect(archiveRes.status).toBe(200);
+
+    const terminal = await reader.nextEvent();
+    expect(terminal?.event).toBe("session.status_terminated");
+
+    await expect(reader.nextReadWithin(50)).resolves.toBe("timeout");
+    await reader.cancel();
+  });
+
   it("rejects archive while a runtime turn is active without mutation or cleanup", async () => {
     const runner = new DelayedRunner();
     const app = createInMemoryControlPlaneApp({
@@ -299,6 +333,53 @@ describe("session lifecycle API", () => {
       "session.status_idle",
       "session.status_terminated",
     ]);
+  });
+
+  it("deletes a session paused on custom-tool requires_action without accepting stale results", async () => {
+    const runner = new PausedCustomToolRunner();
+    const fixture = createLifecycleFixture({
+      runner,
+      translate: () => [],
+    });
+    const session = await setupSession(fixture.app);
+    await sendMessage(fixture.app, session.id, "ask external");
+    await waitFor(() => runner.boundCustomToolUseId !== undefined);
+    await waitFor(async () => {
+      const events = await listEvents(fixture.app, session.id);
+      return events.data.some(
+        (event) =>
+          event.type === "session.status_idle" &&
+          (event.stop_reason as { type?: unknown } | undefined)?.type ===
+            "requires_action",
+      );
+    });
+
+    const deleteRes = await fixture.app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(deleteRes.status).toBe(200);
+    expect(runner.closed).toEqual([session.id]);
+
+    const staleResult = await fixture.app.request(
+      `/v1/sessions/${session.id}/events`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          events: [
+            {
+              type: "user.custom_tool_result",
+              custom_tool_use_id: runner.boundCustomToolUseId,
+              content: [{ type: "text", text: "too late" }],
+            },
+          ],
+        }),
+      },
+    );
+    expect(staleResult.status).toBe(404);
+    expect((await fixture.app.request(`/v1/sessions/${session.id}/events`)).status)
+      .toBe(404);
+    expect(fixture.eventStore.listPendingRuntimeTurns("wrk_default")).toEqual([]);
   });
 
   it("retires archive lifecycle guards after in-flight runtime settles", async () => {
@@ -582,6 +663,11 @@ interface ArchiveGuardHarness {
   store: HookedSessionStore;
 }
 
+interface LifecycleFixture {
+  app: ReturnType<typeof createControlPlaneApp>;
+  eventStore: EventStore;
+}
+
 interface GuardState {
   archivingSessions: Map<string, number>;
   closedSessions: Set<string>;
@@ -645,6 +731,42 @@ function createGuardHarness(
     },
   });
   return { eventStore, runner, service, sessionId };
+}
+
+function createLifecycleFixture(opts: {
+  runner: RuntimeEventRunner;
+  translate: RuntimeEventTranslator;
+}): LifecycleFixture {
+  const agentStore = SqliteAgentStore.open(":memory:");
+  const environmentStore = SqliteEnvironmentStore.open(":memory:");
+  const sessionStore = SqliteSessionStore.open(":memory:");
+  const eventStore = EventStore.open(":memory:");
+  const broadcaster = new SessionEventBroadcaster(eventStore);
+  return {
+    app: createControlPlaneApp({
+      agents: new DefaultAgentService(agentStore),
+      environments: new DefaultEnvironmentService(environmentStore),
+      sessions: new DefaultSessionService(
+        sessionStore,
+        agentStore,
+        environmentStore,
+      ),
+      sessionEvents: new DefaultSessionEventsService(
+        eventStore,
+        sessionStore,
+        broadcaster,
+        {
+          runner: opts.runner,
+          translate: opts.translate,
+          runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+            sessions: sessionStore,
+            events: eventStore,
+          }),
+        },
+      ),
+    }),
+    eventStore,
+  };
 }
 
 function createRuntimeFailureHarness(): {
@@ -1060,6 +1182,64 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function createSseReader(response: Response): {
+  nextEvent(): Promise<{ event?: string; data?: Record<string, unknown> } | null>;
+  nextReadWithin(ms: number): Promise<"closed" | "data" | "timeout">;
+  cancel(): Promise<void>;
+} {
+  const body = response.body;
+  if (!body) throw new Error("Expected streaming response body");
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  return {
+    async nextEvent() {
+      while (true) {
+        const frameIdx = buffer.indexOf("\n\n");
+        if (frameIdx !== -1) {
+          const frame = buffer.slice(0, frameIdx);
+          buffer = buffer.slice(frameIdx + 2);
+          const lines = frame.split("\n");
+          const payload: { event?: string; data?: string } = {};
+          for (const line of lines) {
+            if (line.startsWith("event: ")) payload.event = line.slice(7);
+            else if (line.startsWith("data: ")) payload.data = line.slice(6);
+          }
+          return {
+            event: payload.event,
+            data:
+              payload.data === undefined
+                ? undefined
+                : (JSON.parse(payload.data) as Record<string, unknown>),
+          };
+        }
+        const next = await reader.read();
+        if (next.done) return null;
+        buffer += decoder.decode(next.value, { stream: true });
+      }
+    },
+    async nextReadWithin(ms) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          reader.read(),
+          new Promise<"timeout">((resolve) => {
+            timer = setTimeout(() => resolve("timeout"), ms);
+          }),
+        ]);
+        if (result === "timeout") return "timeout";
+        return result.done ? "closed" : "data";
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+    async cancel() {
+      await reader.cancel();
+    },
+  };
 }
 
 function viSpyConsoleError(): { restore(): void } {

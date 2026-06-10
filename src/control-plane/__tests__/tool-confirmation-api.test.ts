@@ -704,6 +704,47 @@ describe("builtin tool confirmations", () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { status?: unknown }).status).toBe("terminated");
   });
+
+  it("deletes a session paused on a builtin confirmation without accepting stale confirmations", async () => {
+    const runner = new FakeToolPermissionRunner("ask");
+    const fixture = makeSharedFixture(runner);
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.tool_use"),
+    );
+    const toolUse = waiting.find((event) => event.type === "agent.tool_use");
+
+    const deleteRes = await fixture.app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(deleteRes.status).toBe(200);
+
+    const staleConfirmation = await fixture.app.request(
+      `/v1/sessions/${session.id}/events`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          events: [
+            {
+              type: "user.tool_confirmation",
+              tool_use_id: toolUse?.id,
+              result: "allow",
+            },
+          ],
+        }),
+      },
+    );
+    expect(staleConfirmation.status).toBe(404);
+    expect(
+      (await fixture.app.request(`/v1/sessions/${session.id}/events`)).status,
+    ).toBe(404);
+    expect(fixture.eventStore.listPendingRuntimeTurns("wrk_default")).toEqual([]);
+  });
 });
 
 class FakeToolPermissionRunner implements RuntimeEventRunner {

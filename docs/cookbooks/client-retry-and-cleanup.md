@@ -88,6 +88,11 @@ On reconnect:
 `Last-Event-ID` is supported as an SSE convenience, but the durable reconnect
 pattern is still stream first, then list backfill.
 
+Treat `session.status_terminated` and `session.deleted` as terminal events for
+the client-side stream loop. Archive publishes `session.status_terminated` and
+keeps the stream available for readable history; delete publishes
+`session.deleted` and the server closes the live stream.
+
 Python sketch:
 
 ```python
