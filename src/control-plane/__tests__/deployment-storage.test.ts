@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { DefaultAgentService } from "../agents/service.ts";
+import { createBestEffortSessionOutputCoordinator } from "../deployment-session-output-coordinator.ts";
 import {
   createDeploymentStoresFromEnv,
 } from "../deployment-storage.ts";
@@ -405,6 +406,201 @@ describe("deployment storage", () => {
     const page = await storage.list("wrk_default", { scopeId: "sesn_stale" });
     expect(page.data).toEqual([]);
     db.close();
+  });
+
+  it("commits session outputs through the deployment output coordinator", async () => {
+    const paths = await durablePaths();
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    const sessionId = "sesn_output_commit";
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_output_commit",
+          ownerId: "owner_output",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const [output] =
+      await stores.sessionOutputCoordinator.replaceSessionOutputsForRuntimeTurn({
+        workspaceId: "wrk_default",
+        sessionId,
+        turnId: "turn_output_commit",
+        ownerId: "owner_output",
+        ownerGeneration: 1,
+        files: [
+          {
+            relativePath: "output.txt",
+            filename: "output.txt",
+            mimeType: "text/plain",
+            body: new TextEncoder().encode("coordinated"),
+            sizeBytes: 11,
+          },
+        ],
+      });
+
+    await expect(
+      stores.files.retrieveMetadata("wrk_default", output!.metadata.id),
+    ).resolves.toMatchObject({
+      metadata: {
+        id: output!.metadata.id,
+        scope: { type: "session", id: sessionId },
+      },
+    });
+    stores.close();
+  });
+
+  it("rejects session output commits for stale runtime owners", async () => {
+    const paths = await durablePaths();
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    const sessionId = "sesn_output_stale_owner";
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_output_stale_owner",
+          ownerId: "owner_output",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await expect(
+      stores.sessionOutputCoordinator.replaceSessionOutputsForRuntimeTurn({
+        workspaceId: "wrk_default",
+        sessionId,
+        turnId: "turn_output_stale_owner",
+        ownerId: "owner_output",
+        ownerGeneration: 2,
+        files: [
+          {
+            relativePath: "late.txt",
+            filename: "late.txt",
+            mimeType: "text/plain",
+            body: new TextEncoder().encode("late"),
+            sizeBytes: 4,
+          },
+        ],
+      }),
+    ).rejects.toThrow("cannot be committed for inactive session");
+    await expect(
+      stores.files.list("wrk_default", { scopeId: sessionId }),
+    ).resolves.toMatchObject({ data: [] });
+    stores.close();
+  });
+
+  it("rejects session output commits for archived sessions", async () => {
+    const paths = await durablePaths();
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    const sessionId = "sesn_output_archived";
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_output_archived",
+          ownerId: "owner_output",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now: new Date().toISOString(),
+        },
+      ],
+    });
+    stores.sessions.archive("wrk_default", sessionId, new Date().toISOString());
+
+    await expect(
+      stores.sessionOutputCoordinator.replaceSessionOutputsForRuntimeTurn({
+        workspaceId: "wrk_default",
+        sessionId,
+        turnId: "turn_output_archived",
+        ownerId: "owner_output",
+        ownerGeneration: 1,
+        files: [
+          {
+            relativePath: "archived.txt",
+            filename: "archived.txt",
+            mimeType: "text/plain",
+            body: new TextEncoder().encode("archived"),
+            sizeBytes: 8,
+          },
+        ],
+      }),
+    ).rejects.toThrow("cannot be committed for inactive session");
+    await expect(
+      stores.files.list("wrk_default", { scopeId: sessionId }),
+    ).resolves.toMatchObject({ data: [] });
+    stores.close();
+  });
+
+  it("rejects best-effort session output commits before writing stale outputs", async () => {
+    const stores = createDeploymentStoresFromEnv({});
+    const coordinator = createBestEffortSessionOutputCoordinator({
+      sessions: stores.sessions,
+      events: stores.events,
+      files: stores.files,
+    });
+    const sessionId = "sesn_output_best_effort_stale";
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_output_best_effort_stale",
+          ownerId: "owner_output",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await expect(
+      coordinator.replaceSessionOutputsForRuntimeTurn({
+        workspaceId: "wrk_default",
+        sessionId,
+        turnId: "turn_output_best_effort_stale",
+        ownerId: "owner_output",
+        ownerGeneration: 2,
+        files: [
+          {
+            relativePath: "late.txt",
+            filename: "late.txt",
+            mimeType: "text/plain",
+            body: new TextEncoder().encode("late"),
+            sizeBytes: 4,
+          },
+        ],
+      }),
+    ).rejects.toThrow("cannot be committed for inactive session");
+    await expect(
+      stores.files.list("wrk_default", { scopeId: sessionId }),
+    ).resolves.toMatchObject({ data: [] });
+    stores.close();
   });
 
   it("serializes durable workspace quota accounting across concurrent uploads", async () => {

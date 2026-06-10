@@ -15,11 +15,9 @@ import {
   type JsonValue,
 } from "../../types/json.ts";
 import { ApiError, invalidRequest, notFound } from "../errors.ts";
-import type {
-  FileStorage,
-  FileStorageRecord,
-  SessionOutputFileInput,
-} from "../files/types.ts";
+import {
+  type DeploymentSessionOutputCoordinator,
+} from "../deployment-session-output-coordinator.ts";
 import type { SessionRow, SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { newRuntimeTurnId, newRequestId } from "../ids.ts";
@@ -117,7 +115,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly leaseTtlMs: number;
   private readonly runtimeRunner: RuntimeEventRunner | undefined;
   private readonly runtimeTranslator: RuntimeEventTranslator | undefined;
-  private readonly outputFileStorage: FileStorage | undefined;
+  private readonly sessionOutputCoordinator:
+    | DeploymentSessionOutputCoordinator
+    | undefined;
   private readonly pendingCustomToolActions = new Map<
     string,
     {
@@ -165,14 +165,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
     runtime?: {
       runner: RuntimeEventRunner;
       translate: RuntimeEventTranslator;
-      fileStorage?: FileStorage;
+      sessionOutputCoordinator?: DeploymentSessionOutputCoordinator;
       ownerId?: string;
       leaseTtlMs?: number;
     },
   ) {
     this.runtimeRunner = runtime?.runner;
     this.runtimeTranslator = runtime?.translate;
-    this.outputFileStorage = runtime?.fileStorage;
+    this.sessionOutputCoordinator = runtime?.sessionOutputCoordinator;
     this.ownerId = runtime?.ownerId ?? `owner_${newRequestId()}`;
     this.leaseTtlMs = runtime?.leaseTtlMs ?? 120_000;
   }
@@ -1357,7 +1357,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     prompt: RuntimePrompt,
   ): Promise<void> {
-    if (!this.outputFileStorage || !this.runtimeRunner?.collectSessionOutputs) {
+    if (
+      !this.sessionOutputCoordinator ||
+      !this.runtimeRunner?.collectSessionOutputs
+    ) {
       return;
     }
     try {
@@ -1368,6 +1371,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
       if (collection.kind !== "collected") return;
       if (collection.files.length === 0) return;
       if (
+        // Cheap process-local early-out. The coordinator is still the
+        // authoritative check at metadata commit time.
         !this.canCommitSessionOutputsFromRuntimeTurn(
           workspaceId,
           sessionId,
@@ -1377,32 +1382,21 @@ export class DefaultSessionEventsService implements SessionEventsService {
         return;
       }
       const files = collection.files.map((file) => ({
-          relativePath: file.relativePath,
-          filename: file.filename,
-          mimeType: file.mimeType,
-          sizeBytes: file.sizeBytes,
-          sha256: file.sha256,
-          body: file.bytes,
-        }));
-      if (hasLivenessFencedSessionOutputReplace(this.outputFileStorage)) {
-        await this.outputFileStorage.replaceSessionOutputsIfLive(
-          workspaceId,
-          sessionId,
-          files,
-          () =>
-            this.canCommitSessionOutputsFromRuntimeTurn(
-              workspaceId,
-              sessionId,
-              prompt,
-            ),
-        );
-        return;
-      }
-      await this.outputFileStorage.replaceSessionOutputs(
+        relativePath: file.relativePath,
+        filename: file.filename,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes,
+        sha256: file.sha256,
+        body: file.bytes,
+      }));
+      await this.sessionOutputCoordinator.replaceSessionOutputsForRuntimeTurn({
         workspaceId,
         sessionId,
+        turnId: prompt.turnId,
+        ownerId: prompt.ownerId,
+        ownerGeneration: prompt.ownerGeneration,
         files,
-      );
+      });
     } catch (error) {
       console.warn("session output indexing failed", {
         workspaceId,
@@ -2889,25 +2883,6 @@ function hasTerminalIdleDraft(drafts: readonly EventDraft[]): boolean {
     if (!isJsonObject(stopReason)) return true;
     return stopReason.type !== "requires_action";
   });
-}
-
-type LivenessFencedSessionOutputStorage = FileStorage & {
-  replaceSessionOutputsIfLive(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    files: readonly SessionOutputFileInput[],
-    canCommit: () => boolean,
-  ): Promise<readonly FileStorageRecord[]>;
-};
-
-function hasLivenessFencedSessionOutputReplace(
-  storage: FileStorage,
-): storage is LivenessFencedSessionOutputStorage {
-  return typeof (
-    storage as {
-      replaceSessionOutputsIfLive?: unknown;
-    }
-  ).replaceSessionOutputsIfLive === "function";
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
