@@ -379,8 +379,10 @@ This preserves B.2/B.3 replay and SSE guarantees while Cycle C only adds transla
 - The concrete duplicate-side-effect paths it guards are:
   - duplicate `user.message` can cause duplicate runtime prompts
   - duplicate `user.custom_tool_result` can double-resolve pending tool waits
-- Idempotency for `POST /v1/sessions`, file uploads, multipart fingerprints,
-  and streaming responses remains deferred.
+- Remaining idempotency work is split into explicit future items:
+  - `POST /v1/sessions`;
+  - file uploads and multipart fingerprints;
+  - streaming response exclusions or replay semantics.
 
 **Cycle C slices:**
 
@@ -581,8 +583,10 @@ Implemented scope:
 
 Deferred:
 
-- Idempotency outside `events.send`, including `POST /v1/sessions`, file uploads,
-  multipart fingerprints, and streaming responses.
+- Idempotency outside `events.send`:
+  - `POST /v1/sessions`;
+  - file uploads and multipart fingerprints;
+  - streaming response exclusions or replay semantics.
 - Permission-gated built-in/MCP tools (`user.tool_confirmation`) and the source path for `evaluated_permission`.
 - Durable pending-call recovery after process crash or horizontal process handoff.
 - Structured multi-block error payload preservation for `user.custom_tool_result.is_error`.
@@ -759,7 +763,7 @@ Current checkpoint:
 This is enough to call the project an MVP control plane with proven Docker-local execution.
 It is not enough to claim full Anthropic Managed Agents compatibility or canonical tutorial parity.
 
-Remaining parity gaps include archive-running-session behavior, durable custom-tool recovery, idempotency outside `events.send`, agent update/versioning, broader event-topology parity, managed remote sandbox providers, and production auth/RBAC/tenancy.
+Remaining parity gaps include archive-running-session behavior, durable custom-tool recovery, idempotency outside `events.send` (`POST /v1/sessions`, file uploads/multipart fingerprints, and streaming replay semantics), agent update/versioning, broader event-topology parity, managed remote sandbox providers, and production auth/RBAC/tenancy.
 
 ## Canonical Tutorial Compatibility Backlog
 

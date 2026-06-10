@@ -55,7 +55,8 @@ Working today:
 
 Still missing before claiming broad Anthropic Managed Agents parity:
 
-- request-level idempotency;
+- request idempotency outside `events.send` (`POST /v1/sessions`, file uploads,
+  multipart fingerprints, and streaming replay semantics);
 - agent update/versioning;
 - broader event-topology parity;
 - managed remote sandbox providers such as Modal;
