@@ -224,6 +224,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
     opts: { signal?: AbortSignal; requestId?: string } = {},
   ): SessionEventsHttpResponse {
     const now = new Date();
+    // Keep reservation and domain execution in one synchronous call path after
+    // the route has read the raw body. Adding an await here would reopen the
+    // same-key interleaving ADR 0015 is designed to avoid.
     const reservation = this.events.reserveIdempotencyKey({
       ...idempotency,
       workspaceId,
@@ -257,6 +260,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
       return { status: 200, body: { data: events } };
     } catch (error) {
       if (error instanceof ApiError && error.status < 500) {
+        // Replay returns the original error envelope, including request_id.
+        // The fresh HTTP header still carries the retry attempt's request id.
         const body = toApiErrorBody(error, opts.requestId);
         const completionClock = new Date();
         this.events.completeIdempotency({

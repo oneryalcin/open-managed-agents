@@ -93,6 +93,8 @@ CREATE INDEX IF NOT EXISTS events_by_workspace_session ON events (workspace_id, 
 CREATE INDEX IF NOT EXISTS events_by_workspace_session_type ON events (workspace_id, session_id, type, id);
 CREATE INDEX IF NOT EXISTS pending_runtime_actions_by_turn
   ON pending_runtime_actions (workspace_id, session_id, turn_id);
+CREATE INDEX IF NOT EXISTS idempotency_keys_by_status_expiry
+  ON idempotency_keys (status, expires_at);
 `;
 
 interface EventRow {
@@ -356,7 +358,7 @@ export class EventStore implements SessionEventStore {
     );
     this.purgeExpiredIdempotencyKeysStmt = this.db.prepare(
       `DELETE FROM idempotency_keys
-       WHERE status = 'completed' AND expires_at <= ?`,
+       WHERE status IN ('completed', 'in_progress') AND expires_at <= ?`,
     );
     this.reserveIdempotencyKeyStmt = this.db.prepare(
       `INSERT INTO idempotency_keys
