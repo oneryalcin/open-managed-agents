@@ -15,6 +15,7 @@ import {
   type JsonValue,
 } from "../../types/json.ts";
 import { ApiError, invalidRequest, notFound } from "../errors.ts";
+import { conflict, toApiErrorBody } from "../errors.ts";
 import {
   type DeploymentSessionOutputCoordinator,
 } from "../deployment-session-output-coordinator.ts";
@@ -32,10 +33,13 @@ import {
   materializePersistedEvents,
   persistAndPublish,
   persistRuntimeChangesAndPublish,
+  persistRuntimeChangesCompleteIdempotencyAndPublish,
   type EventDraft,
 } from "./persist.ts";
 import type {
+  EventsSendIdempotencyKey,
   EventStoreRuntimeChanges,
+  IdempotencyCompletionInput,
   ListSessionEventsOptions,
   PendingRuntimeActionRecord,
   PendingRuntimeTurnRecord,
@@ -48,6 +52,7 @@ import type {
   SessionEventBroadcaster,
   SessionEventStore,
   SessionEventsService,
+  SessionEventsHttpResponse,
   StreamSessionEventsOptions,
 } from "./types.ts";
 import {
@@ -61,6 +66,28 @@ const SUPPORTED_USER_EVENT_TYPES = new Set([
   "user.custom_tool_result",
   "user.tool_confirmation",
 ] as const);
+
+const IDEMPOTENCY_RESPONSE_TTL_MS = 24 * 60 * 60 * 1000;
+// Stale in-progress rows older than this may be reacquired. Because reservation
+// commits before the domain transaction, an abandoned row past this threshold
+// cannot imply a committed side effect unless the completed response committed too.
+const IDEMPOTENCY_ABANDONED_IN_PROGRESS_MS = 5 * 60 * 1000;
+
+function idempotencyCompletion(
+  workspaceId: WorkspaceId,
+  idempotency: EventsSendIdempotencyKey,
+  response: { status: number; body: unknown },
+): IdempotencyCompletionInput {
+  const now = new Date();
+  return {
+    ...idempotency,
+    workspaceId,
+    responseStatus: response.status,
+    responseBody: response.body,
+    now: now.toISOString(),
+    expiresAt: new Date(now.getTime() + IDEMPOTENCY_RESPONSE_TTL_MS).toISOString(),
+  };
+}
 
 interface ToolConfirmationCommit {
   event: ManagedAgentsUserToolConfirmationEventInput;
@@ -189,6 +216,74 @@ export class DefaultSessionEventsService implements SessionEventsService {
     input: unknown,
     opts: { signal?: AbortSignal } = {},
   ): ManagedAgentsEvent[] {
+    return this.sendInternal(workspaceId, sessionId, input, opts);
+  }
+
+  sendIdempotent(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    input: unknown,
+    idempotency: EventsSendIdempotencyKey,
+    opts: { signal?: AbortSignal; requestId?: string } = {},
+  ): SessionEventsHttpResponse {
+    const now = new Date();
+    const reservation = this.events.reserveIdempotencyKey({
+      ...idempotency,
+      workspaceId,
+      now: now.toISOString(),
+      expiresAt: new Date(now.getTime() + IDEMPOTENCY_RESPONSE_TTL_MS).toISOString(),
+      abandonedBefore: new Date(
+        now.getTime() - IDEMPOTENCY_ABANDONED_IN_PROGRESS_MS,
+      ).toISOString(),
+    });
+    if (reservation.kind === "replay") {
+      return {
+        status: reservation.responseStatus as SessionEventsHttpResponse["status"],
+        body: reservation.responseBody,
+      };
+    }
+    if (reservation.kind === "fingerprint_mismatch") {
+      throw invalidRequest(
+        "`Idempotency-Key` was already used for a different request",
+      );
+    }
+    if (reservation.kind === "in_progress") {
+      throw conflict(
+        "A request with this `Idempotency-Key` is already in progress; retry later",
+      );
+    }
+    try {
+      const events = this.sendInternal(workspaceId, sessionId, input, {
+        signal: opts.signal,
+        idempotency,
+      });
+      return { status: 200, body: { data: events } };
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500) {
+        const body = toApiErrorBody(error, opts.requestId);
+        const completionClock = new Date();
+        this.events.completeIdempotency({
+          ...idempotency,
+          workspaceId,
+          responseStatus: error.status,
+          responseBody: body,
+          now: completionClock.toISOString(),
+          expiresAt: new Date(
+            completionClock.getTime() + IDEMPOTENCY_RESPONSE_TTL_MS,
+          ).toISOString(),
+        });
+        return { status: error.status, body };
+      }
+      throw error;
+    }
+  }
+
+  private sendInternal(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    input: unknown,
+    opts: { signal?: AbortSignal; idempotency?: EventsSendIdempotencyKey } = {},
+  ): ManagedAgentsEvent[] {
     if (this.isArchivingSession(workspaceId, sessionId)) {
       throw notFound(`Session ${sessionId} not found`);
     }
@@ -293,12 +388,33 @@ export class DefaultSessionEventsService implements SessionEventsService {
         now,
       });
     }
-    persistRuntimeChangesAndPublish(
-      this.events,
-      this.broadcaster,
-      [...rows, ...terminalRows, ...toolConfirmationTerminalRows],
-      runtimeChanges,
+    const responseEvents = req.events.map((event) =>
+      toSendResponseEvent(
+        existingToolConfirmations.get(event) ??
+          existingCustomToolResults.get(event) ??
+          rowsByInput.get(event),
+      ),
     );
+    const persistedRows = [...rows, ...terminalRows, ...toolConfirmationTerminalRows];
+    if (opts.idempotency) {
+      persistRuntimeChangesCompleteIdempotencyAndPublish(
+        this.events,
+        this.broadcaster,
+        persistedRows,
+        runtimeChanges,
+        idempotencyCompletion(workspaceId, opts.idempotency, {
+          status: 200,
+          body: { data: responseEvents },
+        }),
+      );
+    } else {
+      persistRuntimeChangesAndPublish(
+        this.events,
+        this.broadcaster,
+        persistedRows,
+        runtimeChanges,
+      );
+    }
     this.scheduleAcceptedTurnRecovery(runtimeChanges.acceptedTurns);
     const committedToolConfirmations = toolConfirmationClaims.filter(
       (claim): claim is ToolConfirmationCommit => "commit" in claim,
@@ -344,13 +460,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       opts.signal,
     );
     this.maybeInterruptRuntime(workspaceId, sessionId, req.events);
-    return req.events.map((event) =>
-      toSendResponseEvent(
-        existingToolConfirmations.get(event) ??
-          existingCustomToolResults.get(event) ??
-          rowsByInput.get(event),
-      ),
-    );
+    return responseEvents;
   }
 
   private maybeInterruptRuntime(

@@ -5,6 +5,7 @@ import { MAX_EVENT_PAYLOAD_BYTES } from "./constants.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import type {
   EventStoreRuntimeChanges,
+  IdempotencyCompletionInput,
   PersistedSessionEvent,
   SessionEventBroadcaster,
   SessionEventStore,
@@ -60,5 +61,23 @@ export function persistRuntimeChangesAndPublish(
   // Same persist-then-notify invariant as persistAndPublish, with runtime
   // ledger mutations committed in the same SQLite transaction as the events.
   store.appendBatchWithRuntimeChanges(events, changes);
+  broadcaster.publishPersisted(events);
+}
+
+export function persistRuntimeChangesCompleteIdempotencyAndPublish(
+  store: SessionEventStore,
+  broadcaster: SessionEventBroadcaster,
+  events: readonly PersistedSessionEvent[],
+  changes: EventStoreRuntimeChanges,
+  completion: IdempotencyCompletionInput,
+): void {
+  // The idempotency response must commit in the same transaction as the domain
+  // event/runtime writes, or a crash can leave a committed side effect with no
+  // replayable response.
+  store.appendBatchWithRuntimeChangesAndCompleteIdempotency(
+    events,
+    changes,
+    completion,
+  );
   broadcaster.publishPersisted(events);
 }

@@ -15,6 +15,9 @@ import type { JsonObject } from "../../types/json.ts";
 import { RuntimeTurnOwnershipLostError } from "./types.ts";
 import type {
   EventStoreRuntimeChanges,
+  IdempotencyCompletionInput,
+  IdempotencyReservationInput,
+  IdempotencyReservationResult,
   ListSessionEventRecordsOptions,
   PendingRuntimeActionRecord,
   PendingRuntimeTurnRecord,
@@ -67,6 +70,21 @@ CREATE TABLE IF NOT EXISTS pending_runtime_actions (
   PRIMARY KEY (workspace_id, session_id, action_id),
   FOREIGN KEY (workspace_id, session_id, turn_id)
     REFERENCES pending_runtime_turns(workspace_id, session_id, turn_id)
+);
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  workspace_id TEXT NOT NULL,
+  method TEXT NOT NULL,
+  concrete_path TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  route_label TEXT NOT NULL,
+  fingerprint_sha256 TEXT NOT NULL,
+  status TEXT NOT NULL,
+  response_status INTEGER,
+  response_body TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, method, concrete_path, idempotency_key)
 );
 `;
 
@@ -127,6 +145,21 @@ interface RuntimeTurnRow {
   terminalized_at: string | null;
 }
 
+interface IdempotencyKeyRow {
+  workspace_id: string;
+  method: string;
+  concrete_path: string;
+  idempotency_key: string;
+  route_label: string;
+  fingerprint_sha256: string;
+  status: string;
+  response_status: number | null;
+  response_body: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+}
+
 export interface ListOptions {
   /** Legacy cursor alias — return events with `id > afterId` in ASC order. */
   afterId?: string;
@@ -166,6 +199,11 @@ export class EventStore implements SessionEventStore {
   private readonly claimAcceptedRuntimeTurnStmt: StatementSync;
   private readonly claimTerminalizingRuntimeTurnStmt: StatementSync;
   private readonly retrieveRuntimeTurnStmt: StatementSync;
+  private readonly purgeExpiredIdempotencyKeysStmt: StatementSync;
+  private readonly reserveIdempotencyKeyStmt: StatementSync;
+  private readonly retrieveIdempotencyKeyStmt: StatementSync;
+  private readonly acquireAbandonedIdempotencyKeyStmt: StatementSync;
+  private readonly completeIdempotencyKeyStmt: StatementSync;
   private readonly listStmts = new Map<string, StatementSync>();
 
   constructor(db: DatabaseSync) {
@@ -311,6 +349,43 @@ export class EventStore implements SessionEventStore {
        FROM pending_runtime_turns
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?`,
     );
+    this.purgeExpiredIdempotencyKeysStmt = this.db.prepare(
+      `DELETE FROM idempotency_keys
+       WHERE status = 'completed' AND expires_at <= ?`,
+    );
+    this.reserveIdempotencyKeyStmt = this.db.prepare(
+      `INSERT INTO idempotency_keys
+        (workspace_id, method, concrete_path, idempotency_key, route_label,
+         fingerprint_sha256, status, created_at, updated_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?)
+       ON CONFLICT(workspace_id, method, concrete_path, idempotency_key) DO NOTHING`,
+    );
+    this.retrieveIdempotencyKeyStmt = this.db.prepare(
+      `SELECT workspace_id, method, concrete_path, idempotency_key, route_label,
+              fingerprint_sha256, status, response_status, response_body,
+              created_at, updated_at, expires_at
+       FROM idempotency_keys
+       WHERE workspace_id = ? AND method = ? AND concrete_path = ?
+         AND idempotency_key = ?`,
+    );
+    this.acquireAbandonedIdempotencyKeyStmt = this.db.prepare(
+      `UPDATE idempotency_keys
+       SET updated_at = ?, expires_at = ?
+       WHERE workspace_id = ? AND method = ? AND concrete_path = ?
+         AND idempotency_key = ? AND fingerprint_sha256 = ?
+         AND status = 'in_progress' AND updated_at <= ?`,
+    );
+    this.completeIdempotencyKeyStmt = this.db.prepare(
+      `UPDATE idempotency_keys
+       SET status = 'completed',
+           response_status = ?,
+           response_body = ?,
+           updated_at = ?,
+           expires_at = ?
+       WHERE workspace_id = ? AND method = ? AND concrete_path = ?
+         AND idempotency_key = ? AND fingerprint_sha256 = ?
+         AND status = 'in_progress'`,
+    );
   }
 
   /** Open a store backed by a SQLite file. Pass `:memory:` for in-memory. */
@@ -335,6 +410,17 @@ export class EventStore implements SessionEventStore {
     });
   }
 
+  appendBatchWithRuntimeChangesAndCompleteIdempotency(
+    events: readonly PersistedSessionEvent[],
+    changes: EventStoreRuntimeChanges,
+    completion: IdempotencyCompletionInput,
+  ): void {
+    this.withTransaction(() => {
+      this.appendBatchWithRuntimeChangesInTransaction(events, changes);
+      this.completeIdempotencyInTransaction(completion);
+    });
+  }
+
   appendBatchWithRuntimeChangesInTransaction(
     events: readonly PersistedSessionEvent[],
     changes: EventStoreRuntimeChanges,
@@ -343,6 +429,77 @@ export class EventStore implements SessionEventStore {
       this.appendEvent(event);
     }
     this.applyRuntimeChanges(changes);
+  }
+
+  completeIdempotencyInTransaction(completion: IdempotencyCompletionInput): void {
+    const result = this.completeIdempotencyKeyStmt.run(
+      completion.responseStatus,
+      JSON.stringify(completion.responseBody),
+      completion.now,
+      completion.expiresAt,
+      completion.workspaceId,
+      completion.method,
+      completion.concretePath,
+      completion.key,
+      completion.fingerprintSha256,
+    );
+    if (result.changes === 0) {
+      throw new Error("Idempotency key reservation was not active at completion");
+    }
+  }
+
+  completeIdempotency(completion: IdempotencyCompletionInput): void {
+    this.withTransaction(() => {
+      this.completeIdempotencyInTransaction(completion);
+    });
+  }
+
+  reserveIdempotencyKey(
+    input: IdempotencyReservationInput,
+  ): IdempotencyReservationResult {
+    this.purgeExpiredIdempotencyKeysStmt.run(input.now);
+    const inserted = this.reserveIdempotencyKeyStmt.run(
+      input.workspaceId,
+      input.method,
+      input.concretePath,
+      input.key,
+      input.routeLabel,
+      input.fingerprintSha256,
+      input.now,
+      input.now,
+      input.expiresAt,
+    );
+    if (inserted.changes === 1) return { kind: "reserved" };
+
+    const row = this.retrieveIdempotencyKey(input);
+    if (!row) return { kind: "reserved" };
+    if (row.fingerprint_sha256 !== input.fingerprintSha256) {
+      return { kind: "fingerprint_mismatch" };
+    }
+    if (row.status === "completed") {
+      if (row.response_status === null || row.response_body === null) {
+        throw new Error("Completed idempotency row is missing response data");
+      }
+      return {
+        kind: "replay",
+        responseStatus: row.response_status,
+        responseBody: JSON.parse(row.response_body) as JsonObject,
+      };
+    }
+    if (row.status === "in_progress") {
+      const acquired = this.acquireAbandonedIdempotencyKeyStmt.run(
+        input.now,
+        input.expiresAt,
+        input.workspaceId,
+        input.method,
+        input.concretePath,
+        input.key,
+        input.fingerprintSha256,
+        input.abandonedBefore,
+      );
+      return acquired.changes === 1 ? { kind: "reserved" } : { kind: "in_progress" };
+    }
+    throw new Error(`Unknown idempotency key status: ${row.status}`);
   }
 
   deleteForSession(workspaceId: WorkspaceId, sessionId: string): void {
@@ -483,6 +640,20 @@ export class EventStore implements SessionEventStore {
       turnId,
     ) as unknown as RuntimeTurnRow | undefined;
     return row ? deserializeRuntimeTurn(row) : undefined;
+  }
+
+  private retrieveIdempotencyKey(
+    input: Pick<
+      IdempotencyReservationInput,
+      "workspaceId" | "method" | "concretePath" | "key"
+    >,
+  ): IdempotencyKeyRow | undefined {
+    return this.retrieveIdempotencyKeyStmt.get(
+      input.workspaceId,
+      input.method,
+      input.concretePath,
+      input.key,
+    ) as unknown as IdempotencyKeyRow | undefined;
   }
 
   close(): void {

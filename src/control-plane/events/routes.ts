@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { parseJsonBody, parseLimit, parseOrder } from "../http.ts";
 import { invalidRequest } from "../errors.ts";
@@ -16,6 +17,30 @@ export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv>
 
   app.post("/", async (c) => {
     const sessionId = requiredSessionId(c.req.param("sessionId"));
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey !== undefined) {
+      const rawBody = new Uint8Array(await c.req.raw.arrayBuffer());
+      const body = parseJsonBytes(rawBody);
+      const method = c.req.method.toUpperCase();
+      const concretePath = new URL(c.req.url).pathname;
+      const response = service.sendIdempotent(
+        DEFAULT_WORKSPACE_ID,
+        sessionId,
+        body,
+        {
+          method,
+          concretePath,
+          key: validateIdempotencyKey(idempotencyKey),
+          routeLabel: "POST /v1/sessions/{session_id}/events",
+          fingerprintSha256: requestFingerprint(method, concretePath, rawBody),
+        },
+        {
+          signal: c.req.raw.signal,
+          requestId: c.get("requestId"),
+        },
+      );
+      return jsonResponse(response.body, response.status, c.get("requestId"));
+    }
     const body = await parseJsonBody(c.req);
     return c.json(
       {
@@ -74,6 +99,55 @@ function requiredSessionId(value: string | undefined): string {
     throw invalidRequest("Session ID path parameter is required");
   }
   return value;
+}
+
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+
+function validateIdempotencyKey(value: string): string {
+  if (value.length === 0) {
+    throw invalidRequest("`Idempotency-Key` must not be empty");
+  }
+  if (value.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    throw invalidRequest(
+      `\`Idempotency-Key\` must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`,
+    );
+  }
+  if (!/^[\x21-\x7E]+$/.test(value)) {
+    throw invalidRequest("`Idempotency-Key` must contain only visible ASCII characters");
+  }
+  return value;
+}
+
+function parseJsonBytes(bytes: Uint8Array): unknown {
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch (error) {
+    throw invalidRequest("Request body must be valid JSON", String(error));
+  }
+}
+
+function requestFingerprint(
+  method: string,
+  concretePath: string,
+  rawBody: Uint8Array,
+): string {
+  const hash = createHash("sha256");
+  hash.update(method);
+  hash.update("\n");
+  hash.update(concretePath);
+  hash.update("\n");
+  hash.update(rawBody);
+  return hash.digest("hex");
+}
+
+function jsonResponse(body: unknown, status: number, requestId: string): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "request-id": requestId,
+    },
+  });
 }
 
 function parsePage(value: string | undefined): string | undefined {
