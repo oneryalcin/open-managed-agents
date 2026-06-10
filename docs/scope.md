@@ -27,6 +27,12 @@ The smallest end-to-end flow that proves the architecture **and preserves the "b
 
 **Session events:**
 - `POST /v1/sessions/{id}/events` — accept `user.message` and `user.custom_tool_result` (carries `custom_tool_use_id`, NOT `tool_use_id`).
+  Optional `Idempotency-Key` is supported for retry-safe JSON writes on this
+  endpoint. Reusing the same key with the same method, concrete path, and raw
+  request body replays the original response without appending duplicate events
+  or starting duplicate runtime work. Reusing the same key with a different raw
+  body returns `invalid_request_error`; a fresh in-progress same-key request
+  returns `409`.
 - `GET /v1/sessions/{id}/events/stream` — SSE wrapping Pi's `session.subscribe()`. Honors `Last-Event-ID` header for resume.
 - **`GET /v1/sessions/{id}/events`** — paginated list of all persisted events (the append-only event log). **Cursor query param is `?page=<token>`** (not `?after_id=...`), matching Anthropic's wire contract. Clients pass the returned `next_page` value unchanged; token internals are server-owned. Required for client reconnect-with-consolidation (see `architecture.md` → Event log).
 - Runtime model requests emit `span.model_request_start` /

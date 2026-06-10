@@ -45,10 +45,16 @@ The control plane, the Pi loop, and the sandbox are three separate concerns — 
 ## Request flow — `events.send` with `user.message`
 
 1. Client posts to `/v1/sessions/{id}/events` with `{ type: "user.message", content: [...] }`
-2. Control plane resolves session and persists the user event to the event log.
-3. Runtime ingestion forwards the text into the cached Pi session. If idle: `session.prompt(text)`. If already running: `session.followUp(text)`; Pi owns the turn queue.
-4. Pi runs the loop; emits `tool_execution_start`, `message_update`, `agent_end`, etc.
-5. Control plane translates Pi events → Managed Agents event shapes → SSE stream
+2. If the request includes `Idempotency-Key`, the control plane reserves the key
+   for the exact method, concrete path, and raw JSON body. Completed same-key
+   retries replay the stored response; fresh in-progress retries return `409`;
+   same-key/different-body retries return `invalid_request_error`.
+3. Control plane resolves session and persists the user event to the event log.
+   For idempotent requests, the event rows, runtime ledger changes, and stored
+   idempotency response complete in the same SQLite transaction.
+4. Runtime ingestion forwards the text into the cached Pi session. If idle: `session.prompt(text)`. If already running: `session.followUp(text)`; Pi owns the turn queue.
+5. Pi runs the loop; emits `tool_execution_start`, `message_update`, `agent_end`, etc.
+6. Control plane translates Pi events → Managed Agents event shapes → SSE stream
 
 ## Request flow — custom tool round-trip
 
