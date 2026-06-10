@@ -21,6 +21,7 @@ export type ApiErrorStatus =
   | 402
   | 403
   | 404
+  | 409
   | 413
   | 429
   | 500
@@ -66,6 +67,10 @@ export function invalidRequest(
 
 export function notFound(message: string): ApiError {
   return new ApiError(404, "not_found_error", message);
+}
+
+export function conflict(message: string): ApiError {
+  return new ApiError(409, "invalid_request_error", message);
 }
 
 export function requestTooLarge(message = "Request body is too large"): ApiError {

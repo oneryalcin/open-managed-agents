@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { RuntimeEventRunner } from "../events/types.ts";
 import { createInMemoryControlPlaneApp } from "./helpers.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
@@ -108,6 +109,119 @@ describe("Session events API", () => {
       expect(event).not.toHaveProperty("payload");
       expect(event).not.toHaveProperty("created_at");
     }
+  });
+
+  it("replays idempotent user.message retries without appending or starting runtime twice", async () => {
+    const runner = new PromptTrackingRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: () => [] },
+    });
+    const session = await setupSession(app);
+    const body = JSON.stringify({
+      events: [{ type: "user.message", content: [{ type: "text", text: "hello" }] }],
+    });
+
+    const first = await postEvents(app, session.id, body, "retry-message");
+    const second = await postEvents(app, session.id, body, "retry-message");
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const firstBody = (await first.json()) as { data: Array<Record<string, unknown>> };
+    const secondBody = (await second.json()) as { data: Array<Record<string, unknown>> };
+    expect(secondBody).toEqual(firstBody);
+    expect(runner.prompts).toEqual(["hello"]);
+
+    const list = await getEvents(app, `/v1/sessions/${session.id}/events?order=asc`);
+    expect(list.data.map((event) => event.id)).toEqual([
+      firstBody.data[0].id,
+    ]);
+  });
+
+  it("rejects same-key retries with a different raw body without appending", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const session = await setupSession(app);
+    const firstBody = JSON.stringify({
+      events: [{ type: "user.message", content: [{ type: "text", text: "first" }] }],
+    });
+    const secondBody = JSON.stringify({
+      events: [{ type: "user.message", content: [{ type: "text", text: "second" }] }],
+    });
+
+    expect((await postEvents(app, session.id, firstBody, "same-key")).status).toBe(200);
+    await expectError(
+      await postEvents(app, session.id, secondBody, "same-key"),
+      400,
+      "invalid_request_error",
+      "`Idempotency-Key` was already used for a different request",
+    );
+
+    const list = await getEvents(app, `/v1/sessions/${session.id}/events?order=asc`);
+    expect(list.data.map((event) => event.content)).toEqual([
+      [{ type: "text", text: "first" }],
+    ]);
+  });
+
+  it("replays idempotent custom tool result retries without appending duplicates", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const session = await setupSession(app);
+    const body = JSON.stringify({
+      events: [
+        {
+          type: "user.custom_tool_result",
+          custom_tool_use_id: "ctu_retry",
+          content: [{ type: "text", text: "done" }],
+        },
+      ],
+    });
+
+    const first = await postEvents(app, session.id, body, "retry-tool-result");
+    const second = await postEvents(app, session.id, body, "retry-tool-result");
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const firstBody = (await first.json()) as { data: Array<Record<string, unknown>> };
+    await expect(second.json()).resolves.toEqual(firstBody);
+    const list = await getEvents(app, `/v1/sessions/${session.id}/events?order=asc`);
+    expect(list.data.map((event) => event.id)).toEqual([
+      firstBody.data[0].id,
+    ]);
+  });
+
+  it("scopes idempotency keys to the concrete session path", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const first = await setupSession(app);
+    const second = await setupSession(app);
+    const body = JSON.stringify({
+      events: [{ type: "user.message", content: [{ type: "text", text: "shared" }] }],
+    });
+
+    const firstRes = await postEvents(app, first.id, body, "shared-key");
+    const secondRes = await postEvents(app, second.id, body, "shared-key");
+
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+    const firstBody = (await firstRes.json()) as { data: Array<Record<string, unknown>> };
+    const secondBody = (await secondRes.json()) as { data: Array<Record<string, unknown>> };
+    expect(secondBody.data[0].id).not.toBe(firstBody.data[0].id);
+  });
+
+  it("replays completed idempotent 4xx responses", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const session = await setupSession(app);
+    const body = JSON.stringify({ events: [] });
+
+    const first = await postEvents(app, session.id, body, "bad-once");
+    const firstBody = (await first.clone().json()) as ApiErrorBody;
+    await expectError(
+      first,
+      400,
+      "invalid_request_error",
+      "`events` must be a non-empty array",
+    );
+
+    const second = await postEvents(app, session.id, body, "bad-once");
+    expect(second.status).toBe(400);
+    await expect(second.json()).resolves.toEqual(firstBody);
   });
 
   it("preserves atomicity for multi-event sends", async () => {
@@ -419,6 +533,18 @@ describe("Session events API", () => {
   });
 });
 
+class PromptTrackingRunner implements RuntimeEventRunner {
+  readonly prompts: string[] = [];
+
+  async *runUserMessage(
+    _workspaceId: string,
+    _sessionId: string,
+    text: string,
+  ): AsyncIterable<unknown> {
+    this.prompts.push(text);
+  }
+}
+
 async function setupSession(
   app: ReturnType<typeof createInMemoryControlPlaneApp>,
 ): Promise<ManagedAgentsSession> {
@@ -443,6 +569,22 @@ async function sendMessage(
     }),
   });
   expect(res.status).toBe(200);
+}
+
+async function postEvents(
+  app: ReturnType<typeof createInMemoryControlPlaneApp>,
+  sessionId: string,
+  body: string,
+  idempotencyKey: string,
+): Promise<Response> {
+  return app.request(`/v1/sessions/${sessionId}/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": idempotencyKey,
+    },
+    body,
+  });
 }
 
 async function getEvents(

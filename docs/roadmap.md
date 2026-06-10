@@ -151,7 +151,10 @@ B.2 proves the persisted session event log over HTTP. It accepts user-originated
 - `MAX_EVENT_PAYLOAD_BYTES` is 64 KiB after JSON serialization. The existing app-level body limit still caps the whole request.
 - The session ID in the URL path is authoritative. B.2 rejects any event payload that includes a `session_id` field rather than ignoring or reconciling it.
 - Event payloads are persisted before any later broadcaster integration. B.2 has no broadcaster dependency.
-- B.2 does not implement idempotency keys. Retried `events.send` calls can duplicate events; this is tracked as a post-B.2 durability gap before external clients rely on retry-heavy workflows.
+- Later durability work added optional `Idempotency-Key` support for
+  `events.send`. Same-key retries with the same concrete path and raw request
+  body replay the original response; same-key/different-body retries return
+  `invalid_request_error`; fresh in-progress same-key retries return `409`.
 
 **Supported user event variants in B.2:**
 
@@ -369,13 +372,15 @@ This preserves B.2/B.3 replay and SSE guarantees while Cycle C only adds transla
 - ADR 0010 must pin normalization rules (IDs/timestamps/non-deterministic fields) and refresh policy.
 - Pi version changes require explicit cassette review.
 
-**Idempotency forward note (tracked, not fixed in C):**
+**Idempotency note:**
 
-- `events.send` idempotency remains deferred from B.2.
-- Cycle C must call out concrete duplicate-side-effect paths:
+- `events.send` idempotency is implemented for retry-safe JSON writes using the
+  `Idempotency-Key` header.
+- The concrete duplicate-side-effect paths it guards are:
   - duplicate `user.message` can cause duplicate runtime prompts
   - duplicate `user.custom_tool_result` can double-resolve pending tool waits
-- Full idempotency enforcement may land in D, but risk ownership begins in C.
+- Idempotency for `POST /v1/sessions`, file uploads, multipart fingerprints,
+  and streaming responses remains deferred.
 
 **Cycle C slices:**
 
@@ -576,7 +581,8 @@ Implemented scope:
 
 Deferred:
 
-- Request-level idempotency. Duplicate `user.custom_tool_result` handling is still non-idempotent at the API boundary, though a result with no pending runtime call is rejected.
+- Idempotency outside `events.send`, including `POST /v1/sessions`, file uploads,
+  multipart fingerprints, and streaming responses.
 - Permission-gated built-in/MCP tools (`user.tool_confirmation`) and the source path for `evaluated_permission`.
 - Durable pending-call recovery after process crash or horizontal process handoff.
 - Structured multi-block error payload preservation for `user.custom_tool_result.is_error`.
@@ -753,7 +759,7 @@ Current checkpoint:
 This is enough to call the project an MVP control plane with proven Docker-local execution.
 It is not enough to claim full Anthropic Managed Agents compatibility or canonical tutorial parity.
 
-Remaining parity gaps include archive-running-session behavior, durable custom-tool recovery, request idempotency, agent update/versioning, broader event-topology parity, managed remote sandbox providers, and production auth/RBAC/tenancy.
+Remaining parity gaps include archive-running-session behavior, durable custom-tool recovery, idempotency outside `events.send`, agent update/versioning, broader event-topology parity, managed remote sandbox providers, and production auth/RBAC/tenancy.
 
 ## Canonical Tutorial Compatibility Backlog
 

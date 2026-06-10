@@ -328,6 +328,104 @@ describe("Custom tool API round trip", () => {
     expect(final.some((event) => event.type === "session.error")).toBe(false);
   });
 
+  it("replays an idempotent live custom tool result without resolving runtime twice", async () => {
+    const runner = new DelayedResumeCustomToolRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.custom_tool_use"),
+    );
+    const customUse = waiting.find(
+      (event) => event.type === "agent.custom_tool_use",
+    );
+    const content = [{ type: "text" as const, text: "external answer" }];
+
+    const accepted = await sendCustomToolResult(
+      fixture.app,
+      session.id,
+      customUse?.id as string,
+      content,
+      "custom-tool-idempotent-retry",
+    );
+    const replay = await sendCustomToolResult(
+      fixture.app,
+      session.id,
+      customUse?.id as string,
+      content,
+      "custom-tool-idempotent-retry",
+    );
+
+    expect(replay).toEqual(accepted);
+    expect(runner.claimCount).toBe(1);
+
+    runner.release();
+    const final = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.message"),
+    );
+    expect(
+      final.filter((event) => event.type === "user.custom_tool_result"),
+    ).toHaveLength(1);
+    expect(final.some((event) => event.type === "session.error")).toBe(false);
+  });
+
+  it("keeps an idempotent custom tool result committed when the callback throws", async () => {
+    const runner = new ThrowingCommitCustomToolRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await sendMessage(fixture.app, session.id, "ask");
+      const waiting = await eventuallyEvents(
+        fixture.app,
+        session.id,
+        (events) => events.some((event) => event.type === "agent.custom_tool_use"),
+      );
+      const customUse = waiting.find(
+        (event) => event.type === "agent.custom_tool_use",
+      );
+      const content = [{ type: "text" as const, text: "external answer" }];
+
+      const accepted = await sendCustomToolResult(
+        fixture.app,
+        session.id,
+        customUse?.id as string,
+        content,
+        "throwing-custom-tool-result",
+      );
+      const replay = await sendCustomToolResult(
+        fixture.app,
+        session.id,
+        customUse?.id as string,
+        content,
+        "throwing-custom-tool-result",
+      );
+
+      expect(replay).toEqual(accepted);
+      expect(runner.claimCount).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "custom tool result callback failed after commit",
+        expect.objectContaining({
+          sessionId: session.id,
+          customToolUseId: customUse?.id,
+          error: expect.any(Error),
+        }),
+      );
+      const final = await getEvents(fixture.app, session.id);
+      expect(
+        final.filter((event) => event.type === "user.custom_tool_result"),
+      ).toHaveLength(1);
+    } finally {
+      runner.release();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("rejects a different duplicate custom tool result before persistence", async () => {
     const runner = new FakeCustomToolRunner();
     const fixture = makeFixture(runner);
@@ -1242,6 +1340,48 @@ class DelayedResumeCustomToolRunner implements RuntimeEventRunner {
   }
 }
 
+class ThrowingCommitCustomToolRunner implements RuntimeEventRunner {
+  boundCustomToolUseId: string | undefined;
+  claimCount = 0;
+  private readonly releaseGate = deferred<void>();
+
+  async *runUserMessage(): AsyncIterable<unknown> {
+    yield { type: "agent_start" };
+    yield {
+      type: "oma.custom_tool_use",
+      piToolCallId: "toolu_throwing_commit",
+      name: "ask_user",
+      input: { question: "probe?" },
+      bindCustomToolUseId: (id) => {
+        this.boundCustomToolUseId = id;
+      },
+      rejectCustomToolUse: () => {},
+    } satisfies RuntimeCustomToolUseEvent;
+    await this.releaseGate.promise;
+    yield { type: "agent_end", messages: [], willRetry: false };
+  }
+
+  claimCustomToolResult(
+    _workspaceId: string,
+    _sessionId: string,
+    event: ManagedAgentsUserCustomToolResultEventInput,
+  ): (() => void) | undefined {
+    if (event.custom_tool_use_id !== this.boundCustomToolUseId) return undefined;
+    return () => {
+      this.claimCount += 1;
+      throw new Error("custom tool callback failed");
+    };
+  }
+
+  customToolNames(): ReadonlySet<string> {
+    return new Set(["ask_user"]);
+  }
+
+  release(): void {
+    this.releaseGate.resolve(undefined);
+  }
+}
+
 class NoPendingCustomToolRunner implements RuntimeEventRunner {
   async *runUserMessage(): AsyncIterable<unknown> {}
 
@@ -1690,10 +1830,15 @@ async function sendCustomToolResult(
   sessionId: string,
   customToolUseId: string,
   content: ManagedAgentsContentBlock[],
+  idempotencyKey?: string,
 ): Promise<Record<string, unknown>> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (idempotencyKey !== undefined) {
+    headers["idempotency-key"] = idempotencyKey;
+  }
   const res = await app.request(`/v1/sessions/${sessionId}/events`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({
       events: [
         {

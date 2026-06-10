@@ -6,6 +6,7 @@ import type {
   ManagedAgentsUserToolConfirmationEventInput,
 } from "../../types/events.ts";
 import type { JsonObject } from "../../types/json.ts";
+import type { ApiErrorStatus } from "../errors.ts";
 import type { SessionRow } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
@@ -42,6 +43,44 @@ export interface ListSessionEventRecordsOptions {
 export interface SessionEventRecordPage {
   data: PersistedSessionEvent[];
   next_page: string | null;
+}
+
+export interface EventsSendIdempotencyKey {
+  method: string;
+  concretePath: string;
+  key: string;
+  routeLabel: string;
+  fingerprintSha256: string;
+}
+
+export interface IdempotencyReservationInput extends EventsSendIdempotencyKey {
+  workspaceId: WorkspaceId;
+  now: string;
+  expiresAt: string;
+  abandonedBefore: string;
+}
+
+export type IdempotencyReservationResult =
+  | { kind: "reserved" }
+  | {
+      kind: "replay";
+      responseStatus: number;
+      responseBody: unknown;
+    }
+  | { kind: "in_progress" }
+  | { kind: "fingerprint_mismatch" };
+
+export interface IdempotencyCompletionInput extends EventsSendIdempotencyKey {
+  workspaceId: WorkspaceId;
+  responseStatus: number;
+  responseBody: unknown;
+  now: string;
+  expiresAt: string;
+}
+
+export interface SessionEventsHttpResponse {
+  status: 200 | ApiErrorStatus;
+  body: unknown;
 }
 
 export type RuntimeTurnState =
@@ -218,12 +257,22 @@ export interface SessionEventStore {
     events: readonly PersistedSessionEvent[],
     changes: EventStoreRuntimeChanges,
   ): void;
+  appendBatchWithRuntimeChangesAndCompleteIdempotency(
+    events: readonly PersistedSessionEvent[],
+    changes: EventStoreRuntimeChanges,
+    completion: IdempotencyCompletionInput,
+  ): void;
   // Coordinator-only hook. Callers must already hold the transaction that owns
   // any required cross-store predicates.
   appendBatchWithRuntimeChangesInTransaction(
     events: readonly PersistedSessionEvent[],
     changes: EventStoreRuntimeChanges,
   ): void;
+  completeIdempotencyInTransaction(completion: IdempotencyCompletionInput): void;
+  completeIdempotency(completion: IdempotencyCompletionInput): void;
+  reserveIdempotencyKey(
+    input: IdempotencyReservationInput,
+  ): IdempotencyReservationResult;
   deleteForSession(workspaceId: WorkspaceId, sessionId: string): void;
   list(
     workspaceId: WorkspaceId,
@@ -285,6 +334,13 @@ export interface SessionEventsService {
     input: unknown,
     opts?: { signal?: AbortSignal },
   ): ManagedAgentsEvent[];
+  sendIdempotent(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    input: unknown,
+    idempotency: EventsSendIdempotencyKey,
+    opts?: { signal?: AbortSignal; requestId?: string },
+  ): SessionEventsHttpResponse;
   archiveSessionRowAfterPreflight(
     workspaceId: WorkspaceId,
     sessionId: string,
