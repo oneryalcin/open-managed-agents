@@ -127,6 +127,8 @@ Behavior:
 - same key + different raw body: `400 invalid_request_error`;
 - same key + same body while fresh `in_progress`: `409 invalid_request_error`
   with `Retry-After`;
+- handled post-reservation failures that do not commit metadata delete the
+  reservation row so a retry can re-execute immediately;
 - completed rows expire after the same 24-hour TTL used by `events.send`;
 - abandoned `in_progress` rows use the same conservative threshold as
   `events.send`.
@@ -151,6 +153,7 @@ interface before adding session-create integration:
 - key validation;
 - raw-byte fingerprinting helper;
 - TTL and abandoned-row policy constants.
+- shared `409` response shaping, including `Retry-After`.
 
 Keep extraction mechanical. Do not introduce a broad service layer with endpoint
 business logic. The ledger primitive should know nothing about sessions or
@@ -173,6 +176,11 @@ If extraction makes table ownership awkward, prefer a small
 from `EventStore` to the session service. `EventStore` can compose the ledger
 for `events.send` rather than own the generic concept forever.
 
+Extraction must also normalize the in-progress conflict response for both
+endpoints. `sessions.create` should not introduce a subtly different `409`
+shape. If the shared contract includes `Retry-After`, add it to the existing
+`events.send` path in the same implementation PR.
+
 ### 2. Reserve Before Side Effects
 
 For `POST /v1/sessions`, reservation must happen before generating durable side
@@ -186,6 +194,12 @@ effects:
 This means abandoned-row reacquisition remains safe: if a process dies before
 the session row commit, the retry can re-execute. If the session row commit and
 idempotency completion commit together, the retry replays.
+
+Handled failures are different from crashes. If create code catches a
+post-reservation failure, performs its cleanup, and knows the metadata
+transaction did not commit, it should delete/release the reservation row before
+returning the error. Leaving the row `in_progress` would force the client to wait
+for the abandoned threshold even though immediate re-execution is safe.
 
 ### 3. Commit Session Row And Ledger Completion Together
 
@@ -232,9 +246,8 @@ response from the completed ledger row, not deterministic ID generation.
 
 ### 6. Delete Cleanup
 
-When a session is hard-deleted, delete any completed/in-progress
-`POST /v1/sessions` idempotency rows whose completed response created that
-session.
+When a session is hard-deleted, delete completed `POST /v1/sessions`
+idempotency rows whose completed response created that session.
 
 This requires adding a way to associate a completed idempotency row with the
 created resource ID. The current `events.send` cleanup can delete by concrete
@@ -262,6 +275,10 @@ This preserves the invariant from the delete cleanup cookbook: after delete,
 retrying an old key should not replay a response for a session that no longer
 exists.
 
+An `in_progress` session-create row cannot be found this way because
+`resource_id` is assigned at completion. That is acceptable: an in-progress
+create has not produced a deletable session yet.
+
 ## In-Memory Mode
 
 Match the existing deployment pattern:
@@ -281,7 +298,11 @@ single process, but it should be documented as non-atomic across process crashes
 - same key + same raw body replays the same response body and same session ID;
 - same key + different raw body returns `invalid_request_error`;
 - same key while fresh `in_progress` returns `409` and `Retry-After`;
+- `events.send` and `sessions.create` use the same `409`/`Retry-After`
+  contract after extraction;
 - invalid key is rejected before reservation;
+- handled post-reservation failure releases the reservation so immediate retry
+  re-executes instead of returning `409`;
 - completed key expires after TTL and may create a new session.
 
 ### Durable Restart Tests
@@ -342,6 +363,15 @@ single process, but it should be documented as non-atomic across process crashes
    requirement that `sessions.create` returns only after resources are prepared,
    and rely on existing best-effort runtime close plus provider reaping if the
    later metadata commit fails.
+
+4. What happens to the reservation row on a handled failure after reservation
+   but before metadata commit?
+
+   Recommendation: delete/release the reservation before returning the error.
+   This covers realistic create-path failures such as runtime preparation
+   failure or file read errors after reservation. It is safe because the
+   metadata transaction did not commit; if it had committed, the ledger row would
+   be `completed`, not still `in_progress`.
 
 ## Recommended Implementation Slice
 
