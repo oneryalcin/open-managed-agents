@@ -27,7 +27,8 @@ attached.
 ## Retry-safe send
 
 Use the same key for retries of the same event batch. Do not generate a new key
-for each retry.
+for each retry. See [Retry-safe `events.send`](retry-safe-events-send.md) for
+the full key format, TTL, `409`, and mismatch contract.
 
 Python:
 
@@ -70,13 +71,6 @@ await client.beta.sessions.events.send(
   },
 );
 ```
-
-If the response is `409`, another request with the same key is still in
-progress. Retry later with the same key and body. Use backoff; a crashed
-in-progress request becomes retryable after roughly five minutes.
-
-Completed keys expire after 24 hours. After expiry, key reuse is treated as a
-new request.
 
 ## Reconnect without losing events
 
