@@ -57,6 +57,9 @@ still tracked separately in the roadmap.
   and admission limits.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
+- [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —
+  design/audit plan for extending `Idempotency-Key` from `events.send` to
+  session creation without duplicating sessions, snapshots, or runtime prep.
 
 ## Current smoke checks
 

@@ -380,7 +380,8 @@ This preserves B.2/B.3 replay and SSE guarantees while Cycle C only adds transla
   - duplicate `user.message` can cause duplicate runtime prompts
   - duplicate `user.custom_tool_result` can double-resolve pending tool waits
 - Remaining idempotency work is split into explicit future items:
-  - `POST /v1/sessions`;
+  - `POST /v1/sessions` — design captured in
+    [plans/0105-session-create-idempotency.md](plans/0105-session-create-idempotency.md);
   - file uploads and multipart fingerprints;
   - streaming response exclusions or replay semantics.
 
@@ -584,7 +585,8 @@ Implemented scope:
 Deferred:
 
 - Idempotency outside `events.send`:
-  - `POST /v1/sessions`;
+  - `POST /v1/sessions` — design captured in
+    [plans/0105-session-create-idempotency.md](plans/0105-session-create-idempotency.md);
   - file uploads and multipart fingerprints;
   - streaming response exclusions or replay semantics.
 - Permission-gated built-in/MCP tools (`user.tool_confirmation`) and the source path for `evaluated_permission`.
