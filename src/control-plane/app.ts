@@ -188,6 +188,8 @@ export function createDeploymentControlPlaneApp(
         runtime: runner,
         deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,
         idempotencyLedger: stores.events,
+        createSessionRowsWithIdempotency:
+          stores.sessions.createAndCompleteIdempotency.bind(stores.sessions),
       },
     ),
     sessionEvents,
@@ -224,6 +226,8 @@ export function createInMemoryControlPlaneApp(
       {
         ...(opts.runtime?.runner ? { runtime: opts.runtime.runner } : {}),
         idempotencyLedger: eventStore,
+        createSessionRowsWithIdempotency:
+          sessionStore.createAndCompleteIdempotency.bind(sessionStore),
       },
     ),
     sessionEvents: new DefaultSessionEventsService(

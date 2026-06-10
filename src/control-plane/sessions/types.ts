@@ -75,10 +75,6 @@ export interface ListSessionsOptions {
 
 export interface SessionStore {
   create(record: CreateSessionRecord): SessionRow;
-  createAndCompleteIdempotency?(
-    record: CreateSessionRecord,
-    idempotency: CreateSessionIdempotencyCommit,
-  ): SessionRow;
   retrieve(
     workspaceId: WorkspaceId,
     sessionId: string,

@@ -5,6 +5,7 @@ import type { WorkspaceId } from "./workspace.ts";
 export const IDEMPOTENCY_RESPONSE_TTL_MS = 24 * 60 * 60 * 1000;
 export const IDEMPOTENCY_ABANDONED_IN_PROGRESS_MS = 5 * 60 * 1000;
 export const IDEMPOTENCY_RETRY_AFTER_SECONDS = 5;
+export const IDEMPOTENCY_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
 
@@ -51,6 +52,11 @@ export interface RequestIdempotencyLedger {
   completeIdempotency(completion: IdempotencyCompletionInput): void;
   releaseIdempotencyReservation(input: RequestIdempotencyKey & {
     workspaceId: WorkspaceId;
+  }): void;
+  refreshIdempotencyReservation(input: RequestIdempotencyKey & {
+    workspaceId: WorkspaceId;
+    now: string;
+    expiresAt: string;
   }): void;
 }
 
@@ -113,6 +119,28 @@ export function completionWindow(now = new Date()): {
   };
 }
 
+export async function withIdempotencyReservationHeartbeat<T>(
+  ledger: RequestIdempotencyLedger | undefined,
+  input: (RequestIdempotencyKey & { workspaceId: WorkspaceId }) | undefined,
+  operation: Promise<T>,
+): Promise<T> {
+  if (!ledger || !input) return operation;
+  const refresh = () => {
+    ledger.refreshIdempotencyReservation({
+      ...input,
+      ...completionWindow(),
+    });
+  };
+  refresh();
+  const timer = setInterval(refresh, IDEMPOTENCY_HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+  try {
+    return await operation;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 export function idempotencyCompletion(
   workspaceId: WorkspaceId,
   idempotency: RequestIdempotencyKey,
@@ -132,6 +160,8 @@ export function idempotencyCompletion(
 }
 
 export function idempotencyConflictResponse(requestId?: string): JsonHttpResponse {
+  // This is client retry guidance in seconds. It is intentionally much shorter
+  // than the abandoned in-progress threshold used for crash recovery.
   const error = conflict(
     "A request with this `Idempotency-Key` is already in progress; retry later",
   );

@@ -215,6 +215,7 @@ export class EventStore implements SessionEventStore {
   private readonly acquireAbandonedIdempotencyKeyStmt: StatementSync;
   private readonly completeIdempotencyKeyStmt: StatementSync;
   private readonly releaseIdempotencyReservationStmt: StatementSync;
+  private readonly refreshIdempotencyReservationStmt: StatementSync;
   private readonly deleteIdempotencyKeysForResourceStmt: StatementSync;
   private readonly listStmts = new Map<string, StatementSync>();
 
@@ -415,6 +416,13 @@ export class EventStore implements SessionEventStore {
          AND idempotency_key = ? AND fingerprint_sha256 = ?
          AND status = 'in_progress'`,
     );
+    this.refreshIdempotencyReservationStmt = this.db.prepare(
+      `UPDATE idempotency_keys
+       SET updated_at = ?, expires_at = ?
+       WHERE workspace_id = ? AND method = ? AND concrete_path = ?
+         AND idempotency_key = ? AND fingerprint_sha256 = ?
+         AND status = 'in_progress'`,
+    );
   }
 
   /** Open a store backed by a SQLite file. Pass `:memory:` for in-memory. */
@@ -489,6 +497,24 @@ export class EventStore implements SessionEventStore {
     input: RequestIdempotencyKey & { workspaceId: WorkspaceId },
   ): void {
     this.releaseIdempotencyReservationStmt.run(
+      input.workspaceId,
+      input.method,
+      input.concretePath,
+      input.key,
+      input.fingerprintSha256,
+    );
+  }
+
+  refreshIdempotencyReservation(
+    input: RequestIdempotencyKey & {
+      workspaceId: WorkspaceId;
+      now: string;
+      expiresAt: string;
+    },
+  ): void {
+    this.refreshIdempotencyReservationStmt.run(
+      input.now,
+      input.expiresAt,
       input.workspaceId,
       input.method,
       input.concretePath,

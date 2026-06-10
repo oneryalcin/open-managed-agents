@@ -218,7 +218,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     });
     if (reservation.kind === "replay") {
       return {
-        status: reservation.responseStatus as SessionEventsHttpResponse["status"],
+        status: reservation.responseStatus,
         body: reservation.responseBody,
       };
     }

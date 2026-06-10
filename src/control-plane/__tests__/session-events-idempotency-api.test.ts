@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
@@ -20,6 +20,7 @@ import { InMemoryFileStorage } from "../files/store.ts";
 import { DefaultSessionService } from "../sessions/service.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
 import type { ApiErrorBody } from "../errors.ts";
+import type { RuntimeEventRunner } from "../events/types.ts";
 
 const VALID_AGENT = {
   name: "Idempotency Agent",
@@ -330,6 +331,14 @@ describe("Session create idempotency", () => {
 
     const failed = await postSession(fixture.app, body, "session-abort");
     expect(failed.status).toBe(500);
+    expect(fixture.sessionStore.list("wrk_default", { includeArchived: true }).data)
+      .toEqual([]);
+    expect(
+      idempotencyRow(fixture.db, {
+        concretePath: "/v1/sessions",
+        key: "session-abort",
+      }),
+    ).toBeUndefined();
     fixture.db.exec("DROP TRIGGER abort_session_idempotency_completion");
 
     const retry = await postSession(fixture.app, body, "session-abort");
@@ -358,6 +367,44 @@ describe("Session create idempotency", () => {
     const fresh = (await retry.json()) as ManagedAgentsSession;
     expect(fresh.id).not.toBe(created.id);
     fixture.close();
+  });
+
+  it("keeps a slow live session create from being reacquired as abandoned", async () => {
+    vi.useFakeTimers();
+    const runner = new DelayedPrepareRunner();
+    const fixture = makeFixture(":memory:", { runtime: runner });
+    try {
+      const agent = await createAgent(fixture.app);
+      const environment = await createEnvironment(fixture.app);
+      const file = await uploadFile(fixture.app, "slow.txt", "slow");
+      const body = JSON.stringify({
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: file.id }],
+      });
+
+      const first = postSession(fixture.app, body, "session-slow");
+      await runner.started;
+      await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
+
+      const retry = await postSession(fixture.app, body, "session-slow");
+      expect(retry.status).toBe(409);
+      expect(retry.headers.get("retry-after")).toBe("5");
+
+      runner.release();
+      const firstResponse = await first;
+      expect(firstResponse.status).toBe(200);
+      const created = (await firstResponse.json()) as ManagedAgentsSession;
+      expect(fixture.sessionStore.list("wrk_default", { includeArchived: true }).data)
+        .toHaveLength(1);
+      expect(
+        fixture.sessionStore.list("wrk_default", { includeArchived: true }).data[0]
+          ?.id,
+      ).toBe(created.id);
+    } finally {
+      vi.useRealTimers();
+      fixture.close();
+    }
   });
 
   it("replays resource-backed session creates without duplicating mount snapshots", async () => {
@@ -410,9 +457,39 @@ describe("Session create idempotency", () => {
       .toEqual([]);
     fixture.close();
   });
+
+  it("replays deleted-upload validation errors without creating a session", async () => {
+    const fixture = makeFixture();
+    const agent = await createAgent(fixture.app);
+    const environment = await createEnvironment(fixture.app);
+    const file = await uploadFile(fixture.app, "gone.txt", "deleted");
+    const deleted = await fixture.app.request(`/v1/files/${file.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    const body = JSON.stringify({
+      agent: agent.id,
+      environment_id: environment.id,
+      resources: [{ type: "file", file_id: file.id }],
+    });
+
+    const first = await postSession(fixture.app, body, "session-deleted-file");
+    expect(first.status).toBe(400);
+    const firstBody = await first.json();
+
+    const second = await postSession(fixture.app, body, "session-deleted-file");
+    expect(second.status).toBe(400);
+    await expect(second.json()).resolves.toEqual(firstBody);
+    expect(fixture.sessionStore.list("wrk_default", { includeArchived: true }).data)
+      .toEqual([]);
+    fixture.close();
+  });
 });
 
-function makeFixture(path = ":memory:") {
+function makeFixture(
+  path = ":memory:",
+  opts: { runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession"> } = {},
+) {
   const db = new DatabaseSync(path);
   const agentStore = new SqliteAgentStore(db);
   const environmentStore = new SqliteEnvironmentStore(db);
@@ -429,7 +506,12 @@ function makeFixture(path = ":memory:") {
       agentStore,
       environmentStore,
       fileStorage,
-      { idempotencyLedger: eventStore },
+      {
+        idempotencyLedger: eventStore,
+        createSessionRowsWithIdempotency:
+          sessionStore.createAndCompleteIdempotency.bind(sessionStore),
+        ...(opts.runtime === undefined ? {} : { runtime: opts.runtime }),
+      },
     ),
     sessionEvents: new DefaultSessionEventsService(
       eventStore,
@@ -491,6 +573,24 @@ function reserveForPath(
     abandonedBefore: new Date(input.now.getTime() - 5 * 60 * 1000).toISOString(),
   });
   expect(result).toEqual({ kind: "reserved" });
+}
+
+function idempotencyRow(
+  db: DatabaseSync,
+  input: { concretePath: string; key: string },
+): { status: string; response_status: number | null } | undefined {
+  return db
+    .prepare(
+      `SELECT status, response_status
+       FROM idempotency_keys
+       WHERE workspace_id = 'wrk_default'
+         AND method = 'POST'
+         AND concrete_path = ?
+         AND idempotency_key = ?`,
+    )
+    .get(input.concretePath, input.key) as
+    | { status: string; response_status: number | null }
+    | undefined;
 }
 
 function requestFingerprint(
@@ -616,6 +716,29 @@ async function uploadFile(
   });
   expect(res.status).toBe(200);
   return (await res.json()) as { id: string };
+}
+
+class DelayedPrepareRunner {
+  readonly started: Promise<void>;
+  private markStarted: (() => void) | undefined;
+  private resume: (() => void) | undefined;
+
+  constructor() {
+    this.started = new Promise<void>((resolve) => {
+      this.markStarted = resolve;
+    });
+  }
+
+  async prepareSession(): Promise<void> {
+    this.markStarted?.();
+    await new Promise<void>((resolve) => {
+      this.resume = resolve;
+    });
+  }
+
+  release(): void {
+    this.resume?.();
+  }
 }
 
 async function expectError(

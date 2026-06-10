@@ -21,6 +21,7 @@ import {
   idempotencyConflictResponse,
   idempotencyMismatchError,
   reserveWindow,
+  withIdempotencyReservationHeartbeat,
 } from "../request-idempotency.ts";
 import type {
   RuntimeEventRunner,
@@ -37,6 +38,8 @@ import {
 import { toManagedSession } from "./serialize.ts";
 import type {
   ListSessionsOptions,
+  CreateSessionIdempotencyCommit,
+  CreateSessionRecord,
   SessionFileMountSnapshotRow,
   SessionRow,
   SessionService,
@@ -80,6 +83,10 @@ export interface DefaultSessionServiceOptions {
     sessionId: string,
   ) => DeleteSessionRowsResult | undefined;
   idempotencyLedger?: RequestIdempotencyLedger;
+  createSessionRowsWithIdempotency?: (
+    record: CreateSessionRecord,
+    idempotency: CreateSessionIdempotencyCommit,
+  ) => SessionRow;
   pendingSnapshotCleanupRetryDelayMs?: number;
   pendingSnapshotCleanupMaxAttempts?: number;
 }
@@ -100,6 +107,12 @@ export class DefaultSessionService implements SessionService {
       ) => DeleteSessionRowsResult | undefined)
     | undefined;
   private readonly idempotencyLedger: RequestIdempotencyLedger | undefined;
+  private readonly createSessionRowsWithIdempotency:
+    | ((
+        record: CreateSessionRecord,
+        idempotency: CreateSessionIdempotencyCommit,
+      ) => SessionRow)
+    | undefined;
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
@@ -123,6 +136,12 @@ export class DefaultSessionService implements SessionService {
     this.runtime = opts.runtime;
     this.deleteSessionRows = opts.deleteSessionRows;
     this.idempotencyLedger = opts.idempotencyLedger;
+    this.createSessionRowsWithIdempotency = opts.createSessionRowsWithIdempotency;
+    if (this.idempotencyLedger && !this.createSessionRowsWithIdempotency) {
+      throw new Error(
+        "DefaultSessionService requires createSessionRowsWithIdempotency when idempotencyLedger is configured",
+      );
+    }
     this.pendingSnapshotCleanupRetryDelayMs =
       opts.pendingSnapshotCleanupRetryDelayMs ??
       DEFAULT_PENDING_SNAPSHOT_CLEANUP_RETRY_DELAY_MS;
@@ -244,6 +263,7 @@ export class DefaultSessionService implements SessionService {
       req.resources ?? [],
       now,
       {
+        idempotency: opts.idempotency,
         onExternalSideEffect: () => {
           externalSideEffectsStarted = true;
         },
@@ -276,10 +296,16 @@ export class DefaultSessionService implements SessionService {
     try {
       if (mounts.length > 0 && this.runtime?.prepareSession) {
         externalSideEffectsStarted = true;
-        await this.runtime.prepareSession(workspaceId, row.id, {
-          fileMounts: mounts,
-          agent: row.agent,
-        });
+        await this.withIdempotencyHeartbeat(
+          workspaceId,
+          opts.idempotency,
+          Promise.resolve(
+            this.runtime.prepareSession(workspaceId, row.id, {
+              fileMounts: mounts,
+              agent: row.agent,
+            }),
+          ),
+        );
         runtimePrepared = true;
       }
       const record = { row, snapshots: sessionSnapshots };
@@ -291,13 +317,11 @@ export class DefaultSessionService implements SessionService {
           { status: 200, body: response },
           { type: "session", id: row.id },
         );
-        const created =
-          this.store.createAndCompleteIdempotency?.(record, {
-            complete: () => {
-              this.idempotencyLedger?.completeIdempotencyInTransaction(completion);
-            },
-          }) ??
-          this.createAndCompleteIdempotencyBestEffort(record, completion);
+        const created = this.createSessionRowsWithIdempotency!(record, {
+          complete: () => {
+            this.idempotencyLedger?.completeIdempotencyInTransaction(completion);
+          },
+        });
         return toManagedSession(created);
       }
       return toManagedSession(this.store.create(record));
@@ -328,15 +352,6 @@ export class DefaultSessionService implements SessionService {
       }
       throw error;
     }
-  }
-
-  private createAndCompleteIdempotencyBestEffort(
-    record: Parameters<SessionStore["create"]>[0],
-    completion: Parameters<RequestIdempotencyLedger["completeIdempotency"]>[0],
-  ): SessionRow {
-    const created = this.store.create(record);
-    this.idempotencyLedger?.completeIdempotency(completion);
-    return created;
   }
 
   retrieve(
@@ -636,7 +651,10 @@ export class DefaultSessionService implements SessionService {
     sessionId: string,
     resources: CreateManagedSessionResourceInput[],
     now: string,
-    opts: { onExternalSideEffect?: () => void } = {},
+    opts: {
+      idempotency?: RequestIdempotencyKey;
+      onExternalSideEffect?: () => void;
+    } = {},
   ): Promise<{
     resources: ManagedAgentsSessionFileResource[];
     snapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">>;
@@ -671,15 +689,27 @@ export class DefaultSessionService implements SessionService {
     }> = [];
     let totalBytes = 0;
     for (const resource of normalized) {
-      const source = await this.files.retrieveMetadata(workspaceId, resource.fileId);
+      const source = await this.withIdempotencyHeartbeat(
+        workspaceId,
+        opts.idempotency,
+        this.files.retrieveMetadata(workspaceId, resource.fileId),
+      );
       if (!source) {
         throw invalidRequest(`File ${resource.fileId} not found`);
       }
-      const stream = await this.files.openBytes(workspaceId, resource.fileId);
+      const stream = await this.withIdempotencyHeartbeat(
+        workspaceId,
+        opts.idempotency,
+        this.files.openBytes(workspaceId, resource.fileId),
+      );
       if (!stream) {
         throw invalidRequest(`File ${resource.fileId} not found`);
       }
-      const bytes = await consumeBytes(stream);
+      const bytes = await this.withIdempotencyHeartbeat(
+        workspaceId,
+        opts.idempotency,
+        consumeBytes(stream),
+      );
       const sha256 = sha256Hex(bytes);
       if (sha256 !== source.sha256) {
         throw invalidRequest(`File ${resource.fileId} failed integrity validation`);
@@ -718,13 +748,17 @@ export class DefaultSessionService implements SessionService {
           now,
         );
         opts.onExternalSideEffect?.();
-        const snapshot = await this.files.createInternalSnapshot(workspaceId, {
-          fileId: snapshotFileId,
-          filename: item.source.metadata.filename,
-          mimeType: item.source.metadata.mime_type,
-          scopeId: item.resourceId,
-          body: item.bytes,
-        });
+        const snapshot = await this.withIdempotencyHeartbeat(
+          workspaceId,
+          opts.idempotency,
+          this.files.createInternalSnapshot(workspaceId, {
+            fileId: snapshotFileId,
+            filename: item.source.metadata.filename,
+            mimeType: item.source.metadata.mime_type,
+            scopeId: item.resourceId,
+            body: item.bytes,
+          }),
+        );
         if (snapshot.metadata.id !== snapshotFileId) {
           throw new Error(
             `FileStorage returned internal snapshot id ${snapshot.metadata.id}; expected ${snapshotFileId}`,
@@ -783,6 +817,18 @@ export class DefaultSessionService implements SessionService {
       // The row has not committed yet; snapshot cleanup below is the
       // authoritative control-plane rollback path for this create.
     }
+  }
+
+  private async withIdempotencyHeartbeat<T>(
+    workspaceId: WorkspaceId,
+    idempotency: RequestIdempotencyKey | undefined,
+    operation: Promise<T>,
+  ): Promise<T> {
+    return withIdempotencyReservationHeartbeat(
+      this.idempotencyLedger,
+      idempotency === undefined ? undefined : { ...idempotency, workspaceId },
+      operation,
+    );
   }
 
 }
