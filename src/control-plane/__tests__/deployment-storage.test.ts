@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { DefaultAgentService } from "../agents/service.ts";
+import { createBestEffortSessionOutputCoordinator } from "../deployment-session-output-coordinator.ts";
 import {
   createDeploymentStoresFromEnv,
 } from "../deployment-storage.ts";
@@ -544,6 +545,54 @@ describe("deployment storage", () => {
             mimeType: "text/plain",
             body: new TextEncoder().encode("archived"),
             sizeBytes: 8,
+          },
+        ],
+      }),
+    ).rejects.toThrow("cannot be committed for inactive session");
+    await expect(
+      stores.files.list("wrk_default", { scopeId: sessionId }),
+    ).resolves.toMatchObject({ data: [] });
+    stores.close();
+  });
+
+  it("rejects best-effort session output commits before writing stale outputs", async () => {
+    const stores = createDeploymentStoresFromEnv({});
+    const coordinator = createBestEffortSessionOutputCoordinator({
+      sessions: stores.sessions,
+      events: stores.events,
+      files: stores.files,
+    });
+    const sessionId = "sesn_output_best_effort_stale";
+    stores.sessions.create({ row: sessionRow(sessionId) });
+    stores.events.appendBatchWithRuntimeChanges([], {
+      acceptedTurns: [
+        {
+          workspaceId: "wrk_default",
+          sessionId,
+          turnId: "turn_output_best_effort_stale",
+          ownerId: "owner_output",
+          ownerGeneration: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          triggerEventIds: [],
+          now: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await expect(
+      coordinator.replaceSessionOutputsForRuntimeTurn({
+        workspaceId: "wrk_default",
+        sessionId,
+        turnId: "turn_output_best_effort_stale",
+        ownerId: "owner_output",
+        ownerGeneration: 2,
+        files: [
+          {
+            relativePath: "late.txt",
+            filename: "late.txt",
+            mimeType: "text/plain",
+            body: new TextEncoder().encode("late"),
+            sizeBytes: 4,
           },
         ],
       }),

@@ -10,6 +10,7 @@ import { SqliteEnvironmentStore } from "../environments/store.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
+import { createBestEffortSessionOutputCoordinator } from "../deployment-session-output-coordinator.ts";
 import type {
   RuntimeEventRunner,
   RuntimeSessionOutputCollection,
@@ -490,6 +491,11 @@ function makeFixture(runner: RuntimeEventRunner): {
   const eventStore = EventStore.open(":memory:");
   const fileStorage = new InMemoryFileStorage();
   const broadcaster = new SessionEventBroadcaster(eventStore);
+  const sessionOutputCoordinator = createBestEffortSessionOutputCoordinator({
+    sessions: sessionStore,
+    events: eventStore,
+    files: fileStorage,
+  });
   return {
     broadcaster,
     app: createControlPlaneApp({
@@ -505,7 +511,7 @@ function makeFixture(runner: RuntimeEventRunner): {
       sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {
         runner,
         translate: translatePiEvent,
-        fileStorage,
+        sessionOutputCoordinator,
       }),
     }),
   };
