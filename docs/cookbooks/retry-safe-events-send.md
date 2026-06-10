@@ -29,9 +29,24 @@ Behavior:
   `409`; retry later with the same key.
 - Requests without `Idempotency-Key` keep normal non-idempotent behavior.
 
+Completed idempotency keys expire after 24 hours. After expiry, reusing the
+same key is treated as a brand-new request and may execute again. Do not rely on
+idempotency replay beyond that window.
+
 The header currently applies only to JSON `events.send` requests. Do not use it
 yet for `POST /v1/sessions`, file uploads, multipart bodies, or streaming
 response replay.
+
+## Key format
+
+`Idempotency-Key` must be:
+
+- non-empty;
+- at most 255 characters;
+- visible ASCII only.
+
+Invalid keys return `400 invalid_request_error` before any idempotency
+reservation is created.
 
 ## Python SDK
 
@@ -135,7 +150,9 @@ const retry = await client.beta.sessions.events.send(
 
 - `200`: the event batch was accepted, or a completed response was replayed.
 - `409`: another request with the same key and body is still in progress. Wait
-  and retry with the same key.
+  and retry with the same key. A crashed in-progress request becomes retryable
+  after roughly five minutes, so use backoff rather than retrying in a tight
+  loop.
 - `400 invalid_request_error`: the key was reused for a different request body,
   or the request itself is invalid.
 
