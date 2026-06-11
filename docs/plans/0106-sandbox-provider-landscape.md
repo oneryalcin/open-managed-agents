@@ -225,6 +225,12 @@ Verified on 2026-06-11:
 - SDKs exist for Rust, Python, TypeScript, and Go;
 - requirements are Linux with KVM enabled or Apple Silicon macOS;
 - docs say the SDK embeds the runtime directly, with no separate daemon.
+- local TypeScript SDK probe passed create, exec, guest filesystem copy
+  host-to-sandbox and sandbox-to-host, stop, start, and cleanup with no account
+  dependency;
+- rootfs state under `/tmp` did not survive stop/start, but a named volume
+  mounted at `/data` did survive. OMA must model session workspace persistence
+  as an explicit volume/disk, not implicit rootfs state.
 
 OMA fit:
 
@@ -233,25 +239,28 @@ OMA fit:
   SDKs expose lifecycle and exec primitives directly;
 - stop/start, detached mode, metrics, logs, and snapshots are directly relevant
   to long-lived OMA sessions.
+- no Docker account dependency was observed in the local SDK probe.
 
 Caveats:
 
 - beta;
 - OMA would depend on a young runtime for core isolation;
-- we must verify TypeScript SDK maturity, file transfer APIs, output streaming,
-  network deny defaults, secret-proxy semantics, and failure cleanup.
+- rootfs stop/start persistence is not enough for OMA; the provider contract
+  must require an explicit session workspace volume or disk;
+- we must still verify output streaming, network deny defaults, secret-proxy
+  semantics, and failure cleanup.
 
 Recommendation:
 
-Run a focused TypeScript SDK probe after Docker Sandboxes:
+Microsandbox is now the strongest self-hosted no-Kubernetes candidate. The next
+probe should focus on the remaining production-shaped gaps:
 
-- create named sandbox;
-- execute commands;
-- write/read files;
-- materialize an uploaded file equivalent;
-- collect generated output bytes;
-- stop/start around a simulated `requires_action`;
-- delete and verify no residual state.
+- output streaming and cancellation;
+- network deny/default policy behavior;
+- secret proxy semantics;
+- failure cleanup after crashed execs or killed sandboxes;
+- whether snapshots help more than named volumes for `requires_action`
+  parking.
 
 ### Kubernetes `agent-sandbox`
 
