@@ -228,9 +228,11 @@ Verified on 2026-06-11:
 - local TypeScript SDK probe passed create, exec, guest filesystem copy
   host-to-sandbox and sandbox-to-host, stop, start, and cleanup with no account
   dependency;
-- rootfs state under `/tmp` did not survive stop/start, but a named volume
-  mounted at `/data` did survive. OMA must model session workspace persistence
-  as an explicit volume/disk, not implicit rootfs state.
+- `/tmp` state did not survive stop/start because it is mounted as tmpfs, while
+  a follow-up verification showed rootfs overlay state under `/root` does
+  survive. A named volume mounted at `/data` also survived. OMA must still
+  model session workspace persistence as an explicit volume/disk because
+  durability is path-dependent and provider-owned, not implicit rootfs state.
 
 OMA fit:
 
@@ -245,8 +247,8 @@ Caveats:
 
 - beta;
 - OMA would depend on a young runtime for core isolation;
-- rootfs stop/start persistence is not enough for OMA; the provider contract
-  must require an explicit session workspace volume or disk;
+- implicit rootfs stop/start persistence is not an OMA contract; the provider
+  contract must require an explicit session workspace volume or disk;
 - we must still verify output streaming, network deny defaults, secret-proxy
   semantics, and failure cleanup.
 

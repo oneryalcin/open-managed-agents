@@ -67,6 +67,9 @@ NET_ALLOW_ALL_PUBLIC {"code":0,"stdout":"all-public-ok\n","stderr":""}
 Interpretation:
 
 - default policy allows public egress;
+- the default policy is implemented as deny-by-default egress plus explicit DNS
+  and public-destination allow rules, with ingress defaulting to allow but no
+  ports published by default;
 - `NetworkPolicy.none()` blocked DNS/public egress;
 - `NetworkPolicy.allowAll()` allowed public egress;
 - the private-network check was inconclusive because `10.0.0.1` refused
@@ -184,6 +187,8 @@ Interpretation:
 - killed sandboxes can be removed;
 - crashed sandboxes can be cleaned by getting the handle, calling
   `stopWithTimeout(0)`, then `handle.remove()`;
+- `await using` auto-dispose stops sandboxes but does not remove them; they
+  remain listed as stopped until explicitly removed;
 - cleanup code should prefer handle-level removal after stop/kill rather than
   assuming static removal is always enough for every state.
 

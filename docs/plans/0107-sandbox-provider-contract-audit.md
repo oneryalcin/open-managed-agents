@@ -22,8 +22,9 @@ landscape probes exposed behavior the current interface does not name:
 - Docker Sandboxes requires Docker account authentication before use.
 - Docker Sandboxes preserved sandbox-local state across stop/resume in the
   smoke probe.
-- microsandbox did not preserve rootfs `/tmp` across stop/start, but did
-  preserve a named volume mounted at `/data`.
+- microsandbox did not preserve `/tmp` across stop/start because `/tmp` is an
+  explicit tmpfs mount; a follow-up verification showed rootfs overlay state
+  under `/root` does survive. A named volume mounted at `/data` also survived.
 - microsandbox exposes explicit stop/start, detached reconnect, volumes,
   snapshots, streaming exec handles, metrics, network policies, and secret
   APIs.
@@ -36,7 +37,9 @@ sandbox rootfs = disposable implementation detail
 ```
 
 Do not let a provider's rootfs persistence become part of the implicit OMA
-contract.
+contract. Even when rootfs overlay state happens to survive, durability can vary
+by path inside one sandbox because providers may mount tmpfs, volumes, disks, or
+snapshots at different locations.
 
 ## Current Interface
 
@@ -93,7 +96,6 @@ install notes.
 
 ```ts
 interface SandboxWorkspaceSpec {
-  durable: true;
   mountPath: string;
   persistence:
     | { kind: "tmpfs"; survivesPark: false }

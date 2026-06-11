@@ -103,13 +103,25 @@ Using the live object returned by `handle.start()` worked.
 
 ## Stop/start persistence
 
-Rootfs state under `/tmp` did not survive stop/start:
+The original probe wrote its "rootfs" check to `/tmp`:
 
 ```text
 RESUME_STDOUT "rootfs=cat: can't open '/tmp/rootfs-state.txt': No such file or directory\n\nvolume=volume-state\n"
 ```
 
-A named volume mounted at `/data` did survive stop/start:
+That result was real but misclassified: `/tmp` is mounted as tmpfs by
+microsandbox, so it measured tmpfs persistence rather than rootfs overlay
+persistence. A follow-up verification wrote to both `/root` and `/tmp`:
+
+```text
+WRITE "overlay-state\ntmpfs-state\n"
+RESUME "rootfs-overlay=overlay-state\ntmpfs=cat: can't open '/tmp/persist.txt': No such file or directory\n"
+```
+
+So rootfs overlay state under `/root` survived stop/start, while the `/tmp`
+tmpfs mount did not.
+
+A named volume mounted at `/data` also survived stop/start:
 
 ```text
 SANDBOX oma-vol-probe-1781168828956
@@ -124,9 +136,11 @@ STOPPED_AGAIN
 REMOVED
 ```
 
-This is the main OMA-relevant result. Microsandbox can park and resume a
-sandbox, but OMA must put durable session workspace state in an explicit named
-volume or disk mount. Do not rely on arbitrary rootfs state surviving stop.
+This is the main OMA-relevant result after correction. Microsandbox can park and
+resume a sandbox, and rootfs overlay state may survive. OMA must still put
+durable session workspace state in an explicit named volume or disk mount
+because persistence is path-dependent and provider-owned. Do not rely on
+arbitrary rootfs paths carrying session durability.
 
 ## Cleanup
 
@@ -143,13 +157,14 @@ Microsandbox is the strongest self-hosted no-Kubernetes candidate so far:
 - no daemon or hosted service setup was required;
 - TypeScript SDK directly covers create, exec, filesystem copy, stop/start,
   detached mode, remove, and named volumes;
-- named volume persistence gives OMA a plausible `requires_action` parking
-  model.
+- rootfs overlay and named volume persistence give OMA plausible
+  `requires_action` parking mechanisms, but only explicit volumes/disks should
+  become the portable contract.
 
 The caveats are also concrete:
 
 - beta runtime;
-- rootfs state is not persistent enough for OMA parking;
+- implicit rootfs persistence is not a portable OMA parking contract;
 - provider contract must include explicit session workspace volume/disk
   ownership;
 - output streaming, cancellation, network policy, secrets, snapshots, and crash
