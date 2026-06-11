@@ -232,12 +232,32 @@ and provider-side metadata. It must be callable after partial failures.
 7. Secret proxy behavior needs its own acceptance tests before any provider is
    allowed to carry production credentials.
 
-## Remaining Verification Targets
+## Microsandbox Production-Behavior Probe Result
 
-Before implementation, finish the remaining microsandbox behavior probes:
+Follow-up probe `scratch/0108-microsandbox-production-behavior-probe.md`
+verified the remaining production-shaped behavior for microsandbox 0.5.6:
+
+- snapshot creation and `fromSnapshot(...)` restore work for stopped sandboxes;
+- named volumes remain the simpler durable workspace primitive for normal
+  parking;
+- port publishing from guest to host works and host ports close after cleanup;
+- metrics and logs/log streams expose usable data shapes;
+- controlled private/LAN target behavior matches the network posture: default
+  and `NetworkPolicy.none()` could not reach the host LAN target, while
+  `NetworkPolicy.allowAll()` could;
+- secret grants keep the real secret out of the guest and expose a placeholder,
+  but placeholder substitution against a controlled local HTTPS echo target did
+  not pass.
+
+## Remaining Verification Target
+
+Before production provider implementation, finish the remaining secret probe:
 
 - secret placeholder substitution with a controlled HTTPS echo target;
-- private-network policy denial with a better target;
-- snapshot versus named-volume parking;
-- port publishing;
-- metrics/log stream shape.
+
+The latest attempt showed the guest received only the placeholder and not the
+real secret, but the controlled HTTPS echo server also received the placeholder.
+TLS interception on a self-signed high-port local server failed before the echo
+request reached the server. Treat microsandbox secrets as unverified for OMA
+until a provider-recommended or production-equivalent HTTPS echo test proves
+substitution end to end.
