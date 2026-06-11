@@ -110,6 +110,22 @@ Interpretation:
 Secret placeholder delivery is verified. Secret substitution is not passing in
 the controlled local probes.
 
+Upstream context checked after the probe:
+
+- [superradcompany/microsandbox#646](https://github.com/superradcompany/microsandbox/issues/646)
+  is open and states that secret substitution only runs in the TLS interception
+  path, so plain HTTP forwards the placeholder verbatim. That matches this
+  probe's plain-HTTP result.
+- [superradcompany/microsandbox#752](https://github.com/superradcompany/microsandbox/issues/752)
+  and [#769](https://github.com/superradcompany/microsandbox/issues/769)
+  document open proxy/tunnel cases where the inner TLS request remains opaque to
+  the substitution layer.
+- [superradcompany/microsandbox#969](https://github.com/superradcompany/microsandbox/issues/969)
+  documents an open TLS-interception failure mode with secrets on Linux.
+
+These upstream issues reinforce the OMA decision: secret substitution is not a
+safe first-slice dependency.
+
 For OMA:
 
 - exclude microsandbox secret proxy support from the first provider slice;
