@@ -64,6 +64,9 @@ still tracked separately in the roadmap.
 - [Sandbox provider landscape and first probes](plans/0106-sandbox-provider-landscape.md) —
   audit local, self-hosted, Kubernetes, and hosted sandbox substrates before
   adding remote provider implementations.
+- [Sandbox provider contract audit](plans/0107-sandbox-provider-contract-audit.md) —
+  provider-neutral contract vocabulary for durable workspaces, lifecycle,
+  execution, network policy, secrets, observability, and cleanup.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
 - [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —
