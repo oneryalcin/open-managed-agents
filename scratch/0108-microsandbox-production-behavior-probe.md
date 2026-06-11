@@ -186,7 +186,9 @@ Passed:
 Not passed:
 
 - secret placeholder substitution. It remains the only blocker in this probe
-  set.
+  set. A follow-up decisive probe with plain HTTP plus HTTPS interception still
+  did not prove substitution; see
+  `scratch/0109-microsandbox-secret-decisive-probe.md`.
 
 Product implication:
 

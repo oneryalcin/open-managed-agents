@@ -246,18 +246,24 @@ verified the remaining production-shaped behavior for microsandbox 0.5.6:
   and `NetworkPolicy.none()` could not reach the host LAN target, while
   `NetworkPolicy.allowAll()` could;
 - secret grants keep the real secret out of the guest and expose a placeholder,
-  but placeholder substitution against a controlled local HTTPS echo target did
-  not pass.
+  but placeholder substitution did not pass controlled local HTTP or HTTPS echo
+  probes.
 
 ## Remaining Verification Target
 
-Before production provider implementation, finish the remaining secret probe:
+Before production provider implementation, treat secret proxy support as out of
+scope unless a provider-recommended or production-equivalent probe passes:
 
 - secret placeholder substitution with a controlled HTTPS echo target;
 
-The latest attempt showed the guest received only the placeholder and not the
-real secret, but the controlled HTTPS echo server also received the placeholder.
-TLS interception on a self-signed high-port local server failed before the echo
-request reached the server. Treat microsandbox secrets as unverified for OMA
-until a provider-recommended or production-equivalent HTTPS echo test proves
-substitution end to end.
+The latest decisive probe showed:
+
+- guest env receives the placeholder and not the real secret;
+- plain HTTP echo receives the placeholder unchanged;
+- HTTPS with TLS interception enabled, the test port in `interceptedPorts`, and
+  `verifyUpstream(false)` still failed before the controlled echo server saw a
+  request.
+
+That is enough to exclude microsandbox secret proxy support from the first OMA
+provider slice. Revisit it only with upstream guidance or a production-equivalent
+HTTPS echo harness that proves substitution end to end.

@@ -233,9 +233,10 @@ Verified on 2026-06-11:
   survive. A named volume mounted at `/data` also survived. OMA must still
   model session workspace persistence as an explicit volume/disk because
   durability is path-dependent and provider-owned, not implicit rootfs state.
-- production-behavior probe passed snapshot create/restore, named-volume
+- production-behavior probes passed snapshot create/restore, named-volume
   parking, port publishing, metrics/log shape, and controlled private-network
-  policy checks. Secret placeholder substitution remains unverified.
+  policy checks. Secret placeholder substitution did not pass controlled local
+  HTTP/HTTPS echo probes.
 
 OMA fit:
 
@@ -252,15 +253,14 @@ Caveats:
 - OMA would depend on a young runtime for core isolation;
 - implicit rootfs stop/start persistence is not an OMA contract; the provider
   contract must require an explicit session workspace volume or disk;
-- secret-proxy semantics remain the main unverified production behavior.
+- secret-proxy semantics are not ready for OMA use.
 
 Recommendation:
 
 Microsandbox is now the strongest self-hosted no-Kubernetes candidate. The next
-probe should focus only on secret proxy semantics. Everything else in the first
-production-behavior set has passing scratch evidence. If secrets remain
-unverified, exclude them from the first provider slice rather than blocking
-basic sandbox execution.
+provider slice should exclude secret proxy semantics. Everything else in the
+first production-behavior set has passing scratch evidence, while controlled
+local HTTP/HTTPS secret substitution did not pass.
 
 ### Kubernetes `agent-sandbox`
 
