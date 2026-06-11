@@ -129,6 +129,11 @@ safe first-slice dependency.
 For OMA:
 
 - exclude microsandbox secret proxy support from the first provider slice;
+- reject proxy-grade secret grants at session/provider creation time, with an
+  error pointing at issue #121 and this probe;
 - do not advertise provider-side secret substitution;
+- if plaintext env delivery is ever added, require a separate explicit contract
+  shape such as `delivery: "env-plaintext"` with `entersGuest: true`; never
+  fall back from proxy-grade secrets to plaintext env vars;
 - revisit only with upstream guidance or a production-equivalent HTTPS echo
   harness that demonstrates query/header/body substitution end to end.

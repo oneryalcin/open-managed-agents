@@ -175,7 +175,11 @@ interface SandboxNetworkPolicy {
 
 interface SandboxSecretGrant {
   name: string;
-  delivery: "env-placeholder" | "header-proxy" | "query-proxy";
+  delivery:
+    | "env-placeholder"
+    | "header-proxy"
+    | "query-proxy"
+    | "env-plaintext";
   allowedHosts: readonly string[];
   entersGuest: boolean;
 }
@@ -231,6 +235,8 @@ and provider-side metadata. It must be callable after partial failures.
    public-only.
 7. Secret proxy behavior needs its own acceptance tests before any provider is
    allowed to carry production credentials.
+8. Provider capability mismatches should fail at session/provider creation time,
+   not when the first tool tries to use the missing feature.
 
 ## Microsandbox Production-Behavior Probe Result
 
@@ -267,3 +273,26 @@ The latest decisive probe showed:
 That is enough to exclude microsandbox secret proxy support from the first OMA
 provider slice. Revisit it only with upstream guidance or a production-equivalent
 HTTPS echo harness that proves substitution end to end.
+
+Probe-design lesson: check upstream issues and examples before designing
+"decisive" experiments. In this arc, `microsandbox#646` would have
+pre-interpreted the plain-HTTP control as a documented non-feature.
+
+The first `microsandbox-local` provider slice should therefore reject any
+proxy-grade secret grant at session/provider creation time. The error should
+name the gate and point to issue #121 plus the 0109 scratch probe so callers see
+that this is a verified limitation, not an accidental omission.
+
+If OMA later supports plaintext env delivery, it must be a distinct contract
+shape, not a fallback:
+
+```ts
+{
+  delivery: "env-plaintext",
+  entersGuest: true,
+}
+```
+
+Do not silently map `env-placeholder`, `header-proxy`, or `query-proxy` requests
+onto plaintext env vars. A weaker security posture must be selected explicitly
+in configuration and remain visible to audit/logging.

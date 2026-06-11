@@ -262,6 +262,13 @@ provider slice should exclude secret proxy semantics. Everything else in the
 first production-behavior set has passing scratch evidence, while controlled
 local HTTP/HTTPS secret substitution did not pass.
 
+Secret-bearing configs should fail at session/provider creation time for
+`microsandbox-local` v1, with an error pointing at issue #121 and the 0109
+secret gate. Do not discover this mismatch after the workspace exists or input
+files have been materialized. If plaintext env delivery is ever added, make it a
+separate explicit contract (`delivery: "env-plaintext"`, `entersGuest: true`),
+never a fallback from proxy-grade secret requests.
+
 ### Kubernetes `agent-sandbox`
 
 Repository: [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox)
