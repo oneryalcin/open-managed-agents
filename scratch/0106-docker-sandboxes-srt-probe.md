@@ -5,6 +5,9 @@ Date: 2026-06-11
 This is a scratch evidence note for issue #121. It probes two near-term local
 sandbox candidates without changing OMA runtime code.
 
+Update after Docker authentication: the Docker Sandboxes lifecycle smoke passed
+end to end. See "Authenticated lifecycle smoke" below.
+
 ## Environment
 
 - Host: macOS arm64, Darwin 25.4.0
@@ -72,7 +75,7 @@ Execute a command in a sandbox. If the sandbox is stopped, it is started first.
 Stopped sandboxes retain their state and can be restarted with "sbx run".
 ```
 
-### Auth blocker
+### Auth requirement
 
 The first real command is blocked before sandbox creation:
 
@@ -93,6 +96,62 @@ login:
 
 I did not run an interactive login or use Docker credentials in this probe.
 
+After the user authenticated locally, `sbx ls` succeeded:
+
+```text
+No sandboxes found.
+Launch one: sbx run claude
+```
+
+This means authentication is required even before listing or creating
+sandboxes. That is not only probe friction; it is a product-posture caveat for
+any self-hosted OMA tier built on Docker Sandboxes.
+
+### Authenticated lifecycle smoke
+
+After authentication, a named `shell` sandbox passed the OMA-shaped lifecycle
+smoke:
+
+- create a sandbox with a temporary mounted workspace;
+- execute a command inside the sandbox;
+- read a host-mounted input file;
+- write sandbox-local state under `/tmp/oma-state`;
+- write a file back to the mounted workspace;
+- copy host to sandbox with `sbx cp`;
+- copy sandbox to host with `sbx cp`;
+- stop the sandbox;
+- verify `sbx ls` reports `stopped`;
+- resume implicitly with `sbx exec`;
+- verify sandbox-local state survived stop/resume;
+- remove the sandbox with `sbx rm --force`;
+- verify `sbx ls` is clean.
+
+Key output:
+
+```text
+✓ Created sandbox 'oma-probe-1781167008'
+Workspace: /tmp/oma-sbx-probe.gcqRyt (direct mount)
+Agent: shell
+
+SANDBOX                AGENT   STATUS    PORTS   WORKSPACE
+oma-probe-1781167008   shell   running           /tmp/oma-sbx-probe.gcqRyt
+
+persisted-oma-probe-1781167008
+copied-from-host
+
+Sandbox 'oma-probe-1781167008' stopped
+SANDBOX                AGENT   STATUS    PORTS   WORKSPACE
+oma-probe-1781167008   shell   stopped           /tmp/oma-sbx-probe.gcqRyt
+
+Sandbox oma-probe-1781167008 started successfully
+persisted-oma-probe-1781167008
+copied-from-host
+
+Sandbox 'oma-probe-1781167008' removed
+No sandboxes found.
+Launch one: sbx run claude
+```
+
 ### Verdict
 
 Docker Sandboxes remains a valid first local provider candidate because the CLI
@@ -105,18 +164,15 @@ surface maps closely to OMA's provider needs:
 - restart stopped sandboxes
 - remove a sandbox
 
-But the OMA-shaped lifecycle is not empirically proven yet. The next probe needs
-Docker authentication and must verify:
+The OMA-shaped local lifecycle is now empirically proven for the shell template:
+create, exec, copy in, copy out, stop, implicit resume via `exec`, state
+survival, and remove all work.
 
-- create a `shell` sandbox
-- write state inside the sandbox
-- copy host to sandbox and sandbox to host
-- stop without removal
-- resume via `sbx exec` or `sbx run`
-- prove state survives stop/resume
-- remove the sandbox
-
-Until that passes, do not implement an OMA provider against `sbx`.
+The remaining concern is product posture. Because Docker authentication is
+required before any sandbox can be used, Docker Sandboxes should be treated as a
+strong local developer-tier candidate, not automatically as OMA's self-hosted
+production substrate. Before production implementation, decide whether a Docker
+account/licensing dependency is acceptable for the target deployment mode.
 
 ## Anthropic sandbox-runtime (`srt`)
 
@@ -242,11 +298,14 @@ remote sandbox provider.
 
 ## Implications for OMA
 
-1. Keep Docker Sandboxes first in the local provider probe queue, but require an
-   authenticated lifecycle proof before implementation.
+1. Keep Docker Sandboxes first in the local provider queue for the developer
+   tier. The authenticated lifecycle proof passed.
 2. Keep `srt` in the "policy wrapper" bucket. It can complement a provider, but
    it does not satisfy OMA's session provider contract alone.
 3. Do not add production provider abstractions yet. The next useful artifact is
    a typed provider-contract audit against the operations OMA already needs:
    create, prepare, exec/stream, park, resume, copy resources, collect outputs,
    interrupt, archive/delete, and cleanup.
+4. Add account/licensing/offline behavior to the provider comparison matrix. The
+   Docker account dependency may disqualify `sbx` from the self-hosted
+   production tier even if it remains excellent for local developer sandboxes.

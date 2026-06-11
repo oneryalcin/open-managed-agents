@@ -170,6 +170,8 @@ Verified:
 - each sandbox gets its own microVM, filesystem, network, and private Docker
   daemon;
 - sandboxes can be stopped without deletion and later restarted;
+- the `sbx` CLI requires Docker authentication before even `sbx ls` or sandbox
+  creation works;
 - `sbx rm` deletes sandbox state;
 - kits can declare tools, files, environment, startup commands, network rules,
   and credential proxy behavior;
@@ -189,6 +191,10 @@ Caveats:
 - several docs mark kits and custom secrets as experimental;
 - the product is young and the CLI/API surface may change;
 - provider automation details need a direct probe, not just docs;
+- the Docker account dependency is a product-posture caveat, not just install
+  friction. It may be acceptable for a local developer tier, but it is in
+  tension with OMA's self-hostability goal unless licensing, offline/headless
+  operation, and account requirements are explicitly accepted;
 - Linux server support and headless deployment posture need verification before
   calling this a self-hosted production provider.
 
@@ -439,6 +445,7 @@ Each probe should produce a short evidence file:
 - commands run;
 - platform;
 - install friction;
+- account, licensing, and offline/headless dependencies;
 - provider-contract coverage;
 - failure modes;
 - cleanup behavior;
@@ -490,6 +497,8 @@ provider; it should either:
   runtime-worker policy over provider-specific stop/start/snapshot primitives?
 - Is Docker Sandboxes usable headlessly and programmatically enough for OMA, or
   is it primarily an interactive CLI product today?
+- Does Docker Sandboxes' Docker-account dependency disqualify it as a
+  self-hosted production substrate, leaving it as a local developer tier only?
 - Can `sandbox-runtime` safely wrap only built-in tool execution inside OMA, or
   would that create confusing partial isolation next to Docker-local?
 - Is microsandbox mature enough to own OMA session lifecycle before a
