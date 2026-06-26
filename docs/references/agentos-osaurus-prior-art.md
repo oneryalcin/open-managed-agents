@@ -25,8 +25,9 @@ or diverge from our decisions, and what (if anything) we should borrow.
   Repo: <https://github.com/rivet-dev/agentos>. Docs: <https://agentos-sdk.dev/docs>.
 - Osaurus: local clone `/tmp/osaurus`, pinned to
   `86195e1d5854c282937ba894581f8d9918074efb`
-  (`fixed tools page layout hang (#1724)`). Native Swift, macOS 15.5+ Apple
-  Silicon only. Repo: <https://github.com/osaurus-ai/osaurus>.
+  (`fixed tools page layout hang (#1724)`). Native Swift app; macOS 15.5+
+  generally, but the sandbox subsystem requires macOS 26+ and Apple Silicon.
+  Repo: <https://github.com/osaurus-ai/osaurus>.
 
 All file:line citations below are against those pinned clones.
 
@@ -54,7 +55,7 @@ Key locations:
   `exec` / `readFile` / `writeFile`.
 - `packages/core/src/runtime.ts` — `VirtualFileSystem`, `NetworkAdapter`,
   `Permissions` interfaces.
-- `packages/core/src/sidecar/permissions.ts` — deny-by-default serialization.
+- `packages/core/src/sidecar/permissions.ts` — permission serialization.
 - `packages/agentos-sandbox/` — the "pair with a full sandbox" extension.
 - `crates/agentos-sidecar/` — Rust transport/dispatch/ACP extension.
 - `packages/secure-exec/`, `packages/posix`, `packages/python`, `packages/shell`
@@ -62,14 +63,16 @@ Key locations:
 
 ### Interesting bits for OMA (overall)
 
-1. **Unified deny-by-default permission model.** One `Permissions` shape covers
-   `fs / network / childProcess / process / env / binding`, each `allow|deny`
-   with path/pattern rules (`packages/core/src/runtime.ts:184`). With no
-   permissions supplied, everything serializes to `"deny"`
-   (`packages/core/src/sidecar/permissions.ts:45-50`). This is a more expressive
+1. **Unified permission model with deny-capable rules.** One `Permissions` shape
+   covers `fs / network / childProcess / process / env / binding`, each
+   `allow|deny` with path/pattern rules (`packages/core/src/runtime.ts:184`).
+   The public runtime defaults missing permissions to `allowAll`, while the
+   sidecar serializer can encode explicit deny policies
+   (`packages/core/src/agent-os.ts:561-564`,
+   `packages/core/src/sidecar/permissions.ts:45-50`). This is a more expressive
    version of what plan 0107 is sketching, and it is the closest **Pi-native**
-   reference we have for a provider permission contract. Relevant well beyond the
-   sandbox: it is also a model for tool-permission / builtin-access policy
+   reference we have for a provider permission contract. Relevant well beyond
+   the sandbox: it is also a model for tool-permission / builtin-access policy
    (cf. `PiToolPermissionBridge`).
 
 2. **Composable VFS mount plugins.** Mounts are first-class and pluggable —
@@ -113,6 +116,12 @@ Key locations:
   sandbox extension. For OMA's untrusted-code isolation bar this is a *policy /
   light-isolation* tier, comparable to where 0106 places `sandbox-runtime`, not a
   replacement for microsandbox/Docker.
+- **The Node/V8 isolation path is not something to trust as-is.** The
+  repo-local `crates/CLAUDE.md` says the intended model is V8 isolates with
+  kernel-backed builtins, but also says that path is currently broken and guest
+  JavaScript still spawns real host `node` in that area
+  (`crates/CLAUDE.md:7-13`). This strengthens the "study the contract, do not
+  adopt as isolation" conclusion.
 - **Credentials are per-session env injection** (`CreateSessionOptions.env`),
   not a boundary proxy. Simpler than microsandbox's (broken) secret proxy, but
   the secret enters the guest — the opposite of OMA's "keep secrets in the
@@ -143,8 +152,9 @@ A native Swift macOS agent harness (local model inference + agent loop + tools).
 Only the **sandbox subsystem** is prior art for us: agents execute in an isolated
 Linux microVM via Apple's
 [Containerization](https://developer.apple.com/documentation/containerization)
-framework. macOS 15.5+ / Apple Silicon only. This is a concrete implementation of
-the Apple `container` path that 0106 listed as "track, do not probe yet."
+framework. The app supports macOS 15.5+, but this sandbox subsystem requires
+macOS 26+ / Apple Silicon. This is a concrete implementation of the Apple
+`container` path that 0106 listed as "track, do not probe yet."
 
 Key locations:
 
@@ -165,19 +175,19 @@ Key locations:
 
 1. **Host API bridge over vsock + per-agent bearer token.** The guest reaches
    host capabilities through a vsock-relayed Unix socket with a 256-bit
-   per-agent token (8 MiB request cap), so the guest never touches host
-   networking and **secrets stay host-side** (`HostAPIBridgeServer.swift`,
-   `docs/SANDBOX.md`). This is a clean realization of OMA's "keep secrets and
-   privileged actions in the harness" goal — and a more credible pattern than
-   microsandbox's TLS-interception secret proxy (gated out in 0109). Worth
-   recording as a design option for credential-bearing tools.
+   per-agent token (8 MiB request cap), so the guest does not need direct host
+   networking (`HostAPIBridgeServer.swift`, `docs/SANDBOX.md`). This is useful
+   prior art for privileged host actions. It is **not** a boundary secret-proxy
+   design: Osaurus can return secrets through the bridge and inject them into
+   sandbox exec env, then scrub outputs before model persistence. Treat this as
+   a host-bridge pattern, not as OMA's keep-secrets-out-of-guest target.
 
 2. **Inactivity timeout instead of wall-clock.** Exec polls stdout/stderr every
-   2s and kills only after N seconds of *no output* (SIGTERM → 3s grace →
-   SIGKILL), plus a user `[Terminate]` button
-   (`SandboxManager.swift` `waitWithInactivityTimeout`). OMA's Docker provider
-   uses a wall-clock `operationTimeoutMs`; inactivity-based termination handles
-   long builds far better and is worth considering for the provider contract.
+   2s and times out only after N seconds of *no output*, sending SIGTERM from
+   `waitWithInactivityTimeout`; separate live/user termination paths add the
+   SIGTERM -> grace -> SIGKILL behavior. OMA's Docker provider uses a wall-clock
+   `operationTimeoutMs`; inactivity-based termination handles long builds far
+   better and is worth considering for the provider contract.
 
 3. **Warm rootfs reuse + digest-pinned guest image.** Second+ boot reuses a
    persisted ext4 rootfs instead of re-unpacking the OCI image; the image is
@@ -216,6 +226,53 @@ Key locations:
 
 ---
 
+## Other OMA-Relevant Patterns
+
+These are not blockers for the `microsandbox-local` provider, but they are
+worth keeping in the repo because they touch future OMA surfaces outside
+sandboxing.
+
+1. **Live session-update delivery should be tested with an observable mid-turn
+   window.** agentOS has a focused regression test proving `session/update`
+   events stream before prompt resolution, not batched at the end. The test
+   injects latency into the second model response so the tool-call update has a
+   real window to arrive before the turn resolves
+   (`packages/core/tests/session-update-live.test.ts:20-42`,
+   `packages/core/tests/session-update-live.test.ts:199-209`). This is the same
+   testing shape OMA should use whenever SSE or runtime event delivery can
+   accidentally batch.
+
+2. **Memory should stay compact and scoped.** Osaurus splits memory into
+   identity, pinned facts, per-session episodes, and transcript fallback; raw
+   transcript is not injected by default, and memory can inject a compact slice
+   or nothing (`docs/MEMORY.md:22-73`). This is useful prior art for future OMA
+   memory work: keep durable recall separate from transcript replay, score and
+   decay facts, and avoid stuffing full history into every turn.
+
+3. **Privacy filtering needs a fail-closed invariant if OMA ever proxies cloud
+   model calls.** Osaurus documents a two-layer outbound privacy filter:
+   deterministic regex plus optional on-device classifier, user review, stable
+   placeholders, a post-scrub leak scan that blocks sends, and a wire probe for
+   the exact bytes sent to the provider (`docs/PRIVACY_FILTER.md:5-10`,
+   `docs/PRIVACY_FILTER.md:86-91`). This is not current OMA scope, but the
+   fail-closed post-scrub check is the important pattern if we ever handle PII
+   policy at the platform boundary.
+
+4. **Loop-control tools are useful UX, but Pi owns OMA's loop.** Osaurus uses
+   global `todo`, `complete`, and `clarify` tools, then intercepts successful
+   results across chat, HTTP, and plugin surfaces (`docs/AGENT_LOOP.md:25-35`,
+   `docs/AGENT_LOOP.md:39-79`). This is good product UX prior art for task
+   planning and explicit completion, but not something to copy directly while
+   OMA delegates the agent loop to Pi.
+
+5. **File-operation history and undo are folder-product ideas, not control-plane
+   obligations.** Osaurus logs file writes/edits and some simple shell
+   mutations so the user or agent can inspect and undo them
+   (`docs/AGENT_LOOP.md:111-139`). Useful if OMA grows a local workspace UI, but
+   outside the current Managed Agents control-plane contract.
+
+---
+
 ## Net takeaways
 
 - The microsandbox-local decision is unaffected — both confirm the design space
@@ -223,8 +280,11 @@ Key locations:
 - agentOS is the more important find: Pi-native, Apache-2.0, and it already names
   the permission + mount-plugin + lazy-escalation contract we are about to pin.
   It is a real omission from 0106.
-- Osaurus contributes transferable patterns (host-side secrets via vsock+token,
+- Osaurus contributes transferable patterns (vsock+token host bridge,
   inactivity timeout, warm rootfs) even though its substrate is macOS-only.
+- Outside sandboxing, agentOS contributes a concrete live-session-event test
+  shape, while Osaurus contributes compact memory, fail-closed privacy filtering,
+  loop-control UX, and file-undo patterns for future product surfaces.
 - One recurring theme across both: a **two-tier** model — a cheap default
   execution tier plus on-demand escalation to a heavier real sandbox — is worth
   weighing against OMA's current "one provider selection per deployment" shape

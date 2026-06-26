@@ -167,9 +167,10 @@ Verified on 2026-06-26 (clone pinned to `4c2b9bb`). Full read-through in
   (Rust coreutils) plus JS/Python (Pyodide) — not a real Linux kernel;
 - ships a first-class **Pi** integration and speaks ACP, so it is the closest
   Pi-native reference we have for the provider contract we are pinning in 0107;
-- unified deny-by-default `Permissions` model (`fs/network/childProcess/process/
-  env/binding`), composable VFS mount plugins (host-dir/S3/overlay/sandbox), and
-  rich resource accounting (cpu/fds/pipes/sockets/fs-bytes/wasm-fuel);
+- unified permission model with deny-capable rules (`fs/network/childProcess/
+  process/env/binding`), composable VFS mount plugins
+  (host-dir/S3/overlay/sandbox), and rich resource accounting
+  (cpu/fds/pipes/sockets/fs-bytes/wasm-fuel);
 - a lazy **"sandbox extension"** mounts a heavier real sandbox (E2B/Daytona/etc.)
   on demand and exposes it as agent-callable tools — a two-tier model directly
   relevant to cheap `requires_action` parking.
@@ -375,10 +376,12 @@ A concrete reference implementation now exists:
 harness) runs agents in an Apple-Containerization Linux microVM. Read-through in
 [agentos-osaurus-prior-art.md](../references/agentos-osaurus-prior-art.md).
 Transferable patterns regardless of substrate: a vsock-relayed host-API bridge
-with per-agent bearer tokens (secrets stay host-side), inactivity-based exec
-timeouts (vs wall-clock), warm digest-pinned rootfs reuse, and one long-lived VM
-multiplexed by per-agent Linux users. macOS/Apple-Silicon/Swift-only, so it is a
-pattern source, not a server-substrate candidate.
+with per-agent bearer tokens, inactivity-based exec timeouts (vs wall-clock),
+warm digest-pinned rootfs reuse, and one long-lived VM multiplexed by per-agent
+Linux users. The bridge is not a boundary secret-proxy pattern: Osaurus can
+return secrets into guest code and inject them into exec env, then scrub outputs.
+macOS 26+/Apple-Silicon/Swift-only for the sandbox subsystem, so it is a pattern
+source, not a server-substrate candidate.
 
 Recommendation:
 
