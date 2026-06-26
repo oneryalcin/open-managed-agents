@@ -19,6 +19,7 @@
 - File storage prior-art notes: [file-storage-prior-art.md](references/file-storage-prior-art.md)
 - Competing OMA implementations (open-ma / openma.dev) prior-art: [oma-implementations-prior-art.md](references/oma-implementations-prior-art.md)
 - just-bash (simulated-bash sandbox) prior-art: [just-bash-prior-art.md](references/just-bash-prior-art.md)
+- agentOS (Pi-native in-process runtime) + Osaurus (Apple-Containerization sandbox) prior-art: [agentos-osaurus-prior-art.md](references/agentos-osaurus-prior-art.md)
 
 ## Anthropic SDK source (for endpoint shapes and types)
 

@@ -155,6 +155,41 @@ References:
 - [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing)
 - [Anthropic engineering post](https://www.anthropic.com/engineering/claude-code-sandboxing)
 
+### agentOS (`rivet-dev/agentos`)
+
+Repository: [rivet-dev/agentos](https://github.com/rivet-dev/agentos)
+
+Verified on 2026-06-26 (clone pinned to `4c2b9bb`). Full read-through in
+[agentos-osaurus-prior-art.md](../references/agentos-osaurus-prior-art.md).
+
+- Apache-2.0, TypeScript + Rust; a portable "agent OS" that runs an in-process
+  kernel (VFS, process table, virtual network) and executes commands as WASM
+  (Rust coreutils) plus JS/Python (Pyodide) — not a real Linux kernel;
+- ships a first-class **Pi** integration and speaks ACP, so it is the closest
+  Pi-native reference we have for the provider contract we are pinning in 0107;
+- unified deny-by-default `Permissions` model (`fs/network/childProcess/process/
+  env/binding`), composable VFS mount plugins (host-dir/S3/overlay/sandbox), and
+  rich resource accounting (cpu/fds/pipes/sockets/fs-bytes/wasm-fuel);
+- a lazy **"sandbox extension"** mounts a heavier real sandbox (E2B/Daytona/etc.)
+  on demand and exposes it as agent-callable tools — a two-tier model directly
+  relevant to cheap `requires_action` parking.
+
+OMA fit:
+
+- Belongs in the same **light-isolation policy tier** as `sandbox-runtime`, not
+  the microVM/Docker tier: there is no OS-kernel boundary or pid/namespace
+  isolation from the host, and heavy/native workloads must escalate to the
+  external sandbox.
+- Credentials are per-session env injection (secret enters the guest), the
+  opposite of OMA's keep-secrets-in-the-harness goal; treat only as the explicit
+  `env-plaintext` shape, never proxy-grade.
+
+Recommendation:
+
+Do not adopt as an isolation provider. Mine its `Permissions` + mount-plugin +
+sandbox-extension design before freezing the 0107 contract vocabulary; it is the
+most directly applicable, Pi-native permission/mount prior art found so far.
+
 ### Docker Sandboxes
 
 References:
@@ -335,9 +370,21 @@ Caveats:
   file-transfer, and cleanup controls OMA needs as cleanly as Docker
   Sandboxes or microsandbox.
 
+A concrete reference implementation now exists:
+[osaurus-ai/osaurus](https://github.com/osaurus-ai/osaurus) (macOS desktop
+harness) runs agents in an Apple-Containerization Linux microVM. Read-through in
+[agentos-osaurus-prior-art.md](../references/agentos-osaurus-prior-art.md).
+Transferable patterns regardless of substrate: a vsock-relayed host-API bridge
+with per-agent bearer tokens (secrets stay host-side), inactivity-based exec
+timeouts (vs wall-clock), warm digest-pinned rootfs reuse, and one long-lived VM
+multiplexed by per-agent Linux users. macOS/Apple-Silicon/Swift-only, so it is a
+pattern source, not a server-substrate candidate.
+
 Recommendation:
 
-Track, but do not make it a first provider probe.
+Track, but do not make it a first provider probe. Capture Osaurus's vsock+token
+host-bridge and inactivity-timeout patterns as provider-contract design options
+in 0107.
 
 ### Docker + gVisor
 
