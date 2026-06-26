@@ -12,7 +12,7 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-06-11 (main @ `cbd3705`). Earlier `#69 / #51 / #13` queue is
+_Last updated 2026-06-26 (main @ `4ec0903`). Earlier `#69 / #51 / #13` queue is
 landed/closed; superseded below._
 
 - `main` is the integration branch. Docs/scratch slices commit straight to `main`;
@@ -21,13 +21,16 @@ landed/closed; superseded below._
   #112/#114), **request idempotency** (ADR 0015, PRs #116/#120 — closed `#13`),
   and a **sandbox-provider evaluation** (plans 0106/0107, issue #121). `#51` is
   closed. See "What Landed Recently" below.
-- **In-flight:** **PR #122** (`dev/interrupt-message-abort-window`, base `main`,
-  OPEN) fixes **#59** cross-request interrupt/message abort-window ordering in
-  `src/control-plane/sessions/pi/runner.ts`. Runtime hot path → review with the
-  full constellation before merge.
-- **Next concrete slice:** first `microsandbox-local` sandbox provider, **fully
-  scoped in [docs/plans/0107-sandbox-provider-contract-audit.md](docs/plans/0107-sandbox-provider-contract-audit.md)**
-  (issue #121).
+- **`#59` interrupt/message abort-window ordering is closed.** PR #122 merged to
+  `main` (squash `4ec0903`): the original abort-window fix plus an
+  overlapping-interrupt **coalescing** hardening (one in-flight `abort()` per
+  session, found by the review constellation + hot-path trace). All in
+  `src/control-plane/sessions/pi/runner.ts`.
+- **Top active work:** first `microsandbox-local` sandbox provider (issue #121,
+  **OPEN**), **fully scoped in
+  [docs/plans/0107-sandbox-provider-contract-audit.md](docs/plans/0107-sandbox-provider-contract-audit.md)**.
+  No microsandbox provider code exists yet; runtime today supports `none`,
+  `host-passthrough`, and `docker-local`.
 - Untracked-on-purpose: `scratch/oma-sandbox-provider-landscape.md` (research copy
   behind a gist). Don't commit/delete without asking.
 
@@ -337,13 +340,18 @@ Full detail lives in-repo; this is the index + the one invariant to carry from e
 
 ## Immediate Next Work
 
-1. **Finish PR #122 (`#59`)** — review the fix commit with the constellation,
-   then merge. Interrupt/message abort-window ordering in the runtime hot path.
-2. **First `microsandbox-local` provider slice** — fully scoped in plan 0107 and
-   issue #121: execution, files, explicit volumes, explicit network policy,
-   logs/metrics; **no secret proxy** (rejected at create time, error pointing at
-   the gate). This is the bigger bite; everything it needs is pinned.
-3. **Standing queue (evidence-gated):** `#113` coordinator seam audit
+1. **First `microsandbox-local` provider slice** — the top active work, fully
+   scoped in plan 0107 and issue #121. Suggested branch
+   `dev/microsandbox-local-provider`. v1 includes: exec + streaming/cancel;
+   read/write/list/find/ls; file mounts + output collection; an **explicit
+   durable volume** workspace (rootfs is disposable); **explicit** network
+   policy; logs/metrics normalization; cleanup/reap of owned resources; and
+   **reject proxy-grade secrets at create time** pointing at #121 / the 0109
+   gate. Explicitly NOT in v1: secret-proxy support, plaintext-env fallback,
+   snapshot parking as default, and any hosted/K8s abstraction work. Per the
+   review cadence, write the implementation plan and run an adversarial review of
+   it before coding (probes 0106–0109 already supply the evidence).
+2. **Standing queue (evidence-gated):** `#113` coordinator seam audit
    (opportunistic); `#107` SQLite scaling (200–400 sessions); `#103` deployment
    hardening; `#16` Pi runtime production rollout policy; `#118/#119` upload +
    streaming idempotency. Postgres / async-store boundary stays gated on a
