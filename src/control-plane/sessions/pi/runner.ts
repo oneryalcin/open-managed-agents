@@ -197,6 +197,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
     _workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<void> {
+    const pending = this.pendingInterrupts.get(sessionId);
+    if (pending) return pending;
     const interrupt = this.interruptSessionInternal(sessionId);
     this.pendingInterrupts.set(sessionId, interrupt);
     try {
