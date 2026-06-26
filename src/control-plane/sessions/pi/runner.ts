@@ -70,6 +70,7 @@ interface RuntimeHandle {
   session: PiRuntimeSession;
   sandbox: SandboxProvider | undefined;
   running: boolean;
+  needsFreshPromptAfterInterrupt: boolean;
   closeWhenIdle: boolean;
   lastUsedAt: number;
   timer: ReturnType<typeof setTimeout> | undefined;
@@ -89,6 +90,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly modelRegistry = ModelRegistry.create(this.authStorage);
   private readonly sessions = new Map<string, RuntimeHandle>();
   private readonly pendingSessions = new Map<string, Promise<RuntimeHandle>>();
+  private readonly pendingInterrupts = new Map<string, Promise<void>>();
   private readonly closedSessionIds = new Set<string>();
   private readonly customToolBridge: PiCustomToolBridge;
   private readonly toolPermissionBridge: PiToolPermissionBridge;
@@ -195,12 +197,25 @@ export class PiSessionRunner implements RuntimeEventRunner {
     _workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<void> {
+    const pending = this.pendingInterrupts.get(sessionId);
+    if (pending) return pending;
+    const interrupt = this.interruptSessionInternal(sessionId);
+    this.pendingInterrupts.set(sessionId, interrupt);
+    try {
+      await interrupt;
+    } finally {
+      if (this.pendingInterrupts.get(sessionId) === interrupt) {
+        this.pendingInterrupts.delete(sessionId);
+      }
+    }
+  }
+
+  private async interruptSessionInternal(sessionId: string): Promise<void> {
     const existing = this.sessions.get(sessionId);
     if (existing) {
       await this.interruptHandle(sessionId, existing);
       return;
     }
-
     const pending = this.pendingSessions.get(sessionId);
     if (!pending) return;
     try {
@@ -303,6 +318,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
     text: string,
     signal: AbortSignal | undefined,
   ): AsyncIterable<unknown> {
+    // Cross-request interrupt/message ordering: a message that arrives while
+    // abort is settling waits and then starts a fresh post-interrupt turn.
+    await this.waitForPendingInterrupt(sessionId);
     const handle = await this.getOrCreateHandle(workspaceId, sessionId);
     if (this.closed) {
       this.evict(sessionId, handle);
@@ -310,7 +328,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
     this.touch(sessionId, handle);
 
-    if (handle.running) {
+    if (handle.running && !handle.needsFreshPromptAfterInterrupt) {
       try {
         await handle.session.followUp(text);
         this.touch(sessionId, handle);
@@ -320,6 +338,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       }
       return;
     }
+    handle.needsFreshPromptAfterInterrupt = false;
 
     const queue: unknown[] = [];
     const gatedEvents: unknown[] = [];
@@ -562,6 +581,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           session,
           sandbox,
           running: false,
+          needsFreshPromptAfterInterrupt: false,
           closeWhenIdle: false,
           lastUsedAt: this.now(),
           timer: undefined,
@@ -750,7 +770,21 @@ export class PiSessionRunner implements RuntimeEventRunner {
   ): Promise<void> {
     handle.session.clearQueue?.();
     await handle.session.abort();
+    handle.session.clearQueue?.();
+    handle.running = false;
+    handle.needsFreshPromptAfterInterrupt = true;
     this.touch(sessionId, handle);
+  }
+
+  private async waitForPendingInterrupt(sessionId: string): Promise<void> {
+    const interrupt = this.pendingInterrupts.get(sessionId);
+    if (!interrupt) return;
+    try {
+      await interrupt;
+    } catch {
+      // interruptSession callers observe abort errors; message delivery waits only
+      // for the abort window to close before deciding prompt vs follow-up.
+    }
   }
 
   private evict(sessionId: string, handle: RuntimeHandle): void {

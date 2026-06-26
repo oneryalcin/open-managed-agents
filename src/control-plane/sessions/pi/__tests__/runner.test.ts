@@ -230,7 +230,6 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     await runner.interruptSession("wrk", "sesn_1");
 
     expect(factory.sessions[0]?.aborts).toBe(1);
-    expect(factory.sessions[0]?.clearQueues).toBe(1);
     expect(factory.sessions[0]?.followUps).toEqual([]);
     expect(factory.sessions[0]?.disposed).toBe(false);
 
@@ -265,7 +264,121 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const secondEvents = await second;
     expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
     expect(secondEvents).toEqual([]);
-    expect(factory.sessions[0]?.clearQueues).toBe(1);
+    expect(factory.sessions[0]?.followUps).toEqual([]);
+  });
+
+  it("waits for an in-flight interrupt before running the next message as a fresh turn", async () => {
+    const promptGate = deferred<void>();
+    const abortGate = deferred<void>();
+    const factory = new FakeSessionFactory({
+      promptGate: promptGate.promise,
+      abortGate: abortGate.promise,
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    const interrupt = runner.interruptSession("wrk", "sesn_1");
+    await until(() => factory.sessions[0]?.clearQueues === 1);
+
+    const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await delay(10);
+    expect(factory.sessions[0]?.prompts).toEqual(["one"]);
+    expect(factory.sessions[0]?.followUps).toEqual([]);
+
+    promptGate.resolve();
+    const firstEvents = await first;
+    abortGate.resolve();
+    await interrupt;
+
+    const secondEvents = await second;
+
+    expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
+    expect(messageTexts(secondEvents)).toEqual(["reply: two"]);
+    expect(factory.sessions[0]?.prompts).toEqual(["one", "two"]);
+    expect(factory.sessions[0]?.followUps).toEqual([]);
+  });
+
+  it("coalesces overlapping interrupts before a waiting message starts fresh", async () => {
+    const promptGate = deferred<void>();
+    const abortGate = deferred<void>();
+    const factory = new FakeSessionFactory({
+      promptGate: promptGate.promise,
+      abortGate: abortGate.promise,
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    const interruptA = runner.interruptSession("wrk", "sesn_1");
+    await until(() => factory.sessions[0]?.aborts === 1);
+    const interruptB = runner.interruptSession("wrk", "sesn_1");
+    await delay(10);
+
+    expect(factory.sessions[0]?.aborts).toBe(1);
+
+    const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await delay(10);
+    expect(factory.sessions[0]?.prompts).toEqual(["one"]);
+    expect(factory.sessions[0]?.followUps).toEqual([]);
+
+    promptGate.resolve();
+    const firstEvents = await first;
+    abortGate.resolve();
+    await Promise.all([interruptA, interruptB]);
+    const secondEvents = await second;
+
+    expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
+    expect(messageTexts(secondEvents)).toEqual(["reply: two"]);
+    expect(factory.sessions[0]?.aborts).toBe(1);
+    expect(factory.sessions[0]?.prompts).toEqual(["one", "two"]);
+    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.running).toBe(false);
+  });
+
+  it("swallows pending interrupt abort errors before a waiting message starts fresh", async () => {
+    const promptGate = deferred<void>();
+    const abortGate = deferred<void>();
+    const factory = new FakeSessionFactory({
+      promptGate: promptGate.promise,
+      abortGate: abortGate.promise,
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
+
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    const interrupt = runner.interruptSession("wrk", "sesn_1");
+    await until(() => factory.sessions[0]?.aborts === 1);
+
+    const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await delay(10);
+    expect(factory.sessions[0]?.prompts).toEqual(["one"]);
+    expect(factory.sessions[0]?.followUps).toEqual([]);
+
+    promptGate.resolve();
+    const firstEvents = await first;
+    const interruptFailure = expect(interrupt).rejects.toThrow("abort failed");
+    abortGate.reject(new Error("abort failed"));
+    await interruptFailure;
+    const secondEvents = await second;
+
+    expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
+    expect(messageTexts(secondEvents)).toEqual(["reply: two"]);
+    expect(factory.sessions[0]?.prompts).toEqual(["one", "two"]);
+    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.running).toBe(false);
   });
 
   it("interruptSession is idempotent and harmless for idle or missing sessions", async () => {
@@ -283,7 +396,6 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     await runner.interruptSession("wrk", "sesn_1");
 
     expect(factory.sessions[0]?.aborts).toBe(2);
-    expect(factory.sessions[0]?.clearQueues).toBe(2);
     expect(factory.sessions[0]?.disposed).toBe(false);
   });
 
@@ -318,7 +430,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
     await interrupt;
     expect(session.aborts).toBe(1);
-    expect(session.clearQueues).toBe(1);
+    expect(session.clearQueues).toBe(2);
     expect(session.disposed).toBe(false);
     await run;
   });
@@ -886,6 +998,7 @@ class FakeSessionFactory {
 
 interface FakeSessionOptions {
   promptGate?: Promise<void>;
+  abortGate?: Promise<void>;
   throwAlreadyProcessingOnce?: boolean;
   throwAlreadyProcessingAfterFirstPrompt?: boolean;
   throwHardErrorOnce?: boolean;
@@ -1002,6 +1115,7 @@ class FakeSession implements PiRuntimeSession {
 
   async abort(): Promise<void> {
     this.aborts += 1;
+    if (this.opts.abortGate) await this.opts.abortGate;
   }
 
   clearQueue(): { steering: string[]; followUp: string[] } {
