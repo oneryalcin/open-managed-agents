@@ -12,14 +12,27 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-- `main` is the integration branch.
-- `#69` landed durable runtime waits and recovery on `main`.
-- `#14` is closed and reconciled to `#69`.
-- The next queued issues are:
-  - `#51` snapshot orphan-sweep / delete ordering before any durable file backend
-  - `#13` request-level idempotency for custom-tool results
+_Last updated 2026-06-11 (main @ `cbd3705`). Earlier `#69 / #51 / #13` queue is
+landed/closed; superseded below._
 
-Treat lifecycle, restart recovery, storage ordering, and hosted parity as sharp edges, not routine CRUD.
+- `main` is the integration branch. Docs/scratch slices commit straight to `main`;
+  code slices land via `dev/*` branch → PR → squash-merge.
+- Since the last handoff, three arcs landed: **coordinator seams** (ADR 0014, PRs
+  #112/#114), **request idempotency** (ADR 0015, PRs #116/#120 — closed `#13`),
+  and a **sandbox-provider evaluation** (plans 0106/0107, issue #121). `#51` is
+  closed. See "What Landed Recently" below.
+- **In-flight:** **PR #122** (`dev/interrupt-message-abort-window`, base `main`,
+  OPEN) fixes **#59** cross-request interrupt/message abort-window ordering in
+  `src/control-plane/sessions/pi/runner.ts`. Runtime hot path → review with the
+  full constellation before merge.
+- **Next concrete slice:** first `microsandbox-local` sandbox provider, **fully
+  scoped in [docs/plans/0107-sandbox-provider-contract-audit.md](docs/plans/0107-sandbox-provider-contract-audit.md)**
+  (issue #121).
+- Untracked-on-purpose: `scratch/oma-sandbox-provider-landscape.md` (research copy
+  behind a gist). Don't commit/delete without asking.
+
+Treat lifecycle, restart recovery, storage ordering, idempotency, sandbox
+provider boundaries, and hosted parity as sharp edges, not routine CRUD.
 
 ## How We Work
 
@@ -171,6 +184,30 @@ Use reviewers selectively, not theatrically.
 
 Do not run the full constellation on low-risk changes just because it exists.
 
+### The independent-verification discipline (non-negotiable)
+
+The refinement this period: on a heavy slice, a background engineer ("codex")
+implements on a `dev/*` branch and reports; the review constellation runs; **then
+the reviewing agent does its own hands-on verification** — re-read the exact hot
+path, write throwaway probes, run the suite, and **adjudicate every reviewer
+headline against direct evidence** (code trace or empirical probe) before it
+enters the verdict. **Nothing ships on a reviewer's say-so.** Finally, verify the
+fix commit directly (diff against the agreed fix list, re-run typecheck + suite)
+— and diff the **merge** commit, not just the last commit you reviewed.
+
+Reviewer value is genuinely unpredictable: on PR #120 *both* codex headline
+findings were refuted under verification while Opus/Sonnet found the real ones; on
+PR #116 plain codex found the best issue while adversarial misfired. Run the
+constellation for coverage, not for a vote.
+
+Invoke the codex reviewers in the background (the Claude background flag is what
+detaches — `--background` alone does not):
+
+```
+node "<plugins>/openai-codex/codex/1.0.4/scripts/codex-companion.mjs" \
+  review|adversarial-review "--background --base=main"   # via Bash(run_in_background:true)
+```
+
 ## Architectural Defaults
 
 ### Typed boundaries
@@ -219,10 +256,44 @@ These have all bitten real work already:
 4. Assuming IDs are globally unique when workspace scoping actually matters
 5. Returning success after “best effort” cleanup where durable truth is required
 6. Shipping a divergence from hosted behavior without explicitly naming it as a non-goal
+7. **Forgetting the `anthropic-beta` gate.** Managed Agents routes 404 without
+   `anthropic-beta: managed-agents-2026-04-01` (`MANAGED_AGENTS_BETA`, `app.ts`);
+   Files API needs `files-api-2025-04-14`. A probe missing the header sees a 404
+   envelope on every route and looks like a routing bug. Add it to every request.
+8. **Confounded probes that pass multiple reviewers.** A microsandbox "rootfs
+   doesn't survive stop/start" finding passed codex's probe *and* a first
+   reproduction — both wrote to `/tmp`, which is mounted **tmpfs**. Caught only by
+   reading the config dump skeptically. Verify the actual environment (mount
+   table, config) before generalizing a filesystem/environment result.
+9. **Probing before searching the upstream tracker.** microsandbox#646 already
+   documented the plain-HTTP secret behavior we "discovered". Search upstream
+   issues/examples *before* designing a decisive probe.
+10. **`await` in a SQLite commit path.** `node:sqlite` `DatabaseSync` is
+    synchronous on purpose; the coordinators' atomicity depends on no interleaving
+    inside `withSqliteTransaction`. Don't async-ify stores without re-reading ADR 0014.
+11. **Editing `~/.npmrc` to probe a new package.** It has a time-gate and
+    `ignore-scripts=true`. Use a temp `NPM_CONFIG_USERCONFIG` in a throwaway dir;
+    never mutate the user's npmrc. (`tsx --eval` with top-level await also fails —
+    use a scrap file with `async main()`.)
 
 The meta-rule:
 
 **Check the whole contract surface, not a representative sample.**
+
+### The capability-injection lesson (bit us three times this period)
+
+Capability selection by **duck-typing / optional-method-presence at call time
+silently downgrades guarantees** — first atomicity (twice, in the coordinators),
+then secret protection (sandbox). Every fix had the same shape:
+
+> Inject the capability explicitly at composition time; **fail fast at
+> construction** if a required capability is absent. Never select correctness-
+> bearing behavior by sniffing for an optional method when the call happens.
+
+Generalized as plan 0107 **audit conclusion #8**: *capability mismatches should
+fail at session/provider creation time, not when the first tool tries to use the
+missing feature.* If you write `if (obj.maybeMethod) {…} else {best-effort}` in a
+correctness path, stop — that is this anti-pattern in a new coat.
 
 ## Definition of Done
 
@@ -235,27 +306,49 @@ A slice is done when:
 - issue/PR tracker state matches the code
 - deferred work is either fixed now or clearly ticketed
 
+## What Landed Recently (arcs since the last handoff)
+
+Full detail lives in-repo; this is the index + the one invariant to carry from each.
+
+- **Coordinator seams** (ADR 0014; PRs #112, #114). Real cross-store invariants
+  moved behind deployment-level coordinators: durable mode = atomic (shared
+  `DatabaseSync`, SAVEPOINT-re-entrant `withSqliteTransaction`), in-memory =
+  best-effort. *"No await in the commit path" is load-bearing.* `#113` (open)
+  audits remaining seams.
+- **Request idempotency** (ADR 0015; PRs #116 events.send, #120 sessions.create —
+  closed `#13`). The design insight: **ledger completion happens inside the domain
+  transaction**, which turns crash recovery from policy into theorem (a surviving
+  `in_progress` row provably means no committed side effect). Async create paths
+  use a status-guarded **heartbeat** to keep "abandoned ⟹ dead" true for
+  live-but-slow requests. Cookbooks: `retry-safe-events-send.md`,
+  `retry-safe-session-create.md`, `client-retry-and-cleanup.md`. `#118/#119` (open)
+  defer upload + streaming idempotency.
+- **Session lifecycle** (plan 0104; `faab4e9`). Pinned: archive keeps live SSE
+  streams open; delete force-closes after terminal `session.deleted`. Cookbook
+  `session-lifecycle-flow.md`.
+- **Sandbox provider evaluation** (plans 0106/0107; scratch probes 0106–0109;
+  issue #121). Landscape + provider-contract audit + hands-on probes of Docker
+  Sandboxes, microsandbox, and Anthropic `sandbox-runtime`. Pinned in 0107:
+  the **explicit-persistence invariant** (session workspace = explicit durable
+  mount/volume/disk; rootfs is disposable), **create-time capability rejection**
+  (audit conclusion #8), and **secrets gated out of v1** (substitution only runs
+  in the TLS-interception path, which failed locally; upstream
+  microsandbox#646/#752/#769/#969 confirm).
+
 ## Immediate Next Work
 
-### `#51` snapshot orphan-sweep / delete ordering
-
-This is a real boundary problem, not a cleanup chore.
-
-Current delete ordering drops snapshot metadata before confirming byte deletion. That is safe with the current in-memory file store, but it becomes wrong once file deletion is real I/O.
-
-Start with:
-- [docs/plans/0013-0014-0051-durable-runtime-and-storage.md](docs/plans/0013-0014-0051-durable-runtime-and-storage.md)
-- [docs/adrs/0013-file-resources-and-session-mounts.md](docs/adrs/0013-file-resources-and-session-mounts.md)
-
-The point of `#51` is to avoid silent orphaned snapshot bytes and leaked quota once durable file storage exists.
-
-### `#13` request-level idempotency
-
-Do not conflate this with the durable runtime wait work from `#69`.
-
-`#69` handled durable waits, turn recovery, replay safety for in-flight action submissions, and stale-owner fencing.
-
-`#13` is still open because full request-level idempotency for duplicated `user.message` requests remains separate.
+1. **Finish PR #122 (`#59`)** — review the fix commit with the constellation,
+   then merge. Interrupt/message abort-window ordering in the runtime hot path.
+2. **First `microsandbox-local` provider slice** — fully scoped in plan 0107 and
+   issue #121: execution, files, explicit volumes, explicit network policy,
+   logs/metrics; **no secret proxy** (rejected at create time, error pointing at
+   the gate). This is the bigger bite; everything it needs is pinned.
+3. **Standing queue (evidence-gated):** `#113` coordinator seam audit
+   (opportunistic); `#107` SQLite scaling (200–400 sessions); `#103` deployment
+   hardening; `#16` Pi runtime production rollout policy; `#118/#119` upload +
+   streaming idempotency. Postgres / async-store boundary stays gated on a
+   concrete multi-process need per ADR 0014 (exploratory `dev/async-store-boundary`
+   branch — do not merge speculatively).
 
 ## Practical Rules for the Next Agent
 
