@@ -274,6 +274,16 @@ describe("microsandbox CLI adapter", () => {
     ).toThrow("ENOBUFS");
   });
 
+  it("uses the module maxBuffer default for sync commands", () => {
+    const result = execMicrosandboxCommandSync(process.execPath, [
+      "-e",
+      "process.stdout.write(Buffer.alloc(2 * 1024 * 1024))",
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toHaveLength(2 * 1024 * 1024);
+  });
+
   it("uses a bounded async output buffer by default", () => {
     expect(DEFAULT_MICROSANDBOX_MAX_BUFFER).toBeGreaterThan(0);
   });

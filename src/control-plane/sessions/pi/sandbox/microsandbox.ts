@@ -325,7 +325,7 @@ export function execMicrosandboxCommandSync(
     cwd: opts.cwd,
     env: opts.env,
     input: opts.input,
-    maxBuffer: opts.maxBuffer,
+    maxBuffer: opts.maxBuffer ?? DEFAULT_MICROSANDBOX_MAX_BUFFER,
     timeout: opts.timeoutMs,
     encoding: "buffer",
   });
