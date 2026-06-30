@@ -40,12 +40,28 @@ Evidence that did not pass:
 - proxy-grade secret substitution. Plain HTTP received placeholders unchanged;
   HTTPS interception failed before the controlled echo server saw the request.
 
-Evidence still needed before coding:
+CLI confidence probe — passed (see
+[`scratch/0110-microsandbox-cli-confidence-probe.md`](../../scratch/0110-microsandbox-cli-confidence-probe.md),
+`msb` 0.6.1):
 
-- CLI parity for the operations this PR will depend on. Earlier probes used the
-  TypeScript SDK heavily, but today's `SandboxProvider.dispose()` is synchronous.
-  The implementation needs an `msb` command boundary, at minimum for teardown,
-  and preferably for the whole provider so tests can fake it like Docker-local.
+- create + named volume + `/workspace` mount, no-network policy, exec, streamed
+  exec, host/guest copy both directions, stop/start volume persistence, and
+  ordered sandbox-then-volume removal all work through the `msb` CLI;
+- sandbox and volume `inspect` both expose creation timestamps, so age-based
+  reaping is viable (no longer a conditional);
+- caveat: timeout/abort returns `error: exec timed out after <N>s` with no
+  partial stdout. Streamed output arrives live during exec, but a timed-out
+  command's final result carries no buffered partial output.
+
+Two environment facts the implementation must target:
+
+- `msb` is a Node-launched CLI. The version used here is 0.6.1 invoked with Node
+  on `PATH` via `fnm`; the Homebrew-global wrapper fails with
+  `env: node: No such file or directory` when its Node is absent. The provider
+  spawns `msb` (`spawnSync`), so the child environment must resolve `node`, and
+  deployment docs must state the Node-on-`PATH` requirement.
+- Earlier SDK probes (0106–0109) used the npm package `0.5.6`; this slice targets
+  the `msb` 0.6.1 CLI behavior, not SDK import shape.
 
 ## Scope
 
@@ -274,7 +290,10 @@ Responsibilities:
 - implement timeout and `AbortSignal` cancellation by killing the microsandbox
   exec handle;
 - normalize provider cancellation/exit results so callers do not depend on raw
-  microsandbox exit codes;
+  microsandbox exit codes. The CLI probe showed a timed-out/aborted command
+  returns an error with no partial stdout (streamed output arrives live during
+  exec, but the final envelope is empty), so map timeout/abort to an error
+  result, not a partial-output result;
 - materialize input file resources under the `/mnt/session/uploads` root,
   preserving each `RuntimeSessionFileMount.mountPath` relative to that root;
 - collect output files under `/mnt/session/outputs` with the same count/size
@@ -341,11 +360,10 @@ fire-and-forget SDK cleanup for owned durable resources.
 
 Reaping strategy:
 
-- if microsandbox exposes reliable creation timestamps for sandboxes and
-  volumes, support age-based stale reaping;
-- if volumes do not expose timestamps, reap only orphaned OMA-prefixed volumes
-  that are not attached to any live OMA sandbox, or leave volume reaping to an
-  explicit manual cleanup command;
+- the CLI probe confirmed both sandbox and volume `inspect` expose creation
+  timestamps, so support age-based stale reaping for both;
+- still scope reaping to OMA-prefixed/labelled resources only, and never reap a
+  volume still attached to a live OMA sandbox;
 - never reap resources without the OMA prefix/metadata.
 
 ### 6. Observability
@@ -376,7 +394,8 @@ Cover:
 - pure command-builder tests for create, exec, copy/read/list, network-deny,
   kill, remove, and volume removal commands;
 - path normalization and escape rejection;
-- command timeout and abort call the exec kill path;
+- command timeout and abort call the exec kill path and produce an error result
+  with no partial stdout (per the CLI probe behavior);
 - output collection quotas and unsafe name rejection;
 - dispose cleanup order after partial failures;
 - sync teardown uses the remove commands and does not await SDK promises;
