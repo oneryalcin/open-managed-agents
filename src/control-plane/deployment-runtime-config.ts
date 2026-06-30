@@ -11,13 +11,18 @@ export const DEPLOYMENT_RUNTIME_ENV_KEYS = [
   "OMA_SANDBOX_ENV_ALLOWLIST",
   "OMA_SANDBOX_OPERATION_TIMEOUT_MS",
   "OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS",
+  "OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS",
   "OMA_ALLOW_DOCKER_LOCAL",
+  "OMA_ALLOW_MICROSANDBOX_LOCAL",
   "OMA_ALLOW_UNSAFE_HOST_PASSTHROUGH",
   "OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH",
   "OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT",
 ] as const;
 
 export const DEFAULT_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS =
+  24 * 60 * 60 * 1000;
+
+export const DEFAULT_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS =
   24 * 60 * 60 * 1000;
 
 export type DeploymentRuntimeEnvKey =
@@ -59,6 +64,7 @@ export function parseDeploymentRuntimeConfigFromEnv(
   }
   if (provider === "docker-local") {
     rejectHostPassthroughEnv(env, "OMA_SANDBOX_PROVIDER=docker-local");
+    rejectMicrosandboxEnv(env, "OMA_SANDBOX_PROVIDER=docker-local");
     const selection = parseSandboxProviderSelection({
       type: "docker-local",
       ...envAllowlist(env),
@@ -76,8 +82,33 @@ export function parseDeploymentRuntimeConfigFromEnv(
       },
     });
   }
+  if (provider === "microsandbox-local") {
+    rejectDockerEnv(env, "OMA_SANDBOX_PROVIDER=microsandbox-local");
+    rejectHostPassthroughEnv(env, "OMA_SANDBOX_PROVIDER=microsandbox-local");
+    rejectEnvAllowlist(env, "OMA_SANDBOX_PROVIDER=microsandbox-local");
+    const selection = parseSandboxProviderSelection({
+      type: "microsandbox-local",
+      ...operationTimeoutMs(env),
+      reapStaleSandboxesOlderThanMs:
+        microsandboxReapStaleSandboxesOlderThanMs(env),
+    });
+    return validateDeploymentRuntimeConfig({
+      sandboxProviderSelection: selection,
+      sandboxProviderSelectionOptions: {
+        allowMicrosandboxLocal: parseBoolean(
+          env.OMA_ALLOW_MICROSANDBOX_LOCAL,
+          {
+            defaultValue: false,
+            name: "OMA_ALLOW_MICROSANDBOX_LOCAL",
+          },
+        ),
+      },
+    });
+  }
   if (provider === "host-passthrough") {
     rejectDockerEnv(env, "OMA_SANDBOX_PROVIDER=host-passthrough");
+    rejectMicrosandboxEnv(env, "OMA_SANDBOX_PROVIDER=host-passthrough");
+    rejectOperationTimeoutEnv(env, "OMA_SANDBOX_PROVIDER=host-passthrough");
     const unsafeAllowHostPassthrough = parseBoolean(
       env.OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH,
       {
@@ -193,6 +224,20 @@ function dockerReapStaleContainersOlderThanMs(
       );
 }
 
+function microsandboxReapStaleSandboxesOlderThanMs(
+  env: DeploymentRuntimeEnv,
+): number {
+  const raw = optionalString(
+    env.OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS,
+  );
+  return raw === undefined
+    ? DEFAULT_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS
+    : parsePositiveInteger(
+        raw,
+        "OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS",
+      );
+}
+
 function parsePositiveInteger(
   raw: string,
   name: DeploymentRuntimeEnvKey,
@@ -210,9 +255,9 @@ function rejectProviderSpecificEnv(
 ): void {
   rejectDockerEnv(env, context);
   rejectHostPassthroughEnv(env, context);
-  if (env.OMA_SANDBOX_ENV_ALLOWLIST !== undefined) {
-    throw new Error(`OMA_SANDBOX_ENV_ALLOWLIST requires ${context}`);
-  }
+  rejectMicrosandboxEnv(env, context);
+  rejectEnvAllowlist(env, context);
+  rejectOperationTimeoutEnv(env, context);
 }
 
 function rejectIgnoredResolverOptions(config: DeploymentRuntimeConfig): void {
@@ -220,6 +265,11 @@ function rejectIgnoredResolverOptions(config: DeploymentRuntimeConfig): void {
   const opts = config.sandboxProviderSelectionOptions ?? {};
   if (selection === undefined || selection.type === "none") {
     rejectDefinedOption(opts.allowDockerLocal, "allowDockerLocal", "no provider");
+    rejectDefinedOption(
+      opts.allowMicrosandboxLocal,
+      "allowMicrosandboxLocal",
+      "no provider",
+    );
     rejectDefinedOption(
       opts.allowUnsafeHostPassthrough,
       "allowUnsafeHostPassthrough",
@@ -234,6 +284,11 @@ function rejectIgnoredResolverOptions(config: DeploymentRuntimeConfig): void {
   }
   if (selection.type === "docker-local") {
     rejectDefinedOption(
+      opts.allowMicrosandboxLocal,
+      "allowMicrosandboxLocal",
+      "docker-local",
+    );
+    rejectDefinedOption(
       opts.allowUnsafeHostPassthrough,
       "allowUnsafeHostPassthrough",
       "docker-local",
@@ -245,8 +300,35 @@ function rejectIgnoredResolverOptions(config: DeploymentRuntimeConfig): void {
     );
     return;
   }
+  if (selection.type === "microsandbox-local") {
+    rejectDefinedOption(
+      opts.allowDockerLocal,
+      "allowDockerLocal",
+      "microsandbox-local",
+    );
+    rejectDefinedOption(
+      opts.allowUnsafeHostPassthrough,
+      "allowUnsafeHostPassthrough",
+      "microsandbox-local",
+    );
+    rejectDefinedOption(
+      opts.hostPassthroughWorkspaceRoot,
+      "hostPassthroughWorkspaceRoot",
+      "microsandbox-local",
+    );
+    return;
+  }
   if (selection.type === "host-passthrough") {
-    rejectDefinedOption(opts.allowDockerLocal, "allowDockerLocal", "host-passthrough");
+    rejectDefinedOption(
+      opts.allowDockerLocal,
+      "allowDockerLocal",
+      "host-passthrough",
+    );
+    rejectDefinedOption(
+      opts.allowMicrosandboxLocal,
+      "allowMicrosandboxLocal",
+      "host-passthrough",
+    );
   }
 }
 
@@ -263,9 +345,6 @@ function rejectDefinedOption(
 function rejectDockerEnv(env: DeploymentRuntimeEnv, context: string): void {
   if (env.OMA_ALLOW_DOCKER_LOCAL !== undefined) {
     throw new Error(`OMA_ALLOW_DOCKER_LOCAL is ignored by ${context}`);
-  }
-  if (env.OMA_SANDBOX_OPERATION_TIMEOUT_MS !== undefined) {
-    throw new Error(`OMA_SANDBOX_OPERATION_TIMEOUT_MS is ignored by ${context}`);
   }
   if (env.OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS !== undefined) {
     throw new Error(
@@ -292,5 +371,34 @@ function rejectHostPassthroughEnv(
     throw new Error(
       `OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT is ignored by ${context}`,
     );
+  }
+}
+
+function rejectMicrosandboxEnv(
+  env: DeploymentRuntimeEnv,
+  context: string,
+): void {
+  if (env.OMA_ALLOW_MICROSANDBOX_LOCAL !== undefined) {
+    throw new Error(`OMA_ALLOW_MICROSANDBOX_LOCAL is ignored by ${context}`);
+  }
+  if (env.OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS !== undefined) {
+    throw new Error(
+      `OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS is ignored by ${context}`,
+    );
+  }
+}
+
+function rejectEnvAllowlist(env: DeploymentRuntimeEnv, context: string): void {
+  if (env.OMA_SANDBOX_ENV_ALLOWLIST !== undefined) {
+    throw new Error(`OMA_SANDBOX_ENV_ALLOWLIST requires ${context}`);
+  }
+}
+
+function rejectOperationTimeoutEnv(
+  env: DeploymentRuntimeEnv,
+  context: string,
+): void {
+  if (env.OMA_SANDBOX_OPERATION_TIMEOUT_MS !== undefined) {
+    throw new Error(`OMA_SANDBOX_OPERATION_TIMEOUT_MS is ignored by ${context}`);
   }
 }
