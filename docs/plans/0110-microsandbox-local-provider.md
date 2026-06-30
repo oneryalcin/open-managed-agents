@@ -288,12 +288,14 @@ Responsibilities:
 - create Pi built-in tool definitions with `createSandboxToolDefinitions`;
 - filter/ignore guest env explicitly;
 - implement timeout and `AbortSignal` cancellation by killing the microsandbox
-  exec handle;
+  exec handle, then stop/remove the sandbox on provider-level timeout/abort so
+  a killed `msb` parent cannot leave guest work running;
 - normalize provider cancellation/exit results so callers do not depend on raw
   microsandbox exit codes. The CLI probe showed a timed-out/aborted command
   returns an error with no partial stdout (streamed output arrives live during
   exec, but the final envelope is empty), so map timeout/abort to an error
-  result, not a partial-output result;
+  result, not a partial-output result. If the CLI process exits by signal,
+  discard collected stdout/stderr instead of interpreting partial output;
 - materialize input file resources under the `/mnt/session/uploads` root,
   preserving each `RuntimeSessionFileMount.mountPath` relative to that root;
 - collect output files under `/mnt/session/outputs` with the same count/size
@@ -307,6 +309,11 @@ Use a command adapter with a test fake, like Docker-local's fake CLI strategy.
 Prefer direct `msb` filesystem/exec commands if the CLI probe proves them. Use
 guest shell only for operations that lack a safe CLI primitive, and keep path
 handling centralized.
+
+All provider-generated sandbox names, volume names, labels, and argv values
+that become positional command arguments must be validated so they cannot be
+parsed as flags. In particular, reject generated or caller-derived values that
+start with `-` before they reach the CLI adapter.
 
 ### 4. Path Rules
 
@@ -396,6 +403,10 @@ Cover:
 - path normalization and escape rejection;
 - command timeout and abort call the exec kill path and produce an error result
   with no partial stdout (per the CLI probe behavior);
+- timeout/abort cleanup orders `msb` exec termination before sandbox stop/remove,
+  and tests discard partial stdout/stderr when the CLI exits by signal;
+- generated sandbox names, volume names, labels, and positional argv values
+  reject leading `-` flag-like values;
 - output collection quotas and unsafe name rejection;
 - dispose cleanup order after partial failures;
 - sync teardown uses the remove commands and does not await SDK promises;
@@ -419,6 +430,7 @@ It should prove:
 - file-resource materialization;
 - output collection;
 - explicit no-network policy blocks egress;
+- guest environment does not contain host secrets or disallowed provider env;
 - dispose removes sandbox and volume;
 - final owned-resource list is clean.
 
