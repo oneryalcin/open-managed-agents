@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_MICROSANDBOX_MAX_BUFFER,
   DEFAULT_MICROSANDBOX_IMAGE,
   DEFAULT_MICROSANDBOX_OUTPUTS_PATH,
   DEFAULT_MICROSANDBOX_UPLOADS_PATH,
@@ -20,6 +21,7 @@ import {
   buildMicrosandboxVolumeListArgs,
   buildMicrosandboxVolumeRemoveArgs,
   execMicrosandboxCommand,
+  execMicrosandboxCommandSync,
   microsandboxCliEnv,
   microsandboxPathRef,
   microsandboxResourceName,
@@ -185,19 +187,25 @@ describe("microsandbox CLI adapter", () => {
   it("prepends the current Node directory so msb's env-node wrapper works", async () => {
     const nodeDir = dirname(process.execPath);
     const env = microsandboxCliEnv(
-      { PATH: "/usr/bin:/bin" },
+      {
+        PATH: "/usr/bin:/bin",
+        HOME: "/tmp/home",
+        AWS_SECRET_ACCESS_KEY: "secret",
+      },
       { nodeExecutable: process.execPath },
     );
 
     expect(env.PATH?.split(":").at(0)).toBe(nodeDir);
+    expect(env.HOME).toBe("/tmp/home");
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
 
     const cli = new NodeMicrosandboxCli({
       command: "/usr/bin/env",
-      env: { PATH: "/usr/bin:/bin" },
+      env: { PATH: "/usr/bin:/bin", AWS_SECRET_ACCESS_KEY: "secret" },
       nodeExecutable: process.execPath,
     });
     const result = await cli.exec(["node", "--version"], {
-      env: { PATH: "/usr/bin:/bin" },
+      env: { PATH: "/usr/bin:/bin", OPENAI_API_KEY: "secret" },
     });
 
     expect(result.status).toBe(0);
@@ -214,6 +222,16 @@ describe("microsandbox CLI adapter", () => {
     expect(result.stdout.toString("utf8")).toContain("__OMA_TERMINAL__");
   });
 
+  it("rejects async exec when output exceeds maxBuffer", async () => {
+    await expect(
+      execMicrosandboxCommand(
+        "/bin/sh",
+        ["-c", "printf 12345"],
+        { maxBuffer: 3 },
+      ),
+    ).rejects.toThrow("Microsandbox command output exceeded 3 bytes");
+  });
+
   it("can kill a hung child process at the adapter boundary", async () => {
     const result = await execMicrosandboxCommand(
       "/bin/sh",
@@ -223,6 +241,41 @@ describe("microsandbox CLI adapter", () => {
 
     expect(result.status).toBeNull();
     expect(result.signal).toBe("SIGKILL");
+  });
+
+  it("rejects async exec spawn errors and aborts", async () => {
+    await expect(
+      execMicrosandboxCommand("/definitely/not/a/command", []),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const controller = new AbortController();
+    const promise = execMicrosandboxCommand("/bin/sh", ["-c", "sleep 10"], {
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("passes timeout and maxBuffer through the sync teardown path", () => {
+    expect(() =>
+      execMicrosandboxCommandSync(
+        "/bin/sh",
+        ["-c", "sleep 1"],
+        { timeoutMs: 10 },
+      ),
+    ).toThrow("ETIMEDOUT");
+    expect(() =>
+      execMicrosandboxCommandSync(
+        "/bin/sh",
+        ["-c", "printf 12345"],
+        { maxBuffer: 3 },
+      ),
+    ).toThrow("ENOBUFS");
+  });
+
+  it("uses a bounded async output buffer by default", () => {
+    expect(DEFAULT_MICROSANDBOX_MAX_BUFFER).toBeGreaterThan(0);
   });
 
   it("records call order and can fail scripted calls in tests", async () => {
