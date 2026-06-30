@@ -63,7 +63,7 @@ describe("deployment runtime config", () => {
         OMA_SANDBOX_PROVIDER: "microsandbox-local",
         OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
       }),
-    ).toThrow("Microsandbox-local sandbox provider is not implemented yet");
+    ).not.toThrow();
   });
 
   it("resolves docker-local only behind the deployment gate", () => {
@@ -101,15 +101,25 @@ describe("deployment runtime config", () => {
     });
   });
 
-  it("parses microsandbox-local config fail-closed", () => {
-    expect(() =>
-      parseDeploymentRuntimeConfigFromEnv({
-        OMA_SANDBOX_PROVIDER: "microsandbox-local",
-        OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
-        OMA_SANDBOX_OPERATION_TIMEOUT_MS: "2500",
-        OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS: "60000",
-      }),
-    ).toThrow("Microsandbox-local sandbox provider is not implemented yet");
+  it("resolves microsandbox-local only behind the deployment gate", () => {
+    const config = parseDeploymentRuntimeConfigFromEnv({
+      OMA_SANDBOX_PROVIDER: "microsandbox-local",
+      OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+      OMA_SANDBOX_OPERATION_TIMEOUT_MS: "2500",
+      OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS: "60000",
+    });
+
+    expect(config).toEqual({
+      sandboxProviderSelection: {
+        type: "microsandbox-local",
+        operationTimeoutMs: 2500,
+        reapStaleSandboxesOlderThanMs: 60000,
+      },
+      sandboxProviderSelectionOptions: {
+        allowMicrosandboxLocal: true,
+      },
+    });
+    expect(() => createDeploymentPiSessionRunner(config)).not.toThrow();
   });
 
   it("does not let runner construction options replace deployment provider config", () => {

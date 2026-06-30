@@ -121,7 +121,7 @@ describe("sandbox provider selection (Cycle E.3)", () => {
     ).toBeTypeOf("function");
   });
 
-  it("parses microsandbox-local but keeps it gated and unimplemented", () => {
+  it("parses microsandbox-local and keeps it deployment-gated", () => {
     const selection = parseSandboxProviderSelection({
       type: "microsandbox-local",
       operationTimeoutMs: 1000,
@@ -137,10 +137,10 @@ describe("sandbox provider selection (Cycle E.3)", () => {
     expect(() => resolveSandboxProviderFactory(selection)).toThrow(
       "disabled by deployment configuration",
     );
-    expect(() =>
+    expect(
       resolveSandboxProviderFactory(selection, {
         allowMicrosandboxLocal: true,
       }),
-    ).toThrow("Microsandbox-local sandbox provider is not implemented yet");
+    ).toBeTypeOf("function");
   });
 });

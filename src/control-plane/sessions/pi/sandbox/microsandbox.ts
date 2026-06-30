@@ -1,5 +1,33 @@
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { dirname } from "node:path";
+import { mkdir, mkdtemp, open, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join as joinHostPath, posix } from "node:path";
+import type {
+  BashOperations,
+  EditOperations,
+  FindOperations,
+  LsOperations,
+  ReadOperations,
+  WriteOperations,
+} from "@earendil-works/pi-coding-agent";
+import { matchGlob } from "./glob.ts";
+import {
+  createSandboxInvocationStats,
+  createSandboxToolDefinitions,
+  recordSandboxInvocation,
+  type SandboxDisposedFlag,
+  type SandboxOperations,
+  type SandboxOutputFile,
+  type SandboxProvider,
+  type SandboxProviderFactory,
+} from "./provider.ts";
+import type { RuntimeSessionFileMount } from "../../../events/types.ts";
+import {
+  MAX_SESSION_OUTPUT_BYTES,
+  MAX_SESSION_OUTPUT_FILE_BYTES,
+  MAX_SESSION_OUTPUT_FILES,
+} from "../../../files/types.ts";
 
 export const DEFAULT_MICROSANDBOX_COMMAND = "msb";
 export const DEFAULT_MICROSANDBOX_IMAGE = "docker.io/library/alpine:latest";
@@ -7,6 +35,16 @@ export const DEFAULT_MICROSANDBOX_WORKSPACE = "/workspace";
 export const DEFAULT_MICROSANDBOX_UPLOADS_PATH = "/mnt/session/uploads";
 export const DEFAULT_MICROSANDBOX_OUTPUTS_PATH = "/mnt/session/outputs";
 export const DEFAULT_MICROSANDBOX_MAX_BUFFER = 16 * 1024 * 1024;
+const DEFAULT_MICROSANDBOX_OPERATION_TIMEOUT_MS = 10_000;
+const DEFAULT_MICROSANDBOX_CPUS = "1";
+const DEFAULT_MICROSANDBOX_MEMORY = "512M";
+const DEFAULT_MICROSANDBOX_OCI_UPPER_SIZE = "1G";
+const DEFAULT_MICROSANDBOX_MAX_DURATION = "2h";
+const DEFAULT_MICROSANDBOX_SECURITY = "restricted";
+const SANDBOX_LABEL_KEY = "open-managed-agents.sandbox";
+const SANDBOX_LABEL_VALUE = "microsandbox-local";
+const OWNER_LABEL_KEY = "open-managed-agents.owner";
+const OWNER_LABEL_VALUE = "open-managed-agents";
 
 const MICROSANDBOX_ENV_ALLOWLIST = new Set([
   "HOME",
@@ -28,6 +66,7 @@ export interface MicrosandboxCliExecOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   input?: Buffer | string;
+  onData?: (data: Buffer) => void;
   signal?: AbortSignal;
   timeoutMs?: number;
   maxBuffer?: number;
@@ -48,6 +87,67 @@ export interface NodeMicrosandboxCliOptions {
   command?: string;
   env?: NodeJS.ProcessEnv;
   nodeExecutable?: string;
+}
+
+export interface MicrosandboxSandboxOptions {
+  image?: string;
+  cli?: MicrosandboxCli;
+  command?: string;
+  workspacePath?: string;
+  operationTimeoutMs?: number;
+  resourceNamePrefix?: string;
+  cpus?: string;
+  memory?: string;
+  ociUpperSize?: string;
+  maxDuration?: string;
+  security?: "default" | "restricted";
+  maxOutputFiles?: number;
+  maxOutputFileBytes?: number;
+  maxOutputBytes?: number;
+  reapStaleSandboxesOlderThanMs?: number;
+  now?: () => number;
+  random?: () => number;
+}
+
+export interface MicrosandboxSandboxReaperOptions {
+  cli?: MicrosandboxCli;
+  command?: string;
+  olderThanMs: number;
+  labelFilters?: string[];
+  resourceNamePrefix?: string;
+  now?: () => number;
+}
+
+interface MicrosandboxResolvedOptions {
+  image: string;
+  cli: MicrosandboxCli;
+  workspacePath: string;
+  uploadsPath: string;
+  outputsPath: string;
+  operationTimeoutMs: number;
+  resourceNamePrefix: string;
+  cpus: string;
+  memory: string;
+  ociUpperSize: string;
+  maxDuration: string;
+  security: "default" | "restricted";
+  maxOutputFiles: number;
+  maxOutputFileBytes: number;
+  maxOutputBytes: number;
+  now?: () => number;
+  random?: () => number;
+}
+
+export interface MicrosandboxShellCommand {
+  script: string;
+  args: readonly string[];
+  input?: Buffer | string;
+}
+
+export interface MicrosandboxExecResult {
+  stdout: Buffer;
+  stderr: Buffer;
+  exitCode: number | null;
 }
 
 export class NodeMicrosandboxCli implements MicrosandboxCli {
@@ -90,6 +190,429 @@ export class NodeMicrosandboxCli implements MicrosandboxCli {
   }
 }
 
+export function createMicrosandboxSandboxProviderFactory(
+  opts: MicrosandboxSandboxOptions = {},
+): SandboxProviderFactory {
+  const cli =
+    opts.cli ??
+    new NodeMicrosandboxCli({
+      command: opts.command ?? DEFAULT_MICROSANDBOX_COMMAND,
+    });
+  const providerOpts = { ...opts, cli };
+  let swept = false;
+  let sweepPromise: Promise<void> | undefined;
+  return async (workspaceId, sessionId) => {
+    if (!swept && opts.reapStaleSandboxesOlderThanMs !== undefined) {
+      sweepPromise ??= reapMicrosandboxSandboxes({
+        cli,
+        olderThanMs: opts.reapStaleSandboxesOlderThanMs,
+        resourceNamePrefix: opts.resourceNamePrefix,
+        now: opts.now,
+      }).then(
+        () => {
+          swept = true;
+        },
+        (error: unknown) => {
+          sweepPromise = undefined;
+          throw error;
+        },
+      );
+      await sweepPromise;
+    }
+    return createMicrosandboxSandboxProvider(workspaceId, sessionId, providerOpts);
+  };
+}
+
+export async function createMicrosandboxSandboxProvider(
+  workspaceId: string,
+  sessionId: string,
+  opts: MicrosandboxSandboxOptions = {},
+): Promise<SandboxProvider> {
+  const resolved = resolveMicrosandboxOptions(opts);
+  const sandboxName = microsandboxResourceName({
+    prefix: resolved.resourceNamePrefix,
+    workspaceId,
+    sessionId,
+    purpose: "sandbox",
+    now: resolved.now,
+    random: resolved.random,
+  });
+  const volumeName = microsandboxResourceName({
+    prefix: resolved.resourceNamePrefix,
+    workspaceId,
+    sessionId,
+    purpose: "workspace-volume",
+    now: resolved.now,
+    random: resolved.random,
+  });
+  let volumeCreated = false;
+  let sandboxCreated = false;
+  try {
+    await microsandboxChecked(
+      resolved.cli,
+      buildMicrosandboxVolumeCreateArgs(volumeName),
+      { timeoutMs: resolved.operationTimeoutMs },
+    );
+    volumeCreated = true;
+    await microsandboxChecked(
+      resolved.cli,
+      buildMicrosandboxCreateArgs({
+        sandboxName,
+        volumeName,
+        image: resolved.image,
+        workspacePath: resolved.workspacePath,
+        workdir: resolved.workspacePath,
+        cpus: resolved.cpus,
+        memory: resolved.memory,
+        ociUpperSize: resolved.ociUpperSize,
+        maxDuration: resolved.maxDuration,
+        security: resolved.security,
+        labels: {
+          [SANDBOX_LABEL_KEY]: SANDBOX_LABEL_VALUE,
+          [OWNER_LABEL_KEY]: OWNER_LABEL_VALUE,
+          "open-managed-agents.workspace-id": workspaceId,
+          "open-managed-agents.session-id": sessionId,
+          "open-managed-agents.created-at": new Date(
+            resolved.now?.() ?? Date.now(),
+          ).toISOString(),
+        },
+      }),
+      { timeoutMs: resolved.operationTimeoutMs },
+    );
+    sandboxCreated = true;
+  } catch (error) {
+    if (volumeCreated || sandboxCreated) {
+      forceRemoveMicrosandboxSandbox(resolved.cli, sandboxName, resolved);
+    }
+    if (volumeCreated) {
+      forceRemoveMicrosandboxVolume(resolved.cli, volumeName, resolved);
+    }
+    throw error;
+  }
+
+  const invocations = createSandboxInvocationStats();
+  const disposed: SandboxDisposedFlag = { value: false };
+
+  const shell = (
+    command: MicrosandboxShellCommand,
+    execOpts: MicrosandboxCliExecOptions = {},
+  ) =>
+    microsandboxChecked(
+      resolved.cli,
+      buildMicrosandboxShellExecArgs({
+        sandboxName,
+        script: command.script,
+        args: command.args,
+        workdir: resolved.workspacePath,
+        timeout: timeoutSecondsText(
+          execOpts.timeoutMs ?? resolved.operationTimeoutMs,
+        ),
+        stream: command.input !== undefined || execOpts.input !== undefined,
+      }),
+      {
+        ...execOpts,
+        input: execOpts.input ?? command.input,
+        timeoutMs:
+          (execOpts.timeoutMs ?? resolved.operationTimeoutMs) + 2_000,
+      },
+    );
+  const exists = async (absolutePath: string): Promise<boolean> => {
+    const result = await resolved.cli.exec(
+      buildMicrosandboxShellExecArgs({
+        sandboxName,
+        script: "test -e \"$1\"",
+        args: [absolutePath],
+        workdir: resolved.workspacePath,
+        timeout: timeoutSecondsText(resolved.operationTimeoutMs),
+      }),
+      { timeoutMs: resolved.operationTimeoutMs + 2_000 },
+    );
+    if (result.signal !== null) throw new Error("microsandbox exists timed out");
+    if (result.status === 0) return true;
+    if (result.status === 1 && result.stderr.length === 0) return false;
+    throw new Error(
+      `msb exists failed with ${result.status}: ${errorText(result)}`,
+    );
+  };
+  const materializeFileResources = async (
+    mounts: readonly RuntimeSessionFileMount[],
+  ): Promise<void> => {
+    if (mounts.length === 0) return;
+    recordSandboxNotDisposed(disposed);
+    const tempRoot = await mkdtemp(joinHostPath(tmpdir(), "oma-msb-mounts-"));
+    try {
+      for (const mount of mounts) {
+        const relativePath = assertInsideMicrosandboxUploadsPath(
+          mount.mountPath,
+          resolved.uploadsPath,
+        );
+        const hostPath = await writeMountFile(tempRoot, relativePath, mount);
+        const guestPath = posix.join(resolved.uploadsPath, relativePath);
+        await shell(buildMicrosandboxMkdirCommand(posix.dirname(guestPath)));
+        await microsandboxChecked(
+          resolved.cli,
+          buildMicrosandboxCopyArgs(
+            hostPath,
+            microsandboxPathRef(sandboxName, guestPath),
+          ),
+          { timeoutMs: resolved.operationTimeoutMs },
+        );
+      }
+      await shell(buildMicrosandboxNormalizeUploadsCommand(resolved.uploadsPath));
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  };
+  const collectOutputFiles = async (): Promise<readonly SandboxOutputFile[]> => {
+    recordSandboxNotDisposed(disposed);
+    const listing = await shell(
+      buildMicrosandboxOutputListingCommand(resolved.outputsPath, {
+        maxFiles: resolved.maxOutputFiles,
+        maxFileBytes: resolved.maxOutputFileBytes,
+        maxBytes: resolved.maxOutputBytes,
+      }),
+    );
+    const records = parseOutputListing(listing.stdout);
+    return records.map((record) => {
+      const absolutePath = assertInsideMicrosandboxOutputPath(
+        posix.join(resolved.outputsPath, record.relativePath),
+        resolved.outputsPath,
+      );
+      return {
+        relativePath: record.relativePath,
+        filename: posix.basename(record.relativePath),
+        mimeType: mimeTypeForFilename(record.relativePath),
+        sizeBytes: record.sizeBytes,
+        sha256: record.sha256,
+        bytes: microsandboxOutputBytes(() =>
+          shell(buildMicrosandboxReadFileCommand(absolutePath), {
+            maxBuffer: resolved.maxOutputFileBytes,
+          }),
+        ),
+      };
+    });
+  };
+
+  const readOps: ReadOperations = {
+    access: async (absolutePath) => {
+      recordSandboxInvocation(invocations, disposed, "read");
+      await shell(
+        buildMicrosandboxFileAccessCommand(
+          assertInsideMicrosandboxWorkspace(
+            absolutePath,
+            resolved.workspacePath,
+          ),
+          "read",
+        ),
+      );
+    },
+    readFile: async (absolutePath) => {
+      recordSandboxInvocation(invocations, disposed, "read");
+      return (
+        await shell(
+          buildMicrosandboxReadFileCommand(
+            assertInsideMicrosandboxWorkspace(
+              absolutePath,
+              resolved.workspacePath,
+            ),
+          ),
+        )
+      ).stdout;
+    },
+  };
+  const writeOps: WriteOperations = {
+    mkdir: async (dir) => {
+      recordSandboxInvocation(invocations, disposed, "write");
+      await shell(
+        buildMicrosandboxMkdirCommand(
+          assertInsideMicrosandboxWorkspace(dir, resolved.workspacePath),
+        ),
+      );
+    },
+    writeFile: async (absolutePath, content) => {
+      recordSandboxInvocation(invocations, disposed, "write");
+      await shell(
+        buildMicrosandboxWriteFileCommand(
+          assertInsideMicrosandboxWorkspace(
+            absolutePath,
+            resolved.workspacePath,
+          ),
+          content,
+        ),
+      );
+    },
+  };
+  const editOps: EditOperations = {
+    access: async (absolutePath) => {
+      recordSandboxInvocation(invocations, disposed, "edit");
+      await shell(
+        buildMicrosandboxFileAccessCommand(
+          assertInsideMicrosandboxWorkspace(
+            absolutePath,
+            resolved.workspacePath,
+          ),
+          "edit",
+        ),
+      );
+    },
+    readFile: async (absolutePath) => {
+      recordSandboxInvocation(invocations, disposed, "edit");
+      return (
+        await shell(
+          buildMicrosandboxReadFileCommand(
+            assertInsideMicrosandboxWorkspace(
+              absolutePath,
+              resolved.workspacePath,
+            ),
+          ),
+        )
+      ).stdout;
+    },
+    writeFile: async (absolutePath, content) => {
+      recordSandboxInvocation(invocations, disposed, "edit");
+      await shell(
+        buildMicrosandboxWriteFileCommand(
+          assertInsideMicrosandboxWorkspace(
+            absolutePath,
+            resolved.workspacePath,
+          ),
+          content,
+        ),
+      );
+    },
+  };
+  const findOps: FindOperations = {
+    exists: async (absolutePath) => {
+      recordSandboxInvocation(invocations, disposed, "find");
+      return exists(
+        assertInsideMicrosandboxWorkspace(absolutePath, resolved.workspacePath),
+      );
+    },
+    glob: async (pattern, cwd, options) => {
+      recordSandboxInvocation(invocations, disposed, "find");
+      const root = assertInsideMicrosandboxWorkspace(
+        cwd,
+        resolved.workspacePath,
+      );
+      const result = await shell(
+        buildMicrosandboxGlobEnumerationCommand(root, options.ignore),
+      );
+      const files = result.stdout
+        .toString("utf8")
+        .split("\n")
+        .filter(Boolean);
+      return matchGlob(files, pattern, {
+        ignore: options.ignore,
+        limit: options.limit,
+      }).map((rel) => posix.join(root, rel));
+    },
+  };
+  const lsOps: LsOperations = {
+    exists: async (absolutePath) => {
+      recordSandboxInvocation(invocations, disposed, "ls");
+      return exists(
+        assertInsideMicrosandboxWorkspace(absolutePath, resolved.workspacePath),
+      );
+    },
+    stat: async (absolutePath) => {
+      recordSandboxInvocation(invocations, disposed, "ls");
+      const result = await shell(
+        buildMicrosandboxStatCommand(
+          assertInsideMicrosandboxWorkspace(
+            absolutePath,
+            resolved.workspacePath,
+          ),
+        ),
+      );
+      const kind = result.stdout.toString("utf8");
+      return { isDirectory: () => kind === "directory" };
+    },
+    readdir: async (absolutePath) => {
+      recordSandboxInvocation(invocations, disposed, "ls");
+      const result = await shell(
+        buildMicrosandboxReaddirCommand(
+          assertInsideMicrosandboxWorkspace(
+            absolutePath,
+            resolved.workspacePath,
+          ),
+        ),
+      );
+      return result.stdout.toString("utf8").split("\n").filter(Boolean);
+    },
+  };
+  const bashOps: BashOperations = {
+    exec: async (command, cwd, options) => {
+      recordSandboxInvocation(invocations, disposed, "bash");
+      const path = assertInsideMicrosandboxWorkspace(
+        cwd,
+        resolved.workspacePath,
+      );
+      const timeoutSeconds =
+        options.timeout !== undefined && options.timeout > 0
+          ? options.timeout
+          : resolved.operationTimeoutMs / 1000;
+      const args = buildMicrosandboxShellExecArgs({
+        sandboxName,
+        script: command,
+        workdir: path,
+        timeout: `${timeoutSeconds}s`,
+        stream: true,
+      });
+      try {
+        const result = await resolved.cli.exec(args, {
+          onData: options.onData,
+          signal: options.signal,
+          timeoutMs: Math.ceil(timeoutSeconds * 1000) + 2_000,
+        });
+        if (result.signal !== null) {
+          disposed.value = true;
+          terminateMicrosandboxAfterLostExec(resolved.cli, sandboxName, resolved);
+          throw new Error(`timeout:${timeoutSeconds}`);
+        }
+        if (isMicrosandboxTimeout(result)) {
+          throw new Error(`timeout:${timeoutSeconds}`);
+        }
+        return { exitCode: result.status };
+      } catch (error) {
+        if (isAbortError(error)) {
+          disposed.value = true;
+          terminateMicrosandboxAfterLostExec(resolved.cli, sandboxName, resolved);
+          throw new Error("aborted");
+        }
+        throw error;
+      }
+    },
+  };
+  const operations: SandboxOperations = {
+    bash: bashOps,
+    read: readOps,
+    write: writeOps,
+    edit: editOps,
+    find: findOps,
+    ls: lsOps,
+  };
+
+  return {
+    cwd: resolved.workspacePath,
+    collectOutputFiles,
+    invocations,
+    materializeFileResources,
+    operations,
+    toolNames: new Set(["bash", "read", "write", "edit", "find", "ls"]),
+    tools: createSandboxToolDefinitions(
+      resolved.workspacePath,
+      operations,
+      invocations,
+      disposed,
+    ),
+    dispose: () => {
+      disposed.value = true;
+      forceRemoveMicrosandboxSandbox(resolved.cli, sandboxName, resolved);
+      forceRemoveMicrosandboxVolume(resolved.cli, volumeName, resolved);
+    },
+  };
+}
+
 export function microsandboxCliEnv(
   source: NodeJS.ProcessEnv = process.env,
   opts: { nodeExecutable?: string } = {},
@@ -110,10 +633,12 @@ export function microsandboxCliEnv(
 }
 
 export function buildMicrosandboxVolumeCreateArgs(volumeName: string): string[] {
+  assertMicrosandboxArg(volumeName, "volumeName");
   return ["volume", "create", "--name", volumeName];
 }
 
 export function buildMicrosandboxVolumeRemoveArgs(volumeName: string): string[] {
+  assertMicrosandboxArg(volumeName, "volumeName");
   return ["volume", "remove", volumeName];
 }
 
@@ -124,6 +649,7 @@ export function buildMicrosandboxVolumeListArgs(): string[] {
 export function buildMicrosandboxVolumeInspectArgs(
   volumeName: string,
 ): string[] {
+  assertMicrosandboxArg(volumeName, "volumeName");
   return ["volume", "inspect", volumeName];
 }
 
@@ -134,12 +660,20 @@ export function buildMicrosandboxCreateArgs(opts: {
   workspacePath?: string;
   workdir?: string;
   pullPolicy?: "always" | "if-missing" | "never";
+  cpus?: string;
+  memory?: string;
+  ociUpperSize?: string;
+  maxDuration?: string;
+  security?: "default" | "restricted";
   labels?: Readonly<Record<string, string>>;
 }): string[] {
   const workspacePath = opts.workspacePath ?? DEFAULT_MICROSANDBOX_WORKSPACE;
+  assertMicrosandboxArg(opts.sandboxName, "sandboxName");
+  assertMicrosandboxArg(opts.volumeName, "volumeName");
+  assertMicrosandboxArg(opts.image ?? DEFAULT_MICROSANDBOX_IMAGE, "image");
   const labels = Object.entries(opts.labels ?? {}).flatMap(([key, value]) => [
     "--label",
-    `${key}=${value}`,
+    microsandboxLabelArg(key, value),
   ]);
   return [
     "create",
@@ -151,6 +685,16 @@ export function buildMicrosandboxCreateArgs(opts: {
     "--workdir",
     opts.workdir ?? workspacePath,
     "--no-net",
+    "--cpus",
+    opts.cpus ?? DEFAULT_MICROSANDBOX_CPUS,
+    "--memory",
+    opts.memory ?? DEFAULT_MICROSANDBOX_MEMORY,
+    "--oci-upper-size",
+    opts.ociUpperSize ?? DEFAULT_MICROSANDBOX_OCI_UPPER_SIZE,
+    "--max-duration",
+    opts.maxDuration ?? DEFAULT_MICROSANDBOX_MAX_DURATION,
+    "--security",
+    opts.security ?? DEFAULT_MICROSANDBOX_SECURITY,
     "--pull",
     opts.pullPolicy ?? "if-missing",
     "--quiet",
@@ -165,6 +709,7 @@ export function buildMicrosandboxExecArgs(opts: {
   timeout?: string;
   stream?: boolean;
 }): string[] {
+  assertMicrosandboxArg(opts.sandboxName, "sandboxName");
   const out = ["exec"];
   if (opts.stream) out.push("--stream");
   if (opts.timeout !== undefined) out.push("--timeout", opts.timeout);
@@ -201,18 +746,22 @@ export function microsandboxPathRef(
   sandboxName: string,
   absolutePath: string,
 ): string {
+  assertMicrosandboxArg(sandboxName, "sandboxName");
   return `${sandboxName}:${absolutePath}`;
 }
 
 export function buildMicrosandboxStopArgs(sandboxName: string): string[] {
+  assertMicrosandboxArg(sandboxName, "sandboxName");
   return ["stop", sandboxName];
 }
 
 export function buildMicrosandboxStartArgs(sandboxName: string): string[] {
+  assertMicrosandboxArg(sandboxName, "sandboxName");
   return ["start", sandboxName];
 }
 
 export function buildMicrosandboxRemoveArgs(sandboxName: string): string[] {
+  assertMicrosandboxArg(sandboxName, "sandboxName");
   return ["remove", "--force", sandboxName];
 }
 
@@ -223,12 +772,151 @@ export function buildMicrosandboxListArgs(
     "list",
     "--format",
     "json",
-    ...labels.flatMap((label) => ["--label", label]),
+    ...labels.flatMap((label) => ["--label", microsandboxLabelFilterArg(label)]),
   ];
 }
 
 export function buildMicrosandboxInspectArgs(sandboxName: string): string[] {
+  assertMicrosandboxArg(sandboxName, "sandboxName");
   return ["inspect", sandboxName, "--format", "json"];
+}
+
+export function buildMicrosandboxFileAccessCommand(
+  absolutePath: string,
+  mode: "read" | "edit",
+): MicrosandboxShellCommand {
+  return {
+    script:
+      mode === "read"
+        ? "test -r \"$1\" -a -f \"$1\""
+        : "test -r \"$1\" -a -w \"$1\" -a -f \"$1\"",
+    args: [absolutePath],
+  };
+}
+
+export function buildMicrosandboxReadFileCommand(
+  absolutePath: string,
+): MicrosandboxShellCommand {
+  return { script: "cat \"$1\"", args: [absolutePath] };
+}
+
+export function buildMicrosandboxWriteFileCommand(
+  absolutePath: string,
+  content: Buffer | string,
+): MicrosandboxShellCommand {
+  return {
+    script: "cat > \"$1\"",
+    args: [absolutePath],
+    input: content,
+  };
+}
+
+export function buildMicrosandboxMkdirCommand(
+  absolutePath: string,
+): MicrosandboxShellCommand {
+  return { script: "mkdir -p \"$1\"", args: [absolutePath] };
+}
+
+export function buildMicrosandboxNormalizeUploadsCommand(
+  uploadsPath: string,
+): MicrosandboxShellCommand {
+  return {
+    script:
+      "find \"$1\" -type d -exec chmod 755 {} + && find \"$1\" -type f -exec chmod 444 {} +",
+    args: [uploadsPath],
+  };
+}
+
+export function buildMicrosandboxStatCommand(
+  absolutePath: string,
+): MicrosandboxShellCommand {
+  return {
+    script:
+      "if [ -d \"$1\" ]; then printf directory; elif [ -e \"$1\" ]; then printf file; else exit 1; fi",
+    args: [absolutePath],
+  };
+}
+
+export function buildMicrosandboxReaddirCommand(
+  absolutePath: string,
+): MicrosandboxShellCommand {
+  return { script: "ls -1A \"$1\"", args: [absolutePath] };
+}
+
+export function buildMicrosandboxGlobEnumerationCommand(
+  root: string,
+  ignore: readonly string[] = [],
+): MicrosandboxShellCommand {
+  const prunedDirectoryNames = directoryNamesPrunedByIgnoreGlobs(ignore);
+  return {
+    script: [
+      "cd \"$1\"",
+      "shift",
+      "if [ \"$#\" -eq 0 ]; then",
+      "  find . -type f | sed 's#^./##' | sort",
+      "else",
+      "  find . \\( -type d \\( \"$@\" \\) -prune \\) -o -type f -print | sed 's#^./##' | sort",
+      "fi",
+    ].join("\n"),
+    args: [
+      root,
+      ...prunedDirectoryNames.flatMap((name, index) =>
+        index === 0 ? ["-name", name] : ["-o", "-name", name],
+      ),
+    ],
+  };
+}
+
+export function buildMicrosandboxOutputListingCommand(
+  outputRoot: string,
+  limits: {
+    maxFiles: number;
+    maxFileBytes: number;
+    maxBytes: number;
+  } = {
+    maxFiles: MAX_SESSION_OUTPUT_FILES,
+    maxFileBytes: MAX_SESSION_OUTPUT_FILE_BYTES,
+    maxBytes: MAX_SESSION_OUTPUT_BYTES,
+  },
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "root=\"$1\"",
+      "max_files=\"$2\"",
+      "max_file_bytes=\"$3\"",
+      "max_bytes=\"$4\"",
+      "if [ ! -d \"$root\" ]; then exit 0; fi",
+      "cd \"$root\"",
+      "count=0",
+      "total=0",
+      "find . -type f -print0 | sort -z | while IFS= read -r -d '' file; do",
+      "  rel=\"${file#./}\"",
+      "  size=$(wc -c < \"$file\")",
+      "  count=$((count + 1))",
+      "  if [ \"$count\" -gt \"$max_files\" ]; then",
+      "    printf 'session output file count exceeds %s\\n' \"$max_files\" >&2",
+      "    exit 42",
+      "  fi",
+      "  if [ \"$size\" -gt \"$max_file_bytes\" ]; then",
+      "    printf 'session output file exceeds %s bytes: %s\\n' \"$max_file_bytes\" \"$rel\" >&2",
+      "    exit 42",
+      "  fi",
+      "  total=$((total + size))",
+      "  if [ \"$total\" -gt \"$max_bytes\" ]; then",
+      "    printf 'session output bytes exceed %s\\n' \"$max_bytes\" >&2",
+      "    exit 42",
+      "  fi",
+      "  sha=$(sha256sum \"$file\" | awk '{print $1}')",
+      "  printf '%s\\0%s\\0%s\\0' \"$rel\" \"$size\" \"$sha\"",
+      "done",
+    ].join("\n"),
+    args: [
+      outputRoot,
+      String(limits.maxFiles),
+      String(limits.maxFileBytes),
+      String(limits.maxBytes),
+    ],
+  };
 }
 
 export function microsandboxResourceName(opts: {
@@ -289,6 +977,7 @@ export function execMicrosandboxCommand(
         return;
       }
       target.push(chunk);
+      opts.onData?.(chunk);
     };
     child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
     child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
@@ -336,6 +1025,444 @@ export function execMicrosandboxCommandSync(
     status: result.status,
     signal: result.signal,
   };
+}
+
+export function assertInsideMicrosandboxWorkspace(
+  absolutePath: string,
+  workspacePath = DEFAULT_MICROSANDBOX_WORKSPACE,
+): string {
+  if (!posix.isAbsolute(absolutePath)) {
+    throw new Error(`Sandbox path must be absolute: ${absolutePath}`);
+  }
+  const root = posix.resolve(workspacePath);
+  const path = posix.resolve(absolutePath);
+  const rel = posix.relative(root, path);
+  if (rel === "" || (!rel.startsWith("..") && !posix.isAbsolute(rel))) {
+    return path;
+  }
+  throw new Error(`Sandbox path escapes workspace: ${absolutePath}`);
+}
+
+export function assertInsideMicrosandboxUploadsPath(
+  absolutePath: string,
+  uploadsPath = DEFAULT_MICROSANDBOX_UPLOADS_PATH,
+): string {
+  if (!posix.isAbsolute(absolutePath)) {
+    throw new Error(`Session file mount path must be absolute: ${absolutePath}`);
+  }
+  const root = posix.resolve(uploadsPath);
+  const path = posix.resolve(absolutePath);
+  const rel = posix.relative(root, path);
+  if (rel !== "" && !rel.startsWith("..") && !posix.isAbsolute(rel)) {
+    return rel;
+  }
+  throw new Error(`Session file mount path escapes uploads root: ${absolutePath}`);
+}
+
+export function assertInsideMicrosandboxOutputPath(
+  absolutePath: string,
+  outputsPath = DEFAULT_MICROSANDBOX_OUTPUTS_PATH,
+): string {
+  if (!posix.isAbsolute(absolutePath)) {
+    throw new Error(`Session output path must be absolute: ${absolutePath}`);
+  }
+  const root = posix.resolve(outputsPath);
+  const path = posix.resolve(absolutePath);
+  const rel = posix.relative(root, path);
+  if (rel !== "" && !rel.startsWith("..") && !posix.isAbsolute(rel)) {
+    return path;
+  }
+  throw new Error(`Session output path escapes outputs root: ${absolutePath}`);
+}
+
+export function directoryNamesPrunedByIgnoreGlobs(
+  ignore: readonly string[],
+): string[] {
+  const names = new Set<string>();
+  for (const pattern of ignore) {
+    const normalized = pattern.replaceAll("\\", "/");
+    const match = /(?:^|\/)([^/*?[\]{}!]+)\/\*\*$/.exec(normalized);
+    if (match?.[1]) names.add(match[1]);
+  }
+  return [...names].sort();
+}
+
+export async function reapMicrosandboxSandboxes(
+  opts: MicrosandboxSandboxReaperOptions,
+): Promise<number> {
+  const cli =
+    opts.cli ??
+    new NodeMicrosandboxCli({
+      command: opts.command ?? DEFAULT_MICROSANDBOX_COMMAND,
+    });
+  const resourceNamePrefix = opts.resourceNamePrefix ?? "oma";
+  const listedSandboxes = await microsandboxChecked(
+    cli,
+    buildMicrosandboxListArgs([
+      `${SANDBOX_LABEL_KEY}=${SANDBOX_LABEL_VALUE}`,
+      `${OWNER_LABEL_KEY}=${OWNER_LABEL_VALUE}`,
+      ...(opts.labelFilters ?? []),
+    ]),
+  );
+  const sandboxNames = parseMicrosandboxListedNames(listedSandboxes.stdout);
+  const now = opts.now?.() ?? Date.now();
+  const attachedVolumes = new Set<string>();
+  const expiredSandboxes: string[] = [];
+  for (const name of sandboxNames) {
+    const inspected = await microsandboxChecked(
+      cli,
+      buildMicrosandboxInspectArgs(name),
+    );
+    collectMicrosandboxVolumeRefs(inspected.stdout, attachedVolumes);
+    const createdAt = parseMicrosandboxCreatedAt(inspected.stdout);
+    if (now - createdAt.getTime() >= opts.olderThanMs) {
+      expiredSandboxes.push(name);
+    }
+  }
+  for (const name of expiredSandboxes) {
+    await microsandboxChecked(cli, buildMicrosandboxRemoveArgs(name));
+  }
+  const listedVolumes = await microsandboxChecked(
+    cli,
+    buildMicrosandboxVolumeListArgs(),
+  );
+  const volumeNames = parseMicrosandboxListedNames(listedVolumes.stdout).filter(
+    (name) =>
+      isOmaMicrosandboxWorkspaceVolumeName(name, resourceNamePrefix) &&
+      !attachedVolumes.has(name),
+  );
+  const expiredVolumes: string[] = [];
+  for (const name of volumeNames) {
+    const inspected = await microsandboxChecked(
+      cli,
+      buildMicrosandboxVolumeInspectArgs(name),
+    );
+    const createdAt = parseMicrosandboxCreatedAt(inspected.stdout);
+    if (now - createdAt.getTime() >= opts.olderThanMs) {
+      expiredVolumes.push(name);
+    }
+  }
+  for (const name of expiredVolumes) {
+    await microsandboxChecked(cli, buildMicrosandboxVolumeRemoveArgs(name));
+  }
+  return expiredSandboxes.length + expiredVolumes.length;
+}
+
+function resolveMicrosandboxOptions(
+  opts: MicrosandboxSandboxOptions,
+): MicrosandboxResolvedOptions {
+  return {
+    image: opts.image ?? DEFAULT_MICROSANDBOX_IMAGE,
+    cli:
+      opts.cli ??
+      new NodeMicrosandboxCli({ command: opts.command ?? DEFAULT_MICROSANDBOX_COMMAND }),
+    workspacePath: opts.workspacePath ?? DEFAULT_MICROSANDBOX_WORKSPACE,
+    uploadsPath: DEFAULT_MICROSANDBOX_UPLOADS_PATH,
+    outputsPath: DEFAULT_MICROSANDBOX_OUTPUTS_PATH,
+    operationTimeoutMs:
+      opts.operationTimeoutMs ?? DEFAULT_MICROSANDBOX_OPERATION_TIMEOUT_MS,
+    resourceNamePrefix: opts.resourceNamePrefix ?? "oma",
+    cpus: opts.cpus ?? DEFAULT_MICROSANDBOX_CPUS,
+    memory: opts.memory ?? DEFAULT_MICROSANDBOX_MEMORY,
+    ociUpperSize: opts.ociUpperSize ?? DEFAULT_MICROSANDBOX_OCI_UPPER_SIZE,
+    maxDuration: opts.maxDuration ?? DEFAULT_MICROSANDBOX_MAX_DURATION,
+    security: opts.security ?? DEFAULT_MICROSANDBOX_SECURITY,
+    maxOutputFiles: opts.maxOutputFiles ?? MAX_SESSION_OUTPUT_FILES,
+    maxOutputFileBytes:
+      opts.maxOutputFileBytes ?? MAX_SESSION_OUTPUT_FILE_BYTES,
+    maxOutputBytes: opts.maxOutputBytes ?? MAX_SESSION_OUTPUT_BYTES,
+    now: opts.now,
+    random: opts.random,
+  };
+}
+
+async function microsandboxChecked(
+  cli: MicrosandboxCli,
+  args: readonly string[],
+  opts: MicrosandboxCliExecOptions = {},
+): Promise<MicrosandboxExecResult> {
+  const result = await cli.exec(args, opts);
+  if (result.signal !== null || result.status !== 0) {
+    throw new Error(
+      `msb ${args.join(" ")} failed with ${result.signal ?? result.status}: ${errorText(result)}`,
+    );
+  }
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.status,
+  };
+}
+
+function forceRemoveMicrosandboxSandbox(
+  cli: MicrosandboxCli,
+  sandboxName: string,
+  resolved: Pick<MicrosandboxResolvedOptions, "operationTimeoutMs">,
+): void {
+  try {
+    cli.execSync(buildMicrosandboxRemoveArgs(sandboxName), {
+      timeoutMs: resolved.operationTimeoutMs,
+    });
+  } catch {
+    // Synchronous dispose mirrors Docker-local: cleanup is best-effort at the
+    // terminal hook, while create-time partial cleanup preserves the original
+    // construction error.
+  }
+}
+
+function forceRemoveMicrosandboxVolume(
+  cli: MicrosandboxCli,
+  volumeName: string,
+  resolved: Pick<MicrosandboxResolvedOptions, "operationTimeoutMs">,
+): void {
+  try {
+    cli.execSync(buildMicrosandboxVolumeRemoveArgs(volumeName), {
+      timeoutMs: resolved.operationTimeoutMs,
+    });
+  } catch {
+    // See forceRemoveMicrosandboxSandbox.
+  }
+}
+
+function terminateMicrosandboxAfterLostExec(
+  cli: MicrosandboxCli,
+  sandboxName: string,
+  resolved: Pick<MicrosandboxResolvedOptions, "operationTimeoutMs">,
+): void {
+  forceRemoveMicrosandboxSandbox(cli, sandboxName, resolved);
+}
+
+function errorText(result: MicrosandboxCliResult): string {
+  return (
+    result.stderr.toString("utf8") ||
+    result.stdout.toString("utf8") ||
+    "no output"
+  );
+}
+
+function isMicrosandboxTimeout(result: MicrosandboxCliResult): boolean {
+  return result.status !== 0 && /timed out/i.test(errorText(result));
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function timeoutSecondsText(timeoutMs: number): string {
+  return `${Math.ceil(timeoutMs / 1000)}s`;
+}
+
+function parseOutputListing(
+  stdout: Buffer,
+): { relativePath: string; sizeBytes: number; sha256: string }[] {
+  if (stdout.length === 0) return [];
+  const fields = stdout.toString("utf8").split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  if (fields.length % 3 !== 0) {
+    throw new Error("Microsandbox output listing returned malformed records");
+  }
+  const out: { relativePath: string; sizeBytes: number; sha256: string }[] = [];
+  for (let index = 0; index < fields.length; index += 3) {
+    const relativePath = fields[index]!;
+    const sizeBytes = Number(fields[index + 1]);
+    const sha256 = fields[index + 2]!;
+    if (
+      relativePath.length === 0 ||
+      posix.isAbsolute(relativePath) ||
+      relativePath.split("/").includes("..")
+    ) {
+      throw new Error(`Unsafe session output path: ${relativePath}`);
+    }
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
+      throw new Error(`Invalid session output size: ${relativePath}`);
+    }
+    if (!/^[0-9a-f]{64}$/i.test(sha256)) {
+      throw new Error(`Invalid session output checksum: ${relativePath}`);
+    }
+    out.push({ relativePath, sizeBytes, sha256 });
+  }
+  return out;
+}
+
+function parseMicrosandboxListedNames(stdout: Buffer): string[] {
+  const text = stdout.toString("utf8").trim();
+  if (text.length === 0) return [];
+  const parsed = JSON.parse(text) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error("Microsandbox list returned non-array JSON");
+  }
+  return parsed.map((entry) => {
+    const name =
+      typeof entry === "string"
+        ? entry
+        : fieldString(entry, ["name", "Name", "id", "ID"]);
+    assertMicrosandboxArg(name, "listed sandbox name");
+    return name;
+  });
+}
+
+function parseMicrosandboxCreatedAt(stdout: Buffer): Date {
+  const parsed = JSON.parse(stdout.toString("utf8")) as unknown;
+  const raw = fieldString(parsed, [
+    "created_at",
+    "createdAt",
+    "Created",
+    "created",
+  ]);
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Invalid microsandbox creation timestamp: ${raw}`);
+  }
+  return date;
+}
+
+function collectMicrosandboxVolumeRefs(
+  stdout: Buffer,
+  out: Set<string>,
+): void {
+  visitJsonStrings(JSON.parse(stdout.toString("utf8")) as unknown, (value) => {
+    for (const segment of value.split(":")) {
+      if (segment.includes("-workspace-volume-")) out.add(segment);
+    }
+  });
+}
+
+function visitJsonStrings(
+  value: unknown,
+  visit: (value: string) => void,
+): void {
+  if (typeof value === "string") {
+    visit(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => visitJsonStrings(entry, visit));
+    return;
+  }
+  if (typeof value === "object" && value !== null) {
+    Object.values(value).forEach((entry) => visitJsonStrings(entry, visit));
+  }
+}
+
+function isOmaMicrosandboxWorkspaceVolumeName(
+  name: string,
+  prefix: string,
+): boolean {
+  return (
+    name.startsWith(`${sanitizeMicrosandboxNamePart(prefix)}-`) &&
+    name.includes("-workspace-volume-")
+  );
+}
+
+function fieldString(value: unknown, fields: readonly string[]): string {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("Microsandbox JSON entry must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const field of fields) {
+    const raw = record[field];
+    if (typeof raw === "string" && raw.length > 0) return raw;
+  }
+  throw new Error(`Microsandbox JSON entry missing ${fields.join("/")}`);
+}
+
+function mimeTypeForFilename(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".txt")) return "text/plain";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".csv")) return "text/csv";
+  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "text/html";
+  if (lower.endsWith(".md")) return "text/markdown";
+  if (lower.endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  return "application/octet-stream";
+}
+
+async function* microsandboxOutputBytes(
+  read: () => Promise<{ stdout: Buffer }>,
+): AsyncIterable<Uint8Array> {
+  yield (await read()).stdout;
+}
+
+async function writeMountFile(
+  tempRoot: string,
+  relativePath: string,
+  mount: RuntimeSessionFileMount,
+): Promise<string> {
+  const segments = relativePath.split("/");
+  const filePath = joinHostPath(tempRoot, ...segments);
+  await mkdir(joinHostPath(tempRoot, ...segments.slice(0, -1)), {
+    recursive: true,
+    mode: 0o755,
+  });
+  const handle = await open(filePath, "w", 0o644);
+  const hash = createHash("sha256");
+  let size = 0;
+  try {
+    for await (const chunk of chunksForMount(mount.bytes)) {
+      const buffer = Buffer.from(chunk);
+      size += buffer.byteLength;
+      hash.update(buffer);
+      await handle.write(buffer);
+    }
+  } finally {
+    await handle.close();
+  }
+  const sha256 = hash.digest("hex");
+  if (size !== mount.sizeBytes) {
+    throw new Error(
+      `Session file mount ${mount.snapshotFileId} size mismatch: expected ${mount.sizeBytes}, got ${size}`,
+    );
+  }
+  if (sha256 !== mount.sha256) {
+    throw new Error(
+      `Session file mount ${mount.snapshotFileId} failed integrity validation`,
+    );
+  }
+  return filePath;
+}
+
+async function* chunksForMount(
+  bytes: RuntimeSessionFileMount["bytes"],
+): AsyncIterable<Uint8Array> {
+  if (bytes instanceof Uint8Array) {
+    yield bytes;
+    return;
+  }
+  yield* bytes;
+}
+
+function recordSandboxNotDisposed(disposed: SandboxDisposedFlag): void {
+  if (disposed.value) throw new Error("Sandbox provider is disposed");
+}
+
+function assertMicrosandboxArg(value: string, label: string): void {
+  if (value.length === 0 || value.startsWith("-")) {
+    throw new Error(`Microsandbox ${label} cannot be empty or start with '-'`);
+  }
+}
+
+function microsandboxLabelArg(key: string, value: string): string {
+  if (
+    key.length === 0 ||
+    key.startsWith("-") ||
+    key.includes("=") ||
+    value.startsWith("-")
+  ) {
+    throw new Error("Microsandbox labels cannot be empty, flag-like, or contain '=' in keys");
+  }
+  return `${key}=${value}`;
+}
+
+function microsandboxLabelFilterArg(label: string): string {
+  if (label.length === 0 || label.startsWith("-")) {
+    throw new Error("Microsandbox label filters cannot be empty or flag-like");
+  }
+  return label;
 }
 
 function sanitizeMicrosandboxNamePart(value: string): string {

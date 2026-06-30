@@ -3,9 +3,7 @@ import {
   type SandboxProviderFactory,
 } from "./provider.ts";
 import { createDockerSandboxProviderFactory } from "./docker.ts";
-
-const MICROSANDBOX_LOCAL_PROVIDER_UNIMPLEMENTED =
-  "Microsandbox-local sandbox provider is not implemented yet";
+import { createMicrosandboxSandboxProviderFactory } from "./microsandbox.ts";
 
 export type SandboxProviderSelection =
   | { type: "none" }
@@ -146,7 +144,11 @@ export function resolveSandboxProviderFactory(
         "Microsandbox-local sandbox provider is disabled by deployment configuration",
       );
     }
-    throw new Error(MICROSANDBOX_LOCAL_PROVIDER_UNIMPLEMENTED);
+    return createMicrosandboxSandboxProviderFactory({
+      operationTimeoutMs: selection.operationTimeoutMs,
+      reapStaleSandboxesOlderThanMs:
+        selection.reapStaleSandboxesOlderThanMs,
+    });
   }
   const _exhaustive: never = selection;
   throw new Error(`Unsupported sandbox provider type: ${String(_exhaustive)}`);
