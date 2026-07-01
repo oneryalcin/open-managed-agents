@@ -12,8 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-01 (`dev/microsandbox-local-provider`, PR #123). Earlier
-`#69 / #51 / #13` queue is landed/closed; superseded below._
+_Last updated 2026-07-01 (`dev/pi-runtime-rollout-policy`). Earlier
+`#69 / #51 / #13 / #113` queue is landed/closed; superseded below._
 
 - `main` is the integration branch. Docs/scratch slices commit straight to `main`;
   code slices land via `dev/*` branch → PR → squash-merge.
@@ -26,13 +26,21 @@ _Last updated 2026-07-01 (`dev/microsandbox-local-provider`, PR #123). Earlier
   overlapping-interrupt **coalescing** hardening (one in-flight `abort()` per
   session, found by the review constellation + hot-path trace). All in
   `src/control-plane/sessions/pi/runner.ts`.
-- **Top active work:** PR #123 (`dev/microsandbox-local-provider`) implements the
-  first `microsandbox-local` sandbox provider slice for issue #121. The branch
-  has the deployment gate, CLI builders/adapter, provider skeleton, explicit
-  durable workspace volume, no-network policy, uploads/outputs tmpfs hardening,
-  file materialization/output collection, owned-resource cleanup/reaping, and
-  Docker-style guest process-group timeout/abort cleanup. Proxy-grade secrets
-  remain rejected/out of scope; guest env forwarding remains disabled.
+- **First `microsandbox-local` provider slice is landed.** PR #123 merged to
+  `main` (squash `2f756ee`): deployment gate, CLI builders/adapter, provider
+  skeleton, explicit durable workspace volume, no-network policy,
+  uploads/outputs tmpfs hardening, file materialization/output collection,
+  owned-resource cleanup/reaping, and Docker-style guest process-group
+  timeout/abort cleanup. Proxy-grade secrets remain rejected/out of scope; guest
+  env forwarding remains disabled.
+- **`#113` runtime coordinator seam audit is closed.** PR #124 merged to `main`
+  (squash `9b067f9`): the audit found no required coordinator migration, but
+  documented the unfenced `persistRuntimeDrafts -> appendBatch(events)` footgun
+  and the future rule that turn-scoped runtime rows must not use that path.
+- **Top active work:** `#16` Pi runtime production rollout policy on
+  `dev/pi-runtime-rollout-policy`. This is a policy/docs slice defining dark
+  runtime vs deployment runtime, allowed local/demo/single-node durable modes,
+  and the gates that still block multi-worker/managed production.
 - Untracked-on-purpose: `scratch/oma-sandbox-provider-landscape.md` (research copy
   behind a gist). Don't commit/delete without asking.
 
@@ -342,18 +350,14 @@ Full detail lives in-repo; this is the index + the one invariant to carry from e
 
 ## Immediate Next Work
 
-1. **Finish PR #123 (`microsandbox-local` provider slice)** — final review,
-   undraft when satisfied, then squash-merge. Required evidence is already in
-   the branch: typecheck/full suite green, focused microsandbox suite green, and
-   gated live smoke on real `msb` 0.6.1 proving no-network, host-secret
-   invisibility, file mounts/path rejection, daemonized-child timeout cleanup,
-   output collection, and dispose. Keep v1 non-goals intact: no secret proxy, no
-   plaintext-env fallback, no snapshot parking default, no hosted/K8s
-   abstraction, and no speculative logs/metrics normalization.
-2. **Standing queue (evidence-gated):** `#113` coordinator seam audit
-   (opportunistic); `#107` SQLite scaling (200–400 sessions); `#103` deployment
-   hardening; `#16` Pi runtime production rollout policy; `#118/#119` upload +
-   streaming idempotency. Postgres / async-store boundary stays gated on a
+1. **Finish `#16` Pi runtime rollout policy** — review the policy doc and
+   merge. It should close #16 without adding a speculative global runtime flag:
+   `createControlPlaneApp(...)` remains the dark-runtime shape, while
+   `createDeploymentControlPlaneApp(...)` wires Pi and sandbox execution remains
+   provider-gated by deployment config.
+2. **Standing queue (evidence-gated):** `#107` SQLite scaling (200–400
+   sessions); `#103` deployment hardening; `#118/#119` upload + streaming
+   idempotency. Postgres / async-store boundary stays gated on a
    concrete multi-process need per ADR 0014 (exploratory `dev/async-store-boundary`
    branch — do not merge speculatively).
 
