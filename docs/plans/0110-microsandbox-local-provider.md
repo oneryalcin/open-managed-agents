@@ -63,6 +63,21 @@ Two environment facts the implementation must target:
 - Earlier SDK probes (0106–0109) used the npm package `0.5.6`; this slice targets
   the `msb` 0.6.1 CLI behavior, not SDK import shape.
 
+Implementation update — 2026-07-01:
+
+- PR #123 now contains the deployment gate, CLI builders/adapter, and provider
+  skeleton.
+- Timeout/abort/max-buffer loss use the Docker-local pattern: run guest commands
+  under `setsid`, write the guest pid, and issue an in-guest `kill -KILL -<pgid>`
+  before returning an error. The host `msb` process kill is only a client
+  backstop; the sandbox remains usable after cancellation.
+- Uploads and outputs are created as explicit `--tmpfs` mounts with
+  `nosuid,nodev,noexec` and size bounds. The gated live smoke proved real
+  `msb` 0.6.1 accepts this syntax.
+- The live smoke now covers real create+volume, workspace I/O, file mounts,
+  path-escape rejection, no-network egress blocking, host-secret invisibility in
+  the guest, daemonized-child timeout cleanup, output collection, and dispose.
+
 ## Scope
 
 Build `microsandbox-local` behind the existing `SandboxProvider` interface:
@@ -287,9 +302,9 @@ Responsibilities:
 - expose `cwd = "/workspace"`;
 - create Pi built-in tool definitions with `createSandboxToolDefinitions`;
 - filter/ignore guest env explicitly;
-- implement timeout and `AbortSignal` cancellation by killing the microsandbox
-  exec handle, then stop/remove the sandbox on provider-level timeout/abort so
-  a killed `msb` parent cannot leave guest work running;
+- implement timeout and `AbortSignal` cancellation with a guest-side process
+  group kill. Killing the local `msb` client alone is not sufficient because it
+  can leave guest work running;
 - normalize provider cancellation/exit results so callers do not depend on raw
   microsandbox exit codes. The CLI probe showed a timed-out/aborted command
   returns an error with no partial stdout (streamed output arrives live during
@@ -421,7 +436,7 @@ Add one gated smoke, skipped unless an env flag is set:
 OMA_MICROSANDBOX_LIVE=1
 ```
 
-It should prove:
+It proves:
 
 - create sandbox and explicit volume;
 - write/read/list/find/ls under `/workspace`;
@@ -457,7 +472,8 @@ Run the gated live smoke only on a host with microsandbox support.
 - Pi built-in tools work through microsandbox with Docker-local parity.
 - File resources and output files work with existing session semantics and
   quotas.
-- Abort and timeout stop the guest process.
+- Abort, timeout, and host-client loss stop the guest process group without
+  destroying the sandbox.
 - `dispose()` synchronously removes owned sandbox and volume resources.
 - Cleanup removes owned sandbox and volume resources after success, failure, and
   partial creation.
@@ -478,10 +494,15 @@ Run the gated live smoke only on a host with microsandbox support.
   in the live smoke for every SDK/runtime upgrade.
 - Secret proxy support remains excluded until upstream guidance or a
   production-equivalent HTTPS echo harness proves substitution end to end.
-- Volume reaping depends on what metadata microsandbox exposes. If timestamps
-  are missing, avoid pretending age-based cleanup is safe.
 - Logs/metrics are useful, but there is no OMA-level observability contract yet.
   Keep them out of v1 unless debugging proves they are needed.
+- `dispose()` is synchronous and can block while removing the owned sandbox and
+  volume. This matches today's `SandboxProvider.dispose(): void` contract; if it
+  becomes operationally painful, change the provider contract rather than adding
+  async fire-and-forget cleanup.
+- Output collection checks aggregate count/size from the directory listing, then
+  re-caps each file read with `maxBuffer`. A malicious guest can race the listing
+  and read steps, but the per-file read cap keeps the v1 failure bounded.
 
 ## Follow-Up Slices
 

@@ -951,16 +951,20 @@ describe("microsandbox sandbox provider live smoke", () => {
       const prefix = `oma-live-${Date.now().toString(36)}-${Math.random()
         .toString(36)
         .slice(2, 8)}`;
-      const provider = await createMicrosandboxSandboxProvider(
-        "wrk_live",
-        "sesn_live",
-        {
-          resourceNamePrefix: prefix,
-          operationTimeoutMs: 15_000,
-          maxDuration: "10m",
-        },
-      );
+      const previousHostSecret = process.env.OMA_LIVE_SECRET_HOST;
+      process.env.OMA_LIVE_SECRET_HOST = "should-not-enter-guest";
+      let provider: SandboxProvider | undefined;
       try {
+        provider = await createMicrosandboxSandboxProvider(
+          "wrk_live",
+          "sesn_live",
+          {
+            resourceNamePrefix: prefix,
+            operationTimeoutMs: 15_000,
+            maxDuration: "10m",
+          },
+        );
+
         await provider.operations.write.writeFile(
           "/workspace/README.md",
           "hello\n",
@@ -995,6 +999,22 @@ describe("microsandbox sandbox provider live smoke", () => {
           ),
         ).resolves.not.toEqual({ exitCode: 0 });
 
+        const secretChunks: Buffer[] = [];
+        await expect(
+          provider.operations.bash.exec(
+            'printf "%s:%s" "${OMA_LIVE_SECRET_HOST:-absent}" "${OMA_LIVE_SECRET_REQUEST:-absent}"',
+            "/workspace",
+            {
+              env: { OMA_LIVE_SECRET_REQUEST: "should-not-enter-guest" },
+              onData: (chunk) => secretChunks.push(chunk),
+              timeout: 5,
+            },
+          ),
+        ).resolves.toEqual({ exitCode: 0 });
+        expect(Buffer.concat(secretChunks).toString("utf8")).toBe(
+          "absent:absent",
+        );
+
         await expect(
           provider.operations.bash.exec(
             "nohup sh -c 'while true; do printf x >> /workspace/leak.txt; sleep 0.1; done' >/dev/null 2>&1 & sleep 5",
@@ -1020,7 +1040,12 @@ describe("microsandbox sandbox provider live smoke", () => {
           "report.txt",
         ]);
       } finally {
-        provider.dispose();
+        if (previousHostSecret === undefined) {
+          delete process.env.OMA_LIVE_SECRET_HOST;
+        } else {
+          process.env.OMA_LIVE_SECRET_HOST = previousHostSecret;
+        }
+        provider?.dispose();
       }
     },
     120_000,
