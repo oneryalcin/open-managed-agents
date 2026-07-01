@@ -7,10 +7,13 @@ import {
   DEFAULT_MICROSANDBOX_UPLOADS_PATH,
   DEFAULT_MICROSANDBOX_WORKSPACE,
   NodeMicrosandboxCli,
+  assertInsideMicrosandboxOutputPath,
   assertInsideMicrosandboxUploadsPath,
   assertInsideMicrosandboxWorkspace,
+  buildMicrosandboxBashCommand,
   buildMicrosandboxFileAccessCommand,
   buildMicrosandboxGlobEnumerationCommand,
+  buildMicrosandboxKillProcessGroupCommand,
   buildMicrosandboxMkdirCommand,
   buildMicrosandboxOutputListingCommand,
   buildMicrosandboxReadFileCommand,
@@ -32,6 +35,7 @@ import {
   buildMicrosandboxVolumeRemoveArgs,
   createMicrosandboxSandboxProvider,
   createMicrosandboxSandboxProviderFactory,
+  createMicrosandboxBashDispatchFilter,
   directoryNamesPrunedByIgnoreGlobs,
   execMicrosandboxCommand,
   execMicrosandboxCommandSync,
@@ -43,6 +47,7 @@ import {
   type MicrosandboxCliExecOptions,
   type MicrosandboxCliResult,
 } from "../microsandbox.ts";
+import type { SandboxProvider } from "../provider.ts";
 
 describe("microsandbox command builders", () => {
   it("builds create args with explicit volume workspace and no-network policy", () => {
@@ -62,6 +67,10 @@ describe("microsandbox command builders", () => {
       "--workdir",
       DEFAULT_MICROSANDBOX_WORKSPACE,
       "--no-net",
+      "--tmpfs",
+      `${DEFAULT_MICROSANDBOX_UPLOADS_PATH}:64M:nosuid,nodev,noexec`,
+      "--tmpfs",
+      `${DEFAULT_MICROSANDBOX_OUTPUTS_PATH}:100M:nosuid,nodev,noexec`,
       "--cpus",
       "1",
       "--memory",
@@ -275,6 +284,43 @@ describe("microsandbox command builders", () => {
     ).toEqual(["dist", "node_modules"]);
   });
 
+  it("builds bash commands with guest process-group timeout and pid tracking", () => {
+    const command = buildMicrosandboxBashCommand(
+      "sleep 5",
+      1,
+      "/workspace/.oma-msb-exec-test.pid",
+      "token",
+    );
+
+    expect(command.args).toEqual([
+      "/workspace/.oma-msb-exec-test.pid",
+      "1",
+      "sleep 5",
+      "token",
+    ]);
+    expect(command.script).toContain("__OMA_DISPATCHED__");
+    expect(command.script).toContain("__OMA_TERMINAL__");
+    expect(command.script).toContain("setsid /bin/sh -lc");
+    expect(command.script).toContain("kill -KILL \"-$pid\"");
+    expect(buildMicrosandboxKillProcessGroupCommand("/workspace/pid")).toMatchObject({
+      args: ["/workspace/pid"],
+    });
+  });
+
+  it("filters microsandbox bash dispatch and terminal markers", () => {
+    const filter = createMicrosandboxBashDispatchFilter("token");
+
+    expect(filter.chunk(Buffer.from("__OMA_DIS"))).toEqual(Buffer.alloc(0));
+    expect(filter.chunk(Buffer.from("PATCHED__:token\nhello"))).toEqual(
+      Buffer.from("hello"),
+    );
+    expect(
+      filter.chunk(Buffer.from("__OMA_TERMINAL__:token:timeout:137\n")),
+    ).toEqual(Buffer.alloc(0));
+    expect(filter.dispatchSeen()).toBe(true);
+    expect(filter.terminalRecord()).toEqual({ kind: "timeout", exitCode: 137 });
+  });
+
   it("keeps microsandbox paths inside provider-owned roots", () => {
     expect(assertInsideMicrosandboxWorkspace("/workspace/src/../a.txt")).toBe(
       "/workspace/a.txt",
@@ -293,6 +339,15 @@ describe("microsandbox command builders", () => {
     expect(() =>
       assertInsideMicrosandboxUploadsPath("/mnt/session/uploads"),
     ).toThrow("escapes uploads root");
+    expect(assertInsideMicrosandboxOutputPath("/mnt/session/outputs/a.txt")).toBe(
+      "/mnt/session/outputs/a.txt",
+    );
+    expect(() => assertInsideMicrosandboxOutputPath("../escape.txt")).toThrow(
+      "must be absolute",
+    );
+    expect(() =>
+      assertInsideMicrosandboxOutputPath("/mnt/session/outputs/../escape.txt"),
+    ).toThrow("escapes outputs root");
   });
 
   it("rejects flag-like generated resource arguments", () => {
@@ -433,7 +488,7 @@ describe("microsandbox CLI adapter", () => {
 
     expect(cli.calls.map((call) => call.args.join(" "))).toEqual([
       "volume create --name oma-vol",
-      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-sbx --mount-named oma-vol:/workspace --workdir /workspace --no-net --cpus 1 --memory 512M --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet`,
+      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-sbx --mount-named oma-vol:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 512M --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet`,
       "volume remove oma-vol",
     ]);
     expect(cli.calls.map((call) => call.mode)).toEqual([
@@ -498,7 +553,7 @@ describe("microsandbox sandbox provider", () => {
 
     expect(cli.calls.map((call) => call.args.join(" "))).toEqual([
       "volume create --name oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx",
-      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-wrk-sesn-sandbox-mppxg2io-4fzzzx --mount-named oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx:/workspace --workdir /workspace --no-net --cpus 1 --memory 512M --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet --label open-managed-agents.sandbox=microsandbox-local --label open-managed-agents.owner=open-managed-agents --label open-managed-agents.workspace-id=wrk --label open-managed-agents.session-id=sesn --label open-managed-agents.created-at=2026-05-28T20:10:00.000Z`,
+      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-wrk-sesn-sandbox-mppxg2io-4fzzzx --mount-named oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 512M --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet --label open-managed-agents.sandbox=microsandbox-local --label open-managed-agents.owner=open-managed-agents --label open-managed-agents.workspace-id=wrk --label open-managed-agents.session-id=sesn --label open-managed-agents.created-at=2026-05-28T20:10:00.000Z`,
       "remove --force oma-wrk-sesn-sandbox-mppxg2io-4fzzzx",
       "volume remove oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx",
     ]);
@@ -565,7 +620,9 @@ describe("microsandbox sandbox provider", () => {
     cli.queueExec(ok("volume"));
     cli.queueExec(ok("sandbox"));
     cli.queueExec((opts) => {
-      opts?.onData?.(Buffer.from("streamed"));
+      const token = cli.calls.at(-1)?.args.at(-1);
+      opts?.onData?.(Buffer.from(`__OMA_DISPATCHED__:${token}\nstreamed`));
+      opts?.onData?.(Buffer.from(`__OMA_TERMINAL__:${token}:exit:7\n`));
       return okResult("", "", 7);
     });
     cli.queueExecSync(ok(""));
@@ -586,16 +643,22 @@ describe("microsandbox sandbox provider", () => {
     ).resolves.toEqual({ exitCode: 7 });
     expect(Buffer.concat(chunks).toString("utf8")).toBe("streamed");
     expect(cli.calls[2]?.args).toContain("--stream");
-    expect(cli.calls[2]?.args).toContain("--timeout");
+    expect(cli.calls[2]?.args).not.toContain("--timeout");
     expect(cli.calls[2]?.opts?.env).toBeUndefined();
     provider.dispose();
   });
 
-  it("normalizes host-backstop timeout as terminal provider cleanup", async () => {
+  it("normalizes guest timeout without disposing the provider", async () => {
     const cli = new RecordingMicrosandboxCli();
     cli.queueExec(ok("volume"));
     cli.queueExec(ok("sandbox"));
-    cli.queueExec(() => okResult("partial", "", null, "SIGKILL"));
+    cli.queueExec((opts) => {
+      const token = cli.calls.at(-1)?.args.at(-1);
+      opts?.onData?.(Buffer.from(`__OMA_DISPATCHED__:${token}\npartial`));
+      opts?.onData?.(Buffer.from(`__OMA_TERMINAL__:${token}:timeout:137\n`));
+      return okResult("", "", 137);
+    });
+    cli.queueExec(ok("after"));
     cli.queueExecSync(ok(""));
     cli.queueExecSync(ok(""));
     const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
@@ -612,18 +675,56 @@ describe("microsandbox sandbox provider", () => {
     ).rejects.toThrow("timeout:1");
     await expect(
       provider.operations.read.readFile("/workspace/README.md"),
-    ).rejects.toThrow("Sandbox provider is disposed");
+    ).resolves.toEqual(Buffer.from("after"));
     provider.dispose();
-    expect(cli.calls.map((call) => call.args.join(" "))).toContain(
-      "remove --force oma-wrk-sesn-sandbox-mppxg2io-4fzzzx",
-    );
   });
 
-  it("normalizes abort as terminal provider cleanup", async () => {
+  it("kills guest process groups on host-backstop timeout and maxBuffer loss", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    cli.queueExec(() => okResult("partial", "", null, "SIGKILL"));
+    cli.queueExec(fail("Microsandbox command output exceeded 3 bytes"));
+    cli.queueExecSync(ok(""));
+    cli.queueExecSync(ok(""));
+    cli.queueExecSync(ok(""));
+    cli.queueExecSync(ok(""));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+    await expect(
+      provider.operations.bash.exec("sleep 5", "/workspace", {
+        env: {},
+        onData: () => {},
+        timeout: 1,
+      }),
+    ).rejects.toThrow("timeout:1");
+    await expect(
+      provider.operations.bash.exec("printf too-much", "/workspace", {
+        env: {},
+        onData: () => {},
+      }),
+    ).rejects.toThrow("Microsandbox command output exceeded");
+    provider.dispose();
+    expect(
+      cli.calls.filter(
+        (call) =>
+          call.mode === "sync" &&
+          call.args[0] === "exec" &&
+          call.args.join(" ").includes("kill -KILL"),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("normalizes abort by killing the guest process group", async () => {
     const cli = new RecordingMicrosandboxCli();
     cli.queueExec(ok("volume"));
     cli.queueExec(ok("sandbox"));
     cli.queueExec(failAbort());
+    cli.queueExec(ok("after"));
+    cli.queueExecSync(ok(""));
     cli.queueExecSync(ok(""));
     cli.queueExecSync(ok(""));
     const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
@@ -637,9 +738,11 @@ describe("microsandbox sandbox provider", () => {
         onData: () => {},
       }),
     ).rejects.toThrow("aborted");
-
-    expect(cli.calls.map((call) => call.args.join(" "))).toContain(
-      "remove --force oma-wrk-sesn-sandbox-mppxg2io-4fzzzx",
+    await expect(
+      provider.operations.read.readFile("/workspace/README.md"),
+    ).resolves.toEqual(Buffer.from("after"));
+    expect(cli.calls.some((call) => call.args.join(" ").includes("kill -KILL"))).toBe(
+      true,
     );
     provider.dispose();
   });
@@ -693,6 +796,69 @@ describe("microsandbox sandbox provider", () => {
     expect(await bytesToBuffer(files![0]!.bytes)).toEqual(Buffer.from("hello"));
     provider.dispose();
   });
+
+  it("rejects file mount integrity mismatches before copying into the guest", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    cli.queueExecSync(ok(""));
+    cli.queueExecSync(ok(""));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    await expect(
+      provider.materializeFileResources?.([
+        {
+          mountPath: "/mnt/session/uploads/data/probe.txt",
+          snapshotFileId: "file_snapshot",
+          sha256: "0".repeat(64),
+          sizeBytes: 6,
+          bytes: Buffer.from("hello\n"),
+        },
+      ]),
+    ).rejects.toThrow("failed integrity validation");
+    expect(cli.calls.filter((call) => call.args[0] === "copy")).toHaveLength(0);
+    provider.dispose();
+  });
+
+  it("rejects output quota failures and unsafe output listing paths", async () => {
+    const quotaCli = new RecordingMicrosandboxCli();
+    quotaCli.queueExec(ok("volume"));
+    quotaCli.queueExec(ok("sandbox"));
+    quotaCli.queueExec(() =>
+      okResult("", "session output file count exceeds 1\n", 42),
+    );
+    quotaCli.queueExecSync(ok(""));
+    quotaCli.queueExecSync(ok(""));
+    const quotaProvider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli: quotaCli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+    await expect(quotaProvider.collectOutputFiles?.()).rejects.toThrow(
+      "session output file count exceeds",
+    );
+    quotaProvider.dispose();
+
+    const pathCli = new RecordingMicrosandboxCli();
+    pathCli.queueExec(ok("volume"));
+    pathCli.queueExec(ok("sandbox"));
+    pathCli.queueExec(ok("../escape.txt\0" + "5\0" + "a".repeat(64) + "\0"));
+    pathCli.queueExecSync(ok(""));
+    pathCli.queueExecSync(ok(""));
+    const pathProvider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli: pathCli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+    await expect(pathProvider.collectOutputFiles?.()).rejects.toThrow(
+      "Unsafe session output path",
+    );
+    pathProvider.dispose();
+  });
 });
 
 describe("microsandbox sandbox provider factory", () => {
@@ -701,17 +867,23 @@ describe("microsandbox sandbox provider factory", () => {
     cli.queueExec(ok('[{"name":"old-sandbox"},{"name":"young-sandbox"}]'));
     cli.queueExec(
       ok(
-        '{"created_at":"2026-05-28T10:00:00.000Z","mounts":["oma-attached-workspace-volume-old"]}',
+        '{"created_at":"2026-05-28T10:00:00.000Z","mounts":["oma-expired-workspace-volume-old:/workspace"]}',
       ),
     );
-    cli.queueExec(ok('{"created_at":"2026-05-28T10:59:00.000Z"}'));
+    cli.queueExec(
+      ok(
+        '{"created_at":"2026-05-28T10:59:00.000Z","mounts":["oma-live-workspace-volume-old:/workspace"]}',
+      ),
+    );
     cli.queueExec(ok(""));
     cli.queueExec(
       ok(
-        '["oma-attached-workspace-volume-old","oma-orphan-workspace-volume-old","not-oma-workspace-volume-old"]',
+        '["oma-expired-workspace-volume-old","oma-live-workspace-volume-old","oma-orphan-workspace-volume-old","not-oma-workspace-volume-old"]',
       ),
     );
     cli.queueExec(ok('{"Created":"2026-05-28T09:00:00.000Z"}'));
+    cli.queueExec(ok('{"Created":"2026-05-28T09:00:00.000Z"}'));
+    cli.queueExec(ok(""));
     cli.queueExec(ok(""));
 
     await expect(
@@ -720,7 +892,7 @@ describe("microsandbox sandbox provider factory", () => {
         olderThanMs: 30 * 60 * 1000,
         now: () => new Date("2026-05-28T11:00:00.000Z").getTime(),
       }),
-    ).resolves.toBe(2);
+    ).resolves.toBe(3);
 
     expect(cli.calls.map((call) => call.args.join(" "))).toEqual([
       "list --format json --label open-managed-agents.sandbox=microsandbox-local --label open-managed-agents.owner=open-managed-agents",
@@ -728,7 +900,9 @@ describe("microsandbox sandbox provider factory", () => {
       "inspect young-sandbox --format json",
       "remove --force old-sandbox",
       "volume list --format json",
+      "volume inspect oma-expired-workspace-volume-old",
       "volume inspect oma-orphan-workspace-volume-old",
+      "volume remove oma-expired-workspace-volume-old",
       "volume remove oma-orphan-workspace-volume-old",
     ]);
   });
@@ -765,6 +939,92 @@ describe("microsandbox sandbox provider factory", () => {
       cli.calls.filter((call) => call.args[0] === "create"),
     ).toHaveLength(2);
   });
+});
+
+const microsandboxLiveIt =
+  process.env.OMA_MICROSANDBOX_LIVE === "1" ? it : it.skip;
+
+describe("microsandbox sandbox provider live smoke", () => {
+  microsandboxLiveIt(
+    "runs tools with no-net, file mounts, outputs, timeout cleanup, and dispose",
+    async () => {
+      const prefix = `oma-live-${Date.now().toString(36)}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+      const provider = await createMicrosandboxSandboxProvider(
+        "wrk_live",
+        "sesn_live",
+        {
+          resourceNamePrefix: prefix,
+          operationTimeoutMs: 15_000,
+          maxDuration: "10m",
+        },
+      );
+      try {
+        await provider.operations.write.writeFile(
+          "/workspace/README.md",
+          "hello\n",
+        );
+        await expect(
+          provider.operations.read.readFile("/workspace/README.md"),
+        ).resolves.toEqual(Buffer.from("hello\n"));
+
+        await expect(
+          provider.materializeFileResources?.([
+            {
+              mountPath: "/mnt/session/uploads/data/probe.txt",
+              snapshotFileId: "file_snapshot",
+              sha256:
+                "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+              sizeBytes: 6,
+              bytes: Buffer.from("hello\n"),
+            },
+          ]),
+        ).resolves.toBeUndefined();
+        await expect(
+          provider.operations.read.readFile(
+            "/workspace/../mnt/session/uploads/data/probe.txt",
+          ),
+        ).rejects.toThrow("escapes workspace");
+
+        await expect(
+          provider.operations.bash.exec(
+            "wget -T 2 -qO- http://example.com",
+            "/workspace",
+            { env: {}, onData: () => {}, timeout: 5 },
+          ),
+        ).resolves.not.toEqual({ exitCode: 0 });
+
+        await expect(
+          provider.operations.bash.exec(
+            "nohup sh -c 'while true; do printf x >> /workspace/leak.txt; sleep 0.1; done' >/dev/null 2>&1 & sleep 5",
+            "/workspace",
+            { env: {}, onData: () => {}, timeout: 0.5 },
+          ),
+        ).rejects.toThrow("timeout:0.5");
+        const sizeAfterTimeout = await readLiveFileSize(provider, "leak.txt");
+        await delay(500);
+        await expect(readLiveFileSize(provider, "leak.txt")).resolves.toBe(
+          sizeAfterTimeout,
+        );
+
+        await expect(
+          provider.operations.bash.exec(
+            "printf report > /mnt/session/outputs/report.txt",
+            "/workspace",
+            { env: {}, onData: () => {}, timeout: 5 },
+          ),
+        ).resolves.toEqual({ exitCode: 0 });
+        const outputs = await provider.collectOutputFiles?.();
+        expect(outputs?.map((file) => file.relativePath)).toEqual([
+          "report.txt",
+        ]);
+      } finally {
+        provider.dispose();
+      }
+    },
+    120_000,
+  );
 });
 
 interface RecordedMicrosandboxCall {
@@ -860,4 +1120,29 @@ async function bytesToBuffer(
   const chunks: Uint8Array[] = [];
   for await (const chunk of bytes) chunks.push(chunk);
   return Buffer.concat(chunks);
+}
+
+async function readLiveFileSize(
+  provider: SandboxProvider,
+  relativePath: string,
+): Promise<number> {
+  if (!/^[A-Za-z0-9._/-]+$/.test(relativePath)) {
+    throw new Error(`unsafe live smoke path: ${relativePath}`);
+  }
+  const absolutePath = `/workspace/${relativePath}`;
+  const chunks: Buffer[] = [];
+  await provider.operations.bash.exec(
+    `test ! -e '${absolutePath}' && printf 0 || wc -c < '${absolutePath}'`,
+    "/workspace",
+    {
+      env: {},
+      onData: (chunk) => chunks.push(chunk),
+      timeout: 5,
+    },
+  );
+  return Number(Buffer.concat(chunks).toString("utf8").trim());
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -41,10 +41,14 @@ const DEFAULT_MICROSANDBOX_MEMORY = "512M";
 const DEFAULT_MICROSANDBOX_OCI_UPPER_SIZE = "1G";
 const DEFAULT_MICROSANDBOX_MAX_DURATION = "2h";
 const DEFAULT_MICROSANDBOX_SECURITY = "restricted";
+const DEFAULT_MICROSANDBOX_UPLOADS_TMPFS_SIZE = "64M";
+const DEFAULT_MICROSANDBOX_OUTPUTS_TMPFS_SIZE = "100M";
 const SANDBOX_LABEL_KEY = "open-managed-agents.sandbox";
 const SANDBOX_LABEL_VALUE = "microsandbox-local";
 const OWNER_LABEL_KEY = "open-managed-agents.owner";
 const OWNER_LABEL_VALUE = "open-managed-agents";
+const BASH_DISPATCH_PREFIX = "__OMA_DISPATCHED__:";
+const BASH_TERMINAL_PREFIX = "__OMA_TERMINAL__:";
 
 const MICROSANDBOX_ENV_ALLOWLIST = new Set([
   "HOME",
@@ -149,6 +153,10 @@ export interface MicrosandboxExecResult {
   stderr: Buffer;
   exitCode: number | null;
 }
+
+type BashTerminalRecord =
+  | { kind: "exit"; exitCode: number }
+  | { kind: "timeout"; exitCode: number };
 
 export class NodeMicrosandboxCli implements MicrosandboxCli {
   private readonly command: string;
@@ -551,33 +559,74 @@ export async function createMicrosandboxSandboxProvider(
         options.timeout !== undefined && options.timeout > 0
           ? options.timeout
           : resolved.operationTimeoutMs / 1000;
-      const args = buildMicrosandboxShellExecArgs({
-        sandboxName,
-        script: command,
-        workdir: path,
-        timeout: `${timeoutSeconds}s`,
-        stream: true,
-      });
+      const execId = randomExecId();
+      const dispatchToken = randomExecId();
+      const pidFile = posix.join(
+        resolved.workspacePath,
+        `.oma-msb-exec-${execId}.pid`,
+      );
+      const shellCommand = buildMicrosandboxBashCommand(
+        command,
+        timeoutSeconds,
+        pidFile,
+        dispatchToken,
+      );
+      const dispatchFilter = createMicrosandboxBashDispatchFilter(dispatchToken);
       try {
-        const result = await resolved.cli.exec(args, {
-          onData: options.onData,
-          signal: options.signal,
-          timeoutMs: Math.ceil(timeoutSeconds * 1000) + 2_000,
-        });
+        const result = await resolved.cli.exec(
+          buildMicrosandboxShellExecArgs({
+            sandboxName,
+            script: shellCommand.script,
+            args: shellCommand.args,
+            workdir: path,
+            stream: true,
+          }),
+          {
+            onData: (chunk) => {
+              const forwarded = dispatchFilter.chunk(chunk);
+              if (forwarded.length > 0) options.onData(forwarded);
+            },
+            signal: options.signal,
+            timeoutMs: Math.ceil(timeoutSeconds * 1000) + 2_000,
+          },
+        );
         if (result.signal !== null) {
-          disposed.value = true;
-          terminateMicrosandboxAfterLostExec(resolved.cli, sandboxName, resolved);
+          killMicrosandboxGuestProcessGroup(
+            resolved.cli,
+            sandboxName,
+            pidFile,
+            resolved,
+          );
           throw new Error(`timeout:${timeoutSeconds}`);
         }
-        if (isMicrosandboxTimeout(result)) {
+        if (!dispatchFilter.dispatchSeen()) {
+          throw new Error("microsandbox bash failed before command dispatch");
+        }
+        const terminal = dispatchFilter.terminalRecord();
+        if (terminal === undefined) {
+          throw new Error("microsandbox bash failed before command completion");
+        }
+        if (
+          result.status !==
+          (terminal.kind === "timeout" ? 137 : terminal.exitCode)
+        ) {
+          throw new Error(
+            "microsandbox bash exit disagreed with command completion",
+          );
+        }
+        if (terminal.kind === "timeout") {
           throw new Error(`timeout:${timeoutSeconds}`);
         }
-        return { exitCode: result.status };
+        return { exitCode: terminal.exitCode };
       } catch (error) {
-        if (isAbortError(error)) {
-          disposed.value = true;
-          terminateMicrosandboxAfterLostExec(resolved.cli, sandboxName, resolved);
-          throw new Error("aborted");
+        if (isAbortError(error) || isMicrosandboxOutputOverflow(error)) {
+          killMicrosandboxGuestProcessGroup(
+            resolved.cli,
+            sandboxName,
+            pidFile,
+            resolved,
+          );
+          if (isAbortError(error)) throw new Error("aborted");
         }
         throw error;
       }
@@ -685,6 +734,10 @@ export function buildMicrosandboxCreateArgs(opts: {
     "--workdir",
     opts.workdir ?? workspacePath,
     "--no-net",
+    "--tmpfs",
+    `${DEFAULT_MICROSANDBOX_UPLOADS_PATH}:${DEFAULT_MICROSANDBOX_UPLOADS_TMPFS_SIZE}:nosuid,nodev,noexec`,
+    "--tmpfs",
+    `${DEFAULT_MICROSANDBOX_OUTPUTS_PATH}:${DEFAULT_MICROSANDBOX_OUTPUTS_TMPFS_SIZE}:nosuid,nodev,noexec`,
     "--cpus",
     opts.cpus ?? DEFAULT_MICROSANDBOX_CPUS,
     "--memory",
@@ -919,6 +972,89 @@ export function buildMicrosandboxOutputListingCommand(
   };
 }
 
+export function buildMicrosandboxBashCommand(
+  command: string,
+  timeoutSeconds: number,
+  pidFile: string,
+  dispatchToken = "",
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "pidfile=\"$1\"",
+      "timeout_secs=\"$2\"",
+      "command=\"$3\"",
+      "dispatch_token=\"$4\"",
+      "timeout_file=\"${pidfile}.timeout\"",
+      "timer_file=\"${pidfile}.timer\"",
+      "rm -f \"$pidfile\" \"$timeout_file\" \"$timer_file\"",
+      "printf '%s\\n' \"__OMA_DISPATCHED__:${dispatch_token}\"",
+      "terminal_exit() { printf '%s\\n' \"__OMA_TERMINAL__:${dispatch_token}:exit:$1\"; }",
+      "terminal_timeout() { printf '%s\\n' \"__OMA_TERMINAL__:${dispatch_token}:timeout:137\"; }",
+      "setsid /bin/sh -lc \"$command\" &",
+      "pid=$!",
+      "printf '%s' \"$pid\" > \"$pidfile\"",
+      "(",
+      "  sleep \"$timeout_secs\"",
+      "  if kill -0 \"$pid\" 2>/dev/null; then",
+      "    : > \"$timeout_file\"",
+      "    kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+      "  fi",
+      ") &",
+      "timer=$!",
+      "printf '%s' \"$timer\" > \"$timer_file\"",
+      "wait \"$pid\"",
+      "status=$?",
+      "if [ -f \"$timeout_file\" ]; then",
+      "  kill \"$timer\" 2>/dev/null || true",
+      "  wait \"$timer\" 2>/dev/null || true",
+      "  rm -f \"$pidfile\" \"$timeout_file\" \"$timer_file\"",
+      "  terminal_timeout",
+      "  exit 137",
+      "fi",
+      "kill \"$timer\" 2>/dev/null || true",
+      "wait \"$timer\" 2>/dev/null || true",
+      "rm -f \"$pidfile\" \"$timeout_file\" \"$timer_file\"",
+      "terminal_exit \"$status\"",
+      "exit \"$status\"",
+    ].join("\n"),
+    args: [pidFile, String(timeoutSeconds), command, dispatchToken],
+  };
+}
+
+export function buildMicrosandboxKillProcessGroupCommand(
+  pidFile: string,
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "pidfile=\"$1\"",
+      "timerfile=\"${pidfile}.timer\"",
+      "timeoutfile=\"${pidfile}.timeout\"",
+      "i=0",
+      "while [ \"$i\" -lt 50 ]; do",
+      "  [ -f \"$pidfile\" ] && break",
+      "  sleep 0.01",
+      "  i=$((i + 1))",
+      "done",
+      "if [ -f \"$timerfile\" ]; then",
+      "  timer=$(cat \"$timerfile\")",
+      "  kill -KILL \"$timer\" 2>/dev/null || true",
+      "fi",
+      "if [ -f \"$pidfile\" ]; then",
+      "  pid=$(cat \"$pidfile\")",
+      "  kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+      "  i=0",
+      "  while [ \"$i\" -lt 50 ]; do",
+      "    kill -0 \"$pid\" 2>/dev/null || break",
+      "    sleep 0.02",
+      "    i=$((i + 1))",
+      "  done",
+      "  rm -f \"$pidfile\" \"$timerfile\" \"$timeoutfile\"",
+      "fi",
+    ].join("\n"),
+    args: [pidFile],
+  };
+}
+
 export function microsandboxResourceName(opts: {
   prefix?: string;
   workspaceId: string;
@@ -1109,18 +1245,25 @@ export async function reapMicrosandboxSandboxes(
   const attachedVolumes = new Set<string>();
   const expiredSandboxes: string[] = [];
   for (const name of sandboxNames) {
-    const inspected = await microsandboxChecked(
-      cli,
-      buildMicrosandboxInspectArgs(name),
-    );
-    collectMicrosandboxVolumeRefs(inspected.stdout, attachedVolumes);
-    const createdAt = parseMicrosandboxCreatedAt(inspected.stdout);
-    if (now - createdAt.getTime() >= opts.olderThanMs) {
-      expiredSandboxes.push(name);
+    try {
+      const inspected = await microsandboxChecked(
+        cli,
+        buildMicrosandboxInspectArgs(name),
+      );
+      const createdAt = parseMicrosandboxCreatedAt(inspected.stdout);
+      if (now - createdAt.getTime() >= opts.olderThanMs) {
+        expiredSandboxes.push(name);
+      } else {
+        collectMicrosandboxVolumeRefs(inspected.stdout, attachedVolumes);
+      }
+    } catch {
+      // One stale/corrupt resource must not wedge all future session creation.
     }
   }
   for (const name of expiredSandboxes) {
-    await microsandboxChecked(cli, buildMicrosandboxRemoveArgs(name));
+    await microsandboxChecked(cli, buildMicrosandboxRemoveArgs(name)).catch(
+      () => undefined,
+    );
   }
   const listedVolumes = await microsandboxChecked(
     cli,
@@ -1133,17 +1276,23 @@ export async function reapMicrosandboxSandboxes(
   );
   const expiredVolumes: string[] = [];
   for (const name of volumeNames) {
-    const inspected = await microsandboxChecked(
-      cli,
-      buildMicrosandboxVolumeInspectArgs(name),
-    );
-    const createdAt = parseMicrosandboxCreatedAt(inspected.stdout);
-    if (now - createdAt.getTime() >= opts.olderThanMs) {
-      expiredVolumes.push(name);
+    try {
+      const inspected = await microsandboxChecked(
+        cli,
+        buildMicrosandboxVolumeInspectArgs(name),
+      );
+      const createdAt = parseMicrosandboxCreatedAt(inspected.stdout);
+      if (now - createdAt.getTime() >= opts.olderThanMs) {
+        expiredVolumes.push(name);
+      }
+    } catch {
+      // Skip malformed or concurrently removed volumes.
     }
   }
   for (const name of expiredVolumes) {
-    await microsandboxChecked(cli, buildMicrosandboxVolumeRemoveArgs(name));
+    await microsandboxChecked(cli, buildMicrosandboxVolumeRemoveArgs(name)).catch(
+      () => undefined,
+    );
   }
   return expiredSandboxes.length + expiredVolumes.length;
 }
@@ -1224,12 +1373,27 @@ function forceRemoveMicrosandboxVolume(
   }
 }
 
-function terminateMicrosandboxAfterLostExec(
+function killMicrosandboxGuestProcessGroup(
   cli: MicrosandboxCli,
   sandboxName: string,
+  pidFile: string,
   resolved: Pick<MicrosandboxResolvedOptions, "operationTimeoutMs">,
 ): void {
-  forceRemoveMicrosandboxSandbox(cli, sandboxName, resolved);
+  const command = buildMicrosandboxKillProcessGroupCommand(pidFile);
+  try {
+    cli.execSync(
+      buildMicrosandboxShellExecArgs({
+        sandboxName,
+        script: command.script,
+        args: command.args,
+      }),
+      { timeoutMs: resolved.operationTimeoutMs },
+    );
+  } catch {
+    // If the control-plane lost the msb exec handle, this follow-up kill is the
+    // best remaining way to stop guest work without destroying the session.
+    // A failed kill must not mask the original abort/timeout/output error.
+  }
 }
 
 function errorText(result: MicrosandboxCliResult): string {
@@ -1240,12 +1404,15 @@ function errorText(result: MicrosandboxCliResult): string {
   );
 }
 
-function isMicrosandboxTimeout(result: MicrosandboxCliResult): boolean {
-  return result.status !== 0 && /timed out/i.test(errorText(result));
-}
-
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function isMicrosandboxOutputOverflow(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith("Microsandbox command output exceeded ")
+  );
 }
 
 function timeoutSecondsText(timeoutMs: number): string {
@@ -1438,6 +1605,135 @@ async function* chunksForMount(
 
 function recordSandboxNotDisposed(disposed: SandboxDisposedFlag): void {
   if (disposed.value) throw new Error("Sandbox provider is disposed");
+}
+
+function randomExecId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function bashDispatchSentinel(token: string): Buffer {
+  return Buffer.from(`${BASH_DISPATCH_PREFIX}${token}\n`);
+}
+
+function bashTerminalPrefix(token: string): Buffer {
+  return Buffer.from(`${BASH_TERMINAL_PREFIX}${token}:`);
+}
+
+export function createMicrosandboxBashDispatchFilter(token: string): {
+  chunk: (chunk: Buffer) => Buffer;
+  dispatchSeen: () => boolean;
+  terminalRecord: () => BashTerminalRecord | undefined;
+} {
+  const dispatchSentinel = bashDispatchSentinel(token);
+  const terminalPrefix = bashTerminalPrefix(token);
+  let dispatchSeen = false;
+  let terminalRecord: BashTerminalRecord | undefined;
+  let pending = Buffer.alloc(0);
+  let terminalCandidate = Buffer.alloc(0);
+
+  const filterAfterDispatch = (chunk: Buffer): Buffer => {
+    pending = Buffer.concat([pending, chunk]);
+    const index = pending.indexOf(terminalPrefix);
+    if (index >= 0) {
+      const lineEnd = pending.indexOf("\n", index);
+      if (lineEnd < 0) {
+        const out = pending.subarray(0, index);
+        pending = pending.subarray(index);
+        return out;
+      }
+      const line = pending.subarray(index, lineEnd).toString("utf8");
+      terminalRecord = parseBashTerminalRecord(line, token);
+      const out = Buffer.concat([
+        pending.subarray(0, index),
+        pending.subarray(lineEnd + 1),
+      ]);
+      pending = Buffer.alloc(0);
+      return out;
+    }
+
+    if (terminalCandidate.length > 0) {
+      const combined = Buffer.concat([terminalCandidate, pending]);
+      if (isPrefixOf(combined, terminalPrefix)) {
+        terminalCandidate = combined;
+        pending = Buffer.alloc(0);
+        return Buffer.alloc(0);
+      }
+      const out = combined;
+      terminalCandidate = Buffer.alloc(0);
+      pending = Buffer.alloc(0);
+      return out;
+    }
+
+    const candidateStart = findTerminalPrefixCandidateStart(
+      pending,
+      terminalPrefix,
+    );
+    if (candidateStart < 0) {
+      const out = pending;
+      pending = Buffer.alloc(0);
+      return out;
+    }
+    const candidate = pending.subarray(candidateStart);
+    if (isPrefixOf(candidate, terminalPrefix)) {
+      const out = pending.subarray(0, candidateStart);
+      terminalCandidate = candidate;
+      pending = Buffer.alloc(0);
+      return out;
+    }
+    const out = pending;
+    pending = Buffer.alloc(0);
+    return out;
+  };
+
+  return {
+    chunk: (chunk) => {
+      if (dispatchSeen) return filterAfterDispatch(chunk);
+      pending = Buffer.concat([pending, chunk]);
+      const index = pending.indexOf(dispatchSentinel);
+      if (index < 0) return Buffer.alloc(0);
+      dispatchSeen = true;
+      const afterDispatch = Buffer.concat([
+        pending.subarray(0, index),
+        pending.subarray(index + dispatchSentinel.length),
+      ]);
+      pending = Buffer.alloc(0);
+      return filterAfterDispatch(afterDispatch);
+    },
+    dispatchSeen: () => dispatchSeen,
+    terminalRecord: () => terminalRecord,
+  };
+}
+
+function parseBashTerminalRecord(
+  line: string,
+  token: string,
+): BashTerminalRecord | undefined {
+  const prefix = `${BASH_TERMINAL_PREFIX}${token}:`;
+  if (!line.startsWith(prefix)) return undefined;
+  const payload = line.slice(prefix.length);
+  const [kind, exitCodeText, extra] = payload.split(":");
+  if (extra !== undefined || !/^(0|[1-9][0-9]*)$/.test(exitCodeText ?? "")) {
+    return undefined;
+  }
+  const exitCode = Number(exitCodeText);
+  if (kind === "exit") return { kind, exitCode };
+  if (kind === "timeout") return { kind, exitCode };
+  return undefined;
+}
+
+function findTerminalPrefixCandidateStart(
+  buffer: Buffer,
+  terminalPrefix: Buffer,
+): number {
+  for (let index = 0; index < buffer.length; index += 1) {
+    if (buffer[index] === terminalPrefix[0]) return index;
+  }
+  return -1;
+}
+
+function isPrefixOf(candidate: Buffer, value: Buffer): boolean {
+  if (candidate.length > value.length) return false;
+  return value.subarray(0, candidate.length).equals(candidate);
 }
 
 function assertMicrosandboxArg(value: string, label: string): void {
