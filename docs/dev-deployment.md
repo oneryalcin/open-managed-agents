@@ -147,3 +147,36 @@ The current owner/generation ledger is the right starting point for later
 workers, but multi-owner production needs liveness checks to move into the same
 durable commit boundary as state changes. Do not start worker extraction before
 the single-node durable store exists.
+
+## Pi runtime rollout policy
+
+The rollout policy for enabling the Pi-backed runtime is
+[0112 - Pi Runtime Rollout Policy](plans/0112-pi-runtime-rollout-policy.md).
+
+Important distinctions:
+
+- `createControlPlaneApp(...)` without a runtime is the dark-runtime shape:
+  events can be persisted and replayed without starting Pi, calling models, or
+  launching sandboxes.
+- `createDeploymentControlPlaneApp(...)` wires the Pi runtime. It is the local
+  and single-node deployment entry point, not a multi-worker production worker
+  pool.
+- `OMA_SANDBOX_PROVIDER=none` disables builtin sandbox execution only. It is not
+  a global runtime-disable flag; agents without active builtins can still run
+  through Pi.
+- Builtin execution requires an explicit provider and allow flag, for example
+  `OMA_SANDBOX_PROVIDER=docker-local` plus `OMA_ALLOW_DOCKER_LOCAL=true`, or
+  `OMA_SANDBOX_PROVIDER=microsandbox-local` plus
+  `OMA_ALLOW_MICROSANDBOX_LOCAL=true`.
+- `host-passthrough` remains trusted-local only and must not be described as a
+  production sandbox.
+
+Current status:
+
+- Pi runtime is allowed for local development and trusted single-node demos.
+- Single-node durable rollout requires the shared durable store, explicit
+  sandbox provider gates, idempotency, pending-call recovery, cleanup/reaping,
+  and a runbook-level rollback path.
+- Multi-worker or managed-SaaS production rollout is not approved until
+  authenticated workspace identity, admission limits, telemetry, threat-model
+  updates, and the Postgres/async coordination boundary exist.

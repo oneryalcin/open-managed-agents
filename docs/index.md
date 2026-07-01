@@ -75,6 +75,9 @@ still tracked separately in the roadmap.
   issue #113 audit of remaining runtime-change commit paths, with each direct
   `appendBatchWithRuntimeChanges` caller classified as coordinator-fenced,
   store-fenced, or lifecycle-owned.
+- [Pi runtime rollout policy](plans/0112-pi-runtime-rollout-policy.md) —
+  issue #16 policy for when the deployment Pi runtime may be used in local,
+  demo, single-node durable, and future production modes.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
 - [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —
