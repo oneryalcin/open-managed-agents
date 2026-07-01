@@ -1,0 +1,84 @@
+{
+  "generated_at": "2026-07-01T14:57:13.128Z",
+  "started_at": "2026-07-01T14:57:12.836Z",
+  "run_id": "probe41_1782917832828_l3pf2d",
+  "verdict": "PASS",
+  "config": {
+    "session_count": 400,
+    "events_per_turn": 50,
+    "burst_count": 1,
+    "resources_per_session": 0,
+    "list_limit": 100
+  },
+  "storage": {
+    "sqlite_path": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe41_1782917832828_l3pf2d-/oma.sqlite",
+    "object_root": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe41_1782917832828_l3pf2d-/objects",
+    "pragmas": {
+      "journalMode": "wal",
+      "busyTimeout": 5000,
+      "foreignKeys": 1,
+      "synchronous": 1
+    },
+    "file_sizes_bytes": {
+      "sqlite": 11317248,
+      "wal": 4214792,
+      "shm": 32768
+    }
+  },
+  "setup": {
+    "session_create_ms": 19.601,
+    "sessions_per_second": 20407.556
+  },
+  "bursts": [
+    {
+      "burst_index": 0,
+      "scheduled_sessions": 400,
+      "events_committed": 20000,
+      "total_wall_ms": 236.812,
+      "throughput_events_per_second": 84455.343,
+      "commit_duration_ms": {
+        "min": 0.411,
+        "p50": 0.464,
+        "p95": 0.738,
+        "p99": 4.435,
+        "max": 5.752,
+        "mean": 0.587
+      },
+      "queue_lag_ms": {
+        "min": 0.385,
+        "p50": 116.252,
+        "p95": 227.508,
+        "p99": 234.667,
+        "max": 236.362,
+        "mean": 117.756
+      }
+    }
+  ],
+  "session_list": {
+    "pages": 4,
+    "rows": 400,
+    "total_ms": 2.608,
+    "page_latency_ms": {
+      "min": 0.53,
+      "p50": 0.555,
+      "p95": 0.918,
+      "p99": 0.918,
+      "max": 0.918,
+      "mean": 0.65
+    }
+  },
+  "event_loop_delay_ms": {
+    "min": 0,
+    "mean": 0,
+    "max": 0,
+    "p50": 0.001,
+    "p95": 0.001,
+    "p99": 0.001
+  },
+  "notes": [
+    "Queue lag is measured from scheduling each setImmediate task to when its synchronous SQLite work starts.",
+    "Commit duration measures only the synchronous appendBatchWithRuntimeChanges call.",
+    "Session listing exercises SqliteSessionStore.deserialize, including the known #52 per-session resources query.",
+    "This probe intentionally excludes model and sandbox compute."
+  ]
+}
