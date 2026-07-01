@@ -51,6 +51,19 @@ describe("deployment runtime config", () => {
         OMA_ALLOW_UNSAFE_HOST_PASSTHROUGH: "true",
       }),
     ).toThrow("requires a deployment workspace root");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "microsandbox-local",
+      }),
+    ).toThrow("Microsandbox-local sandbox provider is disabled");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "microsandbox-local",
+        OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+      }),
+    ).not.toThrow();
   });
 
   it("resolves docker-local only behind the deployment gate", () => {
@@ -86,6 +99,27 @@ describe("deployment runtime config", () => {
       type: "docker-local",
       reapStaleContainersOlderThanMs: 86_400_000,
     });
+  });
+
+  it("resolves microsandbox-local only behind the deployment gate", () => {
+    const config = parseDeploymentRuntimeConfigFromEnv({
+      OMA_SANDBOX_PROVIDER: "microsandbox-local",
+      OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+      OMA_SANDBOX_OPERATION_TIMEOUT_MS: "2500",
+      OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS: "60000",
+    });
+
+    expect(config).toEqual({
+      sandboxProviderSelection: {
+        type: "microsandbox-local",
+        operationTimeoutMs: 2500,
+        reapStaleSandboxesOlderThanMs: 60000,
+      },
+      sandboxProviderSelectionOptions: {
+        allowMicrosandboxLocal: true,
+      },
+    });
+    expect(() => createDeploymentPiSessionRunner(config)).not.toThrow();
   });
 
   it("does not let runner construction options replace deployment provider config", () => {
@@ -142,6 +176,26 @@ describe("deployment runtime config", () => {
 
     expect(() =>
       parseDeploymentRuntimeConfigFromEnv({
+        OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+      }),
+    ).toThrow("OMA_ALLOW_MICROSANDBOX_LOCAL is ignored");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS: "60000",
+      }),
+    ).toThrow(
+      "OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS is ignored",
+    );
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_OPERATION_TIMEOUT_MS: "2500",
+      }),
+    ).toThrow("OMA_SANDBOX_OPERATION_TIMEOUT_MS is ignored");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
         OMA_SANDBOX_PROVIDER: "none",
         OMA_SANDBOX_ENV_ALLOWLIST: "PATH",
       }),
@@ -166,6 +220,32 @@ describe("deployment runtime config", () => {
     ).toThrow("OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS is ignored");
 
     expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "docker-local",
+        OMA_ALLOW_DOCKER_LOCAL: "true",
+        OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS: "60000",
+      }),
+    ).toThrow(
+      "OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS is ignored",
+    );
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "microsandbox-local",
+        OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+        OMA_SANDBOX_ENV_ALLOWLIST: "PATH",
+      }),
+    ).toThrow("OMA_SANDBOX_ENV_ALLOWLIST requires");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "microsandbox-local",
+        OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+        OMA_ALLOW_DOCKER_LOCAL: "true",
+      }),
+    ).toThrow("OMA_ALLOW_DOCKER_LOCAL is ignored");
+
+    expect(() =>
       validateDeploymentRuntimeConfig({
         sandboxProviderSelectionOptions: { allowDockerLocal: true },
       }),
@@ -180,6 +260,32 @@ describe("deployment runtime config", () => {
         },
       }),
     ).toThrow("allowUnsafeHostPassthrough is ignored by docker-local");
+
+    expect(() =>
+      validateDeploymentRuntimeConfig({
+        sandboxProviderSelectionOptions: { allowMicrosandboxLocal: true },
+      }),
+    ).toThrow("allowMicrosandboxLocal is ignored by no provider");
+
+    expect(() =>
+      validateDeploymentRuntimeConfig({
+        sandboxProviderSelection: { type: "docker-local" },
+        sandboxProviderSelectionOptions: {
+          allowDockerLocal: true,
+          allowMicrosandboxLocal: true,
+        },
+      }),
+    ).toThrow("allowMicrosandboxLocal is ignored by docker-local");
+
+    expect(() =>
+      validateDeploymentRuntimeConfig({
+        sandboxProviderSelection: { type: "microsandbox-local" },
+        sandboxProviderSelectionOptions: {
+          allowMicrosandboxLocal: true,
+          hostPassthroughWorkspaceRoot: "/tmp",
+        },
+      }),
+    ).toThrow("hostPassthroughWorkspaceRoot is ignored by microsandbox-local");
   });
 
   it("rejects non-strict deployment values", () => {
@@ -206,6 +312,31 @@ describe("deployment runtime config", () => {
       }),
     ).toThrow(
       "OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS must be a positive integer",
+    );
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "microsandbox-local",
+        OMA_ALLOW_MICROSANDBOX_LOCAL: "yes",
+      }),
+    ).toThrow('OMA_ALLOW_MICROSANDBOX_LOCAL must be "true" or "false"');
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "microsandbox-local",
+        OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+        OMA_SANDBOX_OPERATION_TIMEOUT_MS: "2.5",
+      }),
+    ).toThrow("OMA_SANDBOX_OPERATION_TIMEOUT_MS must be a positive integer");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "microsandbox-local",
+        OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+        OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS: "0",
+      }),
+    ).toThrow(
+      "OMA_MICROSANDBOX_REAP_STALE_SANDBOXES_OLDER_THAN_MS must be a positive integer",
     );
   });
 

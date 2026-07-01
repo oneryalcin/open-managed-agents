@@ -3,6 +3,7 @@ import {
   type SandboxProviderFactory,
 } from "./provider.ts";
 import { createDockerSandboxProviderFactory } from "./docker.ts";
+import { createMicrosandboxSandboxProviderFactory } from "./microsandbox.ts";
 
 export type SandboxProviderSelection =
   | { type: "none" }
@@ -16,11 +17,17 @@ export type SandboxProviderSelection =
       envAllowlist?: string[];
       operationTimeoutMs?: number;
       reapStaleContainersOlderThanMs?: number;
+    }
+  | {
+      type: "microsandbox-local";
+      operationTimeoutMs?: number;
+      reapStaleSandboxesOlderThanMs?: number;
     };
 
 export interface SandboxProviderSelectionResolverOptions {
   allowUnsafeHostPassthrough?: boolean;
   allowDockerLocal?: boolean;
+  allowMicrosandboxLocal?: boolean;
   hostPassthroughWorkspaceRoot?: string;
 }
 
@@ -72,6 +79,18 @@ export function parseSandboxProviderSelection(
         ...optionalReapStaleContainersOlderThanMs(obj),
       };
     }
+    case "microsandbox-local": {
+      rejectUnknownFields(obj, [
+        "type",
+        "operationTimeoutMs",
+        "reapStaleSandboxesOlderThanMs",
+      ]);
+      return {
+        type,
+        ...optionalOperationTimeoutMs(obj),
+        ...optionalReapStaleSandboxesOlderThanMs(obj),
+      };
+    }
     default:
       throw new Error(`Unsupported sandbox provider type: ${type}`);
   }
@@ -119,6 +138,18 @@ export function resolveSandboxProviderFactory(
         selection.reapStaleContainersOlderThanMs,
     });
   }
+  if (selection.type === "microsandbox-local") {
+    if (opts.allowMicrosandboxLocal !== true) {
+      throw new Error(
+        "Microsandbox-local sandbox provider is disabled by deployment configuration",
+      );
+    }
+    return createMicrosandboxSandboxProviderFactory({
+      operationTimeoutMs: selection.operationTimeoutMs,
+      reapStaleSandboxesOlderThanMs:
+        selection.reapStaleSandboxesOlderThanMs,
+    });
+  }
   const _exhaustive: never = selection;
   throw new Error(`Unsupported sandbox provider type: ${String(_exhaustive)}`);
 }
@@ -162,6 +193,12 @@ function optionalReapStaleContainersOlderThanMs(
   obj: Record<string, unknown>,
 ): { reapStaleContainersOlderThanMs?: number } {
   return optionalPositiveIntegerField(obj, "reapStaleContainersOlderThanMs");
+}
+
+function optionalReapStaleSandboxesOlderThanMs(
+  obj: Record<string, unknown>,
+): { reapStaleSandboxesOlderThanMs?: number } {
+  return optionalPositiveIntegerField(obj, "reapStaleSandboxesOlderThanMs");
 }
 
 function optionalPositiveIntegerField<T extends string>(

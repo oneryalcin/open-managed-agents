@@ -39,6 +39,24 @@ describe("sandbox provider selection (Cycle E.3)", () => {
     ).toThrow("`reapStaleContainersOlderThanMs` must be a positive integer");
     expect(() =>
       parseSandboxProviderSelection({
+        type: "microsandbox-local",
+        envAllowlist: ["PATH"],
+      }),
+    ).toThrow("Unsupported sandbox provider field");
+    expect(() =>
+      parseSandboxProviderSelection({
+        type: "microsandbox-local",
+        reapStaleSandboxesOlderThanMs: 0,
+      }),
+    ).toThrow("`reapStaleSandboxesOlderThanMs` must be a positive integer");
+    expect(() =>
+      parseSandboxProviderSelection({
+        type: "microsandbox-local",
+        secretDelivery: "env-plaintext",
+      }),
+    ).toThrow("Unsupported sandbox provider field");
+    expect(() =>
+      parseSandboxProviderSelection({
         type: "none",
         unsafeAllowHostPassthrough: true,
       }),
@@ -99,6 +117,29 @@ describe("sandbox provider selection (Cycle E.3)", () => {
     expect(
       resolveSandboxProviderFactory(selection, {
         allowDockerLocal: true,
+      }),
+    ).toBeTypeOf("function");
+  });
+
+  it("parses microsandbox-local and keeps it deployment-gated", () => {
+    const selection = parseSandboxProviderSelection({
+      type: "microsandbox-local",
+      operationTimeoutMs: 1000,
+      reapStaleSandboxesOlderThanMs: 60_000,
+    });
+
+    expect(selection).toEqual({
+      type: "microsandbox-local",
+      operationTimeoutMs: 1000,
+      reapStaleSandboxesOlderThanMs: 60_000,
+    });
+
+    expect(() => resolveSandboxProviderFactory(selection)).toThrow(
+      "disabled by deployment configuration",
+    );
+    expect(
+      resolveSandboxProviderFactory(selection, {
+        allowMicrosandboxLocal: true,
       }),
     ).toBeTypeOf("function");
   });
