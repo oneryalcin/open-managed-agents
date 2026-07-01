@@ -1,0 +1,132 @@
+{
+  "generated_at": "2026-07-01T15:32:58.636Z",
+  "started_at": "2026-07-01T15:32:57.037Z",
+  "run_id": "probe42_1782919977033_lubewq",
+  "verdict": "PASS",
+  "topology": {
+    "server_process_id": 20267,
+    "driver_process_id": 20218,
+    "shared_event_loop": false
+  },
+  "config": {
+    "session_count": 400,
+    "events_per_request": 5,
+    "burst_count": 1,
+    "fast_clients_per_session": 1,
+    "stalled_clients": 0,
+    "drain_timeout_ms": 10000
+  },
+  "server": {
+    "base_url": "http://127.0.0.1:52379"
+  },
+  "storage": {
+    "sqlite_path": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782919977033_lubewq-/oma.sqlite",
+    "object_root": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782919977033_lubewq-/objects",
+    "pragmas": {
+      "journalMode": "wal",
+      "busyTimeout": 5000,
+      "foreignKeys": 1,
+      "synchronous": 1
+    },
+    "file_sizes_bytes": {
+      "sqlite": 1265664,
+      "wal": 4136512,
+      "shm": 32768
+    }
+  },
+  "clients": {
+    "fast": {
+      "count": 400,
+      "expected_events": 2000,
+      "delivered_events": 2000,
+      "min_delivered_per_client": 5,
+      "max_delivered_per_client": 5,
+      "drain_wait_ms": 5.935
+    },
+    "stalled": {
+      "count": 0,
+      "session_ids": []
+    }
+  },
+  "bursts": [
+    {
+      "burst_index": 0,
+      "requests": 400,
+      "events_sent": 2000,
+      "total_wall_ms": 236.792,
+      "request_latency_ms": {
+        "min": 86.711,
+        "p50": 142.978,
+        "p95": 173.681,
+        "p99": 176.658,
+        "max": 177.43,
+        "mean": 133.522
+      },
+      "queue_lag_ms": {
+        "min": 0.314,
+        "p50": 28.142,
+        "p95": 57.185,
+        "p99": 58.952,
+        "max": 59.357,
+        "mean": 30.323
+      },
+      "status_counts": {
+        "200": 400
+      }
+    }
+  ],
+  "memory_bytes": {
+    "driver": {
+      "before": {
+        "rss": 254574592,
+        "heap_total": 114802688,
+        "heap_used": 71976232,
+        "external": 12643061,
+        "array_buffers": 5524196
+      },
+      "after_drain": {
+        "rss": 322830336,
+        "heap_total": 204832768,
+        "heap_used": 89210432,
+        "external": 15147865,
+        "array_buffers": 7832352
+      },
+      "after_close": {
+        "rss": 323878912,
+        "heap_total": 206290944,
+        "heap_used": 101450936,
+        "external": 15148087,
+        "array_buffers": 7832574
+      }
+    },
+    "server": {
+      "ready": {
+        "rss": 259899392,
+        "heap_total": 117948416,
+        "heap_used": 73492760,
+        "external": 11501757,
+        "array_buffers": 4474782
+      },
+      "after_drain": {
+        "rss": 323551232,
+        "heap_total": 204308480,
+        "heap_used": 100298864,
+        "external": 12434701,
+        "array_buffers": 5245072
+      },
+      "after_close": {
+        "rss": 330694656,
+        "heap_total": 204570624,
+        "heap_used": 107724480,
+        "external": 12434786,
+        "array_buffers": 5245157
+      }
+    }
+  },
+  "notes": [
+    "The Hono server and load driver run in separate Node processes.",
+    "Fast clients parse SSE frames and count real delivered events.",
+    "Stalled clients open SSE responses and deliberately do not read response bodies until cleanup.",
+    "The server has no runtime runner; POST /events persists user.message rows and publishes them."
+  ]
+}

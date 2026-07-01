@@ -1,10 +1,10 @@
 /**
  * Probe 42 — HTTP/SSE streaming load harness for #107.
  *
- * This picks up where Probe 41 stops. Probe 41 clears the direct SQLite commit
- * path and in-memory broadcaster fan-out. Probe 42 runs a real Hono Node server
- * and real HTTP clients so SSE frame serialization, response streaming, and
- * stalled readers are in the measurement.
+ * Probe 41 clears the direct SQLite commit path and in-memory broadcaster
+ * fan-out. Probe 42 measures the HTTP/SSE layer with the load driver and server
+ * in separate Node processes, so client fetch/read work does not share the
+ * server event loop.
  *
  * Run:
  *   fnm exec --using 24.18.0 -- npx tsx scratch/42-http-sse-load.ts
@@ -18,24 +18,28 @@
  *   OMA_HTTP_SSE_DRAIN_TIMEOUT_MS=10000
  */
 
-import { serve } from "@hono/node-server";
+import { fork, type ChildProcess } from "node:child_process";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { serve, type ServerType } from "@hono/node-server";
 import { createControlPlaneApp } from "../src/control-plane/app.ts";
 import { DefaultAgentService } from "../src/control-plane/agents/service.ts";
 import { DefaultEnvironmentService } from "../src/control-plane/environments/service.ts";
+import { createDeploymentStoresFromEnv } from "../src/control-plane/deployment-storage.ts";
 import { SessionEventBroadcaster } from "../src/control-plane/events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../src/control-plane/events/service.ts";
 import { DefaultFileService } from "../src/control-plane/files/service.ts";
 import { DefaultSessionService } from "../src/control-plane/sessions/service.ts";
 import type { SessionRow } from "../src/control-plane/sessions/types.ts";
-import { createDeploymentStoresFromEnv } from "../src/control-plane/deployment-storage.ts";
 import { withManagedAgentsBeta } from "./managed-agents-beta.ts";
 
 const WORKSPACE_ID = "wrk_default";
-const RUN_ID = `probe42_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const ROLE = process.env.OMA_HTTP_SSE_ROLE ?? "driver";
+const RUN_ID =
+  process.env.OMA_HTTP_SSE_RUN_ID ??
+  `probe42_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const OUT_DIR = join(process.cwd(), "scratch", "artifacts", "http-sse-load");
 
 const sessionCount = parsePositiveEnv("OMA_HTTP_SSE_SESSIONS", 200);
@@ -48,58 +52,175 @@ const fastClientsPerSession = parseNonNegativeEnv(
 const stalledClientCount = parseNonNegativeEnv("OMA_HTTP_SSE_STALLED_CLIENTS", 1);
 const drainTimeoutMs = parsePositiveEnv("OMA_HTTP_SSE_DRAIN_TIMEOUT_MS", 10_000);
 
-const runRoot = join(tmpdir(), `${RUN_ID}-`);
-const sqlitePath = join(runRoot, "oma.sqlite");
-const objectRoot = join(runRoot, "objects");
+let nextRequestId = 1;
 
-await mkdir(runRoot, { recursive: true });
-await mkdir(OUT_DIR, { recursive: true });
+await (ROLE === "server" ? runServer() : runDriver());
 
-const stores = createDeploymentStoresFromEnv({
-  OMA_SQLITE_PATH: sqlitePath,
-  OMA_FILE_STORAGE_ROOT: objectRoot,
-});
-const broadcaster = new SessionEventBroadcaster(stores.events);
-const app = createControlPlaneApp({
-  agents: new DefaultAgentService(stores.agents),
-  environments: new DefaultEnvironmentService(stores.environments),
-  files: new DefaultFileService(stores.files),
-  sessions: new DefaultSessionService(
-    stores.sessions,
-    stores.agents,
-    stores.environments,
-    stores.files,
-    {
-      idempotencyLedger: stores.events,
-      createSessionRowsWithIdempotency:
-        stores.sessions.createAndCompleteIdempotency.bind(stores.sessions),
+async function runDriver(): Promise<void> {
+  const runRoot = join(tmpdir(), `${RUN_ID}-`);
+  const sqlitePath = join(runRoot, "oma.sqlite");
+  const objectRoot = join(runRoot, "objects");
+  await mkdir(runRoot, { recursive: true });
+  await mkdir(OUT_DIR, { recursive: true });
+
+  const serverProcess = fork(process.argv[1]!, [], {
+    execArgv: process.execArgv,
+    env: {
+      ...process.env,
+      OMA_HTTP_SSE_ROLE: "server",
+      OMA_HTTP_SSE_RUN_ID: RUN_ID,
+      OMA_HTTP_SSE_SQLITE_PATH: sqlitePath,
+      OMA_HTTP_SSE_OBJECT_ROOT: objectRoot,
     },
-  ),
-  sessionEvents: new DefaultSessionEventsService(
-    stores.events,
-    stores.sessions,
-    broadcaster,
-  ),
-});
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+  });
 
-const server = serve({ fetch: app.fetch, port: 0 });
-const address = server.address();
-if (address === null || typeof address === "string") {
-  throw new Error("Expected TCP server address");
+  const fastClients: FastSseClient[] = [];
+  const stalledClients: StalledSseClient[] = [];
+  const memoryBefore = memorySnapshot();
+  const startedAt = new Date().toISOString();
+
+  try {
+    const ready = await waitForServerReady(serverProcess);
+    const baseUrl = ready.base_url;
+    const sessionIds = ready.session_ids;
+
+    await startFastClients(baseUrl, sessionIds, fastClients);
+    await startStalledClients(baseUrl, sessionIds, stalledClients);
+    await waitForServerSubscribers(
+      serverProcess,
+      fastClients.length + stalledClients.length,
+      5_000,
+    );
+
+    const burstSummaries: HttpBurstSummary[] = [];
+    for (let burst = 0; burst < burstCount; burst += 1) {
+      burstSummaries.push(await sendHttpBurst(baseUrl, sessionIds, burst));
+    }
+
+    const expectedFastEvents =
+      fastClients.length * eventsPerRequest * burstCount;
+    const drain = await waitForFastClients(
+      fastClients,
+      expectedFastEvents,
+      drainTimeoutMs,
+    );
+    const driverAfterDrain = memorySnapshot();
+    const serverAfterDrain = await requestServerMemory(serverProcess);
+
+    await closeClients(fastClients, stalledClients);
+    await waitForServerSubscribers(serverProcess, 0, 5_000);
+    const driverAfterClose = memorySnapshot();
+    const serverAfterClose = await requestServerMemory(serverProcess);
+
+    const summary = {
+      generated_at: new Date().toISOString(),
+      started_at: startedAt,
+      run_id: RUN_ID,
+      verdict:
+        drain.delivered_events === expectedFastEvents ? "PASS" : "PARTIAL_DELIVERY",
+      topology: {
+        server_process_id: ready.pid,
+        driver_process_id: process.pid,
+        shared_event_loop: false,
+      },
+      config: {
+        session_count: sessionCount,
+        events_per_request: eventsPerRequest,
+        burst_count: burstCount,
+        fast_clients_per_session: fastClientsPerSession,
+        stalled_clients: stalledClientCount,
+        drain_timeout_ms: drainTimeoutMs,
+      },
+      server: {
+        base_url: baseUrl,
+      },
+      storage: {
+        sqlite_path: sqlitePath,
+        object_root: objectRoot,
+        pragmas: ready.pragmas,
+        file_sizes_bytes: await storageFileSizes(sqlitePath),
+      },
+      clients: {
+        fast: {
+          count: fastClients.length,
+          expected_events: expectedFastEvents,
+          delivered_events: drain.delivered_events,
+          min_delivered_per_client: minDelivered(fastClients),
+          max_delivered_per_client: maxDelivered(fastClients),
+          drain_wait_ms: drain.wait_ms,
+        },
+        stalled: {
+          count: stalledClients.length,
+          session_ids: stalledClients.map((client) => client.sessionId),
+        },
+      },
+      bursts: burstSummaries,
+      memory_bytes: {
+        driver: {
+          before: memoryBefore,
+          after_drain: driverAfterDrain,
+          after_close: driverAfterClose,
+        },
+        server: {
+          ready: ready.memory,
+          after_drain: serverAfterDrain,
+          after_close: serverAfterClose,
+        },
+      },
+      notes: [
+        "The Hono server and load driver run in separate Node processes.",
+        "Fast clients parse SSE frames and count real delivered events.",
+        "Stalled clients open SSE responses and deliberately do not read response bodies until cleanup.",
+        "The server has no runtime runner; POST /events persists user.message rows and publishes them.",
+      ],
+    };
+    const summaryPath = join(OUT_DIR, `${RUN_ID}.json`);
+    await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+    console.log(JSON.stringify(summary, null, 2));
+  } finally {
+    await closeClients(fastClients, stalledClients).catch(() => undefined);
+    await shutdownServer(serverProcess).catch(() => undefined);
+    if (process.env.OMA_HTTP_SSE_KEEP_ARTIFACTS !== "1") {
+      await rm(runRoot, { recursive: true, force: true });
+    }
+  }
 }
-const baseUrl = `http://127.0.0.1:${address.port}`;
 
-const sessionIds = Array.from(
-  { length: sessionCount },
-  (_, index) => `sesn_http_${RUN_ID}_${index.toString().padStart(4, "0")}`,
-);
+async function runServer(): Promise<void> {
+  const sqlitePath = requiredEnv("OMA_HTTP_SSE_SQLITE_PATH");
+  const objectRoot = requiredEnv("OMA_HTTP_SSE_OBJECT_ROOT");
+  const stores = createDeploymentStoresFromEnv({
+    OMA_SQLITE_PATH: sqlitePath,
+    OMA_FILE_STORAGE_ROOT: objectRoot,
+  });
+  const broadcaster = new SessionEventBroadcaster(stores.events);
+  const app = createControlPlaneApp({
+    agents: new DefaultAgentService(stores.agents),
+    environments: new DefaultEnvironmentService(stores.environments),
+    files: new DefaultFileService(stores.files),
+    sessions: new DefaultSessionService(
+      stores.sessions,
+      stores.agents,
+      stores.environments,
+      stores.files,
+      {
+        idempotencyLedger: stores.events,
+        createSessionRowsWithIdempotency:
+          stores.sessions.createAndCompleteIdempotency.bind(stores.sessions),
+      },
+    ),
+    sessionEvents: new DefaultSessionEventsService(
+      stores.events,
+      stores.sessions,
+      broadcaster,
+    ),
+  });
 
-const fastClients: FastSseClient[] = [];
-const stalledClients: StalledSseClient[] = [];
-const startedAt = new Date().toISOString();
-const memoryBefore = memorySnapshot();
-
-try {
+  const sessionIds = Array.from(
+    { length: sessionCount },
+    (_, index) => `sesn_http_${RUN_ID}_${index.toString().padStart(4, "0")}`,
+  );
   for (const [index, sessionId] of sessionIds.entries()) {
     stores.sessions.create({
       row: sessionRow(sessionId, index),
@@ -107,88 +228,86 @@ try {
     });
   }
 
-  await startFastClients();
-  await startStalledClients();
-  await waitForSubscribers(
-    sessionIds,
-    fastClients.length + stalledClients.length,
-    5_000,
+  const server = serve({ fetch: app.fetch, port: 0 });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Expected TCP server address");
+  }
+
+  process.send?.({
+    type: "ready",
+    pid: process.pid,
+    base_url: `http://127.0.0.1:${address.port}`,
+    session_ids: sessionIds,
+    pragmas: stores.sqlitePragmas?.(),
+    memory: memorySnapshot(),
+  } satisfies ReadyMessage);
+
+  await waitForServerShutdown(server, stores.close.bind(stores), () =>
+    totalSubscriberCount(broadcaster, sessionIds),
   );
+  process.disconnect?.();
+  process.exit(0);
+}
 
-  const burstSummaries: HttpBurstSummary[] = [];
-  for (let burst = 0; burst < burstCount; burst += 1) {
-    burstSummaries.push(await sendHttpBurst(burst));
-  }
+async function waitForServerShutdown(
+  server: ServerType,
+  closeStores: () => void,
+  subscriberCount: () => number,
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    process.on("message", (message: unknown) => {
+      if (!isControlMessage(message)) return;
+      if (message.type === "memory") {
+        process.send?.({
+          id: message.id,
+          type: "memory",
+          memory: memorySnapshot(),
+        } satisfies MemoryResponse);
+        return;
+      }
+      if (message.type === "subscribers") {
+        process.send?.({
+          id: message.id,
+          type: "subscribers",
+          count: subscriberCount(),
+        } satisfies SubscribersResponse);
+        return;
+      }
+      if (message.type === "shutdown") {
+        server.close();
+        closeStores();
+        process.send?.({ id: message.id, type: "shutdown-complete" });
+        resolve();
+      }
+    });
+  });
+}
 
-  const expectedFastEvents =
-    fastClients.length * eventsPerRequest * burstCount;
-  const drain = await waitForFastClients(expectedFastEvents, drainTimeoutMs);
-  const memoryAfterDrain = memorySnapshot();
+interface ReadyMessage {
+  type: "ready";
+  pid: number;
+  base_url: string;
+  session_ids: string[];
+  pragmas: unknown;
+  memory: MemorySnapshot;
+}
 
-  await closeClients();
-  await waitForSubscribers(sessionIds, 0, 5_000);
-  const memoryAfterClose = memorySnapshot();
+interface ControlMessage {
+  id: number;
+  type: "memory" | "subscribers" | "shutdown";
+}
 
-  const summary = {
-    generated_at: new Date().toISOString(),
-    started_at: startedAt,
-    run_id: RUN_ID,
-    verdict:
-      drain.delivered_events === expectedFastEvents ? "PASS" : "PARTIAL_DELIVERY",
-    config: {
-      session_count: sessionCount,
-      events_per_request: eventsPerRequest,
-      burst_count: burstCount,
-      fast_clients_per_session: fastClientsPerSession,
-      stalled_clients: stalledClientCount,
-      drain_timeout_ms: drainTimeoutMs,
-    },
-    server: {
-      base_url: baseUrl,
-    },
-    storage: {
-      sqlite_path: sqlitePath,
-      object_root: objectRoot,
-      pragmas: stores.sqlitePragmas?.(),
-      file_sizes_bytes: await storageFileSizes(sqlitePath),
-    },
-    clients: {
-      fast: {
-        count: fastClients.length,
-        expected_events: expectedFastEvents,
-        delivered_events: drain.delivered_events,
-        min_delivered_per_client: minDelivered(fastClients),
-        max_delivered_per_client: maxDelivered(fastClients),
-        drain_wait_ms: drain.wait_ms,
-      },
-      stalled: {
-        count: stalledClients.length,
-        session_ids: stalledClients.map((client) => client.sessionId),
-      },
-    },
-    bursts: burstSummaries,
-    memory_bytes: {
-      before: memoryBefore,
-      after_drain: memoryAfterDrain,
-      after_close: memoryAfterClose,
-    },
-    notes: [
-      "This harness uses real HTTP fetch clients against a real @hono/node-server listener.",
-      "Fast clients parse SSE frames and count real delivered events.",
-      "Stalled clients open SSE responses and deliberately do not read response bodies until cleanup.",
-      "The harness has no runtime runner; POST /events persists user.message rows and publishes them.",
-    ],
-  };
-  const summaryPath = join(OUT_DIR, `${RUN_ID}.json`);
-  await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
-  console.log(JSON.stringify(summary, null, 2));
-} finally {
-  await closeClients().catch(() => undefined);
-  stores.close();
-  server.close();
-  if (process.env.OMA_HTTP_SSE_KEEP_ARTIFACTS !== "1") {
-    await rm(runRoot, { recursive: true, force: true });
-  }
+interface MemoryResponse {
+  id: number;
+  type: "memory";
+  memory: MemorySnapshot;
+}
+
+interface SubscribersResponse {
+  id: number;
+  type: "subscribers";
+  count: number;
 }
 
 interface HttpBurstSummary {
@@ -215,6 +334,14 @@ interface StalledSseClient {
   response: Response;
 }
 
+interface MemorySnapshot {
+  rss: number;
+  heap_total: number;
+  heap_used: number;
+  external: number;
+  array_buffers: number;
+}
+
 interface Stats {
   min: number;
   p50: number;
@@ -224,7 +351,77 @@ interface Stats {
   mean: number;
 }
 
-async function startFastClients(): Promise<void> {
+function waitForServerReady(child: ChildProcess): Promise<ReadyMessage> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for server ready")),
+      10_000,
+    );
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      clearTimeout(timer);
+      reject(new Error(`server exited before ready: code=${code} signal=${signal}`));
+    };
+    const onMessage = (message: unknown) => {
+      if (!isReadyMessage(message)) return;
+      clearTimeout(timer);
+      child.off("exit", onExit);
+      child.off("message", onMessage);
+      resolve(message);
+    };
+    child.once("exit", onExit);
+    child.on("message", onMessage);
+  });
+}
+
+function requestServerMemory(child: ChildProcess): Promise<MemorySnapshot> {
+  return requestServer<MemoryResponse>(child, "memory").then(
+    (response) => response.memory,
+  );
+}
+
+function requestServerSubscriberCount(child: ChildProcess): Promise<number> {
+  return requestServer<SubscribersResponse>(child, "subscribers").then(
+    (response) => response.count,
+  );
+}
+
+async function shutdownServer(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.killed) return;
+  await requestServer(child, "shutdown");
+}
+
+function requestServer<T extends { id: number; type: string }>(
+  child: ChildProcess,
+  type: ControlMessage["type"],
+): Promise<T> {
+  const id = nextRequestId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Timed out waiting for server ${type} response`)),
+      10_000,
+    );
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      clearTimeout(timer);
+      reject(new Error(`server exited during ${type}: code=${code} signal=${signal}`));
+    };
+    const onMessage = (message: unknown) => {
+      if (!isResponseFor(message, id)) return;
+      clearTimeout(timer);
+      child.off("exit", onExit);
+      child.off("message", onMessage);
+      resolve(message as T);
+    };
+    child.once("exit", onExit);
+    child.on("message", onMessage);
+    child.send?.({ id, type } satisfies ControlMessage);
+  });
+}
+
+async function startFastClients(
+  baseUrl: string,
+  sessionIds: readonly string[],
+  fastClients: FastSseClient[],
+): Promise<void> {
   for (const sessionId of sessionIds) {
     for (let i = 0; i < fastClientsPerSession; i += 1) {
       const controller = new AbortController();
@@ -247,7 +444,11 @@ async function startFastClients(): Promise<void> {
   }
 }
 
-async function startStalledClients(): Promise<void> {
+async function startStalledClients(
+  baseUrl: string,
+  sessionIds: readonly string[],
+  stalledClients: StalledSseClient[],
+): Promise<void> {
   for (let index = 0; index < stalledClientCount; index += 1) {
     const sessionId = sessionIds[index % sessionIds.length];
     const controller = new AbortController();
@@ -286,7 +487,11 @@ async function consumeFastClient(client: FastSseClient): Promise<void> {
   }
 }
 
-async function sendHttpBurst(burst: number): Promise<HttpBurstSummary> {
+async function sendHttpBurst(
+  baseUrl: string,
+  sessionIds: readonly string[],
+  burst: number,
+): Promise<HttpBurstSummary> {
   const scheduledAt = performance.now();
   const results = await Promise.all(
     sessionIds.map(
@@ -295,7 +500,7 @@ async function sendHttpBurst(burst: number): Promise<HttpBurstSummary> {
           (resolve, reject) => {
             setImmediate(() => {
               const start = performance.now();
-              postEvents(sessionId, sessionIndex, burst)
+              postEvents(baseUrl, sessionId, sessionIndex, burst)
                 .then((status) => {
                   resolve({
                     lagMs: start - scheduledAt,
@@ -327,6 +532,7 @@ async function sendHttpBurst(burst: number): Promise<HttpBurstSummary> {
 }
 
 async function postEvents(
+  baseUrl: string,
   sessionId: string,
   sessionIndex: number,
   burst: number,
@@ -357,21 +563,28 @@ async function postEvents(
 }
 
 async function waitForFastClients(
+  fastClients: readonly FastSseClient[],
   expectedEvents: number,
   timeoutMs: number,
 ): Promise<{ delivered_events: number; wait_ms: number }> {
   const start = performance.now();
   const deadline = start + timeoutMs;
-  while (totalFastDelivered() < expectedEvents && performance.now() < deadline) {
+  while (
+    totalFastDelivered(fastClients) < expectedEvents &&
+    performance.now() < deadline
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   return {
-    delivered_events: totalFastDelivered(),
+    delivered_events: totalFastDelivered(fastClients),
     wait_ms: round(performance.now() - start),
   };
 }
 
-async function closeClients(): Promise<void> {
+async function closeClients(
+  fastClients: readonly FastSseClient[],
+  stalledClients: readonly StalledSseClient[],
+): Promise<void> {
   for (const client of fastClients) {
     client.controller.abort();
     await client.reader.cancel().catch(() => undefined);
@@ -385,31 +598,34 @@ async function closeClients(): Promise<void> {
   );
 }
 
-async function waitForSubscribers(
-  ids: readonly string[],
+async function waitForServerSubscribers(
+  child: ChildProcess,
   expectedCount: number,
   timeoutMs: number,
 ): Promise<void> {
   const deadline = performance.now() + timeoutMs;
-  while (totalSubscriberCount(ids) !== expectedCount) {
+  while ((await requestServerSubscriberCount(child)) !== expectedCount) {
     if (performance.now() > deadline) {
       throw new Error(
-        `Timed out waiting for subscriber count ${expectedCount}; got ${totalSubscriberCount(ids)}`,
+        `Timed out waiting for server subscriber count ${expectedCount}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 
-function totalSubscriberCount(ids: readonly string[]): number {
-  return ids.reduce(
+function totalSubscriberCount(
+  broadcaster: SessionEventBroadcaster,
+  sessionIds: readonly string[],
+): number {
+  return sessionIds.reduce(
     (sum, sessionId) =>
       sum + broadcaster.subscriberCount(sessionId, WORKSPACE_ID),
     0,
   );
 }
 
-function totalFastDelivered(): number {
+function totalFastDelivered(fastClients: readonly FastSseClient[]): number {
   return fastClients.reduce((sum, client) => sum + client.delivered, 0);
 }
 
@@ -463,13 +679,7 @@ async function fileSize(path: string): Promise<number> {
   }
 }
 
-function memorySnapshot(): {
-  rss: number;
-  heap_total: number;
-  heap_used: number;
-  external: number;
-  array_buffers: number;
-} {
+function memorySnapshot(): MemorySnapshot {
   const usage = process.memoryUsage();
   return {
     rss: usage.rss,
@@ -485,7 +695,7 @@ function stats(values: readonly number[]): Stats {
     return { min: 0, p50: 0, p95: 0, p99: 0, max: 0, mean: 0 };
   }
   const sorted = [...values].sort((a, b) => a - b);
-  const sum = sorted.reduce((total, value) => total + value, 0);
+  const sum = sorted.reduce((total, value) => value + total, 0);
   return {
     min: round(sorted[0] ?? 0),
     p50: round(percentile(sorted, 50)),
@@ -509,6 +719,42 @@ function assertStatus(response: Response, expected: number, label: string): void
   if (response.status !== expected) {
     throw new Error(`${label}: expected ${expected}, got ${response.status}`);
   }
+}
+
+function isReadyMessage(value: unknown): value is ReadyMessage {
+  return (
+    isRecord(value) &&
+    value.type === "ready" &&
+    typeof value.pid === "number" &&
+    typeof value.base_url === "string" &&
+    Array.isArray(value.session_ids)
+  );
+}
+
+function isControlMessage(value: unknown): value is ControlMessage {
+  return (
+    isRecord(value) &&
+    typeof value.id === "number" &&
+    (value.type === "memory" ||
+      value.type === "subscribers" ||
+      value.type === "shutdown")
+  );
+}
+
+function isResponseFor(value: unknown, id: number): value is { id: number } {
+  return isRecord(value) && value.id === id;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value.length === 0) {
+    throw new Error(`${name} is required`);
+  }
+  return value;
 }
 
 function round(value: number): number {

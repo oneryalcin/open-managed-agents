@@ -7,8 +7,9 @@ Issue: #107
 Harness: [`scratch/42-http-sse-load.ts`](42-http-sse-load.ts)
 
 Purpose: measure the HTTP/SSE layer after Probe 41 cleared the direct SQLite
-commit path and in-memory broadcaster fan-out. This harness runs a real
-`@hono/node-server` listener and real `fetch` clients against the event stream
+commit path and in-memory broadcaster fan-out. This harness forks a dedicated
+server process running a real `@hono/node-server` listener, then drives it from
+a separate client process with real `fetch` clients against the event stream
 API. Fast clients parse SSE frames and count delivered events. Stalled clients
 open SSE responses and deliberately do not read the response body until cleanup.
 
@@ -20,34 +21,43 @@ sandbox work.
 
 All runs used the same SQLite WAL/NORMAL deployment pragmas as Probe 41.
 
-| Run | Sessions | Fast clients | Stalled clients | Events / request | Events sent | Fast delivered | Burst wall ms | Request p99 ms | Queue lag p99 ms | RSS before -> after drain |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `probe42_1782919214548_g7irno` | 400 | 400 | 0 | 5 | 2,000 | 2,000 / 2,000 | 319.952 | 301.989 | 46.000 | 257.7 MB -> 414.9 MB |
-| `probe42_1782919197065_2u3yxr` | 400 | 400 | 1 | 5 | 2,000 | 2,000 / 2,000 | 317.206 | 281.599 | 46.770 | 257.6 MB -> 406.2 MB |
-| `probe42_1782919230512_1id8w6` | 400 | 400 | 20 | 20 | 8,000 | 8,000 / 8,000 | 443.070 | 396.539 | 50.992 | 254.7 MB -> 417.5 MB |
+| Run | Topology | Sessions | Fast clients | Stalled clients | Events / request | Events sent | Fast delivered | Burst wall ms | Request p99 ms | Queue lag p99 ms | Server RSS ready -> after drain |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `probe42_1782919977033_lubewq` | separate processes | 400 | 400 | 0 | 5 | 2,000 | 2,000 / 2,000 | 236.792 | 176.658 | 58.952 | 259.9 MB -> 323.6 MB |
+| `probe42_1782919992465_bf5rwa` | separate processes | 400 | 400 | 1 | 5 | 2,000 | 2,000 / 2,000 | 206.389 | 157.460 | 47.635 | 258.8 MB -> 322.8 MB |
+| `probe42_1782920007393_prddpx` | separate processes | 400 | 400 | 20 | 20 | 8,000 | 8,000 / 8,000 | 341.522 | 282.343 | 57.198 | 259.6 MB -> 367.5 MB |
+| `probe42_1782920031870_q4l92a` | separate processes | 1 | 0 | 1 | 200 | 10,000 | n/a | 2.874-12.219 | n/a | n/a | 285.8 MB -> 310.4 MB |
 
 Raw artifacts are under
 [`scratch/artifacts/http-sse-load`](artifacts/http-sse-load).
 
 ## Readout
 
-The HTTP/SSE layer is materially more expensive than direct-store or
-in-memory-broadcaster measurement. With 400 live HTTP SSE clients and 400
-concurrent `POST /events` requests, request p99 was 282-302 ms for 2,000 events,
-versus Probe 41's direct-store 20,000-event burst at roughly 4 ms commit p99.
-That is expected: this path includes HTTP routing, response serialization,
-client fetch overhead, SSE framing, and stream delivery.
+The harness originally ran server and clients in one Node process; those
+same-process numbers were confounded by client-side fetch/read work sharing the
+server event loop and are intentionally not recorded here. The current artifacts
+use separate server and driver processes (`shared_event_loop: false`).
+
+HTTP/SSE is still materially more expensive than the direct-store and
+in-memory-broadcaster probes, but the corrected out-of-process p99 is lower than
+the same-process artifact suggested. With 400 live HTTP SSE clients and 400
+concurrent `POST /events` requests, request p99 was 157-177 ms for 2,000 events
+and 282 ms for the heavier 8,000-event / 20-stalled-stream run. This includes
+HTTP routing, response serialization, SSE framing, kernel loopback, and client
+round-trip timing; it is not a pure server CPU metric.
 
 Fast-client delivery held in every run: all expected SSE frames reached the fast
 readers, including the run with 20 deliberately stalled readers. In these short
 bursts, stalled readers did not create visible head-of-line blocking for fast
 readers.
 
-Memory is now the metric to watch. Opening 400 fast streams raised RSS by about
-150 MB during the burst, and the heavier stalled-reader run increased external /
-array-buffer memory compared with the lower-volume runs. This is not yet proof
-of an unbounded leak, but it is the first signal that the HTTP/SSE capacity
-ceiling is likely connection and buffering pressure, not SQLite commit time.
+Server memory is now the metric to watch. Opening 400 fast streams raised
+server RSS by roughly 64 MB during the 2,000-event burst. The heavier 20-stalled
+reader run raised server RSS by roughly 108 MB. The targeted stalled-only probe
+queued 10,000 events into one unread stream and raised server RSS by roughly
+25 MB, with server array buffers up roughly 2.4 MB. This is not proof of an
+unbounded leak, but it identifies connection and buffering pressure as the next
+capacity ceiling to test, not SQLite commit time.
 
 ## Limits
 
@@ -56,7 +66,9 @@ ceiling is likely connection and buffering pressure, not SQLite commit time.
   sustained socket backpressure.
 - This does not include Pi runtime, model calls, sandbox execution, file
   materialization, or real remote clients.
-- The harness measures one Node process on laptop local storage.
+- The harness still uses laptop-local loopback and local storage.
+- Server RSS is measured without the client driver in-process, but without
+  explicit post-GC normalization.
 
 ## Next Work
 
