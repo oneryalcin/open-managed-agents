@@ -14,7 +14,10 @@ same runtime turn.
 The first coordinator slice fenced the general translated runtime transcript
 path through `DeploymentRuntimeEventCoordinator.commitRuntimeEventsForTurn`.
 This audit covers the sibling paths that still call
-`appendBatchWithRuntimeChanges` directly.
+`appendBatchWithRuntimeChanges` directly or through the
+`persistRuntimeChangesAndPublish` wrapper, plus the unfenced
+`persistRuntimeDrafts` path that reaches `appendBatch(events)` with empty
+runtime changes.
 
 ## Load-Bearing Invariants
 
@@ -159,6 +162,36 @@ Safety argument:
 This is a defensive cleanup path, not the primary translated transcript path.
 Keep it synchronous and owner-fenced.
 
+### Unfenced Runtime Draft Persistence
+
+Call sites:
+
+- `SessionEventService.persistRuntimeDrafts`.
+- `SessionEventService.persistLifecycleDrafts`.
+- `persistAndPublish` / `EventStore.appendBatch(events)`.
+
+Ruling: safe for the two current runtime callers, but explicitly not safe for
+turn-scoped runtime transcript rows.
+
+Safety argument:
+
+- `EventStore.appendBatch(events)` is `appendBatchWithRuntimeChanges(events,
+  {})`. It carries no owner fence.
+- Current runtime caller 1 writes `session.status_running` after user-submitted
+  custom tool results or tool confirmations have been accepted. This is a
+  user-control transition that re-enters running state; it is not a runtime
+  owner appending turn-scoped model/tool transcript rows.
+- Current runtime caller 2 writes `runtimeErrorDraft(error)` only when
+  `runRuntimePrompts` catches an error with no active prompt. There is no
+  active runtime turn to owner-fence in that branch.
+- Both callers still guard closed/deleted process-local session state before
+  publishing.
+
+This path is the important footgun in the audit: future turn-scoped runtime
+rows must not go through `persistRuntimeDrafts`, `persistLifecycleDrafts`, or
+`appendBatch(events)` because those bypass runtime owner/generation checks
+entirely.
+
 ### Terminalization and Recovery Paths
 
 Call sites:
@@ -231,7 +264,7 @@ Safety argument:
 
 No new runtime event coordinator migration is required for #113.
 
-The remaining direct `appendBatchWithRuntimeChanges` call sites are either:
+The remaining runtime write paths are either:
 
 - transcript-writing paths paired with an owner-fenced runtime mutation in the
   same event-store transaction;
@@ -247,5 +280,7 @@ The key test coverage already exists:
 
 Future rule: if a new runtime-originated transcript path does not naturally pair
 its rows with an owner-fenced `turnStates`, `closedTurns`, or model-request-start
-mutation, it must use `DeploymentRuntimeEventCoordinator` rather than calling
-`appendBatchWithRuntimeChanges` directly.
+mutation, it must use `DeploymentRuntimeEventCoordinator`. It must not call
+`appendBatchWithRuntimeChanges` directly, and it must not route through
+`persistRuntimeDrafts`, `persistLifecycleDrafts`, or `appendBatch(events)`,
+because those paths do not add a runtime owner fence.
