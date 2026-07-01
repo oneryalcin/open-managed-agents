@@ -27,6 +27,7 @@ All runs used the same SQLite WAL/NORMAL deployment pragmas as Probe 41.
 | `probe42_1782919992465_bf5rwa` | separate processes | 400 | 400 | 1 | 5 | 2,000 | 2,000 / 2,000 | 206.389 | 157.460 | 47.635 | 258.8 MB -> 322.8 MB |
 | `probe42_1782920007393_prddpx` | separate processes | 400 | 400 | 20 | 20 | 8,000 | 8,000 / 8,000 | 341.522 | 282.343 | 57.198 | 259.6 MB -> 367.5 MB |
 | `probe42_1782920031870_q4l92a` | separate processes | 1 | 0 | 1 | 200 | 10,000 | n/a | 2.874-12.219 | n/a | n/a | 285.8 MB -> 310.4 MB |
+| `probe42_1782922363198_wpwpem` | separate processes | 20 | 0 | 20 | 200 | 200,000 | n/a | 51.801-101.973 | n/a | n/a | 286.2 MB -> 442.8 MB |
 
 Raw artifacts are under
 [`scratch/artifacts/http-sse-load`](artifacts/http-sse-load).
@@ -59,6 +60,16 @@ queued 10,000 events into one unread stream and raised server RSS by roughly
 unbounded leak, but it identifies connection and buffering pressure as the next
 capacity ceiling to test, not SQLite commit time.
 
+The broadcaster's own live queue is bounded (`DEFAULT_MAX_BUFFER = 10_000` and
+overflow drops the queue before refetching from the store). That bound does not
+fully define the HTTP memory envelope, because the `/events/stream` route
+actively drains the broadcaster iterator and calls `ReadableStream.enqueue(...)`
+for each SSE frame without checking downstream backpressure. In the aggregate
+stalled-reader probe, 20 unread streams each received 10,000 frames; server RSS
+rose by roughly 157 MB and server array buffers by roughly 41 MB. The result is
+still bounded for this short run, but the capacity question has moved from
+SQLite and broadcaster dispatch to HTTP response-stream/socket buffering.
+
 ## Limits
 
 - The stalled clients do not read at all, but the bursts are still short enough
@@ -80,5 +91,7 @@ test before optimizing:
   `--expose-gc`;
 - slower-but-reading clients in addition to fully stalled clients;
 - larger event payloads to stress SSE frame serialization and socket buffers;
+- a source fix or bounded policy for HTTP stream backpressure if endurance runs
+  show response-buffer growth does not plateau;
 - representative storage / deployment host rerun before any production capacity
   claim.
