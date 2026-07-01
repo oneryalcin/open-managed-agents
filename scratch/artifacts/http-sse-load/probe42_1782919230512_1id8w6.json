@@ -1,0 +1,123 @@
+{
+  "generated_at": "2026-07-01T15:20:31.311Z",
+  "started_at": "2026-07-01T15:20:30.523Z",
+  "run_id": "probe42_1782919230512_1id8w6",
+  "verdict": "PASS",
+  "config": {
+    "session_count": 400,
+    "events_per_request": 20,
+    "burst_count": 1,
+    "fast_clients_per_session": 1,
+    "stalled_clients": 20,
+    "drain_timeout_ms": 10000
+  },
+  "server": {
+    "base_url": "http://127.0.0.1:50508"
+  },
+  "storage": {
+    "sqlite_path": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782919230512_1id8w6-/oma.sqlite",
+    "object_root": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782919230512_1id8w6-/objects",
+    "pragmas": {
+      "journalMode": "wal",
+      "busyTimeout": 5000,
+      "foreignKeys": 1,
+      "synchronous": 1
+    },
+    "file_sizes_bytes": {
+      "sqlite": 4710400,
+      "wal": 4173592,
+      "shm": 32768
+    }
+  },
+  "clients": {
+    "fast": {
+      "count": 400,
+      "expected_events": 8000,
+      "delivered_events": 8000,
+      "min_delivered_per_client": 20,
+      "max_delivered_per_client": 20,
+      "drain_wait_ms": 5.936
+    },
+    "stalled": {
+      "count": 20,
+      "session_ids": [
+        "sesn_http_probe42_1782919230512_1id8w6_0000",
+        "sesn_http_probe42_1782919230512_1id8w6_0001",
+        "sesn_http_probe42_1782919230512_1id8w6_0002",
+        "sesn_http_probe42_1782919230512_1id8w6_0003",
+        "sesn_http_probe42_1782919230512_1id8w6_0004",
+        "sesn_http_probe42_1782919230512_1id8w6_0005",
+        "sesn_http_probe42_1782919230512_1id8w6_0006",
+        "sesn_http_probe42_1782919230512_1id8w6_0007",
+        "sesn_http_probe42_1782919230512_1id8w6_0008",
+        "sesn_http_probe42_1782919230512_1id8w6_0009",
+        "sesn_http_probe42_1782919230512_1id8w6_0010",
+        "sesn_http_probe42_1782919230512_1id8w6_0011",
+        "sesn_http_probe42_1782919230512_1id8w6_0012",
+        "sesn_http_probe42_1782919230512_1id8w6_0013",
+        "sesn_http_probe42_1782919230512_1id8w6_0014",
+        "sesn_http_probe42_1782919230512_1id8w6_0015",
+        "sesn_http_probe42_1782919230512_1id8w6_0016",
+        "sesn_http_probe42_1782919230512_1id8w6_0017",
+        "sesn_http_probe42_1782919230512_1id8w6_0018",
+        "sesn_http_probe42_1782919230512_1id8w6_0019"
+      ]
+    }
+  },
+  "bursts": [
+    {
+      "burst_index": 0,
+      "requests": 400,
+      "events_sent": 8000,
+      "total_wall_ms": 443.07,
+      "request_latency_ms": {
+        "min": 70.209,
+        "p50": 243.564,
+        "p95": 388.602,
+        "p99": 396.539,
+        "max": 399.489,
+        "mean": 247.896
+      },
+      "queue_lag_ms": {
+        "min": 0.267,
+        "p50": 26.145,
+        "p95": 48.829,
+        "p99": 50.992,
+        "max": 51.484,
+        "mean": 26.392
+      },
+      "status_counts": {
+        "200": 400
+      }
+    }
+  ],
+  "memory_bytes": {
+    "before": {
+      "rss": 254672896,
+      "heap_total": 117424128,
+      "heap_used": 73034936,
+      "external": 11628045,
+      "array_buffers": 4475630
+    },
+    "after_drain": {
+      "rss": 417513472,
+      "heap_total": 233930752,
+      "heap_used": 130149376,
+      "external": 22881290,
+      "array_buffers": 15500685
+    },
+    "after_close": {
+      "rss": 418971648,
+      "heap_total": 234864640,
+      "heap_used": 145049120,
+      "external": 22881290,
+      "array_buffers": 15500685
+    }
+  },
+  "notes": [
+    "This harness uses real HTTP fetch clients against a real @hono/node-server listener.",
+    "Fast clients parse SSE frames and count real delivered events.",
+    "Stalled clients open SSE responses and deliberately do not read response bodies until cleanup.",
+    "The harness has no runtime runner; POST /events persists user.message rows and publishes them."
+  ]
+}

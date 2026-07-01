@@ -1,0 +1,102 @@
+{
+  "generated_at": "2026-07-01T15:20:15.215Z",
+  "started_at": "2026-07-01T15:20:14.558Z",
+  "run_id": "probe42_1782919214548_g7irno",
+  "verdict": "PASS",
+  "config": {
+    "session_count": 400,
+    "events_per_request": 5,
+    "burst_count": 1,
+    "fast_clients_per_session": 1,
+    "stalled_clients": 0,
+    "drain_timeout_ms": 10000
+  },
+  "server": {
+    "base_url": "http://127.0.0.1:49279"
+  },
+  "storage": {
+    "sqlite_path": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782919214548_g7irno-/oma.sqlite",
+    "object_root": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782919214548_g7irno-/objects",
+    "pragmas": {
+      "journalMode": "wal",
+      "busyTimeout": 5000,
+      "foreignKeys": 1,
+      "synchronous": 1
+    },
+    "file_sizes_bytes": {
+      "sqlite": 1552384,
+      "wal": 4152992,
+      "shm": 32768
+    }
+  },
+  "clients": {
+    "fast": {
+      "count": 400,
+      "expected_events": 2000,
+      "delivered_events": 2000,
+      "min_delivered_per_client": 5,
+      "max_delivered_per_client": 5,
+      "drain_wait_ms": 5.906
+    },
+    "stalled": {
+      "count": 0,
+      "session_ids": []
+    }
+  },
+  "bursts": [
+    {
+      "burst_index": 0,
+      "requests": 400,
+      "events_sent": 2000,
+      "total_wall_ms": 319.952,
+      "request_latency_ms": {
+        "min": 62.895,
+        "p50": 168.577,
+        "p95": 292.876,
+        "p99": 301.989,
+        "max": 304.191,
+        "mean": 176.954
+      },
+      "queue_lag_ms": {
+        "min": 0.329,
+        "p50": 23.151,
+        "p95": 43.676,
+        "p99": 46,
+        "max": 46.501,
+        "mean": 23.502
+      },
+      "status_counts": {
+        "200": 400
+      }
+    }
+  ],
+  "memory_bytes": {
+    "before": {
+      "rss": 257720320,
+      "heap_total": 117161984,
+      "heap_used": 73057448,
+      "external": 11628045,
+      "array_buffers": 4475630
+    },
+    "after_drain": {
+      "rss": 414859264,
+      "heap_total": 228687872,
+      "heap_used": 111572048,
+      "external": 14400414,
+      "array_buffers": 7019809
+    },
+    "after_close": {
+      "rss": 416153600,
+      "heap_total": 229359616,
+      "heap_used": 125980240,
+      "external": 14400414,
+      "array_buffers": 7019809
+    }
+  },
+  "notes": [
+    "This harness uses real HTTP fetch clients against a real @hono/node-server listener.",
+    "Fast clients parse SSE frames and count real delivered events.",
+    "Stalled clients open SSE responses and deliberately do not read response bodies until cleanup.",
+    "The harness has no runtime runner; POST /events persists user.message rows and publishes them."
+  ]
+}
