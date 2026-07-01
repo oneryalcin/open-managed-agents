@@ -20,6 +20,7 @@
  *   OMA_SQLITE_LOAD_BURSTS=1
  *   OMA_SQLITE_LOAD_RESOURCES_PER_SESSION=0
  *   OMA_SQLITE_LOAD_LIST_LIMIT=100
+ *   OMA_SQLITE_LOAD_SUBSCRIBERS_PER_SESSION=0
  */
 
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
@@ -27,6 +28,7 @@ import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createDeploymentStoresFromEnv } from "../src/control-plane/deployment-storage.ts";
+import { SessionEventBroadcaster } from "../src/control-plane/events/broadcaster.ts";
 import type { PersistedSessionEvent } from "../src/control-plane/events/types.ts";
 import type {
   SessionFileMountSnapshotRow,
@@ -46,6 +48,10 @@ const resourcesPerSession = parseNonNegativeEnv(
   0,
 );
 const listLimit = parsePositiveEnv("OMA_SQLITE_LOAD_LIST_LIMIT", 100);
+const subscribersPerSession = parseNonNegativeEnv(
+  "OMA_SQLITE_LOAD_SUBSCRIBERS_PER_SESSION",
+  0,
+);
 
 const runRoot = join(tmpdir(), `${RUN_ID}-`);
 const sqlitePath = join(runRoot, "oma.sqlite");
@@ -58,6 +64,10 @@ const stores = createDeploymentStoresFromEnv({
   OMA_SQLITE_PATH: sqlitePath,
   OMA_FILE_STORAGE_ROOT: objectRoot,
 });
+const broadcaster = new SessionEventBroadcaster(stores.events);
+const subscriberControllers: AbortController[] = [];
+const subscriberPromises: Promise<void>[] = [];
+const subscriberResults: SubscriberResult[] = [];
 
 const delayMonitor = monitorEventLoopDelay({ resolution: 10 });
 delayMonitor.enable();
@@ -81,9 +91,13 @@ try {
   const bursts: BurstSummary[] = [];
   for (let burst = 0; burst < burstCount; burst += 1) {
     seedAcceptedTurns(sessionIds, burst);
+    if (burst === 0 && subscribersPerSession > 0) {
+      await startLiveSubscribers(sessionIds);
+    }
     bursts.push(await runTurnCompletionBurst(sessionIds, burst));
   }
 
+  const subscriberSummary = await stopLiveSubscribers();
   const listSummary = measureSessionList();
   const fileSizes = await storageFileSizes(sqlitePath);
   delayMonitor.disable();
@@ -99,6 +113,7 @@ try {
       burst_count: burstCount,
       resources_per_session: resourcesPerSession,
       list_limit: listLimit,
+      subscribers_per_session: subscribersPerSession,
     },
     storage: {
       sqlite_path: sqlitePath,
@@ -111,6 +126,7 @@ try {
       sessions_per_second: round((sessionCount / sessionCreateMs) * 1000),
     },
     bursts,
+    subscribers: subscriberSummary,
     session_list: listSummary,
     event_loop_delay_ms: {
       min: nsToMs(delayMonitor.min),
@@ -123,6 +139,7 @@ try {
     notes: [
       "Queue lag is measured from scheduling each setImmediate task to when its synchronous SQLite work starts.",
       "Commit duration measures only the synchronous appendBatchWithRuntimeChanges call.",
+      "Publish duration measures SessionEventBroadcaster.publishPersisted after commit.",
       "Session listing exercises SqliteSessionStore.deserialize, including the known #52 per-session resources query.",
       "This probe intentionally excludes model and sandbox compute.",
     ],
@@ -132,6 +149,9 @@ try {
   console.log(JSON.stringify(summary, null, 2));
 } finally {
   delayMonitor.disable();
+  for (const controller of subscriberControllers) {
+    controller.abort();
+  }
   stores.close();
   if (process.env.OMA_SQLITE_LOAD_KEEP_ARTIFACTS !== "1") {
     await rm(runRoot, { recursive: true, force: true });
@@ -145,7 +165,15 @@ interface BurstSummary {
   total_wall_ms: number;
   throughput_events_per_second: number;
   commit_duration_ms: Stats;
+  publish_duration_ms: Stats;
+  commit_plus_publish_duration_ms: Stats;
   queue_lag_ms: Stats;
+}
+
+interface SubscriberResult {
+  sessionId: string;
+  subscriberIndex: number;
+  delivered: number;
 }
 
 interface Stats {
@@ -165,15 +193,21 @@ async function runTurnCompletionBurst(
   const results = await Promise.all(
     ids.map(
       (sessionId, index) =>
-        new Promise<{ lagMs: number; durationMs: number }>((resolve, reject) => {
+        new Promise<{
+          lagMs: number;
+          commitMs: number;
+          publishMs: number;
+          totalMs: number;
+        }>((resolve, reject) => {
           setImmediate(() => {
             const start = performance.now();
             try {
-              completeTurn(sessionId, index, burst);
-              const end = performance.now();
+              const result = completeTurn(sessionId, index, burst);
               resolve({
                 lagMs: start - scheduledAt,
-                durationMs: end - start,
+                commitMs: result.commitMs,
+                publishMs: result.publishMs,
+                totalMs: performance.now() - start,
               });
             } catch (error) {
               reject(error);
@@ -190,7 +224,11 @@ async function runTurnCompletionBurst(
     events_committed: eventsCommitted,
     total_wall_ms: round(totalWallMs),
     throughput_events_per_second: round((eventsCommitted / totalWallMs) * 1000),
-    commit_duration_ms: stats(results.map((result) => result.durationMs)),
+    commit_duration_ms: stats(results.map((result) => result.commitMs)),
+    publish_duration_ms: stats(results.map((result) => result.publishMs)),
+    commit_plus_publish_duration_ms: stats(
+      results.map((result) => result.totalMs),
+    ),
     queue_lag_ms: stats(results.map((result) => result.lagMs)),
   };
 }
@@ -223,7 +261,11 @@ function seedAcceptedTurns(ids: readonly string[], burst: number): void {
   }
 }
 
-function completeTurn(sessionId: string, index: number, burst: number): void {
+function completeTurn(
+  sessionId: string,
+  index: number,
+  burst: number,
+): { commitMs: number; publishMs: number } {
   const now = new Date().toISOString();
   const events = Array.from({ length: eventsPerTurn }, (_, eventIndex) =>
     eventRow(sessionId, newEventId(), "agent.message", now, {
@@ -235,6 +277,7 @@ function completeTurn(sessionId: string, index: number, burst: number): void {
       ],
     }),
   );
+  const commitStart = performance.now();
   stores.events.appendBatchWithRuntimeChanges(events, {
     closedTurns: [
       {
@@ -249,6 +292,117 @@ function completeTurn(sessionId: string, index: number, burst: number): void {
       },
     ],
   });
+  const commitMs = performance.now() - commitStart;
+  const publishStart = performance.now();
+  broadcaster.publishPersisted(events);
+  return {
+    commitMs,
+    publishMs: performance.now() - publishStart,
+  };
+}
+
+async function startLiveSubscribers(ids: readonly string[]): Promise<void> {
+  const expectedCount = ids.length * subscribersPerSession;
+  if (expectedCount === 0) return;
+
+  for (const sessionId of ids) {
+    for (
+      let subscriberIndex = 0;
+      subscriberIndex < subscribersPerSession;
+      subscriberIndex += 1
+    ) {
+      const controller = new AbortController();
+      subscriberControllers.push(controller);
+      const result: SubscriberResult = {
+        sessionId,
+        subscriberIndex,
+        delivered: 0,
+      };
+      subscriberResults.push(result);
+      subscriberPromises.push(
+        consumeSubscriber(sessionId, controller.signal, result),
+      );
+    }
+  }
+
+  const deadline = performance.now() + 5_000;
+  while (totalSubscriberCount(ids) < expectedCount) {
+    if (performance.now() > deadline) {
+      throw new Error(
+        `Timed out waiting for ${expectedCount} subscribers; registered ${totalSubscriberCount(ids)}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+async function consumeSubscriber(
+  sessionId: string,
+  signal: AbortSignal,
+  result: SubscriberResult,
+): Promise<void> {
+  try {
+    for await (const _event of broadcaster.subscribe(WORKSPACE_ID, sessionId, {
+      signal,
+    })) {
+      result.delivered += 1;
+    }
+  } catch (error) {
+    if (!signal.aborted) throw error;
+  }
+}
+
+async function stopLiveSubscribers(): Promise<{
+  configured_per_session: number;
+  total_configured: number;
+  expected_events: number;
+  delivered_events: number;
+  drain_wait_ms: number;
+  min_delivered_per_subscriber: number;
+  max_delivered_per_subscriber: number;
+}> {
+  const drainStart = performance.now();
+  const expectedEvents =
+    subscribersPerSession === 0
+      ? 0
+      : sessionCount * subscribersPerSession * (1 + eventsPerTurn * burstCount);
+  const deadline = performance.now() + 5_000;
+  while (
+    expectedEvents > 0 &&
+    totalDeliveredEvents() < expectedEvents &&
+    performance.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  const drainWaitMs = performance.now() - drainStart;
+  for (const controller of subscriberControllers) {
+    controller.abort();
+  }
+  await Promise.all(subscriberPromises);
+  const delivered = subscriberResults.map((result) => result.delivered);
+  return {
+    configured_per_session: subscribersPerSession,
+    total_configured: subscriberResults.length,
+    expected_events: expectedEvents,
+    delivered_events: delivered.reduce((sum, value) => sum + value, 0),
+    drain_wait_ms: round(drainWaitMs),
+    min_delivered_per_subscriber:
+      delivered.length === 0 ? 0 : Math.min(...delivered),
+    max_delivered_per_subscriber:
+      delivered.length === 0 ? 0 : Math.max(...delivered),
+  };
+}
+
+function totalSubscriberCount(ids: readonly string[]): number {
+  return ids.reduce(
+    (sum, sessionId) =>
+      sum + broadcaster.subscriberCount(sessionId, WORKSPACE_ID),
+    0,
+  );
+}
+
+function totalDeliveredEvents(): number {
+  return subscriberResults.reduce((sum, result) => sum + result.delivered, 0);
 }
 
 function measureSessionList(): {

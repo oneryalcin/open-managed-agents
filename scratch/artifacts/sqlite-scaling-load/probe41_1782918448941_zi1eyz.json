@@ -1,0 +1,189 @@
+{
+  "generated_at": "2026-07-01T15:07:29.825Z",
+  "started_at": "2026-07-01T15:07:28.949Z",
+  "run_id": "probe41_1782918448941_zi1eyz",
+  "verdict": "PASS",
+  "config": {
+    "session_count": 400,
+    "events_per_turn": 50,
+    "burst_count": 3,
+    "resources_per_session": 0,
+    "list_limit": 100,
+    "subscribers_per_session": 1
+  },
+  "storage": {
+    "sqlite_path": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe41_1782918448941_zi1eyz-/oma.sqlite",
+    "object_root": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe41_1782918448941_zi1eyz-/objects",
+    "pragmas": {
+      "journalMode": "wal",
+      "busyTimeout": 5000,
+      "foreignKeys": 1,
+      "synchronous": 1
+    },
+    "file_sizes_bytes": {
+      "sqlite": 35598336,
+      "wal": 4235392,
+      "shm": 32768
+    }
+  },
+  "setup": {
+    "session_create_ms": 19.48,
+    "sessions_per_second": 20534.013
+  },
+  "bursts": [
+    {
+      "burst_index": 0,
+      "scheduled_sessions": 400,
+      "events_committed": 20000,
+      "total_wall_ms": 235.978,
+      "throughput_events_per_second": 84753.813,
+      "commit_duration_ms": {
+        "min": 0.255,
+        "p50": 0.29,
+        "p95": 0.353,
+        "p99": 3.716,
+        "max": 4.524,
+        "mean": 0.375
+      },
+      "publish_duration_ms": {
+        "min": 0.014,
+        "p50": 0.017,
+        "p95": 0.026,
+        "p99": 0.043,
+        "max": 0.208,
+        "mean": 0.019
+      },
+      "commit_plus_publish_duration_ms": {
+        "min": 0.418,
+        "p50": 0.473,
+        "p95": 0.694,
+        "p99": 3.916,
+        "max": 4.727,
+        "mean": 0.57
+      },
+      "queue_lag_ms": {
+        "min": 0.758,
+        "p50": 120.197,
+        "p95": 226.427,
+        "p99": 233.74,
+        "max": 235.522,
+        "mean": 120.381
+      }
+    },
+    {
+      "burst_index": 1,
+      "scheduled_sessions": 400,
+      "events_committed": 20000,
+      "total_wall_ms": 239.1,
+      "throughput_events_per_second": 83647.024,
+      "commit_duration_ms": {
+        "min": 0.263,
+        "p50": 0.304,
+        "p95": 0.356,
+        "p99": 4.58,
+        "max": 5.781,
+        "mean": 0.415
+      },
+      "publish_duration_ms": {
+        "min": 0.014,
+        "p50": 0.016,
+        "p95": 0.019,
+        "p99": 0.022,
+        "max": 0.024,
+        "mean": 0.016
+      },
+      "commit_plus_publish_duration_ms": {
+        "min": 0.414,
+        "p50": 0.457,
+        "p95": 0.637,
+        "p99": 4.734,
+        "max": 5.94,
+        "mean": 0.581
+      },
+      "queue_lag_ms": {
+        "min": 0.534,
+        "p50": 120.169,
+        "p95": 229.099,
+        "p99": 236.886,
+        "max": 238.674,
+        "mean": 120.964
+      }
+    },
+    {
+      "burst_index": 2,
+      "scheduled_sessions": 400,
+      "events_committed": 20000,
+      "total_wall_ms": 250.634,
+      "throughput_events_per_second": 79797.673,
+      "commit_duration_ms": {
+        "min": 0.285,
+        "p50": 0.319,
+        "p95": 0.371,
+        "p99": 5.256,
+        "max": 5.765,
+        "mean": 0.445
+      },
+      "publish_duration_ms": {
+        "min": 0.014,
+        "p50": 0.015,
+        "p95": 0.018,
+        "p99": 0.024,
+        "max": 0.03,
+        "mean": 0.016
+      },
+      "commit_plus_publish_duration_ms": {
+        "min": 0.434,
+        "p50": 0.474,
+        "p95": 0.586,
+        "p99": 5.41,
+        "max": 5.922,
+        "mean": 0.61
+      },
+      "queue_lag_ms": {
+        "min": 0.544,
+        "p50": 124.439,
+        "p95": 239.927,
+        "p99": 248.274,
+        "max": 250.183,
+        "mean": 124.742
+      }
+    }
+  ],
+  "subscribers": {
+    "configured_per_session": 1,
+    "total_configured": 400,
+    "expected_events": 60400,
+    "delivered_events": 60400,
+    "drain_wait_ms": 1.337,
+    "min_delivered_per_subscriber": 151,
+    "max_delivered_per_subscriber": 151
+  },
+  "session_list": {
+    "pages": 4,
+    "rows": 400,
+    "total_ms": 2.417,
+    "page_latency_ms": {
+      "min": 0.512,
+      "p50": 0.526,
+      "p95": 0.834,
+      "p99": 0.834,
+      "max": 0.834,
+      "mean": 0.603
+    }
+  },
+  "event_loop_delay_ms": {
+    "min": 251.003,
+    "mean": 268.075,
+    "max": 285.213,
+    "p50": 251.134,
+    "p95": 285.213,
+    "p99": 285.213
+  },
+  "notes": [
+    "Queue lag is measured from scheduling each setImmediate task to when its synchronous SQLite work starts.",
+    "Commit duration measures only the synchronous appendBatchWithRuntimeChanges call.",
+    "Publish duration measures SessionEventBroadcaster.publishPersisted after commit.",
+    "Session listing exercises SqliteSessionStore.deserialize, including the known #52 per-session resources query.",
+    "This probe intentionally excludes model and sandbox compute."
+  ]
+}
