@@ -71,6 +71,10 @@ still tracked separately in the roadmap.
   first implementation slice for the self-hosted no-Kubernetes microVM
   provider, with explicit volume workspace, deny-network default, cleanup, and
   no secret proxy support.
+- [Runtime coordinator seam audit](plans/0111-runtime-coordinator-seam-audit.md) —
+  issue #113 audit of remaining runtime-change commit paths, with each direct
+  `appendBatchWithRuntimeChanges` caller classified as coordinator-fenced,
+  store-fenced, or lifecycle-owned.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
 - [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —
