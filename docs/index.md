@@ -49,7 +49,7 @@ still tracked separately in the roadmap.
 ## Working notes
 
 - [Scratch: Pi 0.75.4 empirical findings](scratch-pi-findings.md) — what we learn from probing Pi; feeds back into the ADRs below as decisions firm up.
-- [Threat model (stub)](threat-model.md) — security categories to fill in before multi-tenant deployment or untrusted users.
+- [Threat model](threat-model.md) — tenant boundary, auth, and DoS sections now describe shipped mechanisms (plan 0113, #129); egress, secrets, log redaction, and teardown remain open before untrusted multi-tenant deployment.
 
 ## Implementation plans
 

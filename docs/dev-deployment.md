@@ -253,6 +253,10 @@ Current status:
 - Single-node durable rollout requires the shared durable store, explicit
   sandbox provider gates, idempotency, pending-call recovery, cleanup/reaping,
   and a runbook-level rollback path.
+- Authenticated workspace identity and single-node admission limits shipped
+  with plan 0113 (#129) — see the "Workspace authentication" and "Admission
+  limits" sections above.
 - Multi-worker or managed-SaaS production rollout is not approved until
-  authenticated workspace identity, admission limits, telemetry, threat-model
-  updates, and the Postgres/async coordination boundary exist.
+  telemetry, the remaining threat-model sections (egress, secrets, log
+  redaction, teardown), shared-state admission counters, and the
+  Postgres/async coordination boundary exist.

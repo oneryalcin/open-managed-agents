@@ -1,12 +1,15 @@
-# Threat model (stub)
+# Threat model
 
-**Status:** Stub. Sections listed below are placeholders to be filled in before
-any deployment that handles real tenant data or runs untrusted prompts. For the
-MVP scope (single developer, single tenant, single trusted user), the threat
-model is "Docker-local contains sandbox execution for the current dev/demo
-path; everything else is trust-the-operator."
+**Status:** Partially filled. Sections 1 (tenant boundary), 7 (authentication),
+and 8 (denial of service) describe shipped mechanisms as of plan 0113 (#129,
+2026-07). Sections 2-6 remain open questions to be answered before any
+deployment that handles real tenant data or runs untrusted prompts. For the
+trusted single-node scope, the threat model is "Docker-local contains sandbox
+execution; workspace auth + admission limits contain the API surface;
+everything else is trust-the-operator."
 
-This doc exists primarily so the threat-model gap can't be silently overlooked — see code-review finding MEDIUM 7.
+This doc originally existed as a stub so the threat-model gap couldn't be
+silently overlooked (code-review finding MEDIUM 7).
 
 Deployment-mode terminology and sequencing are defined in
 [0103 - Deployment Hardening](plans/0103-deployment-hardening.md).
@@ -19,9 +22,23 @@ Deployment-mode terminology and sequencing are defined in
 
 **Question to answer:** How are sessions isolated between tenants (when multi-tenant)?
 
-- MVP: single workspace, single user, no tenancy. Skip.
-- Post-MVP: workspaces map to API keys. Pi sessions, SQLite rows, Modal sandboxes, pending-call maps must all be workspace-scoped.
-- Open: do we trust the workspace ID in the auth header, or sign session IDs to prevent cross-workspace session-ID guessing?
+**Answered (plan 0113, #129):**
+
+- Workspaces map to API keys (`workspaces` + `workspace_api_keys` tables in the
+  durable SQLite store). Sessions, agents, events, files, idempotency keys, and
+  recovery sweeps are all workspace-scoped: every store method takes a
+  `WorkspaceId` and every SQL query filters on `workspace_id`.
+- The workspace ID is **never** taken from a request header. It is derived
+  server-side by the auth middleware from the authenticated `x-api-key`
+  (`src/control-plane/app.ts`), then read by routes via `workspaceIdFrom(c)`.
+  There is no client-controllable workspace selector.
+- Session/event IDs are not signed, and don't need to be for tenancy: a guessed
+  ID from another workspace returns the same 404 envelope as a nonexistent ID
+  (no existence leak). Cross-workspace denial is covered by tests in
+  `src/control-plane/__tests__/workspace-auth-api.test.ts`.
+- Still open (post-single-node): sandbox providers beyond Docker-local must
+  keep their session→container maps workspace-scoped; revisit when a remote
+  provider (e.g. Modal) is wired in.
 
 ### 2. Host-escape assumptions
 
@@ -100,24 +117,52 @@ Deployment-mode terminology and sequencing are defined in
 
 **Question to answer:** Who can call what?
 
-- MVP: TBD — likely a single shared bearer token in `.env`. Acceptable for solo experiment.
-- Post-MVP: per-workspace API keys, RBAC for environment/agent create vs. read,
-  and authenticated workspace identity for any per-workspace admission limits.
-- Open: do we sign session IDs / event IDs to prevent guessing? Probably yes once multi-tenant.
+**Answered (plan 0113, #129):**
+
+- Per-workspace API keys: opaque `oma_`-prefixed 256-bit bearer keys in the
+  `x-api-key` header, SHA-256 digests at rest (never plaintext — deterministic
+  hash is correct for 256-bit random secrets), minted/revoked via the operator
+  CLI (`scripts/oma-workspaces.ts`, see `docs/dev-deployment.md`).
+- Fail-closed modes: `OMA_AUTH_MODE=api-key` enforces auth and refuses to start
+  without durable storage; `disabled` is explicit; unset warns loudly and
+  resolves everything to `wrk_default`; any other value refuses to start.
+  `api-key` is required for any deployment beyond trusted single-node.
+- Auth failures return the hosted-identical generic 401 ("Authentication
+  failed") for missing, malformed, and revoked keys alike — no key-existence
+  leak. Wire shapes verified against the hosted API
+  (`scratch/0113-hosted-auth-wire-probe.md`).
+- Revocation is a tombstone (`revoked_at`); it gates new requests only. A live
+  SSE stream opened before revocation runs until disconnect; restart severs it.
+- ID signing: not needed for tenancy (see §1) — all lookups are
+  workspace-scoped server-side.
+- Still open: RBAC within a workspace (create vs. read roles). All keys in a
+  workspace currently have full access to that workspace.
 
 ### 8. Denial of service
 
 **Question to answer:** What stops a single session from monopolizing resources?
 
-- Current Docker-local path has per-container memory/PID/CPU/operation/output
-  limits, but no global admission controller.
-- Open: max concurrent sandboxes per process and per authenticated workspace.
+**Partially answered (plan 0113 D9, #129):**
+
+- Per-workspace admission limits exist and are bound to authenticated workspace
+  identity (the precondition the stub demanded): max active sessions, max
+  pending runtime turns, max concurrent uploads (per-workspace and global), max
+  concurrent SSE streams (per-workspace and global) — all via `OMA_MAX_*` env
+  vars (`src/control-plane/admission.ts`, documented in
+  `docs/dev-deployment.md`). Rejections are hosted-shaped 429
+  (`rate_limit_error`, `retry-after: 1`) / 529 (`overloaded_error`). Gates sit
+  before the expensive work (session cap reserves before async file prep;
+  upload cap precedes body buffering) — verified under 20-way concurrency in
+  `scratch/43-admission-limits-load.ts`.
+- Counters are in-process: sufficient for single-node, not for multi-worker
+  (needs shared state — see plan 0112 gate table).
+- Per-container memory/PID/CPU/operation/output limits exist on the
+  Docker-local path.
+- Open: max concurrent sandboxes per process and per workspace (admission caps
+  bound sessions, not sandbox containers directly).
 - Open: max sandbox runtime per session (kill switch).
 - Open: max token-budget per session (Anthropic's `task_budgets` analogue).
 - Open: max event-log size per session (10MB? 100MB?).
-- Do not treat per-workspace admission limits as security controls until
-  workspace identity is authenticated. Header-trusted workspace selection is
-  only acceptable for local/trusted modes.
 
 ---
 
