@@ -1,4 +1,4 @@
-import { Hono, type Context } from "hono";
+import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { File as NodeFile } from "node:buffer";
 import {
@@ -20,6 +20,23 @@ export function filesRoutes(
 ): Hono<ControlPlaneRouteEnv> {
   const app = new Hono<ControlPlaneRouteEnv>();
 
+  // 0113 D9: the upload slot must be reserved BEFORE bodyLimit. For requests
+  // without a content-length, Hono's bodyLimit eagerly reads the raw body
+  // into a wrapped stream, so a gate placed after it (or in the handler)
+  // admits up to 24 MiB of buffering per rejected request.
+  app.use("/", async (c, next) => {
+    if (c.req.method !== "POST" || admission === undefined) {
+      await next();
+      return;
+    }
+    const releaseUpload = admission.uploads.acquire(workspaceIdFrom(c));
+    try {
+      await next();
+    } finally {
+      releaseUpload();
+    }
+  });
+
   app.use(
     "/",
     bodyLimit({
@@ -32,18 +49,6 @@ export function filesRoutes(
   );
 
   app.post("/", async (c) => {
-    // 0113 D9: the memory cost (up to 24 MiB buffered) is incurred by the
-    // multipart parse below, so the slot must be reserved before it — a
-    // service-seam counter would fire after the bytes are already resident.
-    const releaseUpload = admission?.uploads.acquire(workspaceIdFrom(c));
-    try {
-      return await handleUpload(c);
-    } finally {
-      releaseUpload?.();
-    }
-  });
-
-  const handleUpload = async (c: Context<ControlPlaneRouteEnv>) => {
     const body = await parseMultipartBody(c.req);
     const file = body.file;
     if (!isUploadedFile(file)) {
@@ -55,7 +60,7 @@ export function filesRoutes(
       body: new Uint8Array(await file.arrayBuffer()),
     });
     return c.json(uploaded, 200);
-  };
+  });
 
   app.get("/", async (c) => {
     const limit = parseLimit(c.req.query("limit"));

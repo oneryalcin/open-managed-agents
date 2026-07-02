@@ -852,7 +852,15 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): void {
     const cap = this.maxPendingRuntimeTurnsPerWorkspace;
     if (cap === undefined) return;
-    const newTurns = events.filter((event) => event.type === "user.message").length;
+    // Same predicate as runtimePromptsForRows: only user.message events that
+    // yield prompt text accept a runtime turn, so only those count against
+    // the cap. A non-text message must not be rejected for capacity it would
+    // never consume.
+    const newTurns = events.filter(
+      (event) =>
+        event.type === "user.message" &&
+        textFromContent(event.content) !== undefined,
+    ).length;
     if (newTurns === 0) return;
     if (this.events.countPendingRuntimeTurns(workspaceId) + newTurns > cap) {
       throw rateLimited(

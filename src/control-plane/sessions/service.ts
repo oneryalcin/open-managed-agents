@@ -117,6 +117,7 @@ export class DefaultSessionService implements SessionService {
     | undefined;
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
+  private readonly pendingSessionCreates = new Map<WorkspaceId, number>();
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -236,17 +237,44 @@ export class DefaultSessionService implements SessionService {
     input: unknown,
     opts: { idempotency?: RequestIdempotencyKey } = {},
   ): Promise<ManagedAgentsSession> {
-    // 0113 D9: gate before any session work. Count-then-create is not atomic,
-    // but the deployment app is single-process, so the race window is
-    // microtask-sized and an overshoot of one is acceptable for v1.
-    if (
-      this.maxActiveSessionsPerWorkspace !== undefined &&
-      this.store.countActive(workspaceId) >= this.maxActiveSessionsPerWorkspace
-    ) {
+    // 0113 D9: reserve before the async file-resource preparation below, not
+    // just before the row insert. Counting rows alone lets N concurrent
+    // creates with resources all pass the cap while none has inserted yet;
+    // the in-flight reservation closes that window and bounds the expensive
+    // prep itself.
+    const release = this.reserveSessionCreateSlot(workspaceId);
+    try {
+      return await this.createInternalReserved(workspaceId, input, opts);
+    } finally {
+      release();
+    }
+  }
+
+  private reserveSessionCreateSlot(workspaceId: WorkspaceId): () => void {
+    const cap = this.maxActiveSessionsPerWorkspace;
+    if (cap === undefined) return () => {};
+    const pending = this.pendingSessionCreates.get(workspaceId) ?? 0;
+    if (this.store.countActive(workspaceId) + pending >= cap) {
       throw rateLimited(
         "Concurrent active session limit reached for this workspace; archive or delete sessions, or retry later",
       );
     }
+    this.pendingSessionCreates.set(workspaceId, pending + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const current = this.pendingSessionCreates.get(workspaceId) ?? 1;
+      if (current <= 1) this.pendingSessionCreates.delete(workspaceId);
+      else this.pendingSessionCreates.set(workspaceId, current - 1);
+    };
+  }
+
+  private async createInternalReserved(
+    workspaceId: WorkspaceId,
+    input: unknown,
+    opts: { idempotency?: RequestIdempotencyKey } = {},
+  ): Promise<ManagedAgentsSession> {
     const req = parseCreateSession(input);
     const agentRef = parseAgentRef(req.agent);
     const agent = this.agents.retrieveAny(workspaceId, agentRef.id);

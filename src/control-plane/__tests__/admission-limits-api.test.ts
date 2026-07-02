@@ -88,6 +88,30 @@ describe("session admission", () => {
     fixture.close();
   });
 
+  it("holds the cap for concurrent creates with file resources (async prep window)", async () => {
+    // Row-count checks alone let every concurrent create pass before any row
+    // inserts, because file-resource preparation awaits between the check and
+    // the insert. The in-flight reservation must close that window.
+    const fixture = makeFixture({ maxActiveSessionsPerWorkspace: 1 });
+    const uploaded = await upload(fixture.app);
+    expect(uploaded.status).toBe(200);
+    const file = (await uploaded.json()) as { id: string };
+    const base = await sessionCreateBody(fixture.app);
+    const body = {
+      ...base,
+      resources: [{ type: "file", file_id: file.id, mount_path: "data.txt" }],
+    };
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        request(fixture.app, "/v1/sessions", { method: "POST", body }),
+      ),
+    );
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 429, 429, 429, 429]);
+    fixture.close();
+  });
+
   it("releases the idempotency reservation on 429 so the same key succeeds later", async () => {
     const fixture = makeFixture({ maxActiveSessionsPerWorkspace: 1 });
     const body = await sessionCreateBody(fixture.app);
@@ -134,6 +158,22 @@ describe("runtime turn admission", () => {
       "rate_limit_error",
     );
     expect(fixture.eventStore.list("wrk_default", session.id)).toEqual([]);
+    fixture.close();
+  });
+
+  it("admits messages that produce no runtime turn even at the cap", async () => {
+    const fixture = makeFixture({ maxPendingRuntimeTurnsPerWorkspace: 1 });
+    const session = await createSession(fixture.app);
+    seedAcceptedTurn(fixture.eventStore, "wrk_default", session.id, "rtun_seed");
+
+    // Whitespace-only text yields no prompt (textFromContent -> undefined),
+    // so this message never accepts a turn and must not be capacity-rejected.
+    const res = await request(
+      fixture.app,
+      `/v1/sessions/${session.id}/events`,
+      { method: "POST", body: messageBody("   ") },
+    );
+    expect(res.status).toBe(200);
     fixture.close();
   });
 
@@ -187,6 +227,45 @@ describe("upload admission", () => {
     expect((await inFlight).status).toBe(200);
     gate.resolve();
     expect((await upload(fixture.app)).status).toBe(200);
+    fixture.close();
+  });
+
+  it("rejects a capped upload before reading any of the request body", async () => {
+    // Hono's bodyLimit eagerly buffers bodies without a content-length, so
+    // the admission gate must run before it — a rejected upload must not
+    // pull a single chunk from the socket.
+    const gate = deferred();
+    const fixture = makeFixture(
+      { maxConcurrentUploadsPerWorkspace: 1 },
+      { files: slowFileService(gate.promise) },
+    );
+    const inFlight = upload(fixture.app);
+    await tick();
+
+    let reads = 0;
+    const countingBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        reads += 1;
+        controller.enqueue(new Uint8Array(1024));
+      },
+    });
+    const rejected = await fixture.app.request("/v1/files", {
+      method: "POST",
+      headers: {
+        "anthropic-beta": MANAGED_AGENTS_BETA,
+        "content-type": "multipart/form-data; boundary=x",
+      },
+      body: countingBody,
+      duplex: "half",
+    } as RequestInit);
+    expect(rejected.status).toBe(429);
+    // undici primes one chunk when constructing the Request; the server side
+    // must not drain the stream. Ungated, bodyLimit's eager loop pulls
+    // thousands of chunks (until 24 MiB) before rejecting with 413.
+    expect(reads).toBeLessThanOrEqual(1);
+
+    gate.resolve();
+    expect((await inFlight).status).toBe(200);
     fixture.close();
   });
 
