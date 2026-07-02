@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openWorkspaceStoreForProvisioning } from "../deployment-storage.ts";
+import {
+  createDeploymentStoresFromEnv,
+  openWorkspaceStoreForProvisioning,
+} from "../deployment-storage.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
@@ -391,9 +394,10 @@ describe("deployment auth mode", () => {
     const root = mkdtempSync(join(tmpdir(), "oma-auth-"));
     tempRoots.push(root);
     const sqlitePath = join(root, "oma.db");
-    const server = new DatabaseSync(sqlitePath);
-    server.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
-    new SqliteWorkspaceStore(server);
+    const serverStores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: sqlitePath,
+      OMA_FILE_STORAGE_ROOT: join(root, "objects"),
+    });
 
     const worker = new Worker(
       `
@@ -418,7 +422,7 @@ describe("deployment auth mode", () => {
     expect(provisioning.authenticate(plaintextKey)).toBe("wrk_default");
     provisioning.close();
     await new Promise((res) => worker.on("exit", res));
-    server.close();
+    serverStores.close();
   });
 });
 

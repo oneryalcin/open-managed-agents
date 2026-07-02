@@ -200,8 +200,33 @@ export function openWorkspaceStoreForProvisioning(
     );
   }
   const db = new DatabaseSync(resolvedSqlitePath);
-  applyDurablePragmas(db);
-  return new SqliteWorkspaceStore(db);
+  try {
+    // busy_timeout is connection-local and touches nothing on disk; set it
+    // before the identity check so the check itself survives contention.
+    db.exec("PRAGMA busy_timeout = 5000");
+    // Refuse to touch a file the durable server never initialized: a typo'd
+    // path to some other SQLite database would otherwise gain OMA auth
+    // tables (and even a persistent WAL header flip from the pragmas below),
+    // and the minted key would never reach the real server.
+    const marker = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name = 'deployment_storage_config'`,
+      )
+      .get();
+    if (marker === undefined) {
+      throw new Error(
+        `${resolvedSqlitePath} is not an initialized OMA durable database ` +
+          "(missing deployment_storage_config). Start the server once with " +
+          "OMA_SQLITE_PATH and OMA_FILE_STORAGE_ROOT before provisioning keys.",
+      );
+    }
+    applyDurablePragmas(db);
+    return new SqliteWorkspaceStore(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 export function applyDurablePragmas(db: DatabaseSync): void {

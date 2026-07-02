@@ -62,6 +62,8 @@ export class SqliteWorkspaceStore {
   private readonly authenticateStmt: StatementSync;
   private readonly revokeKeyStmt: StatementSync;
   private readonly listKeysStmt: StatementSync;
+  private readonly listWorkspacesStmt: StatementSync;
+  private readonly getKeyStmt: StatementSync;
 
   constructor(db: DatabaseSync) {
     this.db = db;
@@ -91,6 +93,15 @@ export class SqliteWorkspaceStore {
        WHERE workspace_id = ?
        ORDER BY key_sha256 ASC`,
     );
+    this.listWorkspacesStmt = this.db.prepare(
+      `SELECT workspace_id, name, created_at FROM workspaces
+       ORDER BY workspace_id ASC`,
+    );
+    this.getKeyStmt = this.db.prepare(
+      `SELECT key_sha256, workspace_id, label, created_at, revoked_at
+       FROM workspace_api_keys
+       WHERE key_sha256 = ?`,
+    );
     this.db.prepare(
       `INSERT OR IGNORE INTO workspaces (workspace_id, name, created_at)
        VALUES (?, 'Default workspace', ?)`,
@@ -113,6 +124,14 @@ export class SqliteWorkspaceStore {
 
   getWorkspace(workspaceId: WorkspaceId): WorkspaceRow | undefined {
     return this.getWorkspaceStmt.get(workspaceId) as WorkspaceRow | undefined;
+  }
+
+  listWorkspaces(): WorkspaceRow[] {
+    return this.listWorkspacesStmt.all() as unknown as WorkspaceRow[];
+  }
+
+  getKey(keySha256: string): WorkspaceApiKeyRow | undefined {
+    return this.getKeyStmt.get(keySha256) as WorkspaceApiKeyRow | undefined;
   }
 
   mintKey(workspaceId: WorkspaceId, label: string): MintedWorkspaceApiKey {
