@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { File as NodeFile } from "node:buffer";
 import {
@@ -9,11 +9,15 @@ import {
 } from "../errors.ts";
 import { parseLimit } from "../http.ts";
 import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
+import type { AdmissionLimits } from "../admission.ts";
 import type { FileService } from "./types.ts";
 
 export const MAX_FILE_UPLOAD_REQUEST_BYTES = 24 * 1024 * 1024;
 
-export function filesRoutes(service: FileService): Hono<ControlPlaneRouteEnv> {
+export function filesRoutes(
+  service: FileService,
+  admission?: AdmissionLimits,
+): Hono<ControlPlaneRouteEnv> {
   const app = new Hono<ControlPlaneRouteEnv>();
 
   app.use(
@@ -28,6 +32,18 @@ export function filesRoutes(service: FileService): Hono<ControlPlaneRouteEnv> {
   );
 
   app.post("/", async (c) => {
+    // 0113 D9: the memory cost (up to 24 MiB buffered) is incurred by the
+    // multipart parse below, so the slot must be reserved before it — a
+    // service-seam counter would fire after the bytes are already resident.
+    const releaseUpload = admission?.uploads.acquire(workspaceIdFrom(c));
+    try {
+      return await handleUpload(c);
+    } finally {
+      releaseUpload?.();
+    }
+  });
+
+  const handleUpload = async (c: Context<ControlPlaneRouteEnv>) => {
     const body = await parseMultipartBody(c.req);
     const file = body.file;
     if (!isUploadedFile(file)) {
@@ -39,7 +55,7 @@ export function filesRoutes(service: FileService): Hono<ControlPlaneRouteEnv> {
       body: new Uint8Array(await file.arrayBuffer()),
     });
     return c.json(uploaded, 200);
-  });
+  };
 
   app.get("/", async (c) => {
     const limit = parseLimit(c.req.query("limit"));

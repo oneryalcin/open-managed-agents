@@ -114,6 +114,7 @@ export class SqliteSessionStore implements SessionStore {
   private readonly insertResourceStmt: StatementSync;
   private readonly insertSnapshotStmt: StatementSync;
   private readonly retrieveActiveStmt: StatementSync;
+  private readonly countActiveStmt: StatementSync;
   private readonly retrieveAnyStmt: StatementSync;
   private readonly archiveStmt: StatementSync;
   private readonly insertPendingSnapshotDeletesStmt: StatementSync;
@@ -159,6 +160,10 @@ export class SqliteSessionStore implements SessionStore {
     this.retrieveActiveStmt = this.db.prepare(
       `SELECT * FROM sessions
        WHERE workspace_id = ? AND id = ? AND archived_at IS NULL`,
+    );
+    this.countActiveStmt = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM sessions
+       WHERE workspace_id = ? AND archived_at IS NULL`,
     );
     this.retrieveAnyStmt = this.db.prepare(
       `SELECT * FROM sessions
@@ -339,6 +344,10 @@ export class SqliteSessionStore implements SessionStore {
       sessionId,
     ) as unknown as SessionDbRow | undefined;
     return row ? this.deserialize(row) : undefined;
+  }
+
+  countActive(workspaceId: string): number {
+    return (this.countActiveStmt.get(workspaceId) as { n: number }).n;
   }
 
   retrieveAny(workspaceId: string, sessionId: string): SessionRow | undefined {

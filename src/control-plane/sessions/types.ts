@@ -83,6 +83,7 @@ export interface SessionStore {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): SessionRow | undefined;
+  countActive(workspaceId: WorkspaceId): number;
   archive(
     workspaceId: WorkspaceId,
     sessionId: string,

@@ -10,7 +10,7 @@ import type {
 import { isJsonObject } from "../../types/json.ts";
 import type { AgentStore } from "../agents/types.ts";
 import type { EnvironmentStore } from "../environments/types.ts";
-import { ApiError, invalidRequest, notFound, toApiErrorBody } from "../errors.ts";
+import { ApiError, invalidRequest, notFound, rateLimited, toApiErrorBody } from "../errors.ts";
 import type {
   JsonHttpResponse,
   RequestIdempotencyKey,
@@ -75,6 +75,7 @@ interface DeleteSessionRowsResult {
 }
 
 export interface DefaultSessionServiceOptions {
+  maxActiveSessionsPerWorkspace?: number;
   maxFileResources?: number;
   maxMountedBytes?: number;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
@@ -92,6 +93,7 @@ export interface DefaultSessionServiceOptions {
 }
 
 export class DefaultSessionService implements SessionService {
+  private readonly maxActiveSessionsPerWorkspace: number | undefined;
   private readonly maxFileResources: number;
   private readonly maxMountedBytes: number;
   private readonly runtime:
@@ -131,6 +133,7 @@ export class DefaultSessionService implements SessionService {
     private readonly files?: FileStorage,
     opts: DefaultSessionServiceOptions = {},
   ) {
+    this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.runtime = opts.runtime;
@@ -233,6 +236,17 @@ export class DefaultSessionService implements SessionService {
     input: unknown,
     opts: { idempotency?: RequestIdempotencyKey } = {},
   ): Promise<ManagedAgentsSession> {
+    // 0113 D9: gate before any session work. Count-then-create is not atomic,
+    // but the deployment app is single-process, so the race window is
+    // microtask-sized and an overshoot of one is acceptable for v1.
+    if (
+      this.maxActiveSessionsPerWorkspace !== undefined &&
+      this.store.countActive(workspaceId) >= this.maxActiveSessionsPerWorkspace
+    ) {
+      throw rateLimited(
+        "Concurrent active session limit reached for this workspace; archive or delete sessions, or retry later",
+      );
+    }
     const req = parseCreateSession(input);
     const agentRef = parseAgentRef(req.agent);
     const agent = this.agents.retrieveAny(workspaceId, agentRef.id);
@@ -842,6 +856,10 @@ class ReleaseIdempotencyReservationError extends Error {
 
 function shouldReleaseIdempotencyReservation(error: unknown): boolean {
   if (error instanceof ReleaseIdempotencyReservationError) return true;
+  // 429 admission rejections are transient: completing the key would replay
+  // the 429 forever, even after capacity frees. Release so the same-key retry
+  // re-executes (0113 D9).
+  if (error instanceof ApiError && error.status === 429) return true;
   if (error instanceof ApiError && error.status < 500) return false;
   return true;
 }

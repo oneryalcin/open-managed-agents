@@ -6,12 +6,16 @@ import {
   validateIdempotencyKey,
 } from "../request-idempotency.ts";
 import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
+import type { AdmissionLimits } from "../admission.ts";
 import type { SessionEventsService } from "./types.ts";
 import { sseEventFrame } from "./sse.ts";
 
 type AppEnv = ControlPlaneRouteEnv;
 
-export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv> {
+export function sessionEventsRoutes(
+  service: SessionEventsService,
+  admission?: AdmissionLimits,
+): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.post("/", async (c) => {
@@ -75,16 +79,25 @@ export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv>
 
   app.get("/stream", (c) => {
     const sessionId = requiredSessionId(c.req.param("sessionId"));
+    // 0113 D9: the stream's cost is its lifetime (a bounded live queue per
+    // subscription), so the slot is held until the stream closes.
+    const releaseStream = admission?.sseStreams.acquire(workspaceIdFrom(c));
     const abortController = new AbortController();
     c.req.raw.signal.addEventListener("abort", () => abortController.abort(), {
       once: true,
     });
-    const events = service.stream(workspaceIdFrom(c), sessionId, {
-      lastEventId: c.req.header("last-event-id"),
-      signal: abortController.signal,
-    });
+    let events;
+    try {
+      events = service.stream(workspaceIdFrom(c), sessionId, {
+        lastEventId: c.req.header("last-event-id"),
+        signal: abortController.signal,
+      });
+    } catch (error) {
+      releaseStream?.();
+      throw error;
+    }
     const requestId = c.get("requestId");
-    return new Response(toSseBody(events, abortController), {
+    return new Response(toSseBody(events, abortController, releaseStream), {
       status: 200,
       headers: {
         "content-type": "text/event-stream",
@@ -146,6 +159,7 @@ function parseTypesQuery(url: string): string[] {
 function toSseBody(
   events: AsyncIterable<Record<string, unknown>>,
   abortController: AbortController,
+  onClose?: () => void,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const iterator = events[Symbol.asyncIterator]();
@@ -157,14 +171,22 @@ function toSseBody(
     // into unbounded response/socket buffering (#127). A rejected pull()
     // errors the stream, matching the previous controller.error() path.
     async pull(controller) {
-      const next = await iterator.next();
+      let next;
+      try {
+        next = await iterator.next();
+      } catch (error) {
+        onClose?.();
+        throw error;
+      }
       if (next.done) {
+        onClose?.();
         controller.close();
         return;
       }
       controller.enqueue(encoder.encode(sseEventFrame(next.value)));
     },
     async cancel() {
+      onClose?.();
       abortController.abort();
       if (typeof iterator.return === "function") {
         await iterator.return();

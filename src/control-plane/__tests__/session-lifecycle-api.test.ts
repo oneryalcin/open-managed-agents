@@ -903,6 +903,12 @@ class HookedSessionStore implements SessionStore {
     return record.row;
   }
 
+  countActive(workspaceId: WorkspaceId): number {
+    return [...this.rows.values()].filter(
+      (row) => row.workspace_id === workspaceId && row.archived_at === null,
+    ).length;
+  }
+
   retrieve(
     workspaceId: WorkspaceId,
     sessionId: string,

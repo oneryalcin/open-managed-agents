@@ -1526,6 +1526,7 @@ function failCreateStore(delegate: SqliteSessionStore): SessionStore {
     },
     retrieve: delegate.retrieve.bind(delegate),
     retrieveAny: delegate.retrieveAny.bind(delegate),
+    countActive: delegate.countActive.bind(delegate),
     archive: delegate.archive.bind(delegate),
     delete: delegate.delete.bind(delegate),
     getFileMountSnapshots: delegate.getFileMountSnapshots.bind(delegate),

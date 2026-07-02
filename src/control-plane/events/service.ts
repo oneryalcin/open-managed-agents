@@ -14,7 +14,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "../../types/json.ts";
-import { ApiError, invalidRequest, notFound, toApiErrorBody } from "../errors.ts";
+import { ApiError, invalidRequest, notFound, rateLimited, toApiErrorBody } from "../errors.ts";
 import {
   idempotencyCompletion,
   idempotencyConflictResponse,
@@ -120,6 +120,7 @@ type CustomToolResultClaim =
     };
 
 export class DefaultSessionEventsService implements SessionEventsService {
+  private readonly maxPendingRuntimeTurnsPerWorkspace: number | undefined;
   private readonly ownerId: string;
   private readonly ownerGeneration = 1;
   private readonly leaseTtlMs: number;
@@ -183,7 +184,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ownerId?: string;
       leaseTtlMs?: number;
     },
+    opts: { maxPendingRuntimeTurnsPerWorkspace?: number } = {},
   ) {
+    this.maxPendingRuntimeTurnsPerWorkspace =
+      opts.maxPendingRuntimeTurnsPerWorkspace;
     this.runtimeRunner = runtime?.runner;
     this.runtimeTranslator = runtime?.translate;
     this.sessionOutputCoordinator = runtime?.sessionOutputCoordinator;
@@ -235,6 +239,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
       });
       return { status: 200, body: { data: events } };
     } catch (error) {
+      if (error instanceof ApiError && error.status === 429) {
+        // Transient admission rejection: completing the key would replay the
+        // 429 forever. Release so the same-key retry re-executes (0113 D9).
+        this.events.releaseIdempotencyReservation({ ...idempotency, workspaceId });
+        throw error;
+      }
       if (error instanceof ApiError && error.status < 500) {
         // Replay returns the original error envelope, including request_id.
         // The fresh HTTP header still carries the retry attempt's request id.
@@ -262,6 +272,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
     requireActiveSession(this.sessions, workspaceId, sessionId);
     const req = parseSendRequest(input);
+    this.enforceRuntimeTurnAdmission(workspaceId, req.events);
     const customToolResultClaims = this.claimCustomToolResults(
       workspaceId,
       sessionId,
@@ -829,6 +840,25 @@ export class DefaultSessionEventsService implements SessionEventsService {
         now,
       })),
     });
+  }
+
+  // 0113 D9: each user.message in a send accepts a runtime turn, so pending
+  // turns are unbounded per workspace without this gate. Checked before any
+  // event persists; count-then-accept is not atomic, but the deployment app
+  // is single-process, so an overshoot of one batch is the worst case.
+  private enforceRuntimeTurnAdmission(
+    workspaceId: WorkspaceId,
+    events: readonly SendSessionEventsRequest["events"][number][],
+  ): void {
+    const cap = this.maxPendingRuntimeTurnsPerWorkspace;
+    if (cap === undefined) return;
+    const newTurns = events.filter((event) => event.type === "user.message").length;
+    if (newTurns === 0) return;
+    if (this.events.countPendingRuntimeTurns(workspaceId) + newTurns > cap) {
+      throw rateLimited(
+        "Concurrent pending runtime turn limit reached for this workspace; retry later",
+      );
+    }
   }
 
   // 0113 D7: restart recovery must cover every workspace with pending turns,
