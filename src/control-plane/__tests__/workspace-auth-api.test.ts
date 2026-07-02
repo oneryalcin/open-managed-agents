@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { openWorkspaceStoreForProvisioning } from "../deployment-storage.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
@@ -365,13 +367,58 @@ describe("deployment auth mode", () => {
     // The 0113 D8 provisioning shape: a short-lived direct connection to the
     // same WAL database, while the server stays up. Keys take effect without
     // a restart.
-    const provisioning = SqliteWorkspaceStore.open(sqlitePath);
+    const provisioning = openWorkspaceStoreForProvisioning(sqlitePath);
     const { plaintextKey } = provisioning.mintKey("wrk_default", "cli");
     provisioning.close();
 
     expect((await request(app, "/v1/agents", { key: plaintextKey })).status).toBe(
       200,
     );
+  });
+
+  it("refuses to provision against a database path that does not exist", () => {
+    const root = mkdtempSync(join(tmpdir(), "oma-auth-"));
+    tempRoots.push(root);
+    expect(() =>
+      openWorkspaceStoreForProvisioning(join(root, "typo.db")),
+    ).toThrow(/existing OMA database/);
+  });
+
+  it("mints keys while a concurrent writer holds the database write lock", async () => {
+    // busy_timeout is per-connection: a raw unconfigured connection fails
+    // instantly with SQLITE_BUSY under a held write lock (probed: 0ms), so
+    // the provisioning opener must apply the durable pragmas itself.
+    const root = mkdtempSync(join(tmpdir(), "oma-auth-"));
+    tempRoots.push(root);
+    const sqlitePath = join(root, "oma.db");
+    const server = new DatabaseSync(sqlitePath);
+    server.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+    new SqliteWorkspaceStore(server);
+
+    const worker = new Worker(
+      `
+      const { DatabaseSync } = require("node:sqlite");
+      const { parentPort, workerData } = require("node:worker_threads");
+      const db = new DatabaseSync(workerData.path);
+      db.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE; INSERT INTO workspaces VALUES ('wrk_worker', 'held', 'now')");
+      parentPort.postMessage("locked");
+      setTimeout(() => { db.exec("COMMIT"); db.close(); }, workerData.holdMs);
+      `,
+      { eval: true, workerData: { path: sqlitePath, holdMs: 300 } },
+    );
+    await new Promise((res) => worker.on("message", res));
+
+    // Time the whole provisioning operation (open + mint): the opener's
+    // schema statements are themselves writes, so the held lock is waited
+    // out wherever it bites first.
+    const startedAt = Date.now();
+    const provisioning = openWorkspaceStoreForProvisioning(sqlitePath);
+    const { plaintextKey } = provisioning.mintKey("wrk_default", "contended");
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(200);
+    expect(provisioning.authenticate(plaintextKey)).toBe("wrk_default");
+    provisioning.close();
+    await new Promise((res) => worker.on("exit", res));
+    server.close();
   });
 });
 

@@ -183,6 +183,27 @@ function createDurableDeploymentStores(
   }
 }
 
+// 0113 D8: the provisioning entry point for a live server's database. Opens a
+// second connection with the same durability pragmas — busy_timeout is
+// per-connection, so without it a concurrent server write makes key
+// mint/revoke fail instantly with SQLITE_BUSY. Deliberately does NOT take the
+// .oma.lock: that lock guards single-server ownership (runtime recovery, turn
+// coordination), not table writes; WAL is built for this short-lived writer.
+export function openWorkspaceStoreForProvisioning(
+  sqlitePath: string,
+): SqliteWorkspaceStore {
+  const resolvedSqlitePath = resolve(sqlitePath);
+  if (!existsSync(resolvedSqlitePath)) {
+    throw new Error(
+      `Provisioning requires an existing OMA database, none found at ${resolvedSqlitePath}. ` +
+        "Start the server with OMA_SQLITE_PATH once (or check the path) before provisioning keys.",
+    );
+  }
+  const db = new DatabaseSync(resolvedSqlitePath);
+  applyDurablePragmas(db);
+  return new SqliteWorkspaceStore(db);
+}
+
 export function applyDurablePragmas(db: DatabaseSync): void {
   db.exec(`
     PRAGMA journal_mode = WAL;
