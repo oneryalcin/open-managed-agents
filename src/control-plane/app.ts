@@ -34,6 +34,7 @@ import {
 import {
   createDeploymentStoresFromEnv,
   type DeploymentStorageEnv,
+  type DeploymentStores,
 } from "./deployment-storage.ts";
 import {
   ApiError,
@@ -214,10 +215,27 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   return app;
 }
 
+export interface DeploymentControlPlane {
+  app: Hono<AppEnv>;
+  stores: DeploymentStores;
+  authMode: DeploymentAuthMode;
+}
+
 export function createDeploymentControlPlaneApp(
   env: DeploymentControlPlaneEnv = process.env,
   opts: DeploymentControlPlaneAppOptions = {},
 ): Hono<AppEnv> {
+  return createDeploymentControlPlane(env, opts).app;
+}
+
+// Same wiring as createDeploymentControlPlaneApp, but hands back the stores
+// so a caller that owns the process lifecycle (the appliance entrypoint,
+// tests that boot twice against one OMA_HOME) can close them and release the
+// .oma.lock instead of leaking them until process exit.
+export function createDeploymentControlPlane(
+  env: DeploymentControlPlaneEnv = process.env,
+  opts: DeploymentControlPlaneAppOptions = {},
+): DeploymentControlPlane {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
   const admission = createAdmissionLimits(parseAdmissionLimitsFromEnv(env));
@@ -262,7 +280,7 @@ export function createDeploymentControlPlaneApp(
         },
   );
   sessionEvents.recoverAllAbandonedRuntimeTurns();
-  return createControlPlaneApp({
+  const app = createControlPlaneApp({
     ...(authMode === "api-key"
       ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
       : {}),
@@ -291,6 +309,7 @@ export function createDeploymentControlPlaneApp(
     sessionEvents,
     admission,
   });
+  return { app, stores, authMode };
 }
 
 export function createInMemoryControlPlaneApp(

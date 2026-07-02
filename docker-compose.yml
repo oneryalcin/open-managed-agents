@@ -1,0 +1,12 @@
+# docker compose up -> first boot prints the initial API key in the logs:
+#   docker compose logs oma | grep x-api-key
+services:
+  oma:
+    build: .
+    ports:
+      - "4180:4180"
+    volumes:
+      - oma-data:/data
+
+volumes:
+  oma-data:

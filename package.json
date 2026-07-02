@@ -4,6 +4,9 @@
   "private": true,
   "description": "Open-source clone of Anthropic's Managed Agents API surface, runnable on Modal / K8s / anywhere.",
   "type": "module",
+  "bin": {
+    "open-managed-agents": "bin/open-managed-agents.mjs"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
