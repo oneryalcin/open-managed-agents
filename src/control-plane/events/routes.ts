@@ -5,15 +5,11 @@ import {
   requestFingerprint,
   validateIdempotencyKey,
 } from "../request-idempotency.ts";
-import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
+import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
 import type { SessionEventsService } from "./types.ts";
 import { sseEventFrame } from "./sse.ts";
 
-interface AppEnv {
-  Variables: {
-    requestId: string;
-  };
-}
+type AppEnv = ControlPlaneRouteEnv;
 
 export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -27,7 +23,7 @@ export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv>
       const method = c.req.method.toUpperCase();
       const concretePath = new URL(c.req.url).pathname;
       const response = service.sendIdempotent(
-        DEFAULT_WORKSPACE_ID,
+        workspaceIdFrom(c),
         sessionId,
         body,
         {
@@ -52,7 +48,7 @@ export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv>
     const body = await parseJsonBody(c.req);
     return c.json(
       {
-        data: service.send(DEFAULT_WORKSPACE_ID, sessionId, body, {
+        data: service.send(workspaceIdFrom(c), sessionId, body, {
           signal: c.req.raw.signal,
         }),
       },
@@ -67,7 +63,7 @@ export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv>
     const order = parseOrder(c.req.query("order"));
     const types = parseTypesQuery(c.req.url);
     return c.json(
-      service.list(DEFAULT_WORKSPACE_ID, sessionId, {
+      service.list(workspaceIdFrom(c), sessionId, {
         ...(limit === undefined ? {} : { limit }),
         ...(page === undefined ? {} : { page }),
         ...(order === undefined ? {} : { order }),
@@ -83,7 +79,7 @@ export function sessionEventsRoutes(service: SessionEventsService): Hono<AppEnv>
     c.req.raw.signal.addEventListener("abort", () => abortController.abort(), {
       once: true,
     });
-    const events = service.stream(DEFAULT_WORKSPACE_ID, sessionId, {
+    const events = service.stream(workspaceIdFrom(c), sessionId, {
       lastEventId: c.req.header("last-event-id"),
       signal: abortController.signal,
     });
