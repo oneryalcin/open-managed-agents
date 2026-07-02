@@ -1,12 +1,10 @@
 # Open Managed Agents
 
-**Open Managed Agents** is an open-source, self-hostable implementation of the
-Claude Managed Agents API surface.
-
-The goal is wire compatibility with Anthropic's hosted Managed Agents: clients
-that speak the Claude Managed Agents REST + SSE protocol should be able to point
-at this server with a base-URL change, while you keep execution, data, and
-sandboxes on infrastructure you control.
+**Run the Claude Managed Agents API on your own machine.** Open Managed Agents
+(OMA) is a self-hostable implementation of Anthropic's Managed Agents API
+surface: any client that speaks the Managed Agents REST + SSE protocol can
+point at this server with a base-URL change, while execution, data, and
+sandboxes stay on infrastructure you control.
 
 ## Quickstart
 
@@ -24,96 +22,120 @@ docker compose up -d
 docker compose logs oma | grep x-api-key
 ```
 
-The first boot initializes durable storage (default `~/.oma`, `/data` in the
-container) and prints your initial workspace API key once. Point any Anthropic
-SDK client at `http://127.0.0.1:4180` with that `x-api-key`. Details, overrides,
-and key provisioning: [Development and deployment setup](docs/dev-deployment.md).
+First boot initializes durable storage (default `~/.oma`, `/data` in the
+container) and prints your workspace API key **once**. Then point the ordinary
+Anthropic SDK at it — no OMA-specific client:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://127.0.0.1:4180",
+    api_key="oma_...",  # printed on first boot
+    default_headers={"anthropic-beta": "managed-agents-2026-04-01"},
+)
+
+agent = client.beta.agents.create(name="helper", model="claude-sonnet-5")
+env = client.beta.environments.create(
+    name="dev", config={"type": "cloud", "networking": {"type": "unrestricted"}}
+)
+session = client.beta.sessions.create(agent=agent.id, environment_id=env.id)
+
+with client.beta.sessions.events.stream(session.id) as stream:
+    client.beta.sessions.events.send(session.id, events=[
+        {"type": "user.message", "content": [{"type": "text", "text": "hello"}]},
+    ])
+    for event in stream:
+        print(event.type)
+```
+
+A complete working example (file mounts, custom tools, tool confirmations,
+Streamlit UI) lives in
+[examples/ship-your-first-managed-agent](examples/ship-your-first-managed-agent/README.md).
+Config overrides and key provisioning:
+[Development and deployment setup](docs/dev-deployment.md).
 
 ## Why This Exists
 
-Managed Agents are useful because they give agents a durable place to work:
-sessions, event history, streaming updates, custom tools, and sandboxed
-filesystem/shell execution. The hosted version is convenient, but some teams
-need the same API shape with their own runtime, data boundary, sandbox policy,
-or deployment environment.
+Managed Agents give agents a durable place to work: sessions, event history,
+streaming updates, custom tools, and sandboxed filesystem/shell execution. The
+hosted version is convenient, but some teams need the same API shape with
+their own runtime, data boundary, sandbox policy, or deployment environment.
+OMA is that control plane.
 
-Open Managed Agents aims to be that control plane:
+## How It Is Built
 
-- Claude Managed Agents-compatible REST and SSE endpoints;
-- persisted agents, environments, sessions, and events;
-- resumable event streams;
-- server-side custom tools that keep secrets outside the sandbox;
-- pluggable sandbox providers for model-directed shell and file work.
+Three habits shape every slice of this codebase, and they are the reason to
+trust it over a feature checklist:
+
+- **Wire parity is measured, not assumed.** Behavior is cloned by probing the
+  hosted API and recording the evidence — error envelopes, middleware
+  ordering, event sequences — before implementation
+  (`scratch/`, [docs/references/](docs/references.md)). When hosted says 405
+  before auth, so do we.
+- **Everything fails closed.** Unknown config values refuse to start; auth
+  without durable storage refuses to start; sandbox providers must be
+  explicitly enabled; builtin tools without a provider refuse to run. The
+  default is always the safe posture, never the convenient one.
+- **Narrow surface, high rigor.** Every slice ships with adversarial review,
+  mutation-checked tests, and a plan document recording what was decided and
+  why ([docs/plans/](docs/index.md)). We would rather do fewer things whose
+  failure modes are known than more things whose failure modes are a surprise.
 
 ## Current Status
 
 A working single-node appliance: durable, authenticated, multi-tenant on one
-node, with proven sandboxed execution. Not yet a full Anthropic Managed
-Agents-compatible beta.
+node, with real sandboxed execution. Not yet full parity with the hosted
+Managed Agents beta surface.
 
-Working today:
+What works today, at outcome level:
 
-- one-command appliance boot with first-boot API-key minting
-  ([plan 0115](docs/plans/0115-appliance-entrypoint.md));
-- persisted agent, environment, session, and file APIs on durable single-node
-  SQLite storage with crash-safe restart recovery;
-- append-only session event log; event listing and SSE streaming with
-  reconnect support;
-- Pi runtime execution with public custom-tool pause/resume round trips,
-  `user.tool_confirmation` allow/deny gating, and `user.interrupt`;
-- request idempotency for `events.send` and `POST /v1/sessions`;
-- `span.model_request_start` / `span.model_request_end` observability events
-  with required `model_usage`;
-- workspace authentication (`x-api-key`, hashed at rest, fail-closed
-  `OMA_AUTH_MODE`) with per-workspace admission limits and a provisioning CLI
-  ([plan 0113](docs/plans/0113-workspace-authentication-admission.md));
-- file upload resources, Docker-local session file mounts, and session output
-  file collection/indexing;
-- sandbox providers behind a fail-closed selection boundary: Docker-local and
-  microsandbox-local, plus a guarded local passthrough for development tests;
-- browser-based Managed Agents Console for read-only inspection.
+- **One command boots it** — durable SQLite storage, fail-closed auth, and a
+  first-boot API key ([plan 0115](docs/plans/0115-appliance-entrypoint.md)).
+- **The full agent loop runs**: agents, environments, sessions, file mounts,
+  streaming events with reconnect/replay, custom-tool round trips, permission
+  gating, interrupts — on the Pi runtime with crash-safe recovery of pending
+  work.
+- **Multi-tenant on one node**: hashed `x-api-key` workspaces, per-workspace
+  admission limits, request idempotency on the retry-sensitive endpoints
+  ([plan 0113](docs/plans/0113-workspace-authentication-admission.md)).
+- **Real isolation for builtin tools**: Docker-local and microsandbox-local
+  providers behind a fail-closed selection boundary.
+- **A read-only browser console** for inspecting agents, sessions, events,
+  spans, and output files.
 
-Still missing before claiming broad parity or production readiness (the
+What's still missing — the
 [appliance product roadmap](docs/plans/0114-appliance-product-roadmap.md) is
-the authoritative sequencing):
+the authoritative sequencing:
 
-- admin HTTP API and a read-write console (Arc B);
-- operational observability: health endpoint, metrics, SLOs (Arc C);
-- session usage metering (`usage` is still `null`) (Arc D);
-- sandbox network egress, skills and MCP execution (wire-accepted today but
-  runtime-inert), and boundary secret injection
-  ([buy-vs-build survey](docs/references/egress-secrets-buy-vs-build.md));
-- agent update/versioning, broader event-topology parity, file-upload
-  idempotency, managed remote sandbox providers;
-- RBAC within a workspace, billing boundaries, npm publish, CI, and a real
-  license.
+- admin HTTP API and a read-write console;
+- health/metrics observability and session usage metering (`usage` is `null`);
+- sandbox network egress, and with it skills and MCP execution (both are
+  wire-accepted today but runtime-inert) and boundary secret injection
+  ([design survey](docs/references/egress-secrets-buy-vs-build.md));
+- agent versioning, broader event-topology parity, file-upload idempotency,
+  remote sandbox providers, RBAC within a workspace, and CI.
 
 ## Architecture
 
-Open Managed Agents keeps the **harness** separate from **compute**.
+OMA keeps the **harness** separate from **compute**.
 
 The harness is the trusted control plane: API requests, session state, event
 history, model/runtime orchestration, custom-tool correlation, approvals, and
 recovery state.
 
 Compute is the sandbox execution plane: shell commands, filesystem changes,
-packages, generated artifacts, and future provider-specific resources such as
-volumes, ports, snapshots, and managed remote sandboxes.
+packages, and generated artifacts.
 
-That split lets applications keep secrets, auth, billing, audit logs, and human
-review outside the untrusted coding sandbox.
+That split lets applications keep secrets, auth, billing, audit logs, and
+human review outside the untrusted coding sandbox.
 
 ## Compatibility
 
-The north star is Claude Managed Agents wire compatibility:
-
-- same endpoint family;
-- Anthropic-shaped error envelopes;
-- persisted session event stream;
-- SSE replay and reconnect behavior;
-- public custom-tool use/result events.
-
-Details and intentional deviations are tracked in
+The north star is Claude Managed Agents wire compatibility: same endpoint
+family, Anthropic-shaped error envelopes, persisted session event stream, SSE
+replay and reconnect behavior, public custom-tool use/result events. Details
+and intentional deviations:
 [ADR 0004](docs/adrs/0004-managed-agents-rest-sse-surface-as-north-star.md).
 
 ## Stack
@@ -122,9 +144,8 @@ Details and intentional deviations are tracked in
 | --- | --- |
 | Control plane | TypeScript + Hono |
 | Runtime engine | Pi Agent SDK |
-| Persistence | SQLite for local/single-node; Postgres is the managed-SaaS target |
-| First isolation provider | Docker-local |
-| First managed remote target | Modal Sandboxes |
+| Persistence | SQLite (single-node appliance); Postgres is the scale-out target behind existing store interfaces |
+| Sandbox providers | Docker-local and microsandbox-local, fail-closed selection |
 
 ## Development
 
@@ -134,37 +155,20 @@ npm run typecheck
 npm test
 ```
 
-Common tasks are also available through thin Make targets:
+Common tasks are also available through thin Make targets (`make check`,
+`make ui`, `make server`, `make parallel-docker-smoke`); see
+[Development and deployment setup](docs/dev-deployment.md).
 
-```bash
-make typecheck
-make test
-make ui
-make server
-make parallel-docker-smoke
-```
+Deeper docs:
 
-`make ui` serves the browser-based Managed Agents Console against a local OMA
-server for read-only inspection of sessions, events, spans, and output files.
-`make server` runs the local CWC example server with Docker-local enabled.
-`make parallel-docker-smoke` starts several Docker-local sandboxes concurrently
-without calling a model, so it is the cheap check for the current local worker
-shape. See [Development and deployment setup](docs/dev-deployment.md).
-
-The detailed roadmap, architecture notes, and compatibility decisions live in
-the docs:
-
-- [Development and deployment setup](docs/dev-deployment.md)
-- [Managed Agents Console](ui/managed-agents-console/README.md)
+- [Docs index](docs/index.md) — every plan, ADR, and reference note
+- [Appliance product roadmap](docs/plans/0114-appliance-product-roadmap.md)
 - [First Docker-local run](docs/tutorials/docker-local-first-run.md)
 - [Examples](docs/examples.md)
-- [CWC-style Streamlit Managed Agents example](examples/ship-your-first-managed-agent/README.md)
-- [Roadmap](docs/roadmap.md)
-- [Architecture](docs/architecture.md)
-- [ADRs](docs/adrs/)
-- [Scope](docs/scope.md)
-- [References](docs/references.md)
+- [Architecture](docs/architecture.md) · [Scope](docs/scope.md) · [ADRs](docs/adrs/)
 
 ## License
 
-TBD.
+[Elastic License 2.0](LICENSE): free to use, copy, modify, and distribute —
+personally or inside your company — with one main limitation: you may not
+offer OMA itself to third parties as a hosted or managed service.
