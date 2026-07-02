@@ -47,8 +47,10 @@ Related prior art already in-repo, which this survey extends:
 Anthropic's `sandbox-runtime` (Apache-2.0, ~1,250 LOC, TypeScript) — it
 matches all three requirements by design, including the sentinel→real
 credential substitution model, and it is the machinery Anthropic itself runs
-under Claude Code. Steal smokescreen's post-DNS-resolution private-IP deny
-check (~50 lines) on top.
+under Claude Code. Steal smokescreen's SSRF defense on top — but as
+connect-to-a-pinned-vetted-IP in the vendored dial path, NOT a filter-only
+check (a filter-then-dial-hostname shape re-opens DNS rebinding; see ADR 0016
+§5).
 
 **Secrets storage: build thin, no vault dependency.** AES-256-GCM envelope
 encryption inside OMA's existing SQLite — a random per-secret DEK wrapped by a
@@ -159,9 +161,11 @@ Repository: [stripe/smokescreen](https://github.com/stripe/smokescreen).
   `add_headers` via Stripe's goproxy fork), but injection is static YAML per
   role+domain, not programmable per-request, and ACLs are hostname-glob only.
 - Rejected as the proxy (dynamic per-session allowlists + programmable
-  substitution don't fit its config model), but **adopt the post-resolution
-  private-IP deny check as a pattern** (~50 lines) — it closes the
-  SSRF-via-allowlisted-CNAME hole.
+  substitution don't fit its config model), but **adopt its SSRF defense as a
+  pattern**: resolve once, validate the IP, then connect to that pinned IP
+  (hostname preserved only as SNI) — a check-then-dial-hostname shape re-opens
+  DNS rebinding, so this lives in the vendored dial path, not a filter (ADR
+  0016 §5).
 
 ### Rejected
 
@@ -278,15 +282,22 @@ Refuse (YAGNI):
 
 ## Next steps (before any ADR)
 
-1. **Confidence probe** (the same probe class that killed the microsandbox
-   secret path, per #130's acceptance criteria): vendor srt's proxy files into
-   `scratch/`, run a Docker container whose only route is the proxy, and prove
-   end-to-end: (a) allowlisted host works, (b) non-allowlisted host denied,
-   (c) redirect to a non-allowlisted host denied, (d) sentinel substituted at
-   the boundary — the controlled echo target observes the real value (that is
-   the substitution proof), while the container's env, filesystem, and its own
-   outbound request construction never hold it, (e) private-IP literal /
-   CNAME-to-private denied once the smokescreen-style check is added.
+1. **Confidence probe** — ✅ DONE 2026-07-02, deterministic
+   (`scratch/44-egress-proxy-probe.ts` + `.md`). Drove srt's proxy (deep
+   `dist/` import) with a real Docker container and proved (enforcement
+   checks): allowlisted host via TLS termination; non-allowlisted host denied
+   at CONNECT (403); allowlisted host + disallowed **path** denied by
+   `filterRequest` (403); redirect to a non-allowlisted host denied on
+   re-entry; sentinel→real substitution at the boundary (container env holds
+   only the sentinel); missing proxy auth rejected (407); verify-before-inject
+   (a wrong upstream CA fails, secret never leaves). Load-bearing assertions
+   assert the explicit 403/407 the proxy emits and are mutation-checked. Scope:
+   validates the proxy's behavior for a *proxy-honoring* client on default
+   networking — route-level confinement (proxy-only egress) is implementation
+   work; and path policy/injection apply only to terminated TLS (opaque tunnels
+   bypass them). The private-IP/SSRF deny is confirmed **absent** in srt — OMA's
+   to add, connecting to a pinned IP to resist DNS rebinding. Green light on the
+   survey's terms.
 
    Scope note on (d): boundary injection cannot hide the secret from a
    *reflective allowlisted upstream* — the request that leaves the boundary
@@ -299,9 +310,17 @@ Refuse (YAGNI):
    (Osaurus's output scrubbing in
    [agentos-osaurus-prior-art.md](agentos-osaurus-prior-art.md) is the prior
    art).
-2. Envelope-encryption probe: throwaway script proving DEK/KEK
-   wrap–unwrap–rotate round-trip with `node:crypto` before pinning the
-   `SecretsStore` schema.
-3. Then the ADR: egress policy contract + `SecretsStore`, citing this survey;
-   it also closes #130 ("explicit ruling that provider secret proxy stays out
-   of scope and OMA-level boundary injection is the design instead").
+2. **Envelope-encryption probe** — ✅ DONE 2026-07-02, 11/11
+   (`scratch/45-envelope-encryption-probe.ts` + `.md`). `node:crypto` alone
+   (AES-256-GCM per-secret DEK, KEK via HKDF from the master secret) proves
+   round-trip, fresh-DEK non-determinism, GCM tamper detection on both ct and
+   wrapped DEK, AAD record-binding on both layers (mutation-verified
+   load-bearing), truncated-tag rejection (authTagLength pinned), wrong-key
+   rejection, and KEK rotation that leaves the ciphertext byte-for-byte
+   identical (the KMS/OpenBao-transit seam). Record fields for the schema:
+   `version, kekId, wrapIv, wrapTag, wrappedDek, ctIv, ctTag, ct`.
+3. **The ADR** — ✅ DONE 2026-07-02:
+   [ADR 0016](../adrs/0016-egress-proxy-and-secret-injection.md) (accepted).
+   Egress policy contract + `SecretsStore`, citing this survey and both
+   probes; makes the explicit #130 ruling (OMA-level boundary injection, not
+   provider-carried). Implementation slices follow, each its own PR.

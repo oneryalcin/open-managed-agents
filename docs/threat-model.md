@@ -75,6 +75,7 @@ Deployment-mode terminology and sequencing are defined in
   allowlists should map to Managed Agents'
   `environment.config.networking: { type: "limited", allowed_hosts: [...] }`.
 - Threat: prompt injection that exfiltrates context to attacker-controlled domain via `web_fetch` or `bash` curl. Mitigation: egress allowlist + secret-free sandbox (see §4).
+- **Design decided ([ADR 0016](adrs/0016-egress-proxy-and-secret-injection.md), accepted 2026-07): OMA-owned egress proxy (vendored srt stack) with default-deny allowlist, per-request path policy, and redirect re-evaluation — the proxy mechanism (incl. the `filterRequest` path-deny branch and verify-before-inject) validated for proxy-honoring clients in probe 44. Caveats the probe made explicit: path policy/injection apply only to terminated TLS (opaque tunnels bypass them); the private-IP/SSRF deny is OMA's to add and must connect-to-pinned-IP to resist DNS rebinding (probe 44 confirmed srt has none); and route-level confinement (proxy-only egress, so a non-compliant client can't bypass) is implementation work, not yet proven. Not yet built.**
 
 ### 4. Secret injection paths
 
@@ -82,8 +83,9 @@ Deployment-mode terminology and sequencing are defined in
 
 - **Explicit non-goal:** sandbox MUST NOT have access to user-controlled credentials beyond what's required for its declared tools. See ADR 0005 — custom tools execute on the orchestrator (control plane), not in the sandbox.
 - **MVP boundary:** `ANTHROPIC_API_KEY` is on the control-plane host, never in the sandbox. The sandbox container's env is minimal (PATH, HOME, locale).
-- Open: GitHub repo `authorization_token` — when we add repo mounts (post-MVP), how does the git proxy inject auth? Mirror Anthropic's design (out-of-band injection by an Anthropic-side proxy) — never put the token in the container.
-- Open: MCP credentials (post-MVP) — design vault to mirror Anthropic's auto-refreshing OAuth model. Never expose to the container.
+- **Design decided ([ADR 0016](adrs/0016-egress-proxy-and-secret-injection.md), accepted 2026-07): secrets are envelope-encrypted in OMA's SQLite behind a `SecretsStore` interface (AES-256-GCM per-secret DEK, master KEK from `OMA_MASTER_KEY`/file); the sandbox holds only sentinels and the egress proxy injects the real value at the boundary. Proven in probe 45. This is the #130 ruling — OMA-level boundary injection, not provider-carried. Not yet built.**
+- Open (bounded by ADR 0016): GitHub repo `authorization_token` for repo mounts, and MCP OAuth credentials — both flow through `SecretsStore` + boundary injection; the remaining work is per-provider wiring, not the design.
+- Residual (ADR 0016 §6): a reflective allowlisted upstream can echo an injected secret back into the sandbox; v1 mitigation is allowlist trust, with response redaction deferred.
 
 ### 5. Log redaction
 

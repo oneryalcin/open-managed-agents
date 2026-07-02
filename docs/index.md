@@ -138,6 +138,7 @@ The decisions we've already made, with the alternatives we rejected and why:
 - [ADR 0013: File resources and session mounts](adrs/0013-file-resources-and-session-mounts.md)
 - [ADR 0014: Storage engine strategy for managed SaaS](adrs/0014-storage-engine-strategy.md)
 - [ADR 0015: Request idempotency for retry-safe writes](adrs/0015-request-idempotency.md)
+- [ADR 0016: Egress proxy and boundary secret injection](adrs/0016-egress-proxy-and-secret-injection.md) — OMA-owned egress proxy (vendored srt stack) with allowlist + sentinel substitution, and envelope-encrypted `SecretsStore` in SQLite; closes #130 and threat-model §3/§4.
 
 ## How this is organized
 
