@@ -32,6 +32,7 @@ import { EventStore } from "./events/store.ts";
 import { InMemoryFileStorage, LocalObjectFileStorage } from "./files/store.ts";
 import type { FileStorage } from "./files/types.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
+import { SqliteWorkspaceStore } from "./workspaces/store.ts";
 
 export interface DeploymentStorageEnv {
   OMA_SQLITE_PATH?: string;
@@ -40,6 +41,7 @@ export interface DeploymentStorageEnv {
 
 export interface DeploymentStores {
   agents: SqliteAgentStore;
+  workspaces: SqliteWorkspaceStore;
   environments: SqliteEnvironmentStore;
   sessions: SqliteSessionStore;
   events: EventStore;
@@ -83,6 +85,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
   const environments = SqliteEnvironmentStore.open(":memory:");
   const sessions = SqliteSessionStore.open(":memory:");
   const events = EventStore.open(":memory:");
+  const workspaces = SqliteWorkspaceStore.open(":memory:");
   const files = new InMemoryFileStorage();
   const sessionCoordinator = createInMemorySessionCoordinator({
     sessions,
@@ -99,6 +102,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
   });
   return {
     agents,
+    workspaces,
     environments,
     sessions,
     events,
@@ -112,6 +116,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
       environments.close();
       sessions.close();
       events.close();
+      workspaces.close();
     },
   };
 }
@@ -136,6 +141,7 @@ function createDurableDeploymentStores(
     const environments = new SqliteEnvironmentStore(db);
     const sessions = new SqliteSessionStore(db);
     const events = new EventStore(db);
+    const workspaces = new SqliteWorkspaceStore(db);
     const files = new LocalObjectFileStorage(db, resolvedObjectRoot);
     const sessionCoordinator = createSingleDatabaseSessionCoordinator({
       sessions,
@@ -153,6 +159,7 @@ function createDurableDeploymentStores(
     });
     return {
       agents,
+      workspaces,
       environments,
       sessions,
       events,
@@ -174,6 +181,27 @@ function createDurableDeploymentStores(
     releaseLock();
     throw error;
   }
+}
+
+// 0113 D8: the provisioning entry point for a live server's database. Opens a
+// second connection with the same durability pragmas — busy_timeout is
+// per-connection, so without it a concurrent server write makes key
+// mint/revoke fail instantly with SQLITE_BUSY. Deliberately does NOT take the
+// .oma.lock: that lock guards single-server ownership (runtime recovery, turn
+// coordination), not table writes; WAL is built for this short-lived writer.
+export function openWorkspaceStoreForProvisioning(
+  sqlitePath: string,
+): SqliteWorkspaceStore {
+  const resolvedSqlitePath = resolve(sqlitePath);
+  if (!existsSync(resolvedSqlitePath)) {
+    throw new Error(
+      `Provisioning requires an existing OMA database, none found at ${resolvedSqlitePath}. ` +
+        "Start the server with OMA_SQLITE_PATH once (or check the path) before provisioning keys.",
+    );
+  }
+  const db = new DatabaseSync(resolvedSqlitePath);
+  applyDurablePragmas(db);
+  return new SqliteWorkspaceStore(db);
 }
 
 export function applyDurablePragmas(db: DatabaseSync): void {

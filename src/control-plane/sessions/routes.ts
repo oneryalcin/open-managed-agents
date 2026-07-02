@@ -5,16 +5,12 @@ import {
   requestFingerprint,
   validateIdempotencyKey,
 } from "../request-idempotency.ts";
-import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
+import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
 import type { SessionEventsService } from "../events/types.ts";
 import { toManagedSession } from "./serialize.ts";
 import type { SessionService } from "./types.ts";
 
-interface AppEnv {
-  Variables: {
-    requestId: string;
-  };
-}
+type AppEnv = ControlPlaneRouteEnv;
 
 export function sessionsRoutes(
   service: SessionService,
@@ -30,7 +26,7 @@ export function sessionsRoutes(
       const method = c.req.method.toUpperCase();
       const concretePath = new URL(c.req.url).pathname;
       const response = await service.createIdempotent(
-        DEFAULT_WORKSPACE_ID,
+        workspaceIdFrom(c),
         body,
         {
           method,
@@ -49,7 +45,7 @@ export function sessionsRoutes(
       );
     }
     const body = await parseJsonBody(c.req);
-    const session = await service.create(DEFAULT_WORKSPACE_ID, body);
+    const session = await service.create(workspaceIdFrom(c), body);
     return c.json(session, 200);
   });
 
@@ -60,7 +56,7 @@ export function sessionsRoutes(
     const agentId = c.req.query("agent_id") || undefined;
     const includeArchived = parseBoolean(c.req.query("include_archived"));
     return c.json(
-      service.list(DEFAULT_WORKSPACE_ID, {
+      service.list(workspaceIdFrom(c), {
         ...(limit === undefined ? {} : { limit }),
         ...(page === undefined ? {} : { page }),
         ...(order === undefined ? {} : { order }),
@@ -73,7 +69,7 @@ export function sessionsRoutes(
 
   app.get("/:id", (c) => {
     return c.json(
-      service.retrieve(DEFAULT_WORKSPACE_ID, c.req.param("id")),
+      service.retrieve(workspaceIdFrom(c), c.req.param("id")),
       200,
     );
   });
@@ -81,17 +77,17 @@ export function sessionsRoutes(
   app.post("/:id/archive", async (c) => {
     const sessionId = c.req.param("id");
     const row = events.archiveSessionRowAfterPreflight(
-      DEFAULT_WORKSPACE_ID,
+      workspaceIdFrom(c),
       sessionId,
     );
-    await events.archiveSession(DEFAULT_WORKSPACE_ID, sessionId);
+    await events.archiveSession(workspaceIdFrom(c), sessionId);
     return c.json(toManagedSession(row), 200);
   });
 
   app.delete("/:id", async (c) => {
     const sessionId = c.req.param("id");
-    const deleted = await service.delete(DEFAULT_WORKSPACE_ID, sessionId);
-    await events.deleteSession(DEFAULT_WORKSPACE_ID, sessionId);
+    const deleted = await service.delete(workspaceIdFrom(c), sessionId);
+    await events.deleteSession(workspaceIdFrom(c), sessionId);
     return c.json(deleted, 200);
   });
 

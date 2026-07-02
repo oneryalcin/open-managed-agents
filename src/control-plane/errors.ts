@@ -65,6 +65,12 @@ export function invalidRequest(
   });
 }
 
+// Hosted-identical envelope (0113 probe rows 1-5): one generic message for
+// missing and invalid keys, no key-existence leak.
+export function authenticationFailed(): ApiError {
+  return new ApiError(401, "authentication_error", "Authentication failed");
+}
+
 export function notFound(message: string): ApiError {
   return new ApiError(404, "not_found_error", message);
 }

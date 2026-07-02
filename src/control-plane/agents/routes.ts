@@ -1,14 +1,15 @@
 import { Hono } from "hono";
 import { invalidRequest } from "../errors.ts";
 import { parseJsonBody, parseLimit } from "../http.ts";
-import { DEFAULT_WORKSPACE_ID, type AgentService } from "./types.ts";
+import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
+import type { AgentService } from "./types.ts";
 
-export function agentsRoutes(service: AgentService): Hono {
-  const app = new Hono();
+export function agentsRoutes(service: AgentService): Hono<ControlPlaneRouteEnv> {
+  const app = new Hono<ControlPlaneRouteEnv>();
 
   app.post("/", async (c) => {
     const body = await parseJsonBody(c.req);
-    const agent = service.create(DEFAULT_WORKSPACE_ID, body);
+    const agent = service.create(workspaceIdFrom(c), body);
     return c.json(agent, 200);
   });
 
@@ -17,7 +18,7 @@ export function agentsRoutes(service: AgentService): Hono {
     const page = c.req.query("page") || undefined;
     const includeArchived = parseBoolean(c.req.query("include_archived"));
     return c.json(
-      service.list(DEFAULT_WORKSPACE_ID, {
+      service.list(workspaceIdFrom(c), {
         ...(limit === undefined ? {} : { limit }),
         ...(page === undefined ? {} : { page }),
         ...(includeArchived === undefined ? {} : { includeArchived }),
@@ -28,14 +29,14 @@ export function agentsRoutes(service: AgentService): Hono {
 
   app.get("/:id", (c) => {
     return c.json(
-      service.retrieve(DEFAULT_WORKSPACE_ID, c.req.param("id")),
+      service.retrieve(workspaceIdFrom(c), c.req.param("id")),
       200,
     );
   });
 
   app.post("/:id/archive", (c) => {
     return c.json(
-      service.archive(DEFAULT_WORKSPACE_ID, c.req.param("id")),
+      service.archive(workspaceIdFrom(c), c.req.param("id")),
       200,
     );
   });
