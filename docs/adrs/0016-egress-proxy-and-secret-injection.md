@@ -167,3 +167,12 @@ proxy wiring into the Docker provider; then skills, then MCP on top.
 - Probe 44 (egress proxy, 8/8) and probe 45 (secrets envelope, 10/10), both
   deterministic, both with process notes. These are the evidence base; the
   implementation slices will carry their own contract tests.
+- **What probe 44 does NOT prove** (review-driven, do not overread): it
+  validates the proxy's policy/injection behavior for a *proxy-honoring*
+  client, and its deny checks assert the explicit 403/407 the policy branch
+  emits. It does NOT prove route-level confinement — the container uses default
+  networking, so §3's "proxy-only egress" is a design commitment to be
+  validated by an implementation-slice test that asserts a client with proxy
+  env removed / using raw sockets cannot egress directly. Likewise the
+  private-IP deny (§5) is confirmed *absent* in srt by probe 44, not present;
+  it is OMA's to add and test.

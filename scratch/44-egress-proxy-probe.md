@@ -22,10 +22,24 @@ container** as the client?
 | (d1) upstream observed the REAL secret | PASS | echo saw `Authorization: Bearer real-secret-…` |
 | (d2) boundary received only the SENTINEL from the container | PASS | `mutateHeaders` saw exactly `["Bearer srt-sentinel-…"]` |
 | (d3) reflective upstream returns the real secret in the response | PASS (expected caveat) | echo reflected the injected header — inherent, documented |
-| (b) non-allowlisted host denied | PASS | `curl: (7) CONNECT tunnel failed, response 403` |
-| (c) redirect to non-allowlisted host denied on re-entry | PASS | echo returned 302→example.com; the follow-up CONNECT got 403 |
+| (b) non-allowlisted host denied by policy (403) | PASS | `curl: (7) CONNECT tunnel failed, response 403` — asserts the explicit 403, so a DNS/network/TLS failure can't false-green |
+| (c) redirect to non-allowlisted host denied by policy (403) on re-entry | PASS | echo returned 302→example.com; the follow-up CONNECT got an explicit 403 |
 | (e) missing proxy auth rejected | PASS | `curl: (7) CONNECT tunnel failed, response 407` |
 | (f) no post-resolution private-IP deny in srt | PASS (documented gap) | allowlisted loopback served fine; smokescreen-style check is OMA's to add |
+
+## Scope limit (review-driven)
+
+This probe validates the **proxy's behavior for a proxy-honoring client**. The
+container uses default Docker networking and is only pointed at the proxy via
+`HTTPS_PROXY`; it is NOT route-confined (verified: `docker run curl
+https://example.com` with no proxy returns 200). A non-compliant client
+(raw sockets, `curl --noproxy '*'`, cleared env) could egress directly.
+**Route-level confinement — the `--network none` → proxy-only-egress shape — is
+ADR 0016 implementation work, not proven here.** The deny checks (b)/(c)/(e)
+assert the explicit 403/407 the proxy's policy branch emits (only the proxy
+produces it, and the CONNECT is rejected at the hostname filter before the
+target is resolved), so they cannot pass on a generic network failure;
+mutation-verified by flipping the allowlist to accept-all, which drops (b)/(c).
 
 ## What this confirms for the ADR
 

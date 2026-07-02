@@ -19,12 +19,18 @@
  *
  * Run: npx tsx scratch/44-egress-proxy-probe.ts   (requires a Docker daemon)
  *
- * The client is a real Docker container (curlimages/curl) whose ONLY egress
- * route is the proxy (HTTPS_PROXY) and whose env carries ONLY the sentinel;
- * it reaches the host proxy via host.docker.internal, with the MITM CA mounted
- * read-only. The container names "localhost" in CONNECT, but the proxy (on the
- * host) is what resolves it to the echo server — the container never reaches
- * the upstream directly.
+ * The client is a real Docker container (curlimages/curl) CONFIGURED to use
+ * the proxy (HTTPS_PROXY) and whose env carries ONLY the sentinel; it reaches
+ * the host proxy via host.docker.internal, with the MITM CA mounted read-only.
+ * The container names "localhost" in CONNECT, but the proxy (on the host) is
+ * what resolves it to the echo server.
+ *
+ * SCOPE LIMIT: this container uses DEFAULT docker networking, so it is NOT
+ * route-confined — a non-compliant client could ignore HTTPS_PROXY and egress
+ * directly (verified: `docker run curl https://example.com` returns 200 with
+ * no proxy). This probe validates the PROXY's behavior for a compliant client;
+ * route-level confinement (the `--network none` -> proxy-only-egress shape) is
+ * ADR 0016 implementation work, not what is validated here.
  *
  * CLIENT DRIVER: the container runs via async `spawn`, NOT execFileSync. The
  * proxy and echo server run in THIS process; a synchronous child would block
@@ -132,7 +138,8 @@ function curlClient(args: string[], withAuth = true): Promise<{ code: number; ou
     "run", "--rm",
     "-v", `${caPath}:/ca.pem:ro`,
     // The container has ONLY the sentinel; the real secret lives solely in
-    // the host proxy process. HTTPS_PROXY is the container's only egress.
+    // the host proxy process. HTTPS_PROXY configures curl to use the proxy
+    // (not route confinement — see SCOPE LIMIT in the header).
     "-e", `HTTPS_PROXY=${proxyHostUrl(withAuth)}`,
     "-e", `HTTP_PROXY=${proxyHostUrl(withAuth)}`,
     "-e", `API_TOKEN=${SENTINEL}`,
@@ -183,24 +190,33 @@ record(
   "echo reflected the injected header; non-reflective upstreams (github, etc.) do not",
 );
 
-// (b) non-allowlisted host denied
+// (b) non-allowlisted host denied. Assert the explicit 403 CONNECT denial:
+// only the proxy's policy branch emits it, and the proxy rejects the CONNECT
+// at the hostname filter *before* example.com is ever resolved — so a
+// DNS/network/TLS failure (which yields a different curl error, not
+// "response 403") cannot satisfy this. That closes the false-green Codex
+// flagged.
 const denied = await curlClient([`https://example.com/`]);
 record(
-  "(b) non-allowlisted host denied",
-  denied.code !== 0 && !denied.out.includes("<html"),
+  "(b) non-allowlisted host denied by policy (403)",
+  denied.code !== 0 && denied.out.includes("403") && !denied.out.includes("<html"),
   `curl exit ${denied.code}; output: ${denied.out.slice(0, 100).replaceAll("\n", " ")}`,
 );
 
-// (c) redirect to non-allowlisted host denied on re-entry
+// (c) redirect to non-allowlisted host denied on re-entry. Require: the echo
+// served the first hop (/redirect), the follow-up CONNECT to example.com is
+// denied with an explicit 403 (proving re-evaluation, not a generic failure),
+// and the redirect target body was never reached.
 const redirected = await curlClient([
   "-L", `https://localhost:${echoPort}/redirect`,
 ]);
 record(
-  "(c) redirect to non-allowlisted host denied",
+  "(c) redirect to non-allowlisted host denied by policy (403) on re-entry",
   redirected.code !== 0 &&
     upstreamSeen.some((s) => s.path === "/redirect") &&
+    redirected.out.includes("403") &&
     !redirected.out.includes("after-redirect"),
-  `curl exit ${redirected.code}; denials recorded: ${JSON.stringify(denials)}`,
+  `curl exit ${redirected.code}; output: ${redirected.out.slice(0, 100).replaceAll("\n", " ")}`,
 );
 
 // (e) missing proxy auth -> rejected (curl fails the CONNECT on 407)

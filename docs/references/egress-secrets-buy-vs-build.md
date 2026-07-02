@@ -285,9 +285,12 @@ Refuse (YAGNI):
    (403 CONNECT), (c) redirect to a non-allowlisted host denied on re-entry,
    (d) sentinel substituted at the boundary — the echo target observed the
    real value while the container's env held only the sentinel, (e) missing
-   proxy auth rejected (407). The private-IP check (f) is confirmed **absent**
-   in srt (loopback served because allowlisted) — OMA's to add. Green light on
-   the survey's terms.
+   proxy auth rejected (407). Scope: validates the proxy's behavior for a
+   proxy-honoring client — the container uses default networking, so
+   route-level confinement (proxy-only egress) is implementation work, not
+   proven here. The private-IP check (f) is confirmed **absent** in srt
+   (loopback served because allowlisted) — OMA's to add. Green light on the
+   survey's terms.
 
    Scope note on (d): boundary injection cannot hide the secret from a
    *reflective allowlisted upstream* — the request that leaves the boundary
