@@ -125,7 +125,11 @@ in-memory stores could never hold a provisioned key.
 
 Provisioning is an operator CLI, not an HTTP API. It opens a second,
 pragma-configured connection to the live server's SQLite file — no restart
-or downtime; minted and revoked keys take effect on the next request.
+or downtime; minted and revoked keys take effect on the next request. It
+refuses to touch any SQLite file the server has never initialized, so a
+mistyped path fails loudly instead of minting keys into the wrong database;
+start the server once with `OMA_SQLITE_PATH` + `OMA_FILE_STORAGE_ROOT`
+before provisioning.
 
 ```bash
 export OMA_SQLITE_PATH=/path/to/oma.db   # same file the server uses

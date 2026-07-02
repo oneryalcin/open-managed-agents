@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { runWorkspacesCli } from "../../../scripts/oma-workspaces.ts";
-import { openWorkspaceStoreForProvisioning } from "../deployment-storage.ts";
+import {
+  createDeploymentStoresFromEnv,
+  openWorkspaceStoreForProvisioning,
+} from "../deployment-storage.ts";
 
 const tempRoots: string[] = [];
 
@@ -15,11 +18,16 @@ afterEach(() => {
   }
 });
 
+// A database the durable server actually initialized once — provisioning
+// refuses anything else.
 function makeDb(): string {
   const root = mkdtempSync(join(tmpdir(), "oma-cli-"));
   tempRoots.push(root);
   const path = join(root, "oma.db");
-  new DatabaseSync(path).close();
+  createDeploymentStoresFromEnv({
+    OMA_SQLITE_PATH: path,
+    OMA_FILE_STORAGE_ROOT: join(root, "objects"),
+  }).close();
   return path;
 }
 
@@ -100,12 +108,40 @@ describe("oma-workspaces CLI", () => {
     });
   });
 
+  it("refuses to touch an existing SQLite file the server never initialized", () => {
+    const root = mkdtempSync(join(tmpdir(), "oma-cli-"));
+    tempRoots.push(root);
+    const strangerDb = join(root, "someone-elses.db");
+    const db = new DatabaseSync(strangerDb);
+    db.exec("CREATE TABLE invoices (id TEXT PRIMARY KEY)");
+    db.close();
+
+    const result = cli(strangerDb, "mint-key", "wrk_default");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("not an initialized OMA durable database");
+    // The stranger's database was not modified: no OMA tables appeared.
+    const check = new DatabaseSync(strangerDb);
+    const tables = check
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
+      .all() as { name: string }[];
+    check.close();
+    expect(tables.map((t) => t.name)).toEqual(["invoices"]);
+  });
+
   it("runs as a real subprocess with env, argv, and exit-code wiring", () => {
     const db = makeDb();
+    // Direct tsx entry (no npx indirection) with a hard timeout: execFileSync
+    // blocks the event loop, so a hung child would otherwise wedge the whole
+    // suite beyond Vitest's control.
     const stdout = execFileSync(
-      "npx",
-      ["tsx", "scripts/oma-workspaces.ts", "list-workspaces"],
-      { env: { ...process.env, OMA_SQLITE_PATH: db }, encoding: "utf8" },
+      process.execPath,
+      ["node_modules/tsx/dist/cli.mjs", "scripts/oma-workspaces.ts", "list-workspaces"],
+      {
+        env: { ...process.env, OMA_SQLITE_PATH: db },
+        encoding: "utf8",
+        timeout: 60_000,
+        killSignal: "SIGKILL",
+      },
     );
     expect(stdout).toContain("wrk_default\tDefault workspace");
   });
