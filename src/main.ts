@@ -79,47 +79,72 @@ export async function startAppliance(
 
   const { app, stores, authMode } = createDeploymentControlPlane(resolved);
 
-  // First boot = no key was ever minted (revoked tombstones count as minted).
-  // Minting through the live stores keeps this a single connection and means
-  // a crash before listen can't strand a printed-but-unusable key.
-  const minted =
-    authMode === "api-key" && stores.workspaces.countApiKeys() === 0
-      ? stores.workspaces.mintKey(DEFAULT_WORKSPACE_ID, "first-boot")
-      : undefined;
-
-  const { server, boundPort } = await new Promise<{
-    server: ReturnType<typeof serve>;
-    boundPort: number;
-  }>((resolvePromise) => {
-    const s = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
-      resolvePromise({ server: s, boundPort: info.port });
-    });
-  });
-
-  const baseUrl = `http://${host}:${boundPort}`;
-  log(`open-managed-agents listening on ${baseUrl}`);
-  log(`  data: ${resolved.OMA_SQLITE_PATH} | files: ${resolved.OMA_FILE_STORAGE_ROOT}`);
-  log(`  auth: ${authMode}`);
-  if (minted !== undefined) {
-    log("");
-    log(`First boot: minted the initial API key for ${minted.workspaceId}.`);
-    log("It is shown once and stored only as a hash — save it now:");
-    log("");
-    log(`  x-api-key: ${minted.plaintextKey}`);
-    log("");
-    log(`Connect any Anthropic SDK client with base URL ${baseUrl} and that x-api-key.`);
-    log("Mint more keys/workspaces: npx tsx scripts/oma-workspaces.ts --help");
-  }
-
-  return {
-    port: boundPort,
-    close: async () => {
-      await new Promise<void>((resolvePromise, reject) => {
-        server.close((err) => (err ? reject(err) : resolvePromise()));
+  let server: ReturnType<typeof serve> | undefined;
+  try {
+    const bound = await new Promise<{
+      server: ReturnType<typeof serve>;
+      boundPort: number;
+    }>((resolvePromise, reject) => {
+      const onError = (error: Error) => reject(error);
+      const s = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
+        s.off("error", onError);
+        resolvePromise({ server: s, boundPort: info.port });
       });
-      stores.close();
-    },
-  };
+      s.on("error", onError);
+    });
+    server = bound.server;
+    const boundPort = bound.boundPort;
+
+    // Mint only after the server has bound. First boot = no key was ever
+    // minted (revoked tombstones count as minted), so persisting a key on a
+    // boot that then fails to bind (EADDRINUSE) would make every later boot
+    // skip minting — an unprinted key locking the operator out. A key that
+    // prints but never serves only costs a retry; the reverse costs the
+    // quickstart.
+    const minted =
+      authMode === "api-key" && stores.workspaces.countApiKeys() === 0
+        ? stores.workspaces.mintKey(DEFAULT_WORKSPACE_ID, "first-boot")
+        : undefined;
+
+    const baseUrl = `http://${host}:${boundPort}`;
+    log(`open-managed-agents listening on ${baseUrl}`);
+    log(`  data: ${resolved.OMA_SQLITE_PATH} | files: ${resolved.OMA_FILE_STORAGE_ROOT}`);
+    log(`  auth: ${authMode}`);
+    if (minted !== undefined) {
+      log("");
+      log(`First boot: minted the initial API key for ${minted.workspaceId}.`);
+      log("It is shown once and stored only as a hash — save it now:");
+      log("");
+      log(`  x-api-key: ${minted.plaintextKey}`);
+      log("");
+      log(`Connect any Anthropic SDK client with base URL ${baseUrl} and that x-api-key.`);
+      // tsx is a devDependency and absent from the Docker image; the node
+      // flag works in both the checkout and the container.
+      log("Mint more keys/workspaces: node --experimental-transform-types scripts/oma-workspaces.ts --help");
+    }
+
+    return {
+      port: boundPort,
+      close: async () => {
+        await closeServer(bound.server);
+        stores.close();
+      },
+    };
+  } catch (error) {
+    // Failed startups must release everything (notably .oma.lock) so the
+    // operator's retry is a clean boot, not a lock error.
+    if (server !== undefined) {
+      await closeServer(server).catch(() => {});
+    }
+    stores.close();
+    throw error;
+  }
+}
+
+function closeServer(server: ReturnType<typeof serve>): Promise<void> {
+  return new Promise<void>((resolvePromise, reject) => {
+    server.close((err) => (err ? reject(err) : resolvePromise()));
+  });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

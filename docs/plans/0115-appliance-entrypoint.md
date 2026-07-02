@@ -44,15 +44,22 @@ Sandbox provider is untouched: default remains "none", so agents that expose
 builtin tools fail closed until the operator configures a provider — same
 policy as [0112](0112-pi-runtime-rollout-policy.md).
 
-### D3 — First boot mints the initial key through the live stores
+### D3 — First boot mints the initial key through the live stores, after bind
 
 First boot is detected as `workspace_api_keys` having **zero rows ever
 minted** (revoked tombstones count as minted, so revoking every key does not
 resurrect a printed credential on next boot). When true and auth mode is
 `api-key`, the appliance mints one key on `wrk_default` labelled `first-boot`
-and prints the plaintext once, before the listen banner completes. Minting
-uses the same in-process stores as the server — no second SQLite connection,
-no provisioning-CLI dependency at boot.
+and prints the plaintext once. Minting uses the same in-process stores as the
+server — no second SQLite connection, no provisioning-CLI dependency at boot.
+
+**Ordering is bind → mint → print** (review finding, all three reviewers
+converged, one reproduced it): minting before a bind that then fails
+(`EADDRINUSE`) would persist a key whose plaintext was never printed, and
+every later boot would skip minting — a locked-out quickstart. A key that
+prints but never serves only costs a retry; the reverse costs the appliance
+contract. Startup failures reject (the listen promise has an `error` path)
+and close the stores so `.oma.lock` is released for the retry.
 
 `createDeploymentControlPlane(env, opts)` was added for this (and for
 boot-twice tests): identical wiring to `createDeploymentControlPlaneApp`, but
@@ -77,11 +84,13 @@ plus a minimal `docker-compose.yml` (one service, one named volume at
 
 ## Verification
 
-- 8 tests in `src/control-plane/__tests__/appliance-boot.test.ts`: key printed
+- 9 tests in `src/control-plane/__tests__/appliance-boot.test.ts`: key printed
   exactly once; 401 without key; 200 with it; no re-mint on second boot; key
-  survives restart; `disabled` mode mints nothing and serves openly; env
-  derivation precedence; port validation. Mutation-checked: always-mint and
-  fail-open-default mutations each caught by the suite.
+  survives restart; occupied-port bind failure rejects with nothing minted and
+  the lock released (a clean retry then mints); `disabled` mode mints nothing
+  and serves openly; env derivation precedence; port validation.
+  Mutation-checked: always-mint, fail-open-default, missing listen-error
+  listener, and missing stores-close-on-failure mutations each caught.
 - Live end-to-end through the real shim: boot on 41800, 401/200 checks, agent
   create, SIGTERM clean shutdown (port freed, lock released), reboot with no
   re-mint and the agent persisted.

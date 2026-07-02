@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -87,6 +88,31 @@ describe("appliance boot (plan 0115)", () => {
     const second = await boot({ OMA_HOME: home });
     const res = await listAgents(second.appliance.port, key);
     expect(res.status).toBe(200);
+  });
+
+  it("mints nothing and releases the lock when the port bind fails", async () => {
+    const blocker = await new Promise<Server>((resolve) => {
+      const s = createServer();
+      s.listen(0, "127.0.0.1", () => resolve(s));
+    });
+    cleanups.push(
+      () => new Promise<void>((resolve) => blocker.close(() => resolve())),
+    );
+    const occupiedPort = (blocker.address() as { port: number }).port;
+
+    const home = makeHome();
+    await expect(
+      startAppliance(
+        { OMA_HOME: home, OMA_PORT: String(occupiedPort) },
+        { log: () => {} },
+      ),
+    ).rejects.toThrow(/EADDRINUSE/);
+
+    // A stranded key or a leaked .oma.lock would each break this boot: the
+    // lock would refuse startup, and an already-minted row would suppress
+    // the first-boot key line.
+    const retry = await boot({ OMA_HOME: home });
+    expect(retry.logs.some((l) => KEY_LINE.test(l))).toBe(true);
   });
 
   it("respects OMA_AUTH_MODE=disabled: no key minted, requests open", async () => {
