@@ -50,6 +50,7 @@ still tracked separately in the roadmap.
 
 - [Scratch: Pi 0.75.4 empirical findings](scratch-pi-findings.md) — what we learn from probing Pi; feeds back into the ADRs below as decisions firm up.
 - [Threat model](threat-model.md) — tenant boundary, auth, and DoS sections now describe shipped mechanisms (plan 0113, #129); egress, secrets, log redaction, and teardown remain open before untrusted multi-tenant deployment.
+- [Egress + secrets buy-vs-build survey](references/egress-secrets-buy-vs-build.md) — verdict: vendor Anthropic's sandbox-runtime proxy stack for allowlist + sentinel-substitution egress; envelope-encrypt secrets in our own SQLite (no vault dependency, OpenBao as a designed-for-later backend).
 
 ## Implementation plans
 
@@ -83,6 +84,10 @@ still tracked separately in the roadmap.
   issue #129 ADR for `x-api-key` workspace identity (wire-probed hosted 401
   envelope and middleware ordering), hashed key storage, fail-closed
   `OMA_AUTH_MODE`, and the admission-limit shape that keys off it.
+- [Appliance product roadmap](plans/0114-appliance-product-roadmap.md) —
+  product direction after #129: install-and-go appliance (packaging, admin
+  dashboard, observability, usage metering) plus the egress→skills→MCP
+  capability track; names what is deferred and which seams keep it cheap.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
 - [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —
