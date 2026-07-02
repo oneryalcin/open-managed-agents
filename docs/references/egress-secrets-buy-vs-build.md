@@ -308,6 +308,8 @@ Refuse (YAGNI):
    rejection, and KEK rotation that leaves the ciphertext byte-for-byte
    identical (the KMS/OpenBao-transit seam). Record fields for the schema:
    `version, kekId, wrapIv, wrapTag, wrappedDek, ctIv, ctTag, ct`.
-3. Then the ADR: egress policy contract + `SecretsStore`, citing this survey;
-   it also closes #130 ("explicit ruling that provider secret proxy stays out
-   of scope and OMA-level boundary injection is the design instead").
+3. **The ADR** — ✅ DONE 2026-07-02:
+   [ADR 0016](../adrs/0016-egress-proxy-and-secret-injection.md) (accepted).
+   Egress policy contract + `SecretsStore`, citing this survey and both
+   probes; makes the explicit #130 ruling (OMA-level boundary injection, not
+   provider-carried). Implementation slices follow, each its own PR.
