@@ -278,18 +278,21 @@ Refuse (YAGNI):
 
 ## Next steps (before any ADR)
 
-1. **Confidence probe** — ✅ DONE 2026-07-02, 8/8, deterministic
+1. **Confidence probe** — ✅ DONE 2026-07-02, deterministic
    (`scratch/44-egress-proxy-probe.ts` + `.md`). Drove srt's proxy (deep
-   `dist/` import) with a real Docker container as the client and proved: (a)
-   allowlisted host works via TLS termination, (b) non-allowlisted host denied
-   (403 CONNECT), (c) redirect to a non-allowlisted host denied on re-entry,
-   (d) sentinel substituted at the boundary — the echo target observed the
-   real value while the container's env held only the sentinel, (e) missing
-   proxy auth rejected (407). Scope: validates the proxy's behavior for a
-   proxy-honoring client — the container uses default networking, so
-   route-level confinement (proxy-only egress) is implementation work, not
-   proven here. The private-IP check (f) is confirmed **absent** in srt
-   (loopback served because allowlisted) — OMA's to add. Green light on the
+   `dist/` import) with a real Docker container and proved (enforcement
+   checks): allowlisted host via TLS termination; non-allowlisted host denied
+   at CONNECT (403); allowlisted host + disallowed **path** denied by
+   `filterRequest` (403); redirect to a non-allowlisted host denied on
+   re-entry; sentinel→real substitution at the boundary (container env holds
+   only the sentinel); missing proxy auth rejected (407); verify-before-inject
+   (a wrong upstream CA fails, secret never leaves). Load-bearing assertions
+   assert the explicit 403/407 the proxy emits and are mutation-checked. Scope:
+   validates the proxy's behavior for a *proxy-honoring* client on default
+   networking — route-level confinement (proxy-only egress) is implementation
+   work; and path policy/injection apply only to terminated TLS (opaque tunnels
+   bypass them). The private-IP/SSRF deny is confirmed **absent** in srt — OMA's
+   to add, connecting to a pinned IP to resist DNS rebinding. Green light on the
    survey's terms.
 
    Scope note on (d): boundary injection cannot hide the secret from a
@@ -303,11 +306,12 @@ Refuse (YAGNI):
    (Osaurus's output scrubbing in
    [agentos-osaurus-prior-art.md](agentos-osaurus-prior-art.md) is the prior
    art).
-2. **Envelope-encryption probe** — ✅ DONE 2026-07-02, 10/10
+2. **Envelope-encryption probe** — ✅ DONE 2026-07-02, 11/11
    (`scratch/45-envelope-encryption-probe.ts` + `.md`). `node:crypto` alone
    (AES-256-GCM per-secret DEK, KEK via HKDF from the master secret) proves
    round-trip, fresh-DEK non-determinism, GCM tamper detection on both ct and
-   wrapped DEK, AAD record-binding (mutation-verified load-bearing), wrong-key
+   wrapped DEK, AAD record-binding on both layers (mutation-verified
+   load-bearing), truncated-tag rejection (authTagLength pinned), wrong-key
    rejection, and KEK rotation that leaves the ciphertext byte-for-byte
    identical (the KMS/OpenBao-transit seam). Record fields for the schema:
    `version, kekId, wrapIv, wrapTag, wrappedDek, ctIv, ctTag, ct`.

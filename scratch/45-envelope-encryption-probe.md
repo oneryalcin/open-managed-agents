@@ -13,7 +13,7 @@ Can `node:crypto` (zero new deps) back the survey's chosen design —
 AES-256-GCM per-secret DEK, wrapped by a master KEK from env/file — with the
 properties the ADR will rely on?
 
-## Result: 10/10, deterministic
+## Result: 11/11, deterministic
 
 | Check | Result |
 |---|---|
@@ -23,10 +23,17 @@ properties the ADR will rely on?
 | (4) wrapped-DEK tamper detected | PASS |
 | (5) ciphertext cannot be opened under a different record id (AAD) | PASS |
 | (6) the wrong master key cannot open | PASS |
+| (6b) truncated auth tag rejected (authTagLength=16 pinned + length guard) | PASS |
 | (7a) rotation leaves ciphertext byte-for-byte identical | PASS |
 | (7b) the new master key opens the rotated record | PASS |
 | (7c) the old master key no longer opens the rotated record | PASS |
 | (8) a version tag is present for migration | PASS |
+
+Both envelope layers now bind an AAD (ct: `<version>:<recordId>`; wrap:
+`<version>:<kekId>:<recordId>`), and `gcmOpen` pins `authTagLength: 16` and
+rejects tags whose length ≠ 16 — Node otherwise accepts a truncated tag
+(verified: a 4-byte tag decrypts with only a DEP0182 warning), which would
+degrade forgery resistance to 2^32 for an attacker-writable DB column.
 
 Rigor check: dropping the AAD from both seal and open (a mutation) keeps (1)
 passing but flips (5) to FAIL — so (5) genuinely exercises record binding, it

@@ -14,18 +14,23 @@ Does `@anthropic-ai/sandbox-runtime`'s proxy stack — driven directly (deep
 enforce the egress + secret-injection invariants against a **real Docker
 container** as the client?
 
-## Result: 8/8, deterministic across two runs
+## Result: 9/9 enforcement checks, deterministic
 
 | Check | Result | Evidence |
 |---|---|---|
 | (a) allowlisted host reachable via TLS termination | PASS | container curl exit 0; upstream saw the request |
 | (d1) upstream observed the REAL secret | PASS | echo saw `Authorization: Bearer real-secret-…` |
 | (d2) boundary received only the SENTINEL from the container | PASS | `mutateHeaders` saw exactly `["Bearer srt-sentinel-…"]` |
-| (d3) reflective upstream returns the real secret in the response | PASS (expected caveat) | echo reflected the injected header — inherent, documented |
-| (b) non-allowlisted host denied by policy (403) | PASS | `curl: (7) CONNECT tunnel failed, response 403` — asserts the explicit 403, so a DNS/network/TLS failure can't false-green |
-| (c) redirect to non-allowlisted host denied by policy (403) on re-entry | PASS | echo returned 302→example.com; the follow-up CONNECT got an explicit 403 |
-| (e) missing proxy auth rejected | PASS | `curl: (7) CONNECT tunnel failed, response 407` |
-| (f) no post-resolution private-IP deny in srt | PASS (documented gap) | allowlisted loopback served fine; smokescreen-style check is OMA's to add |
+| (d3) reflective upstream returns the real secret in the response | PASS (documents the caveat) | echo reflected the injected header — inherent, documented |
+| (b) non-allowlisted host denied at CONNECT (403) | PASS | `curl: (7) CONNECT tunnel failed, response 403` — asserts the explicit 403, so a DNS/network/TLS failure can't false-green |
+| (b2) allowlisted host + disallowed **path** denied by `filterRequest` (403) | PASS | `http_code=403`; `filterRequest` recorded the `/blocked` denial — exercises the per-request-policy DENY branch |
+| (c) redirect to non-allowlisted host denied (403) on re-entry | PASS | echo returned 302→example.com; the follow-up CONNECT got an explicit 403 |
+| (e) missing proxy auth rejected (407) | PASS | `curl: (7) CONNECT tunnel failed, response 407` |
+| (g) verify-before-inject: wrong upstream CA fails, secret never leaves | PASS | `http_code=502`; echo request count unchanged — mutation-verified (correct CA → echo receives it, 200, check flips) |
+
+NOTE (not a counted check): srt has **no** post-resolution private-IP deny — the
+allowlisted loopback target was served with no objection. A confirmed gap; the
+smokescreen-style connect-to-pinned-IP check is OMA's to add.
 
 ## Scope limit (review-driven)
 
@@ -44,10 +49,15 @@ mutation-verified by flipping the allowlist to accept-all, which drops (b)/(c).
 ## What this confirms for the ADR
 
 - **The survey's chosen architecture works as specified.** Hostname allowlist
-  (`filter`), full-URL policy on the decrypted request (`filterRequest`), TLS
-  termination with cert-verified upstream, per-request redirect re-evaluation,
-  per-session proxy auth token, and sentinel→real substitution at the boundary
-  (`mutateHeaders`) all behave as the survey claimed — verified, not recalled.
+  (`filter`, check b), full-URL path policy on the decrypted request
+  (`filterRequest` DENY branch, check b2), TLS termination with cert-verified
+  upstream (check g, verify-before-inject), per-request redirect re-evaluation
+  (check c), per-session proxy auth token (check e), and sentinel→real
+  substitution at the boundary (`mutateHeaders`, checks d1/d2) all behave as
+  the survey claimed — each with its own enforcement check, not recalled.
+  Caveat: path policy and injection apply only to terminated TLS; srt falls
+  back to an opaque tunnel for TLS-termination opt-outs and non-TLS CONNECT
+  bytes (documented in ADR 0016 §3).
 - **The credential boundary holds.** The container's env carried only the
   sentinel; the real secret existed solely in the host proxy process; the
   upstream received the real value. (d2) is the load-bearing proof.

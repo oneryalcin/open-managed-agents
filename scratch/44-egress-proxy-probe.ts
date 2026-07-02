@@ -6,16 +6,18 @@
  * docs/references/egress-secrets-buy-vs-build.md?
  *
  *   (a) allowlisted host works through TLS termination;
- *   (b) non-allowlisted host is denied (not tunnelled);
- *   (c) redirect to a non-allowlisted host is denied on re-entry;
- *   (d) sentinel -> real substitution happens at the boundary: the client
- *       sends the sentinel, the upstream observes the real value, and the
- *       client's environment never holds the real value (the echoed response
- *       showing it is the known reflective-upstream caveat);
- *   (e) missing proxy auth is rejected (407) - the per-session policy key;
- *   (f) documented gap: srt has no post-DNS-resolution private-IP deny
- *       (our allowlisted target IS loopback and nothing objects) - the
- *       smokescreen-style check is OMA's to add.
+ *   (b) non-allowlisted host is denied at CONNECT (403);
+ *   (b2) allowlisted host + disallowed PATH denied by filterRequest (403);
+ *   (c) redirect to a non-allowlisted host is denied on re-entry (403);
+ *   (d1/d2) sentinel -> real substitution at the boundary: upstream observes
+ *       the real value; the boundary saw only the sentinel; container env holds
+ *       only the sentinel;
+ *   (d3) reflective-upstream caveat, made explicit (secret echoes back);
+ *   (e) missing proxy auth is rejected (407);
+ *   (g) verify-before-inject: a wrong upstream CA fails and the secret never
+ *       leaves (echo never sees it).
+ *   NOTE: srt has no post-DNS private-IP deny (allowlisted loopback served) —
+ *       the smokescreen-style check is OMA's to add.
  *
  * Run: npx tsx scratch/44-egress-proxy-probe.ts   (requires a Docker daemon)
  *
@@ -103,13 +105,17 @@ const proxy = createHttpProxyServer({
   filter: (port, host) => host === "localhost" && port === echoPort,
   mitmCA,
   // Full-URL policy on the decrypted request (origin+path rules are ours).
+  // Path "/blocked" is denied even on the allowlisted host, so the
+  // filterRequest DENY branch is actually exercised (check b2).
   filterRequest: async (request) => {
     const url = new URL(request.url);
-    if (url.hostname === "localhost" && Number(url.port) === echoPort) {
+    const onAllowedHost = url.hostname === "localhost" && Number(url.port) === echoPort;
+    if (onAllowedHost && url.pathname !== "/blocked") {
       return { action: "allow" };
     }
     denials.push(request.url);
-    return { action: "deny", reason: `policy: ${url.hostname} not allowlisted` };
+    const why = onAllowedHost ? `path ${url.pathname} blocked` : `${url.hostname} not allowlisted`;
+    return { action: "deny", reason: `policy: ${why}` };
   },
   // Boundary injection: replace the sentinel bearer with the real secret.
   mutateHeaders: (headers, destHost) => {
@@ -127,23 +133,27 @@ const proxyPort = (proxy.address() as { port: number }).port;
 // --- 3. Docker container as the sandboxed client --------------------------
 const caPath = join(work, "mitm-ca.pem");
 writeFileSync(caPath, mitmCA.certPem);
-const proxyHostUrl = (withAuth: boolean) =>
+const proxyHostUrl = (withAuth: boolean, port = proxyPort) =>
   withAuth
-    ? `http://srt:${PROXY_TOKEN}@host.docker.internal:${proxyPort}`
-    : `http://host.docker.internal:${proxyPort}`;
+    ? `http://srt:${PROXY_TOKEN}@host.docker.internal:${port}`
+    : `http://host.docker.internal:${port}`;
 
 // Async so the in-process proxy/echo keep serving while the container runs.
-function curlClient(args: string[], withAuth = true): Promise<{ code: number; out: string }> {
+function curlClient(
+  args: string[],
+  withAuth = true,
+  port = proxyPort,
+): Promise<{ code: number; out: string }> {
   const child = spawn("docker", [
     "run", "--rm",
     "-v", `${caPath}:/ca.pem:ro`,
     // The container has ONLY the sentinel; the real secret lives solely in
     // the host proxy process. HTTPS_PROXY configures curl to use the proxy
     // (not route confinement — see SCOPE LIMIT in the header).
-    "-e", `HTTPS_PROXY=${proxyHostUrl(withAuth)}`,
-    "-e", `HTTP_PROXY=${proxyHostUrl(withAuth)}`,
+    "-e", `HTTPS_PROXY=${proxyHostUrl(withAuth, port)}`,
+    "-e", `HTTP_PROXY=${proxyHostUrl(withAuth, port)}`,
     "-e", `API_TOKEN=${SENTINEL}`,
-    "curlimages/curl:latest",
+    "curlimages/curl@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13",
     "--cacert", "/ca.pem", "-sS", "--max-time", "15", ...args,
   ]);
   return new Promise((resolvePromise) => {
@@ -203,6 +213,20 @@ record(
   `curl exit ${denied.code}; output: ${denied.out.slice(0, 100).replaceAll("\n", " ")}`,
 );
 
+// (b2) allowlisted HOST but disallowed PATH denied inside the tunnel by
+// filterRequest — exercises the per-request-policy DENY branch (which (b)/(c)
+// never reach, since they're denied at the CONNECT hostname filter). The
+// CONNECT succeeds, so the deny is a 403 *inside* the tunnel (curl exit 0):
+// capture the HTTP status with -w, and filterRequest records the URL.
+const pathDenied = await curlClient([
+  "-o", "/dev/null", "-w", "%{http_code}", `https://localhost:${echoPort}/blocked`,
+]);
+record(
+  "(b2) allowlisted host + disallowed path denied by filterRequest (403)",
+  pathDenied.out.includes("403") && denials.some((u) => u.endsWith("/blocked")),
+  `http_code=${pathDenied.out.trim()}; filterRequest denials: ${JSON.stringify(denials)}`,
+);
+
 // (c) redirect to non-allowlisted host denied on re-entry. Require: the echo
 // served the first hop (/redirect), the follow-up CONNECT to example.com is
 // denied with an explicit 403 (proving re-evaluation, not a generic failure),
@@ -219,26 +243,71 @@ record(
   `curl exit ${redirected.code}; output: ${redirected.out.slice(0, 100).replaceAll("\n", " ")}`,
 );
 
-// (e) missing proxy auth -> rejected (curl fails the CONNECT on 407)
+// (e) missing proxy auth -> rejected. Assert the explicit 407 (only the
+// proxy's auth branch emits it) plus no secret leak, so an infra failure
+// can't false-green.
 const noAuth = await curlClient(
   [`https://localhost:${echoPort}/headers`],
   false,
 );
 record(
-  "(e) missing proxy auth rejected",
-  noAuth.code !== 0 && !noAuth.out.includes(REAL_SECRET),
+  "(e) missing proxy auth rejected (407)",
+  noAuth.code !== 0 && noAuth.out.includes("407") && !noAuth.out.includes(REAL_SECRET),
   `curl exit ${noAuth.code}; output: ${noAuth.out.slice(0, 90).replaceAll("\n", " ")}`,
 );
 
-// (f) private-IP gap: our allowlisted target IS a loopback address and srt
-// raised no objection anywhere above - post-resolution IP checks don't exist.
+// (g) verify-before-inject: srt's upstream leg is cert-verified BEFORE mutated
+// headers leave (ADR §3's most safety-critical claim). Negative test: a second
+// proxy whose upstream-CA does NOT match the echo cert. The tunnel establishes
+// (host allowed), the upstream TLS verify fails, and the proxy returns 5xx
+// inside the tunnel. The load-bearing proof: the echo NEVER receives the
+// request — the mutated header (real secret) is never sent to the unverified
+// peer — and the response is not 200. Mutation-verified: swapping in the
+// correct CA makes the echo receive it (200), flipping this check.
+const wrongCaProxy = createHttpProxyServer({
+  filter: (port, host) => host === "localhost" && port === echoPort,
+  mitmCA,
+  filterRequest: async () => ({ action: "allow" }),
+  mutateHeaders: (headers, destHost) => {
+    if (destHost === "localhost" && headers.authorization === `Bearer ${SENTINEL}`) {
+      headers.authorization = `Bearer ${REAL_SECRET}`;
+    }
+  },
+  // Deliberately the WRONG CA (a fresh MITM CA cert, not the echo's).
+  tlsTerminateUpstreamCA: mitmCA.certPem,
+  proxyAuthToken: PROXY_TOKEN,
+});
+await new Promise<void>((r) => wrongCaProxy.listen(0, "0.0.0.0", r));
+const wrongCaPort = (wrongCaProxy.address() as { port: number }).port;
+const echoSeenBefore = upstreamSeen.length;
+const wrongCa = await curlClient(
+  [
+    "-H", `Authorization: Bearer ${SENTINEL}`,
+    "-o", "/dev/null", "-w", "%{http_code}",
+    `https://localhost:${echoPort}/headers`,
+  ],
+  true,
+  wrongCaPort,
+);
 record(
-  "(f) documented gap: no post-resolution private-IP deny in srt",
-  upstreamSeen.length > 0,
-  "allowlisted localhost (loopback) served fine; smokescreen-style check is OMA's to add",
+  "(g) verify-before-inject: wrong upstream CA fails, secret never leaves",
+  upstreamSeen.length === echoSeenBefore && !wrongCa.out.includes("200"),
+  `http_code=${wrongCa.out.trim()}; echo requests still ${upstreamSeen.length} (was ${echoSeenBefore})`,
+);
+
+// NOTES (not enforcement checks — recorded for the ADR, not counted as proof):
+// - (d3) above documents the reflective-upstream caveat (a PASS that fires
+//   *because* the secret leaks back through a reflective echo).
+// - srt has no post-resolution private-IP deny: the allowlisted loopback
+//   target was served with no objection. A confirmed gap, not a proof.
+console.log(
+  `\nNOTE: srt served the allowlisted loopback target with no private-IP ` +
+    `objection (upstream saw ${upstreamSeen.length} reqs) — no SSRF/private-IP ` +
+    `deny exists; OMA must add the smokescreen-style check.`,
 );
 
 // --- teardown --------------------------------------------------------------
+await new Promise<void>((r) => wrongCaProxy.close(() => r()));
 await new Promise<void>((r) => proxy.close(() => r()));
 await new Promise<void>((r) => echo.close(() => r()));
 await disposeMitmCA(mitmCA);

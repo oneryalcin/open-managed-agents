@@ -23,14 +23,17 @@ The design was chosen by a source-verified buy-vs-build survey
 ([egress-secrets-buy-vs-build.md](../references/egress-secrets-buy-vs-build.md))
 and then de-risked by two confidence probes before this ADR was written:
 
-- **Probe 44** (`scratch/44-egress-proxy-probe.ts`, 8/8): drove Anthropic's
+- **Probe 44** (`scratch/44-egress-proxy-probe.ts`): drove Anthropic's
   `sandbox-runtime` (srt) proxy stack against a real Docker container and
-  proved allowlist enforcement, TLS termination, redirect re-evaluation,
-  per-session proxy auth, and sentinel→real substitution with only the
-  sentinel ever in the container's environment.
-- **Probe 45** (`scratch/45-envelope-encryption-probe.ts`, 10/10): proved the
-  secrets envelope in `node:crypto` alone — per-secret DEK, master-KEK wrap,
-  AAD record-binding, and rotation that leaves ciphertext untouched.
+  proved (enforcement checks) hostname-allowlist denial (403), per-request
+  path-policy denial via `filterRequest`, redirect re-evaluation, per-session
+  proxy auth (407), sentinel→real substitution with only the sentinel in the
+  container's environment, and verify-before-inject (a wrong upstream CA fails
+  and the secret never leaves). Confirmed *absent*: any private-IP/SSRF deny.
+- **Probe 45** (`scratch/45-envelope-encryption-probe.ts`): proved the secrets
+  envelope in `node:crypto` alone — per-secret DEK, master-KEK wrap, AAD
+  record-binding on both layers (mutation-verified load-bearing), truncated-tag
+  rejection, and rotation that leaves ciphertext untouched.
 
 ## Decision
 
@@ -41,8 +44,13 @@ proxy stack (`http-proxy`, `tls-terminate-proxy`, `mitm-ca`, `request-filter`,
 ~1,250 LOC, Apache-2.0), not taken as a dependency: srt does not export
 `createHttpProxyServer`, has no `exports` map, and self-labels as a research
 preview (probe 44 confirmed the deep `dist/` import works but is unsupported).
-Vendoring means we adopt security-reviewed code and track upstream, rather
-than lean on an unstable API or reimplement TLS-termination hygiene ourselves.
+Vendoring lets us adopt a working implementation and track upstream rather than
+lean on an unstable API or reimplement TLS-termination hygiene ourselves.
+Caveat we own (Consequences): srt is upstream-labelled a research preview and
+we are not citing an independent security audit; vendoring forfeits npm
+advisories, so every upstream release must be hand-diffed against our vendored
+copy on a committed cadence, and the code needs its own review before it is a
+production security boundary.
 
 We reject provider-carried secret substitution (microsandbox's built-in
 proxy): #121/#130 could never prove it end-to-end, and OMA-owned injection
@@ -59,7 +67,9 @@ authenticated workspace and the session's environment, and handed to the
 proxy through a narrow module boundary. Policy is testable without a running
 proxy and maps directly onto hosted `environment.config.networking`. We adopt
 the hosted allowlist *mechanism* but keep OMA's **default-deny** posture: an
-environment with no networking config gets no egress.
+environment with no networking config **stays at `--network none`** — no proxy
+is stood up at all, so there is no egress even if the vendored proxy has a bug.
+The proxy exists only for environments that explicitly grant egress.
 
 ### 3. Secrets never enter the sandbox; the proxy injects at the boundary
 
@@ -71,40 +81,87 @@ sandbox trust bundle (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `GIT_SSL_CAINFO`,
 pip/curl equivalents), with a per-host termination opt-out for cert-pinned /
 mTLS upstreams. The sandbox network shape changes from `--network none` to
 **proxy-only egress** (an internal network whose sole route is the proxy),
-so the proxy is a wall, not an env-var honor system.
+so the proxy is a wall, not an env-var honor system. (Probe 44 did not prove
+this — it used a proxy-honoring client on default networking; an
+implementation-slice test must assert that a client with proxy env removed /
+using raw sockets cannot egress directly.)
+
+**Coverage boundary — path policy and injection are TLS-only.** srt falls back
+to an *opaque byte tunnel* (no `filterRequest`, no path policy, no injection)
+for two cases: a per-host TLS-termination opt-out (§ cert-pinned/mTLS above),
+and any CONNECT whose first bytes are not a TLS ClientHello. An allowlisted
+host:port therefore grants the sandbox a raw-TCP channel that policy does not
+inspect. v1 **rejects non-TLS CONNECT payloads** unless the host is explicitly
+flagged for opaque tunnelling, and documents that path/method policy and
+injection are guarantees only for terminated TLS.
 
 ### 4. Secrets are envelope-encrypted in OMA's SQLite behind a `SecretsStore` interface
 
 No vault dependency. Per probe 45: each secret is encrypted under a random
 per-secret DEK (AES-256-GCM); the DEK is wrapped by a KEK derived
-`HKDF-SHA256(masterSecret, info="oma-kek:<kekId>")` from `OMA_MASTER_KEY` /
-key file; the ciphertext's AAD is `<version>:<recordId>` to prevent
-cross-record swaps. Persisted fields:
-`version, kekId, wrapIv, wrapTag, wrappedDek, ctIv, ctTag, ct`. Decisive
-rationale from the survey: OpenBao's own single-node static auto-unseal reads
-its master key from env/file — cryptographically the same trust model — so a
-vault sidecar adds operational weight without a stronger root of trust on one
+`HKDF-SHA256(masterSecret, info="oma-kek:<kekId>")`; both layers bind an AAD
+(`<version>:<recordId>` on the ciphertext, `<version>:<kekId>:<recordId>` on
+the wrap) to prevent cross-record swaps. Persisted fields:
+`version, kekId, wrapIv, wrapTag, wrappedDek, ctIv, ctTag, ct`.
+
+**Two hardening requirements the probe surfaced, mandatory in the store:**
+
+- **Pin `authTagLength: 16`** on every `createDecipheriv` and reject any tag
+  whose length ≠ 16. `node:crypto` otherwise *accepts a truncated tag* (probe
+  45 (6b) verified a 4-byte tag decrypts with only a deprecation warning),
+  degrading forgery resistance from 2^128 to 2^32 — and the tag is an
+  attacker-writable DB column.
+- **Pin the master-key format**: exactly 32 random bytes (e.g. base64), refuse
+  anything else. HKDF is not a password KDF; a low-entropy passphrase in
+  `OMA_MASTER_KEY` would make the DB offline-brute-forceable. If passphrases are
+  ever wanted, route them through scrypt first — a separate, explicit contract.
+
+Decisive rationale from the survey: OpenBao's own single-node static auto-unseal
+reads its master key from env/file — cryptographically the same trust model — so
+a vault sidecar adds operational weight without a stronger root of trust on one
 machine. OAuth refresh uses the MCP TS SDK / `openid-client`; tokens are
 re-encrypted on refresh.
 
-### 5. Add a post-DNS-resolution private-IP deny
+**What this encryption defends, stated honestly (do not overclaim):** it
+protects **DB-file-only** exfiltration — stolen backups, a leaked SQLite file,
+misconfigured file perms. It does **not** defend host compromise: `OMA_MASTER_KEY`
+lives in the process environment on the same host as the database, so an
+attacker with host access gets both. And rotation (probe 45 (7c)) only stops the
+retired master from opening the *rewrapped* row going forward — it does **not**
+recover from a master key that leaked alongside a pre-rotation DB copy (that
+copy decrypts forever), and because `ct` is never re-encrypted, a once-leaked
+DEK is a permanent decrypt capability for its record. Rotation limits blast
+radius; it is not revocation.
+
+### 5. Add an SSRF/private-IP deny that connects to the vetted IP (not the hostname)
 
 Probe 44 confirmed srt has **no** SSRF defense: an allowlisted loopback target
-was served. OMA adds a smokescreen-style check in the policy layer — after DNS
-resolution, deny connections to private/loopback/link-local ranges unless
-explicitly configured — closing the allowlisted-CNAME-to-internal hole
-(~50 lines).
+was served. OMA must add one — but a naive "resolve, check the IP, then let srt
+dial the hostname" is **check-then-connect and does not stop DNS rebinding**:
+srt's upstream leg dials by hostname (it re-resolves), so an attacker who
+controls an allowlisted domain can flip the A record between our check and the
+dial (TOCTOU). The fix, as smokescreen does it, is **resolve once, validate the
+resolved IP(s) against the private/loopback/link-local/ULA blocklist, then
+connect to that pinned IP** with the hostname preserved only as TLS `servername`
+/ SNI — handling multiple A records and IPv6. This touches the vendored dial
+path, not just the policy layer, so it is more than the "~50 lines" a
+filter-only check would be.
 
 ### 6. Response redaction is deferred but named
 
 Boundary injection cannot hide a secret from a *reflective* allowlisted
 upstream: srt pipes responses back unmodified, so an upstream that echoes the
 injected header returns the secret into the sandbox (probe 44 (d3),
-by design). v1 mitigation is **allowlist trust** — only inject toward hosts
-that do not reflect credentials (github.com, configured MCP servers).
-Optional OMA-layer response redaction (Osaurus's output scrubbing is the prior
-art, [agentos-osaurus-prior-art.md](../references/agentos-osaurus-prior-art.md))
-is deferred to a later slice, not v1.
+by design). Reflectivity is a **per-endpoint** property, not per-host — one
+debug route or header-echoing error page on an otherwise-trusted inject-host
+leaks the secret, and a host-level inject grant lets the agent steer requests
+to that endpoint. So v1 does NOT rely on host-granularity "trust": **inject
+grants must be path/method-scoped** (the policy's credential-grant entries
+already carry an optional path prefix — require it for inject-hosts), and
+reflection vetting is stated as per-endpoint. Response redaction (Osaurus's
+output scrubbing is the prior art,
+[agentos-osaurus-prior-art.md](../references/agentos-osaurus-prior-art.md)) is a
+stronger later mitigation, deferred past v1.
 
 ### 7. Modularity: keep the named seams, refuse the speculative registries
 
@@ -164,9 +221,10 @@ proxy wiring into the Docker provider; then skills, then MCP on top.
 
 ## Validation
 
-- Probe 44 (egress proxy, 8/8) and probe 45 (secrets envelope, 10/10), both
-  deterministic, both with process notes. These are the evidence base; the
-  implementation slices will carry their own contract tests.
+- Probe 44 (egress proxy, 9 enforcement checks) and probe 45 (secrets
+  envelope, 11 checks), both deterministic, both with process notes and
+  mutation checks on the load-bearing assertions. These are the evidence base;
+  the implementation slices will carry their own contract tests.
 - **What probe 44 does NOT prove** (review-driven, do not overread): it
   validates the proxy's policy/injection behavior for a *proxy-honoring*
   client, and its deny checks assert the explicit 403/407 the policy branch

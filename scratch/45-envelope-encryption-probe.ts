@@ -68,7 +68,13 @@ function gcmSeal(key: Buffer, plaintext: Buffer, aad?: Buffer): {
 }
 
 function gcmOpen(key: Buffer, iv: Buffer, tag: Buffer, ct: Buffer, aad?: Buffer): Buffer {
-  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  // Pin authTagLength = 16 AND reject short tags explicitly. Without the pin,
+  // node:crypto ACCEPTS a truncated tag (verified: a 4-byte tag decrypts with
+  // only a DEP0182 warning), degrading forgery resistance from 2^128 to 2^32.
+  // In the real SecretsStore the tag is an attacker-writable DB column, so this
+  // is the production-shape requirement, not a nicety.
+  if (tag.length !== 16) throw new Error(`bad auth tag length: ${tag.length}`);
+  const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
   decipher.setAuthTag(tag);
   if (aad) decipher.setAAD(aad);
   return Buffer.concat([decipher.update(ct), decipher.final()]);
@@ -84,7 +90,10 @@ function seal(
   const dek = randomBytes(32);
   const aad = Buffer.from(`${FORMAT_VERSION}:${recordId}`);
   const body = gcmSeal(dek, Buffer.from(plaintext, "utf8"), aad);
-  const wrapped = gcmSeal(kek, dek); // DEK wrapped by KEK
+  // Bind the wrap layer with the same AAD (defense in depth, and because the
+  // wrap is exactly the seam that later becomes a KMS call).
+  const wrapAad = Buffer.from(`${FORMAT_VERSION}:${kekId}:${recordId}`);
+  const wrapped = gcmSeal(kek, dek, wrapAad); // DEK wrapped by KEK
   return {
     version: FORMAT_VERSION,
     kekId,
@@ -99,7 +108,8 @@ function seal(
 
 function open(masterSecret: Buffer, recordId: string, s: SealedSecret): string {
   const kek = deriveKek(masterSecret, s.kekId);
-  const dek = gcmOpen(kek, s.wrapIv, s.wrapTag, s.wrappedDek);
+  const wrapAad = Buffer.from(`${s.version}:${s.kekId}:${recordId}`);
+  const dek = gcmOpen(kek, s.wrapIv, s.wrapTag, s.wrappedDek, wrapAad);
   const aad = Buffer.from(`${s.version}:${recordId}`);
   return gcmOpen(dek, s.ctIv, s.ctTag, s.ct, aad).toString("utf8");
 }
@@ -111,12 +121,15 @@ function rewrap(
   oldMaster: Buffer,
   newMaster: Buffer,
   newKekId: string,
+  recordId: string,
   s: SealedSecret,
 ): SealedSecret {
+  const oldWrapAad = Buffer.from(`${s.version}:${s.kekId}:${recordId}`);
   const oldKek = deriveKek(oldMaster, s.kekId);
-  const dek = gcmOpen(oldKek, s.wrapIv, s.wrapTag, s.wrappedDek);
+  const dek = gcmOpen(oldKek, s.wrapIv, s.wrapTag, s.wrappedDek, oldWrapAad);
   const newKek = deriveKek(newMaster, newKekId);
-  const rewrapped = gcmSeal(newKek, dek);
+  const newWrapAad = Buffer.from(`${s.version}:${newKekId}:${recordId}`);
+  const rewrapped = gcmSeal(newKek, dek, newWrapAad);
   return {
     ...s,
     kekId: newKekId,
@@ -181,9 +194,19 @@ record(
   "a different master secret makes DEK unwrap throw",
 );
 
+// (6b) truncated auth tag rejected (node accepts short tags without the
+// authTagLength pin — verified separately). Guards the SecretsStore shape
+// where the tag is an attacker-writable column.
+const truncTag: SealedSecret = { ...sealed, ctTag: sealed.ctTag.subarray(0, 4) };
+record(
+  "(6b) a truncated auth tag is rejected",
+  throws(() => open(master, RECORD, truncTag)),
+  "opening with a 4-byte tag throws (authTagLength=16 pinned + length guard)",
+);
+
 // (7) KEK rotation rewraps the DEK only
 const newMaster = randomBytes(32);
-const rotated = rewrap(master, newMaster, "kek-2", sealed);
+const rotated = rewrap(master, newMaster, "kek-2", RECORD, sealed);
 record(
   "(7a) rotation leaves the ciphertext byte-for-byte identical",
   rotated.ct.equals(sealed.ct) &&

@@ -75,7 +75,7 @@ Deployment-mode terminology and sequencing are defined in
   allowlists should map to Managed Agents'
   `environment.config.networking: { type: "limited", allowed_hosts: [...] }`.
 - Threat: prompt injection that exfiltrates context to attacker-controlled domain via `web_fetch` or `bash` curl. Mitigation: egress allowlist + secret-free sandbox (see §4).
-- **Design decided ([ADR 0016](adrs/0016-egress-proxy-and-secret-injection.md), accepted 2026-07): OMA-owned egress proxy (vendored srt stack) with default-deny allowlist, per-request path policy, and redirect re-evaluation — all validated for proxy-honoring clients in probe 44. The post-DNS private-IP deny is OMA's to add (probe 44 confirmed srt has none), and route-level confinement (proxy-only egress, so a client can't bypass) is implementation work, not yet proven. Not yet built.**
+- **Design decided ([ADR 0016](adrs/0016-egress-proxy-and-secret-injection.md), accepted 2026-07): OMA-owned egress proxy (vendored srt stack) with default-deny allowlist, per-request path policy, and redirect re-evaluation — the proxy mechanism (incl. the `filterRequest` path-deny branch and verify-before-inject) validated for proxy-honoring clients in probe 44. Caveats the probe made explicit: path policy/injection apply only to terminated TLS (opaque tunnels bypass them); the private-IP/SSRF deny is OMA's to add and must connect-to-pinned-IP to resist DNS rebinding (probe 44 confirmed srt has none); and route-level confinement (proxy-only egress, so a non-compliant client can't bypass) is implementation work, not yet proven. Not yet built.**
 
 ### 4. Secret injection paths
 
