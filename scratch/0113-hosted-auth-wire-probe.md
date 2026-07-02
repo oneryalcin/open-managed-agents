@@ -31,6 +31,10 @@ authentication stays wire-compatible.
 | 9 | `/v1/agents`, valid key, no beta, no version | 404 | same as 6 (beta gate wins over version check) |
 | 10 | `/v1/definitely-not-a-route`, no key | 404 | `not_found_error` / `"Not found"` (capitalized) |
 | 11 | `GET /v1/messages`, invalid key | 405 | `invalid_request_error` / `"Method Not Allowed"`, **no `request-id` header** |
+| 12 | `PATCH /v1/agents`, no key, beta + version | 405 | `invalid_request_error` / `"Method Not Allowed"`, with `request-id` |
+| 13 | `PATCH /v1/agents`, invalid key, beta + version | 405 | same as 12 |
+| 14 | `DELETE /v1/agents`, no key, beta + version | 405 | same as 12 |
+| 15 | `PUT /v1/agents`, no key, no beta | 405 | same as 12 |
 
 Exact 401 envelope (all auth failures, missing and invalid key identical):
 
@@ -53,10 +57,12 @@ is `application/json`.
 Empirical middleware order of the hosted API:
 
 ```text
-1. route existence   unknown path -> 404 even with no credentials
-2. authentication    known path, missing/invalid key -> 401, before beta/version
-3. beta gate         valid key, missing/wrong anthropic-beta -> 404 "not found"
-4. version check     valid key + beta, missing anthropic-version -> 400
+1. route+method match  unknown path -> 404; known path, unsupported method
+                       -> 405, both even with no credentials
+2. authentication      matched route+method, missing/invalid key -> 401,
+                       before beta/version
+3. beta gate           valid key, missing/wrong anthropic-beta -> 404 "not found"
+4. version check       valid key + beta, missing anthropic-version -> 400
 ```
 
 Notes:
@@ -70,4 +76,15 @@ Notes:
 - OMA does not implement the `anthropic-version` required check (row 8) at
   all. Separate parity gap, out of scope for #129; belongs with the #64
   header-parity work.
-- Row 11 (405 without `request-id`) is recorded as trivia; not load-bearing.
+- Rows 12-15 (probed 2026-07-02, second pass): unsupported methods on a known
+  Managed Agents path return 405 **before** authentication — same pre-auth
+  routing stage as the 404 for unknown paths. OMA currently returns 404 for
+  these (`PATCH /v1/agents` -> 404 "Route not found" with beta, 404 "not
+  found" without), so a 405-vs-404 method-parity gap exists independent of
+  auth. With prefix-scoped auth middleware, OMA's unauthenticated unsupported
+  methods become 401 instead; plan 0113 D4 documents this as an accepted
+  divergence, with true 405 parity deferred to the #64 header/method parity
+  area.
+- Row 11 (405 without `request-id` on `/v1/messages`) vs rows 12-15 (405 with
+  `request-id` on `/v1/agents`): the missing header is route-specific trivia,
+  not load-bearing.

@@ -48,11 +48,15 @@ The load-bearing findings:
 2. Empirical hosted middleware order:
 
    ```text
-   route existence -> authentication -> beta gate -> version check
+   route+method match -> authentication -> beta gate -> version check
    ```
 
    - Unknown paths return 404 even without credentials.
-   - Known paths return 401 before the beta or version headers are examined.
+   - Unsupported methods on known paths (`PATCH/PUT/DELETE /v1/agents`)
+     return 405 `"Method Not Allowed"` even without credentials (probe rows
+     12-15): the hosted API resolves route **and method** before auth.
+   - Matched route+method returns 401 before the beta or version headers are
+     examined.
    - Valid key with missing/wrong beta returns 404 `"not found"` (OMA's
      current beta-gate message already matches).
    - The `anthropic-version` required check (400) is a separate parity gap OMA
@@ -89,7 +93,15 @@ New `SqliteWorkspaceStore` (same per-domain store shape as
 
 - `workspaces(workspace_id, name, created_at)`;
 - `workspace_api_keys(key_sha256 PRIMARY KEY, workspace_id, label,
-  created_at, revoked_at)`.
+  created_at, revoked_at)`, with `workspace_id` a foreign key into
+  `workspaces` so a key can never reference a workspace row that does not
+  exist.
+
+Store initialization **idempotently seeds the `wrk_default` row** into
+`workspaces`. Without this, the FK makes minting a key for existing
+single-tenant data fail (no parent row); without the FK, the `workspaces`
+table is decorative. Seeding at init keeps both honest and costs one
+`INSERT OR IGNORE`.
 
 Rules:
 
@@ -129,6 +141,23 @@ A new auth middleware in `createControlPlaneApp`, enabled by an optional
 
 This is deliberately a context variable, not a per-route parameter refactor:
 the route signature churn stays near zero and the diff is reviewable.
+
+Implementation rule for the context read: today every route module declares
+its own private `Variables: { requestId: string }` env type. Add one shared
+control-plane route env (or a `workspaceIdFrom(c)` helper) that types
+`workspaceId` and falls back to `DEFAULT_WORKSPACE_ID` when unset, and use
+it in every route module. No ad hoc `c.get("workspaceId") as string` casts —
+those are exactly where a missed route silently keeps serving `wrk_default`
+to an authenticated tenant.
+
+Accepted divergence, method scope: the hosted API resolves route **and
+method** before auth (unsupported method -> 405 pre-auth, probe rows 12-15).
+OMA's prefix-scoped auth will return 401 for an unauthenticated
+`PATCH /v1/agents` where hosted returns 405. OMA already diverges here today
+(it returns 404 for unsupported methods); maintaining a per-prefix method
+allowlist just for auth scoping is a drift hazard not worth the parity
+delta. True 405 method parity is a separate gap, tracked with the #64
+header-parity work.
 
 ### D5. Modes and fail-closed semantics
 
@@ -178,11 +207,24 @@ story (admin keys, scopes) that the current product shape does not justify.
 Same posture as 0112's "provider selection is an operator deployment
 decision".
 
-The CLI writes to the same SQLite file the live server holds open. That is
-supported: deployment storage already runs WAL with `busy_timeout = 5000`, so
-a short-lived writer coexists with the server, and because key lookup is a
-per-request query, newly minted or revoked keys take effect without a
-restart.
+The CLI writes to the same SQLite file the live server holds open, and this
+needs an explicit path: `createDurableDeploymentStores` acquires an exclusive
+`<db>.oma.lock` process lock (`deployment-storage.ts`), so the CLI **cannot**
+open storage through the normal deployment-store constructor while the
+server runs. Instead the CLI opens a narrow, direct SQLite connection to the
+same file — same WAL + `busy_timeout` pragmas, ensures only the workspace
+tables' schema — and deliberately does not take the `.oma.lock`. That is
+sound because the lock guards single-*server* ownership (runtime recovery,
+turn coordination), not table writes; SQLite WAL is built for exactly this
+short-lived concurrent writer. The bypass must be a dedicated
+`openWorkspaceStoreForProvisioning(sqlitePath)`-style entry point, not a
+flag on the deployment constructor, so nothing else can accidentally skip
+the lock. The alternative — requiring the server stopped for provisioning —
+was rejected: it turns every key mint/revoke into downtime for no integrity
+gain.
+
+Because key lookup is a per-request query, newly minted or revoked keys take
+effect without a restart.
 
 ### D9. Admission limits (follow-up slice, this ADR pins the shape)
 
@@ -200,9 +242,23 @@ Once requests carry workspace identity, admission limits key off it:
   is bounded at 10,000 events, so the per-stream bound is real but the
   per-workspace aggregate is not.
 
-Enforcement sits at the service seams that create those resources (session
-create, runtime dispatch, sandbox provider factory), reading counters scoped
-by `workspace_id`. Rejections are visible, wire-shaped errors: 429
+Enforcement placement rule: the gate must sit **before the expensive work it
+protects**, which is not always a service seam.
+
+- Sessions, runtime turns, sandboxes: service seams (session create, runtime
+  dispatch, sandbox provider factory) — the cost is created there.
+- File uploads: the memory cost is incurred in the **route handler**, which
+  parses multipart and buffers `file.arrayBuffer()` before calling
+  `service.upload` (`files/routes.ts`). A service-level counter would fire
+  after the 24 MiB is already resident. The upload gate is route-level
+  middleware that reserves a slot before body parsing and releases it when
+  the response settles.
+- SSE streams: counted at stream open, released on disconnect/close — a
+  route/stream lifecycle counter, since the cost is the stream's lifetime,
+  not its creation call.
+
+Counters are scoped by `workspace_id`. Rejections are visible, wire-shaped
+errors: 429
 `rate_limit_error` for per-workspace limit hits, 529 `overloaded_error` for
 process-wide overload. Hosted Managed Agents documents 429 + `retry-after`
 for its RPM limits; OMA should send `retry-after` too. Concrete limit values
@@ -238,6 +294,16 @@ are deployment configuration, not code constants.
   mode without durable storage fails startup.
 - No plaintext at rest: store tests assert the key column contains only
   64-hex-char digests.
+- Cross-workspace denial — the main invariant auth exists to provide, and a
+  route/context-plumbing risk the workspace-scoped stores cannot catch alone:
+  with keys A and B provisioned for two workspaces, key A must not be able to
+  retrieve, list, delete, send to, or stream key B's agents, environments,
+  sessions, files, or events **even with guessed/known resource IDs**
+  (responses are the same not-found shape as for nonexistent IDs — no
+  existence leak across workspaces).
+- Idempotency isolation: the same `Idempotency-Key` + path in two workspaces
+  must not collide (the ledger PK already includes `workspace_id`; the test
+  pins the route plumbing that feeds it).
 - Recovery: pending turns in two workspaces both recover after restart.
 
 ## Stop and Rollback
