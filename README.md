@@ -1,10 +1,10 @@
 # Open Managed Agents
 
-**Run the Claude Managed Agents API on your own machine.** Open Managed Agents
-(OMA) is a self-hostable implementation of Anthropic's Managed Agents API
-surface: any client that speaks the Managed Agents REST + SSE protocol can
-point at this server with a base-URL change, while execution, data, and
-sandboxes stay on infrastructure you control.
+**Claude Managed Agents, self-hosted.**
+
+Swap the `base_url` in your Anthropic SDK and your agents run here instead:
+same API, same event stream, same sandboxed execution — but the sessions,
+files, and sandboxes live on your machines, under your policies.
 
 ## Quickstart
 
