@@ -12,6 +12,12 @@ import {
   disposeMitmCA,
   type MitmCA,
 } from "../proxy.ts";
+import { createPinnedLookup } from "../ssrf.ts";
+
+// These tests reach a loopback echo, which the default SSRF lookup denies.
+// Override with a permissive lookup so we exercise the proxy's policy/injection
+// behavior; a dedicated ssrf.test.ts covers the default deny.
+const ALLOW_LOOPBACK = createPinnedLookup({ allowAddress: () => true });
 
 // Contract test for the vendored srt egress proxy (plan 0117a). Exercises the
 // vendored code in CI without Docker: an in-process TLS echo upstream, the
@@ -124,6 +130,7 @@ describe("vendored egress proxy contract (plan 0117a)", () => {
       },
       tlsTerminateUpstreamCA: readFileSync(join(work, "c.pem")),
       proxyAuthToken: TOKEN,
+      lookup: ALLOW_LOOPBACK,
     });
     await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
     proxyPort = (proxy.address() as { port: number }).port;
@@ -188,6 +195,7 @@ describe("vendored egress proxy contract (plan 0117a)", () => {
       },
       tlsTerminateUpstreamCA: bogusCa.certPem,
       proxyAuthToken: TOKEN,
+      lookup: ALLOW_LOOPBACK,
     });
     await new Promise<void>((r) => wrongProxy.listen(0, "127.0.0.1", r));
     const wrongPort = (wrongProxy.address() as { port: number }).port;

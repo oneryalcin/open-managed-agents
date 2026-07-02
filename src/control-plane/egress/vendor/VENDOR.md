@@ -50,6 +50,14 @@ non-empty per-session token and rejects `parentProxy`. Nothing outside the
 4. **`http-proxy.ts` one cast** marked `// OMA:` — `head = peeked.head as typeof head`,
    an `@types/node` buffer-variance skew between srt's build env and ours
    (25.6.0). No behavior change.
+5. **`lookup` threading** (plan 0117b, marked `// OMA:`) — a `lookup?: LookupFunction`
+   field added to `HttpProxyServerOptions` (http-proxy.ts) and `TerminateTarget`
+   (tls-terminate-proxy.ts), a `lookup` param added to `dialDirect`
+   (parent-proxy.ts), and the option threaded to both upstream dial sites
+   (`httpsRequest` on the terminated leg; `netConnect({host,port,lookup})` on the
+   opaque-tunnel leg). This is the seam ADR 0016 §5 predicted: OMA injects a
+   validating `lookup` (`egress/ssrf.ts`) so a hostname resolving to a
+   private/loopback IP is denied and Node connects to the vetted IP.
 
 All changes are marked `// OMA:` in code (except the mechanical `.js`→`.ts`
 rewrite and the two shim files, which are noted here).

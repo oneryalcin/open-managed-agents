@@ -95,6 +95,8 @@ export type TerminateTarget = {
    * is read at process start, so tests can't set it from inside the suite).
    */
   upstreamCA?: string | Buffer | Array<string | Buffer>
+  // OMA: validating dns.lookup for the upstream leg (see egress/ssrf.ts).
+  lookup?: import('node:net').LookupFunction
 }
 
 /**
@@ -272,6 +274,7 @@ async function forwardUpstream(
       // omitting the key, so spread conditionally.
       ...(isIP(target.hostname) ? {} : { servername: target.hostname }),
       ...(target.upstreamCA ? { ca: target.upstreamCA } : {}),
+      ...(target.lookup ? { lookup: target.lookup } : {}), // OMA: connect-to-pinned-IP
       // No global agent: a proxy's outbound leg shouldn't share a connection
       // pool keyed on the proxy process. Also works around a Bun quirk where
       // the first request's `ca:` value is cached on the global agent and

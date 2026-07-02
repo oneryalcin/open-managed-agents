@@ -111,6 +111,11 @@ export interface HttpProxyServerOptions {
    * and reach the filter callback.
    */
   proxyAuthToken?: string
+  // OMA: custom dns.lookup used for every upstream dial. OMA injects a
+  // validating lookup (createPinnedLookup) so an allowlisted hostname that
+  // resolves to a private/loopback IP is denied and Node connects to the vetted
+  // IP (no re-resolution → no DNS rebinding). See egress/ssrf.ts, ADR 0016 §5.
+  lookup?: import('node:net').LookupFunction
 }
 
 export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
@@ -202,7 +207,8 @@ export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
             options.mutateHeaders,
             socket,
             peeked.head,
-            { hostname, port, upstreamCA: options.tlsTerminateUpstreamCA },
+            // OMA: thread the validating lookup to the terminated upstream leg.
+            { hostname, port, upstreamCA: options.tlsTerminateUpstreamCA, lookup: options.lookup },
           )
           return
         }
@@ -242,7 +248,7 @@ export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
         } else if (parentUrl) {
           upstream = await connectViaParentProxy(parentUrl, hostname, port)
         } else {
-          upstream = await dialDirect(hostname, port)
+          upstream = await dialDirect(hostname, port, undefined, options.lookup) // OMA: validating lookup on the opaque-tunnel dial
         }
       } catch (err) {
         logForDebugging(`CONNECT tunnel failed: ${(err as Error).message}`, {

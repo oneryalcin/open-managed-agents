@@ -3,17 +3,16 @@
 // directly — so the vendored implementation stays behind a seam we can re-pin
 // (ADR 0016 §1) without touching call sites.
 //
-// NOT YET A COMPLETE EGRESS BOUNDARY. This slice (0117a) vendors the proxy and
-// exposes a safe constructor; the SSRF/private-IP deny (0117b), egress policy +
-// credential injection (0117c), and Docker proxy-only-egress wiring (0117d) are
-// still owed. Do not treat `createEgressProxy` as a security boundary until
-// those land — in particular, the hostname allowlist does NOT yet resolve and
-// pin the destination IP, so it does not defend against a hostname that
-// resolves to a private address or DNS rebinding (that is 0117b).
+// NOT YET A COMPLETE EGRESS BOUNDARY. The proxy is vendored (0117a) with a safe
+// constructor and, as of 0117b, a default SSRF/private-IP deny (see below).
+// Still owed: egress policy + credential injection (0117c) and Docker
+// proxy-only-egress wiring (0117d). Until those land, `createEgressProxy` is a
+// building block, not the wired control-plane boundary.
 import {
   createHttpProxyServer,
   type HttpProxyServerOptions,
 } from "./vendor/http-proxy.ts";
+import { createPinnedLookup } from "./ssrf.ts";
 
 export {
   createMitmCA,
@@ -57,5 +56,13 @@ export function createEgressProxy(options: EgressProxyOptions) {
         "is unused in OMA v1 and is not honored on the TLS-terminated leg.",
     );
   }
-  return createHttpProxyServer(options);
+  // SSRF/private-IP deny by default (ADR 0016 §5): unless the caller supplies
+  // its own lookup, every upstream dial resolves through a validating lookup
+  // that denies private/loopback/reserved targets and pins the vetted IP. A
+  // caller CAN override `lookup` (tests reaching a loopback fixture do), which
+  // is why this is a default, not a hard-wire.
+  return createHttpProxyServer({
+    lookup: createPinnedLookup(),
+    ...options,
+  });
 }
