@@ -184,7 +184,7 @@ Per the 0114 modularity rule (interface when the second implementation is
 |---|---|
 | Provider-carried secret proxy (microsandbox) | Never proven end-to-end (#121/#130); provider-specific; OMA-owned works across providers. **Explicitly ruled out here.** |
 | Infisical `agent-vault` (off-the-shelf service) | Purpose-built and tempting, but 3 months old, fail-open for unmatched hosts by default, and brings a vault/UI surface OMA doesn't need — too much trust in young code at the most security-critical seam. Re-evaluate if it matures. |
-| mockttp as the proxy | Proven MITM core, but 47 deps and we'd re-write srt's security-reviewed details (URL-differential closure, verify-before-inject). |
+| mockttp as the proxy | Proven MITM core, but 47 deps and we'd re-write srt's probed details — URL-parser-differential closure and verify-before-inject (probe 44 (g)) — that srt already implements. |
 | mitmproxy / OpenSandbox sidecar | Full Python runtime in a Node appliance / Linux-only + `CAP_NET_ADMIN` + one sidecar per sandbox. |
 | HashiCorp Vault | BSL license — redistribution liability in a self-hostable product. |
 | OpenBao now | MPL and viable, but same env-key trust model on one node; adopt later as the `SecretsStore` SaaS backend, not now. |
@@ -221,10 +221,10 @@ proxy wiring into the Docker provider; then skills, then MCP on top.
 
 ## Validation
 
-- Probe 44 (egress proxy, 9 enforcement checks) and probe 45 (secrets
-  envelope, 11 checks), both deterministic, both with process notes and
-  mutation checks on the load-bearing assertions. These are the evidence base;
-  the implementation slices will carry their own contract tests.
+- Probe 44 (egress proxy, 8 enforcement checks + 2 documented NOTES) and probe
+  45 (secrets envelope, 11 checks), both deterministic, both with process notes
+  and mutation checks on the load-bearing assertions. These are the evidence
+  base; the implementation slices will carry their own contract tests.
 - **What probe 44 does NOT prove** (review-driven, do not overread): it
   validates the proxy's policy/injection behavior for a *proxy-honoring*
   client, and its deny checks assert the explicit 403/407 the policy branch

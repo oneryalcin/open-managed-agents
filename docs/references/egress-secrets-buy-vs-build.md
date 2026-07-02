@@ -47,8 +47,10 @@ Related prior art already in-repo, which this survey extends:
 Anthropic's `sandbox-runtime` (Apache-2.0, ~1,250 LOC, TypeScript) — it
 matches all three requirements by design, including the sentinel→real
 credential substitution model, and it is the machinery Anthropic itself runs
-under Claude Code. Steal smokescreen's post-DNS-resolution private-IP deny
-check (~50 lines) on top.
+under Claude Code. Steal smokescreen's SSRF defense on top — but as
+connect-to-a-pinned-vetted-IP in the vendored dial path, NOT a filter-only
+check (a filter-then-dial-hostname shape re-opens DNS rebinding; see ADR 0016
+§5).
 
 **Secrets storage: build thin, no vault dependency.** AES-256-GCM envelope
 encryption inside OMA's existing SQLite — a random per-secret DEK wrapped by a
@@ -159,9 +161,11 @@ Repository: [stripe/smokescreen](https://github.com/stripe/smokescreen).
   `add_headers` via Stripe's goproxy fork), but injection is static YAML per
   role+domain, not programmable per-request, and ACLs are hostname-glob only.
 - Rejected as the proxy (dynamic per-session allowlists + programmable
-  substitution don't fit its config model), but **adopt the post-resolution
-  private-IP deny check as a pattern** (~50 lines) — it closes the
-  SSRF-via-allowlisted-CNAME hole.
+  substitution don't fit its config model), but **adopt its SSRF defense as a
+  pattern**: resolve once, validate the IP, then connect to that pinned IP
+  (hostname preserved only as SNI) — a check-then-dial-hostname shape re-opens
+  DNS rebinding, so this lives in the vendored dial path, not a filter (ADR
+  0016 §5).
 
 ### Rejected
 

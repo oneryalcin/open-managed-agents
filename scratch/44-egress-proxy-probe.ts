@@ -12,12 +12,12 @@
  *   (d1/d2) sentinel -> real substitution at the boundary: upstream observes
  *       the real value; the boundary saw only the sentinel; container env holds
  *       only the sentinel;
- *   (d3) reflective-upstream caveat, made explicit (secret echoes back);
  *   (e) missing proxy auth is rejected (407);
- *   (g) verify-before-inject: a wrong upstream CA fails and the secret never
- *       leaves (echo never sees it).
- *   NOTE: srt has no post-DNS private-IP deny (allowlisted loopback served) —
- *       the smokescreen-style check is OMA's to add.
+ *   (g) verify-before-inject: a wrong upstream CA fails (502) and the secret
+ *       never leaves (echo never sees it).
+ *   NOTES (printed, not counted): (d3) reflective upstream echoes the secret
+ *       back — inherent caveat; and srt has no post-DNS private-IP deny
+ *       (allowlisted loopback served) — connect-to-pinned-IP is OMA's to add.
  *
  * Run: npx tsx scratch/44-egress-proxy-probe.ts   (requires a Docker daemon)
  *
@@ -189,15 +189,17 @@ record(
     clientSentinelSightings[0] === `Bearer ${SENTINEL}`,
   `pre-mutation header at boundary: ${JSON.stringify(clientSentinelSightings)}`,
 );
-// (d3) known reflective-upstream caveat, made explicit: this echo target
-// returns the substituted header, so the REAL secret DOES appear in the
-// container's response body. The survey records this as inherent to boundary
-// injection (srt pipes responses back unmodified); mitigations are allowlist
-// trust + optional OMA response redaction. Documented, not a failure.
-record(
-  "(d3) reflective upstream returns the real secret in the response (expected caveat)",
-  allowed.out.includes(REAL_SECRET),
-  "echo reflected the injected header; non-reflective upstreams (github, etc.) do not",
+// (d3) reflective-upstream caveat, made explicit and printed as a NOTE (not a
+// counted enforcement check — it's a PASS that fires *because* the secret
+// leaks back through a reflective echo). This echo returns the substituted
+// header, so the REAL secret DOES appear in the container's response body. The
+// survey records this as inherent to boundary injection (srt pipes responses
+// back unmodified); mitigations are path/method-scoped inject grants + optional
+// OMA response redaction.
+console.log(
+  `\nNOTE (d3): the reflective echo returned the injected secret in the ` +
+    `response body (present=${allowed.out.includes(REAL_SECRET)}) — inherent to ` +
+    `boundary injection; non-reflective upstreams (github, etc.) do not.`,
 );
 
 // (b) non-allowlisted host denied. Assert the explicit 403 CONNECT denial:
@@ -258,12 +260,16 @@ record(
 
 // (g) verify-before-inject: srt's upstream leg is cert-verified BEFORE mutated
 // headers leave (ADR §3's most safety-critical claim). Negative test: a second
-// proxy whose upstream-CA does NOT match the echo cert. The tunnel establishes
-// (host allowed), the upstream TLS verify fails, and the proxy returns 5xx
-// inside the tunnel. The load-bearing proof: the echo NEVER receives the
-// request — the mutated header (real secret) is never sent to the unverified
-// peer — and the response is not 200. Mutation-verified: swapping in the
-// correct CA makes the echo receive it (200), flipping this check.
+// proxy whose upstream CA is a fresh, DISTINCT bogus CA that never signed the
+// echo cert. The tunnel establishes (host allowed), the upstream TLS verify
+// fails, and the proxy returns 502 inside the tunnel. Load-bearing proof: the
+// echo NEVER receives the request (upstream request bytes are written only
+// after `secureConnect`, which never fires on a cert mismatch) — the mutated
+// header (real secret) is never sent to the unverified peer — AND the proxy
+// returns an explicit 502 (positive marker, so a second-proxy startup/curl
+// failure can't false-green). Check (a) is the correct-CA counterpart (echo
+// receives it, 200), so the differential is present in the probe.
+const bogusCA = createMitmCA({}); // distinct from mitmCA and from the echo cert
 const wrongCaProxy = createHttpProxyServer({
   filter: (port, host) => host === "localhost" && port === echoPort,
   mitmCA,
@@ -273,8 +279,7 @@ const wrongCaProxy = createHttpProxyServer({
       headers.authorization = `Bearer ${REAL_SECRET}`;
     }
   },
-  // Deliberately the WRONG CA (a fresh MITM CA cert, not the echo's).
-  tlsTerminateUpstreamCA: mitmCA.certPem,
+  tlsTerminateUpstreamCA: bogusCA.certPem, // deliberately never signed the echo cert
   proxyAuthToken: PROXY_TOKEN,
 });
 await new Promise<void>((r) => wrongCaProxy.listen(0, "0.0.0.0", r));
@@ -290,16 +295,16 @@ const wrongCa = await curlClient(
   wrongCaPort,
 );
 record(
-  "(g) verify-before-inject: wrong upstream CA fails, secret never leaves",
-  upstreamSeen.length === echoSeenBefore && !wrongCa.out.includes("200"),
+  "(g) verify-before-inject: wrong upstream CA -> 502, secret never leaves",
+  upstreamSeen.length === echoSeenBefore &&
+    wrongCa.out.includes("502") &&
+    !wrongCa.out.includes("200"),
   `http_code=${wrongCa.out.trim()}; echo requests still ${upstreamSeen.length} (was ${echoSeenBefore})`,
 );
 
-// NOTES (not enforcement checks — recorded for the ADR, not counted as proof):
-// - (d3) above documents the reflective-upstream caveat (a PASS that fires
-//   *because* the secret leaks back through a reflective echo).
-// - srt has no post-resolution private-IP deny: the allowlisted loopback
-//   target was served with no objection. A confirmed gap, not a proof.
+// NOTE (not an enforcement check): srt has no post-resolution private-IP deny —
+// the allowlisted loopback target was served with no objection. A confirmed
+// gap, not a proof.
 console.log(
   `\nNOTE: srt served the allowlisted loopback target with no private-IP ` +
     `objection (upstream saw ${upstreamSeen.length} reqs) — no SSRF/private-IP ` +
@@ -311,6 +316,7 @@ await new Promise<void>((r) => wrongCaProxy.close(() => r()));
 await new Promise<void>((r) => proxy.close(() => r()));
 await new Promise<void>((r) => echo.close(() => r()));
 await disposeMitmCA(mitmCA);
+await disposeMitmCA(bogusCA);
 rmSync(work, { recursive: true, force: true });
 
 const failed = results.filter((r) => !r.pass);
