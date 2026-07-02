@@ -102,6 +102,16 @@ Rules:
 - Revocation is a tombstone (`revoked_at`), not a delete, so audit history
   survives.
 
+Revocation semantics: revocation gates **admission of new requests only**.
+Auth is admission-time middleware; an already-admitted long-lived SSE stream
+(`GET .../events/stream`) keeps its subscription until the client disconnects
+or the session closes, even if its key is revoked mid-stream. Re-checking
+credentials per delivered event would put a hash lookup in the hot event path
+for a marginal win. Accepted v1 posture: operators who must sever a revoked
+tenant immediately restart the process (documented rollback shape). A future
+hardening option is a revocation hook that closes the broadcaster
+subscriptions of the affected workspace; do not build it speculatively.
+
 ### D4. Middleware placement and workspace plumbing
 
 A new auth middleware in `createControlPlaneApp`, enabled by an optional
@@ -135,6 +145,11 @@ Deployment env: `OMA_AUTH_MODE` with exactly two values.
   table when implemented.
 - Unknown values fail construction (same posture as sandbox provider
   selection: reject at startup, not first use).
+- `api-key` mode **requires durable deployment storage**
+  (`OMA_SQLITE_PATH` + `OMA_FILE_STORAGE_ROOT`). Without them the deployment
+  app builds per-process in-memory stores, so no key can ever exist and every
+  request would 401 forever — safe but dead. Reject this mode/storage
+  combination at construction with an error naming both flags.
 
 ### D6. Existing data and the default workspace
 
@@ -163,13 +178,27 @@ story (admin keys, scopes) that the current product shape does not justify.
 Same posture as 0112's "provider selection is an operator deployment
 decision".
 
+The CLI writes to the same SQLite file the live server holds open. That is
+supported: deployment storage already runs WAL with `busy_timeout = 5000`, so
+a short-lived writer coexists with the server, and because key lookup is a
+per-request query, newly minted or revoked keys take effect without a
+restart.
+
 ### D9. Admission limits (follow-up slice, this ADR pins the shape)
 
 Once requests carry workspace identity, admission limits key off it:
 
 - max concurrent sessions per workspace;
 - max concurrent runtime turns per workspace;
-- max concurrent sandboxes per workspace.
+- max concurrent sandboxes per workspace;
+- max concurrent file uploads in flight per workspace — each `POST /v1/files`
+  buffers up to 24 MiB fully in memory (`files/routes.ts`,
+  `MAX_FILE_UPLOAD_REQUEST_BYTES`), and the route is exempt from the global
+  1 MiB body limit, so unbounded parallel uploads from one authenticated
+  workspace are a memory-exhaustion vector no other limit catches;
+- max concurrent SSE streams per workspace — each subscription's live queue
+  is bounded at 10,000 events, so the per-stream bound is real but the
+  per-workspace aggregate is not.
 
 Enforcement sits at the service seams that create those resources (session
 create, runtime dispatch, sandbox provider factory), reading counters scoped
@@ -205,7 +234,8 @@ are deployment configuration, not code constants.
 - Ordering: unauthenticated unknown route -> 404; unauthenticated known route
   -> 401; authenticated known route without beta -> 404 `"not found"`.
 - Fail-closed: `api-key` mode with zero provisioned keys rejects everything;
-  revoked key rejects; unknown `OMA_AUTH_MODE` value fails startup.
+  revoked key rejects; unknown `OMA_AUTH_MODE` value fails startup; `api-key`
+  mode without durable storage fails startup.
 - No plaintext at rest: store tests assert the key column contains only
   64-hex-char digests.
 - Recovery: pending turns in two workspaces both recover after restart.
