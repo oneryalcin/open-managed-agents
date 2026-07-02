@@ -21,6 +21,31 @@ single-node durable storage work lands. The current owner/generation runtime
 ledger is useful, but with the deployment app's current in-memory stores it is
 not a cross-process coordination mechanism.
 
+## Appliance quickstart
+
+One command boots a durable, authenticated server
+([plan 0115](plans/0115-appliance-entrypoint.md)). From a checkout (Node ≥ 22.19):
+
+```bash
+node bin/open-managed-agents.mjs
+```
+
+or with Docker:
+
+```bash
+docker compose up -d
+docker compose logs oma | grep x-api-key
+```
+
+The first boot initializes storage under `OMA_HOME` (default `~/.oma`, `/data`
+in the container) and prints the initial workspace API key **once** — it is
+stored only as a hash. Auth defaults to `api-key`; port defaults to `4180`.
+Point any Anthropic SDK client at `http://127.0.0.1:4180` with that
+`x-api-key`. Mint more keys or workspaces with the
+[provisioning CLI](#provisioning-workspaces-and-keys). Builtin-tool execution
+stays off until a sandbox provider is configured (see
+[Pi runtime rollout policy](#pi-runtime-rollout-policy)).
+
 ## Local development
 
 From the repo root:

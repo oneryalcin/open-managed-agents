@@ -64,6 +64,7 @@ export class SqliteWorkspaceStore {
   private readonly listKeysStmt: StatementSync;
   private readonly listWorkspacesStmt: StatementSync;
   private readonly getKeyStmt: StatementSync;
+  private readonly countKeysStmt: StatementSync;
 
   constructor(db: DatabaseSync) {
     this.db = db;
@@ -101,6 +102,9 @@ export class SqliteWorkspaceStore {
       `SELECT key_sha256, workspace_id, label, created_at, revoked_at
        FROM workspace_api_keys
        WHERE key_sha256 = ?`,
+    );
+    this.countKeysStmt = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM workspace_api_keys`,
     );
     this.db.prepare(
       `INSERT OR IGNORE INTO workspaces (workspace_id, name, created_at)
@@ -142,6 +146,12 @@ export class SqliteWorkspaceStore {
     const keySha256 = hashWorkspaceApiKey(plaintextKey);
     this.insertKeyStmt.run(keySha256, workspaceId, label, new Date().toISOString());
     return { plaintextKey, keySha256, workspaceId, label };
+  }
+
+  // Counts every key ever minted, revoked included: first boot means "no key
+  // was ever issued", not "no key currently works".
+  countApiKeys(): number {
+    return (this.countKeysStmt.get() as { n: number }).n;
   }
 
   authenticate(plaintextKey: string): WorkspaceId | undefined {

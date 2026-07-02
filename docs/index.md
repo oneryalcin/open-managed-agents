@@ -88,6 +88,9 @@ still tracked separately in the roadmap.
   product direction after #129: install-and-go appliance (packaging, admin
   dashboard, observability, usage metering) plus the egress→skills→MCP
   capability track; names what is deferred and which seams keep it cheap.
+- [Appliance entrypoint and first boot](plans/0115-appliance-entrypoint.md) —
+  Arc A slice 1: `bin/open-managed-agents.mjs` + `startAppliance` defaults,
+  first-boot key minting, Dockerfile/compose, and the no-build-step decision.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
 - [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —
