@@ -84,7 +84,7 @@ describe("vendored egress proxy contract (plan 0117a)", () => {
   let work: string;
   let echo: Server;
   let echoPort: number;
-  let proxy: ReturnType<typeof createHttpProxyServer>;
+  let proxy: ReturnType<typeof createEgressProxy>;
   let proxyPort: number;
   let ca: MitmCA;
   const upstreamSeen: Array<string | undefined> = [];
