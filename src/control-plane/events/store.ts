@@ -197,6 +197,7 @@ export class EventStore implements SessionEventStore {
   private readonly findRuntimeActionStmt: StatementSync;
   private readonly listPendingRuntimeTurnsStmt: StatementSync;
   private readonly listWorkspacesWithPendingRuntimeTurnsStmt: StatementSync;
+  private readonly countPendingRuntimeTurnsStmt: StatementSync;
   private readonly listRuntimeActionsForTurnStmt: StatementSync;
   private readonly insertRuntimeTurnStmt: StatementSync;
   private readonly insertRuntimeActionStmt: StatementSync;
@@ -271,6 +272,10 @@ export class EventStore implements SessionEventStore {
        FROM pending_runtime_turns
        WHERE state NOT IN ('completed', 'terminalized')
        ORDER BY workspace_id ASC`,
+    );
+    this.countPendingRuntimeTurnsStmt = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM pending_runtime_turns
+       WHERE workspace_id = ? AND state NOT IN ('completed', 'terminalized')`,
     );
     this.listRuntimeActionsForTurnStmt = this.db.prepare(runtimeActionSelectSql(`
       WHERE a.workspace_id = ? AND a.session_id = ? AND a.turn_id = ?
@@ -662,6 +667,10 @@ export class EventStore implements SessionEventStore {
       workspaceId,
     ) as unknown as RuntimeTurnRow[];
     return rows.map(deserializeRuntimeTurn);
+  }
+
+  countPendingRuntimeTurns(workspaceId: WorkspaceId): number {
+    return (this.countPendingRuntimeTurnsStmt.get(workspaceId) as { n: number }).n;
   }
 
   listWorkspaceIdsWithPendingRuntimeTurns(): WorkspaceId[] {

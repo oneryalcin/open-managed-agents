@@ -10,7 +10,7 @@ import type {
 import { isJsonObject } from "../../types/json.ts";
 import type { AgentStore } from "../agents/types.ts";
 import type { EnvironmentStore } from "../environments/types.ts";
-import { ApiError, invalidRequest, notFound, toApiErrorBody } from "../errors.ts";
+import { ApiError, invalidRequest, notFound, rateLimited, toApiErrorBody } from "../errors.ts";
 import type {
   JsonHttpResponse,
   RequestIdempotencyKey,
@@ -75,6 +75,7 @@ interface DeleteSessionRowsResult {
 }
 
 export interface DefaultSessionServiceOptions {
+  maxActiveSessionsPerWorkspace?: number;
   maxFileResources?: number;
   maxMountedBytes?: number;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
@@ -92,6 +93,7 @@ export interface DefaultSessionServiceOptions {
 }
 
 export class DefaultSessionService implements SessionService {
+  private readonly maxActiveSessionsPerWorkspace: number | undefined;
   private readonly maxFileResources: number;
   private readonly maxMountedBytes: number;
   private readonly runtime:
@@ -115,6 +117,7 @@ export class DefaultSessionService implements SessionService {
     | undefined;
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
+  private readonly pendingSessionCreates = new Map<WorkspaceId, number>();
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -131,6 +134,7 @@ export class DefaultSessionService implements SessionService {
     private readonly files?: FileStorage,
     opts: DefaultSessionServiceOptions = {},
   ) {
+    this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.runtime = opts.runtime;
@@ -229,6 +233,44 @@ export class DefaultSessionService implements SessionService {
   }
 
   private async createInternal(
+    workspaceId: WorkspaceId,
+    input: unknown,
+    opts: { idempotency?: RequestIdempotencyKey } = {},
+  ): Promise<ManagedAgentsSession> {
+    // 0113 D9: reserve before the async file-resource preparation below, not
+    // just before the row insert. Counting rows alone lets N concurrent
+    // creates with resources all pass the cap while none has inserted yet;
+    // the in-flight reservation closes that window and bounds the expensive
+    // prep itself.
+    const release = this.reserveSessionCreateSlot(workspaceId);
+    try {
+      return await this.createInternalReserved(workspaceId, input, opts);
+    } finally {
+      release();
+    }
+  }
+
+  private reserveSessionCreateSlot(workspaceId: WorkspaceId): () => void {
+    const cap = this.maxActiveSessionsPerWorkspace;
+    if (cap === undefined) return () => {};
+    const pending = this.pendingSessionCreates.get(workspaceId) ?? 0;
+    if (this.store.countActive(workspaceId) + pending >= cap) {
+      throw rateLimited(
+        "Concurrent active session limit reached for this workspace; archive or delete sessions, or retry later",
+      );
+    }
+    this.pendingSessionCreates.set(workspaceId, pending + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const current = this.pendingSessionCreates.get(workspaceId) ?? 1;
+      if (current <= 1) this.pendingSessionCreates.delete(workspaceId);
+      else this.pendingSessionCreates.set(workspaceId, current - 1);
+    };
+  }
+
+  private async createInternalReserved(
     workspaceId: WorkspaceId,
     input: unknown,
     opts: { idempotency?: RequestIdempotencyKey } = {},
@@ -842,6 +884,10 @@ class ReleaseIdempotencyReservationError extends Error {
 
 function shouldReleaseIdempotencyReservation(error: unknown): boolean {
   if (error instanceof ReleaseIdempotencyReservationError) return true;
+  // 429 admission rejections are transient: completing the key would replay
+  // the 429 forever, even after capacity frees. Release so the same-key retry
+  // re-executes (0113 D9).
+  if (error instanceof ApiError && error.status === 429) return true;
   if (error instanceof ApiError && error.status < 500) return false;
   return true;
 }

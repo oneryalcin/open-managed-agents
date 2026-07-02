@@ -41,19 +41,40 @@ export class ApiError extends Error {
   readonly status: ApiErrorStatus;
   readonly type: ApiErrorType;
   readonly developerMessage?: string;
+  readonly retryAfterSeconds?: number;
 
   constructor(
     status: ApiErrorStatus,
     type: ApiErrorType,
     message: string,
-    opts: { developerMessage?: string; cause?: unknown } = {},
+    opts: {
+      developerMessage?: string;
+      cause?: unknown;
+      retryAfterSeconds?: number;
+    } = {},
   ) {
     super(message, opts.cause === undefined ? undefined : { cause: opts.cause });
     this.name = "ApiError";
     this.status = status;
     this.type = type;
     this.developerMessage = opts.developerMessage;
+    if (opts.retryAfterSeconds !== undefined) {
+      this.retryAfterSeconds = opts.retryAfterSeconds;
+    }
   }
+}
+
+// 0113 D9 admission rejections. Hosted Managed Agents documents 429 with a
+// retry-after header for rate limits; 529 uses the hosted "Overloaded"
+// message verbatim.
+export function rateLimited(message: string): ApiError {
+  return new ApiError(429, "rate_limit_error", message, {
+    retryAfterSeconds: 1,
+  });
+}
+
+export function overloaded(): ApiError {
+  return new ApiError(529, "overloaded_error", "Overloaded");
 }
 
 export function invalidRequest(

@@ -155,6 +155,32 @@ Key handling rules:
 Rollback: set `OMA_AUTH_MODE=disabled` and restart. All data remains, requests
 resolve to `wrk_default` again, and keys become inert until re-enabled.
 
+### Admission limits
+
+Design: [0113 D9](plans/0113-workspace-authentication-admission.md). All
+limits are unset by default (unlimited, today's behavior). Per-workspace
+rejections are 429 `rate_limit_error` with a `retry-after` header;
+process-wide rejections are 529 `overloaded_error`. Invalid values fail
+startup.
+
+| Env var | Bounds |
+| --- | --- |
+| `OMA_MAX_ACTIVE_SESSIONS_PER_WORKSPACE` | Unarchived sessions per workspace, checked at session create. |
+| `OMA_MAX_PENDING_RUNTIME_TURNS_PER_WORKSPACE` | Pending runtime turns per workspace, checked before a `user.message` send persists anything. |
+| `OMA_MAX_CONCURRENT_UPLOADS_PER_WORKSPACE` | In-flight `POST /v1/files` per workspace, reserved before the multipart body is buffered (each upload holds up to 24 MiB in RAM). |
+| `OMA_MAX_CONCURRENT_UPLOADS` | Process-wide in-flight uploads (529). |
+| `OMA_MAX_CONCURRENT_SSE_STREAMS_PER_WORKSPACE` | Open event streams per workspace, held for the stream's lifetime. |
+| `OMA_MAX_CONCURRENT_SSE_STREAMS` | Process-wide open event streams (529). |
+
+Notes:
+
+- A 429 during an `Idempotency-Key` request does not consume the key: the
+  reservation is released and the same-key retry re-executes once capacity
+  frees.
+- Counters are in-process, matching the single-node deployment tiers. A
+  dedicated sandbox cap is deliberately absent in v1: sandboxes are one per
+  live session handle, so the session cap bounds them.
+
 ## Deployment target shape
 
 The current MVP is suitable for local development and single-node demos.

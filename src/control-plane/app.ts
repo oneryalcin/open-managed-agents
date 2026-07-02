@@ -45,6 +45,12 @@ import {
   toApiErrorBody,
 } from "./errors.ts";
 import type { ControlPlaneRouteEnv, WorkspaceId } from "./workspace.ts";
+import {
+  createAdmissionLimits,
+  parseAdmissionLimitsFromEnv,
+  type AdmissionLimits,
+  type DeploymentAdmissionEnv,
+} from "./admission.ts";
 import { sessionsRoutes } from "./sessions/routes.ts";
 import { DefaultSessionService } from "./sessions/service.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
@@ -73,6 +79,7 @@ export interface ControlPlaneServices {
   sessions: SessionService;
   sessionEvents: SessionEventsService;
   auth?: ControlPlaneAuth;
+  admission?: AdmissionLimits;
 }
 
 export interface InMemoryControlPlaneAppOptions {
@@ -93,7 +100,10 @@ export interface DeploymentAuthEnv {
 }
 
 export type DeploymentControlPlaneEnv =
-  DeploymentRuntimeEnv & DeploymentStorageEnv & DeploymentAuthEnv;
+  DeploymentRuntimeEnv &
+  DeploymentStorageEnv &
+  DeploymentAuthEnv &
+  DeploymentAdmissionEnv;
 
 // 0113 D5: exactly two values; unset stays disabled for the currently allowed
 // rollout tiers but warns loudly; anything else fails construction.
@@ -176,10 +186,16 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   app.route("/v1/environments", environmentsRoutes(services.environments));
   app.route(
     "/v1/files",
-    filesRoutes(services.files ?? new DefaultFileService(new InMemoryFileStorage())),
+    filesRoutes(
+      services.files ?? new DefaultFileService(new InMemoryFileStorage()),
+      services.admission,
+    ),
   );
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
-  app.route("/v1/sessions/:sessionId/events", sessionEventsRoutes(services.sessionEvents));
+  app.route(
+    "/v1/sessions/:sessionId/events",
+    sessionEventsRoutes(services.sessionEvents, services.admission),
+  );
 
   app.notFound((c) => {
     const err = new ApiError(404, "not_found_error", "Route not found");
@@ -188,7 +204,11 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
 
   app.onError((error, c) => {
     const err = ensureApiError(error);
-    return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+    return jsonError(
+      toApiErrorBody(err, c.get("requestId")),
+      err.status,
+      err.retryAfterSeconds,
+    );
   });
 
   return app;
@@ -200,6 +220,7 @@ export function createDeploymentControlPlaneApp(
 ): Hono<AppEnv> {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
+  const admission = createAdmissionLimits(parseAdmissionLimitsFromEnv(env));
   const stores = createDeploymentStoresFromEnv(env);
   if (authMode === "api-key" && stores.mode !== "durable") {
     stores.close();
@@ -233,6 +254,12 @@ export function createDeploymentControlPlaneApp(
       sessionOutputCoordinator: stores.sessionOutputCoordinator,
       runtimeEventCoordinator: stores.runtimeEventCoordinator,
     },
+    admission.maxPendingRuntimeTurnsPerWorkspace === undefined
+      ? {}
+      : {
+          maxPendingRuntimeTurnsPerWorkspace:
+            admission.maxPendingRuntimeTurnsPerWorkspace,
+        },
   );
   sessionEvents.recoverAllAbandonedRuntimeTurns();
   return createControlPlaneApp({
@@ -253,9 +280,16 @@ export function createDeploymentControlPlaneApp(
         idempotencyLedger: stores.events,
         createSessionRowsWithIdempotency:
           stores.sessions.createAndCompleteIdempotency.bind(stores.sessions),
+        ...(admission.maxActiveSessionsPerWorkspace === undefined
+          ? {}
+          : {
+              maxActiveSessionsPerWorkspace:
+                admission.maxActiveSessionsPerWorkspace,
+            }),
       },
     ),
     sessionEvents,
+    admission,
   });
 }
 
@@ -391,12 +425,19 @@ function hasRequiredBeta(path: string, betaFeatures: Set<string>): boolean {
   return false;
 }
 
-function jsonError(body: ApiErrorBody, status: number): Response {
+function jsonError(
+  body: ApiErrorBody,
+  status: number,
+  retryAfterSeconds?: number,
+): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json; charset=UTF-8",
       "request-id": body.request_id,
+      ...(retryAfterSeconds === undefined
+        ? {}
+        : { "retry-after": String(retryAfterSeconds) }),
     },
   });
 }

@@ -9,12 +9,33 @@ import {
 } from "../errors.ts";
 import { parseLimit } from "../http.ts";
 import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
+import type { AdmissionLimits } from "../admission.ts";
 import type { FileService } from "./types.ts";
 
 export const MAX_FILE_UPLOAD_REQUEST_BYTES = 24 * 1024 * 1024;
 
-export function filesRoutes(service: FileService): Hono<ControlPlaneRouteEnv> {
+export function filesRoutes(
+  service: FileService,
+  admission?: AdmissionLimits,
+): Hono<ControlPlaneRouteEnv> {
   const app = new Hono<ControlPlaneRouteEnv>();
+
+  // 0113 D9: the upload slot must be reserved BEFORE bodyLimit. For requests
+  // without a content-length, Hono's bodyLimit eagerly reads the raw body
+  // into a wrapped stream, so a gate placed after it (or in the handler)
+  // admits up to 24 MiB of buffering per rejected request.
+  app.use("/", async (c, next) => {
+    if (c.req.method !== "POST" || admission === undefined) {
+      await next();
+      return;
+    }
+    const releaseUpload = admission.uploads.acquire(workspaceIdFrom(c));
+    try {
+      await next();
+    } finally {
+      releaseUpload();
+    }
+  });
 
   app.use(
     "/",
