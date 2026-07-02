@@ -1,0 +1,2628 @@
+{
+  "generated_at": "2026-07-02T07:52:48.421Z",
+  "started_at": "2026-07-02T07:52:42.468Z",
+  "run_id": "probe42_1782978762465_smin8n",
+  "verdict": "PASS",
+  "topology": {
+    "server_process_id": 39483,
+    "driver_process_id": 39423,
+    "shared_event_loop": false
+  },
+  "config": {
+    "session_count": 20,
+    "events_per_request": 200,
+    "burst_count": 100,
+    "fast_clients_per_session": 0,
+    "stalled_clients": 20,
+    "drain_timeout_ms": 10000
+  },
+  "server": {
+    "base_url": "http://127.0.0.1:58953"
+  },
+  "storage": {
+    "sqlite_path": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782978762465_smin8n-/oma.sqlite",
+    "object_root": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782978762465_smin8n-/objects",
+    "pragmas": {
+      "journalMode": "wal",
+      "busyTimeout": 5000,
+      "foreignKeys": 1,
+      "synchronous": 1
+    },
+    "file_sizes_bytes": {
+      "sqlite": 225157120,
+      "wal": 4321912,
+      "shm": 32768
+    }
+  },
+  "clients": {
+    "fast": {
+      "count": 0,
+      "expected_events": 0,
+      "delivered_events": 0,
+      "min_delivered_per_client": 0,
+      "max_delivered_per_client": 0,
+      "drain_wait_ms": 0.027
+    },
+    "stalled": {
+      "count": 20,
+      "session_ids": [
+        "sesn_http_probe42_1782978762465_smin8n_0000",
+        "sesn_http_probe42_1782978762465_smin8n_0001",
+        "sesn_http_probe42_1782978762465_smin8n_0002",
+        "sesn_http_probe42_1782978762465_smin8n_0003",
+        "sesn_http_probe42_1782978762465_smin8n_0004",
+        "sesn_http_probe42_1782978762465_smin8n_0005",
+        "sesn_http_probe42_1782978762465_smin8n_0006",
+        "sesn_http_probe42_1782978762465_smin8n_0007",
+        "sesn_http_probe42_1782978762465_smin8n_0008",
+        "sesn_http_probe42_1782978762465_smin8n_0009",
+        "sesn_http_probe42_1782978762465_smin8n_0010",
+        "sesn_http_probe42_1782978762465_smin8n_0011",
+        "sesn_http_probe42_1782978762465_smin8n_0012",
+        "sesn_http_probe42_1782978762465_smin8n_0013",
+        "sesn_http_probe42_1782978762465_smin8n_0014",
+        "sesn_http_probe42_1782978762465_smin8n_0015",
+        "sesn_http_probe42_1782978762465_smin8n_0016",
+        "sesn_http_probe42_1782978762465_smin8n_0017",
+        "sesn_http_probe42_1782978762465_smin8n_0018",
+        "sesn_http_probe42_1782978762465_smin8n_0019"
+      ]
+    }
+  },
+  "bursts": [
+    {
+      "burst_index": 0,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 109.682,
+      "request_latency_ms": {
+        "min": 16.31,
+        "p50": 44.077,
+        "p95": 90.701,
+        "p99": 104.343,
+        "max": 104.343,
+        "mean": 50.856
+      },
+      "queue_lag_ms": {
+        "min": 0.08,
+        "p50": 3.22,
+        "p95": 5.123,
+        "p99": 5.337,
+        "max": 5.337,
+        "mean": 3.247
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 1,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 64.456,
+      "request_latency_ms": {
+        "min": 6.338,
+        "p50": 34.767,
+        "p95": 58.709,
+        "p99": 61.508,
+        "max": 61.508,
+        "mean": 35.757
+      },
+      "queue_lag_ms": {
+        "min": 0.056,
+        "p50": 1.668,
+        "p95": 2.821,
+        "p99": 2.945,
+        "max": 2.945,
+        "mean": 1.686
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 2,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 70.679,
+      "request_latency_ms": {
+        "min": 15.639,
+        "p50": 42.47,
+        "p95": 65.091,
+        "p99": 67.386,
+        "max": 67.386,
+        "mean": 43.128
+      },
+      "queue_lag_ms": {
+        "min": 0.045,
+        "p50": 1.741,
+        "p95": 3.128,
+        "p99": 3.291,
+        "max": 3.291,
+        "mean": 1.804
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 3,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 69.005,
+      "request_latency_ms": {
+        "min": 9.166,
+        "p50": 41.211,
+        "p95": 64.025,
+        "p99": 66.375,
+        "max": 66.375,
+        "mean": 42.237
+      },
+      "queue_lag_ms": {
+        "min": 0.034,
+        "p50": 1.449,
+        "p95": 2.51,
+        "p99": 2.629,
+        "max": 2.629,
+        "mean": 1.433
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 4,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 59.895,
+      "request_latency_ms": {
+        "min": 5.473,
+        "p50": 34.131,
+        "p95": 54.903,
+        "p99": 57.318,
+        "max": 57.318,
+        "mean": 33.975
+      },
+      "queue_lag_ms": {
+        "min": 0.036,
+        "p50": 1.37,
+        "p95": 2.455,
+        "p99": 2.576,
+        "max": 2.576,
+        "mean": 1.406
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 5,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 60.412,
+      "request_latency_ms": {
+        "min": 5.223,
+        "p50": 34.482,
+        "p95": 55.874,
+        "p99": 57.962,
+        "max": 57.962,
+        "mean": 33.837
+      },
+      "queue_lag_ms": {
+        "min": 0.033,
+        "p50": 1.313,
+        "p95": 2.333,
+        "p99": 2.449,
+        "max": 2.449,
+        "mean": 1.34
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 6,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 74.209,
+      "request_latency_ms": {
+        "min": 5.075,
+        "p50": 49.075,
+        "p95": 69.183,
+        "p99": 71.821,
+        "max": 71.821,
+        "mean": 41.535
+      },
+      "queue_lag_ms": {
+        "min": 0.032,
+        "p50": 1.271,
+        "p95": 2.27,
+        "p99": 2.386,
+        "max": 2.386,
+        "mean": 1.303
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 7,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 61.225,
+      "request_latency_ms": {
+        "min": 5.226,
+        "p50": 34.52,
+        "p95": 56.303,
+        "p99": 58.619,
+        "max": 58.619,
+        "mean": 32.205
+      },
+      "queue_lag_ms": {
+        "min": 0.036,
+        "p50": 1.453,
+        "p95": 2.494,
+        "p99": 2.604,
+        "max": 2.604,
+        "mean": 1.439
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 8,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 56.156,
+      "request_latency_ms": {
+        "min": 4.954,
+        "p50": 24.42,
+        "p95": 51.741,
+        "p99": 53.894,
+        "max": 53.894,
+        "mean": 29.223
+      },
+      "queue_lag_ms": {
+        "min": 0.032,
+        "p50": 1.228,
+        "p95": 2.152,
+        "p99": 2.26,
+        "max": 2.26,
+        "mean": 1.245
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 9,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 60.008,
+      "request_latency_ms": {
+        "min": 4.764,
+        "p50": 25.284,
+        "p95": 55.692,
+        "p99": 57.717,
+        "max": 57.717,
+        "mean": 30.138
+      },
+      "queue_lag_ms": {
+        "min": 0.02,
+        "p50": 1.214,
+        "p95": 2.193,
+        "p99": 2.29,
+        "max": 2.29,
+        "mean": 1.243
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 10,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 61.474,
+      "request_latency_ms": {
+        "min": 15.214,
+        "p50": 28.225,
+        "p95": 56.875,
+        "p99": 59.042,
+        "max": 59.042,
+        "mean": 33.249
+      },
+      "queue_lag_ms": {
+        "min": 0.049,
+        "p50": 1.265,
+        "p95": 2.31,
+        "p99": 2.431,
+        "max": 2.431,
+        "mean": 1.312
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 11,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 60.736,
+      "request_latency_ms": {
+        "min": 4.91,
+        "p50": 28.77,
+        "p95": 56.593,
+        "p99": 58.497,
+        "max": 58.497,
+        "mean": 30.518
+      },
+      "queue_lag_ms": {
+        "min": 0.024,
+        "p50": 1.133,
+        "p95": 2.129,
+        "p99": 2.238,
+        "max": 2.238,
+        "mean": 1.175
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 12,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 60.246,
+      "request_latency_ms": {
+        "min": 4.769,
+        "p50": 26.578,
+        "p95": 55.723,
+        "p99": 58.014,
+        "max": 58.014,
+        "mean": 29.524
+      },
+      "queue_lag_ms": {
+        "min": 0.022,
+        "p50": 1.119,
+        "p95": 2.122,
+        "p99": 2.231,
+        "max": 2.231,
+        "mean": 1.186
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 13,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 58.196,
+      "request_latency_ms": {
+        "min": 4.951,
+        "p50": 24.788,
+        "p95": 53.349,
+        "p99": 55.908,
+        "max": 55.908,
+        "mean": 27.655
+      },
+      "queue_lag_ms": {
+        "min": 0.022,
+        "p50": 1.187,
+        "p95": 2.188,
+        "p99": 2.287,
+        "max": 2.287,
+        "mean": 1.232
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 14,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 60.048,
+      "request_latency_ms": {
+        "min": 4.71,
+        "p50": 26.152,
+        "p95": 55.749,
+        "p99": 57.803,
+        "max": 57.803,
+        "mean": 28.888
+      },
+      "queue_lag_ms": {
+        "min": 0.027,
+        "p50": 1.159,
+        "p95": 2.143,
+        "p99": 2.242,
+        "max": 2.242,
+        "mean": 1.219
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 15,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 54.653,
+      "request_latency_ms": {
+        "min": 5.083,
+        "p50": 24.108,
+        "p95": 50.274,
+        "p99": 52.411,
+        "max": 52.411,
+        "mean": 26.247
+      },
+      "queue_lag_ms": {
+        "min": 0.018,
+        "p50": 1.19,
+        "p95": 2.138,
+        "p99": 2.238,
+        "max": 2.238,
+        "mean": 1.226
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 16,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.451,
+      "request_latency_ms": {
+        "min": 4.921,
+        "p50": 20.194,
+        "p95": 42.298,
+        "p99": 44.2,
+        "max": 44.2,
+        "mean": 21.819
+      },
+      "queue_lag_ms": {
+        "min": 0.024,
+        "p50": 1.216,
+        "p95": 2.143,
+        "p99": 2.25,
+        "max": 2.25,
+        "mean": 1.222
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 17,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 48.942,
+      "request_latency_ms": {
+        "min": 7.769,
+        "p50": 22.703,
+        "p95": 37.9,
+        "p99": 46.395,
+        "max": 46.395,
+        "mean": 23.858
+      },
+      "queue_lag_ms": {
+        "min": 0.026,
+        "p50": 1.307,
+        "p95": 2.433,
+        "p99": 2.546,
+        "max": 2.546,
+        "mean": 1.375
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 18,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 41.801,
+      "request_latency_ms": {
+        "min": 9.144,
+        "p50": 22.927,
+        "p95": 37.76,
+        "p99": 39.341,
+        "max": 39.341,
+        "mean": 23.903
+      },
+      "queue_lag_ms": {
+        "min": 0.03,
+        "p50": 1.271,
+        "p95": 2.355,
+        "p99": 2.459,
+        "max": 2.459,
+        "mean": 1.32
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 19,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 56.333,
+      "request_latency_ms": {
+        "min": 14.641,
+        "p50": 29.834,
+        "p95": 51.828,
+        "p99": 53.52,
+        "max": 53.52,
+        "mean": 31.744
+      },
+      "queue_lag_ms": {
+        "min": 0.02,
+        "p50": 1.265,
+        "p95": 2.695,
+        "p99": 2.812,
+        "max": 2.812,
+        "mean": 1.418
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 20,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 49.863,
+      "request_latency_ms": {
+        "min": 5.08,
+        "p50": 27.4,
+        "p95": 45.912,
+        "p99": 47.44,
+        "max": 47.44,
+        "mean": 29.491
+      },
+      "queue_lag_ms": {
+        "min": 0.029,
+        "p50": 1.249,
+        "p95": 2.312,
+        "p99": 2.422,
+        "max": 2.422,
+        "mean": 1.312
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 21,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 49.798,
+      "request_latency_ms": {
+        "min": 4.669,
+        "p50": 27.432,
+        "p95": 46.019,
+        "p99": 47.514,
+        "max": 47.514,
+        "mean": 29.186
+      },
+      "queue_lag_ms": {
+        "min": 0.041,
+        "p50": 1.179,
+        "p95": 2.174,
+        "p99": 2.281,
+        "max": 2.281,
+        "mean": 1.228
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 22,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 55.487,
+      "request_latency_ms": {
+        "min": 4.73,
+        "p50": 32.536,
+        "p95": 51.462,
+        "p99": 53.102,
+        "max": 53.102,
+        "mean": 32.36
+      },
+      "queue_lag_ms": {
+        "min": 0.021,
+        "p50": 1.209,
+        "p95": 2.282,
+        "p99": 2.385,
+        "max": 2.385,
+        "mean": 1.277
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 23,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.603,
+      "request_latency_ms": {
+        "min": 5.54,
+        "p50": 28.291,
+        "p95": 42.504,
+        "p99": 44.11,
+        "max": 44.11,
+        "mean": 27.4
+      },
+      "queue_lag_ms": {
+        "min": 0.02,
+        "p50": 1.273,
+        "p95": 2.38,
+        "p99": 2.492,
+        "max": 2.492,
+        "mean": 1.344
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 24,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.827,
+      "request_latency_ms": {
+        "min": 6.949,
+        "p50": 29.347,
+        "p95": 43.788,
+        "p99": 45.347,
+        "max": 45.347,
+        "mean": 28.236
+      },
+      "queue_lag_ms": {
+        "min": 0.024,
+        "p50": 1.171,
+        "p95": 2.367,
+        "p99": 2.478,
+        "max": 2.478,
+        "mean": 1.287
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 25,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 50.019,
+      "request_latency_ms": {
+        "min": 5.24,
+        "p50": 30.585,
+        "p95": 45.873,
+        "p99": 47.52,
+        "max": 47.52,
+        "mean": 28.533
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 1.235,
+        "p95": 2.389,
+        "p99": 2.498,
+        "max": 2.498,
+        "mean": 1.328
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 26,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.205,
+      "request_latency_ms": {
+        "min": 4.981,
+        "p50": 28.103,
+        "p95": 43.276,
+        "p99": 44.888,
+        "max": 44.888,
+        "mean": 26.101
+      },
+      "queue_lag_ms": {
+        "min": 0.027,
+        "p50": 1.305,
+        "p95": 2.221,
+        "p99": 2.312,
+        "max": 2.312,
+        "mean": 1.333
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 27,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 49.635,
+      "request_latency_ms": {
+        "min": 4.37,
+        "p50": 28.156,
+        "p95": 45.96,
+        "p99": 47.532,
+        "max": 47.532,
+        "mean": 25.997
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 1.089,
+        "p95": 2.003,
+        "p99": 2.101,
+        "max": 2.101,
+        "mean": 1.131
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 28,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 48.967,
+      "request_latency_ms": {
+        "min": 4.32,
+        "p50": 29.877,
+        "p95": 45.299,
+        "p99": 46.997,
+        "max": 46.997,
+        "mean": 25.944
+      },
+      "queue_lag_ms": {
+        "min": 0.018,
+        "p50": 1.05,
+        "p95": 1.879,
+        "p99": 1.968,
+        "max": 1.968,
+        "mean": 1.073
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 29,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.943,
+      "request_latency_ms": {
+        "min": 5.054,
+        "p50": 19.985,
+        "p95": 42.02,
+        "p99": 43.515,
+        "max": 43.515,
+        "mean": 24.606
+      },
+      "queue_lag_ms": {
+        "min": 0.019,
+        "p50": 1.375,
+        "p95": 2.328,
+        "p99": 2.426,
+        "max": 2.426,
+        "mean": 1.306
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 30,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 51.055,
+      "request_latency_ms": {
+        "min": 4.525,
+        "p50": 18.488,
+        "p95": 47.206,
+        "p99": 48.76,
+        "max": 48.76,
+        "mean": 25.285
+      },
+      "queue_lag_ms": {
+        "min": 0.021,
+        "p50": 1.187,
+        "p95": 2.189,
+        "p99": 2.294,
+        "max": 2.294,
+        "mean": 1.238
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 31,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.926,
+      "request_latency_ms": {
+        "min": 4.312,
+        "p50": 19.69,
+        "p95": 42.316,
+        "p99": 43.829,
+        "max": 43.829,
+        "mean": 23.572
+      },
+      "queue_lag_ms": {
+        "min": 0.021,
+        "p50": 1.087,
+        "p95": 1.996,
+        "p99": 2.095,
+        "max": 2.095,
+        "mean": 1.123
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 32,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 52.887,
+      "request_latency_ms": {
+        "min": 4.422,
+        "p50": 18.338,
+        "p95": 49.204,
+        "p99": 50.733,
+        "max": 50.733,
+        "mean": 24.875
+      },
+      "queue_lag_ms": {
+        "min": 0.02,
+        "p50": 1.14,
+        "p95": 2.051,
+        "p99": 2.152,
+        "max": 2.152,
+        "mean": 1.176
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 33,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.63,
+      "request_latency_ms": {
+        "min": 5.639,
+        "p50": 19.622,
+        "p95": 42.618,
+        "p99": 44.143,
+        "max": 44.143,
+        "mean": 23.206
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 1.391,
+        "p95": 2.382,
+        "p99": 2.485,
+        "max": 2.485,
+        "mean": 1.354
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 34,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.389,
+      "request_latency_ms": {
+        "min": 4.425,
+        "p50": 19.359,
+        "p95": 41.605,
+        "p99": 43.119,
+        "max": 43.119,
+        "mean": 22.013
+      },
+      "queue_lag_ms": {
+        "min": 0.023,
+        "p50": 1.107,
+        "p95": 2.159,
+        "p99": 2.268,
+        "max": 2.268,
+        "mean": 1.19
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 35,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 49.063,
+      "request_latency_ms": {
+        "min": 4.339,
+        "p50": 17.878,
+        "p95": 45.234,
+        "p99": 46.95,
+        "max": 46.95,
+        "mean": 21.148
+      },
+      "queue_lag_ms": {
+        "min": 0.021,
+        "p50": 1.099,
+        "p95": 2.009,
+        "p99": 2.111,
+        "max": 2.111,
+        "mean": 1.135
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 36,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 50.25,
+      "request_latency_ms": {
+        "min": 5.861,
+        "p50": 22.947,
+        "p95": 46.618,
+        "p99": 48.115,
+        "max": 48.115,
+        "mean": 24.876
+      },
+      "queue_lag_ms": {
+        "min": 0.021,
+        "p50": 1.129,
+        "p95": 2.034,
+        "p99": 2.133,
+        "max": 2.133,
+        "mean": 1.14
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 37,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.571,
+      "request_latency_ms": {
+        "min": 4.364,
+        "p50": 18.38,
+        "p95": 43.807,
+        "p99": 45.519,
+        "max": 45.519,
+        "mean": 20.284
+      },
+      "queue_lag_ms": {
+        "min": 0.014,
+        "p50": 1.022,
+        "p95": 1.962,
+        "p99": 2.05,
+        "max": 2.05,
+        "mean": 1.092
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 38,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.033,
+      "request_latency_ms": {
+        "min": 4.074,
+        "p50": 18.621,
+        "p95": 36.498,
+        "p99": 45.136,
+        "max": 45.136,
+        "mean": 20.754
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 0.955,
+        "p95": 1.779,
+        "p99": 1.895,
+        "max": 1.895,
+        "mean": 0.996
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 39,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 36.052,
+      "request_latency_ms": {
+        "min": 4.36,
+        "p50": 18.792,
+        "p95": 32.586,
+        "p99": 34.167,
+        "max": 34.167,
+        "mean": 19.379
+      },
+      "queue_lag_ms": {
+        "min": 0.022,
+        "p50": 0.963,
+        "p95": 1.794,
+        "p99": 1.883,
+        "max": 1.883,
+        "mean": 1.005
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 40,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.632,
+      "request_latency_ms": {
+        "min": 12.664,
+        "p50": 27.357,
+        "p95": 41.781,
+        "p99": 43.657,
+        "max": 43.657,
+        "mean": 28.054
+      },
+      "queue_lag_ms": {
+        "min": 0.02,
+        "p50": 1.039,
+        "p95": 1.88,
+        "p99": 1.973,
+        "max": 1.973,
+        "mean": 1.068
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 41,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 48.994,
+      "request_latency_ms": {
+        "min": 5.038,
+        "p50": 31.006,
+        "p95": 45.197,
+        "p99": 46.704,
+        "max": 46.704,
+        "mean": 31.081
+      },
+      "queue_lag_ms": {
+        "min": 0.012,
+        "p50": 1.059,
+        "p95": 2.187,
+        "p99": 2.286,
+        "max": 2.286,
+        "mean": 1.202
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 42,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 42.678,
+      "request_latency_ms": {
+        "min": 4.184,
+        "p50": 25.454,
+        "p95": 39.274,
+        "p99": 40.694,
+        "max": 40.694,
+        "mean": 25.423
+      },
+      "queue_lag_ms": {
+        "min": 0.012,
+        "p50": 1.021,
+        "p95": 1.884,
+        "p99": 1.983,
+        "max": 1.983,
+        "mean": 1.06
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 43,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 51.785,
+      "request_latency_ms": {
+        "min": 3.984,
+        "p50": 30.392,
+        "p95": 48.282,
+        "p99": 49.848,
+        "max": 49.848,
+        "mean": 30.012
+      },
+      "queue_lag_ms": {
+        "min": 0.015,
+        "p50": 0.971,
+        "p95": 1.838,
+        "p99": 1.935,
+        "max": 1.935,
+        "mean": 1.007
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 44,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 52.305,
+      "request_latency_ms": {
+        "min": 4.505,
+        "p50": 32.391,
+        "p95": 48.559,
+        "p99": 50.132,
+        "max": 50.132,
+        "mean": 30.877
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 1.141,
+        "p95": 2.053,
+        "p99": 2.172,
+        "max": 2.172,
+        "mean": 1.177
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 45,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 44.914,
+      "request_latency_ms": {
+        "min": 4.378,
+        "p50": 27.292,
+        "p95": 41.458,
+        "p99": 42.912,
+        "max": 42.912,
+        "mean": 26.068
+      },
+      "queue_lag_ms": {
+        "min": 0.02,
+        "p50": 1.051,
+        "p95": 1.903,
+        "p99": 1.998,
+        "max": 1.998,
+        "mean": 1.08
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 46,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 53.146,
+      "request_latency_ms": {
+        "min": 4.481,
+        "p50": 31.527,
+        "p95": 49.456,
+        "p99": 50.992,
+        "max": 50.992,
+        "mean": 29.549
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 1.14,
+        "p95": 2.055,
+        "p99": 2.152,
+        "max": 2.152,
+        "mean": 1.176
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 47,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 44.099,
+      "request_latency_ms": {
+        "min": 4.455,
+        "p50": 26.183,
+        "p95": 40.301,
+        "p99": 41.952,
+        "max": 41.952,
+        "mean": 24.256
+      },
+      "queue_lag_ms": {
+        "min": 0.018,
+        "p50": 1.102,
+        "p95": 2.042,
+        "p99": 2.145,
+        "max": 2.145,
+        "mean": 1.151
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 48,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 48.325,
+      "request_latency_ms": {
+        "min": 4.567,
+        "p50": 29.769,
+        "p95": 44.16,
+        "p99": 46.076,
+        "max": 46.076,
+        "mean": 26.17
+      },
+      "queue_lag_ms": {
+        "min": 0.021,
+        "p50": 1.154,
+        "p95": 2.155,
+        "p99": 2.247,
+        "max": 2.247,
+        "mean": 1.214
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 49,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.794,
+      "request_latency_ms": {
+        "min": 4.755,
+        "p50": 27.882,
+        "p95": 42.088,
+        "p99": 43.646,
+        "max": 43.646,
+        "mean": 24.854
+      },
+      "queue_lag_ms": {
+        "min": 0.021,
+        "p50": 1.052,
+        "p95": 2.056,
+        "p99": 2.147,
+        "max": 2.147,
+        "mean": 1.145
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 50,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 50.469,
+      "request_latency_ms": {
+        "min": 4.283,
+        "p50": 32.062,
+        "p95": 47.042,
+        "p99": 48.614,
+        "max": 48.614,
+        "mean": 27
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 0.961,
+        "p95": 1.767,
+        "p99": 1.854,
+        "max": 1.854,
+        "mean": 0.996
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 51,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.404,
+      "request_latency_ms": {
+        "min": 4.096,
+        "p50": 18.232,
+        "p95": 42.91,
+        "p99": 44.517,
+        "max": 44.517,
+        "mean": 23.102
+      },
+      "queue_lag_ms": {
+        "min": 0.019,
+        "p50": 0.987,
+        "p95": 1.8,
+        "p99": 1.886,
+        "max": 1.886,
+        "mean": 1.017
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 52,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.266,
+      "request_latency_ms": {
+        "min": 4.155,
+        "p50": 18.182,
+        "p95": 41.837,
+        "p99": 43.391,
+        "max": 43.391,
+        "mean": 23.163
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 0.97,
+        "p95": 1.785,
+        "p99": 1.873,
+        "max": 1.873,
+        "mean": 1
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 53,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.489,
+      "request_latency_ms": {
+        "min": 4.234,
+        "p50": 19.305,
+        "p95": 41.96,
+        "p99": 43.58,
+        "max": 43.58,
+        "mean": 23.024
+      },
+      "queue_lag_ms": {
+        "min": 0.019,
+        "p50": 0.99,
+        "p95": 1.814,
+        "p99": 1.908,
+        "max": 1.908,
+        "mean": 1.027
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 54,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 51.069,
+      "request_latency_ms": {
+        "min": 4.074,
+        "p50": 20.968,
+        "p95": 47.549,
+        "p99": 49.158,
+        "max": 49.158,
+        "mean": 25.062
+      },
+      "queue_lag_ms": {
+        "min": 0.012,
+        "p50": 0.987,
+        "p95": 1.808,
+        "p99": 1.909,
+        "max": 1.909,
+        "mean": 1.02
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 55,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 50.367,
+      "request_latency_ms": {
+        "min": 4.432,
+        "p50": 19.105,
+        "p95": 46.712,
+        "p99": 48.286,
+        "max": 48.286,
+        "mean": 23.719
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 1.079,
+        "p95": 1.986,
+        "p99": 2.08,
+        "max": 2.08,
+        "mean": 1.123
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 56,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 43.981,
+      "request_latency_ms": {
+        "min": 4.239,
+        "p50": 18.619,
+        "p95": 40.533,
+        "p99": 42.043,
+        "max": 42.043,
+        "mean": 21.219
+      },
+      "queue_lag_ms": {
+        "min": 0.019,
+        "p50": 1.012,
+        "p95": 1.838,
+        "p99": 1.936,
+        "max": 1.936,
+        "mean": 1.044
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 57,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.782,
+      "request_latency_ms": {
+        "min": 5.085,
+        "p50": 19.7,
+        "p95": 42.868,
+        "p99": 44.495,
+        "max": 44.495,
+        "mean": 22.317
+      },
+      "queue_lag_ms": {
+        "min": 0.018,
+        "p50": 1.124,
+        "p95": 2.169,
+        "p99": 2.284,
+        "max": 2.284,
+        "mean": 1.21
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 58,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.779,
+      "request_latency_ms": {
+        "min": 4.632,
+        "p50": 18.79,
+        "p95": 42.087,
+        "p99": 43.626,
+        "max": 43.626,
+        "mean": 21.004
+      },
+      "queue_lag_ms": {
+        "min": 0.022,
+        "p50": 1.113,
+        "p95": 2.051,
+        "p99": 2.152,
+        "max": 2.152,
+        "mean": 1.152
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 59,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 51.837,
+      "request_latency_ms": {
+        "min": 4.077,
+        "p50": 18.276,
+        "p95": 48.105,
+        "p99": 49.894,
+        "max": 49.894,
+        "mean": 20.601
+      },
+      "queue_lag_ms": {
+        "min": 0.019,
+        "p50": 0.999,
+        "p95": 1.845,
+        "p99": 1.941,
+        "max": 1.941,
+        "mean": 1.038
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 60,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 50.144,
+      "request_latency_ms": {
+        "min": 4.289,
+        "p50": 18.602,
+        "p95": 33.788,
+        "p99": 48.102,
+        "max": 48.102,
+        "mean": 20.284
+      },
+      "queue_lag_ms": {
+        "min": 0.031,
+        "p50": 1.078,
+        "p95": 1.949,
+        "p99": 2.041,
+        "max": 2.041,
+        "mean": 1.104
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 61,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 37.558,
+      "request_latency_ms": {
+        "min": 4.69,
+        "p50": 19.17,
+        "p95": 33.893,
+        "p99": 35.542,
+        "max": 35.542,
+        "mean": 20.088
+      },
+      "queue_lag_ms": {
+        "min": 0.023,
+        "p50": 1.012,
+        "p95": 1.91,
+        "p99": 2.014,
+        "max": 2.014,
+        "mean": 1.055
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 62,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 58.182,
+      "request_latency_ms": {
+        "min": 17.493,
+        "p50": 33.53,
+        "p95": 54.004,
+        "p99": 56.191,
+        "max": 56.191,
+        "mean": 35.486
+      },
+      "queue_lag_ms": {
+        "min": 0.022,
+        "p50": 1.018,
+        "p95": 1.894,
+        "p99": 1.989,
+        "max": 1.989,
+        "mean": 1.064
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 63,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.66,
+      "request_latency_ms": {
+        "min": 4.454,
+        "p50": 27.536,
+        "p95": 42.094,
+        "p99": 43.702,
+        "max": 43.702,
+        "mean": 27.837
+      },
+      "queue_lag_ms": {
+        "min": 0.026,
+        "p50": 1.007,
+        "p95": 1.864,
+        "p99": 1.957,
+        "max": 1.957,
+        "mean": 1.053
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 64,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.324,
+      "request_latency_ms": {
+        "min": 4.13,
+        "p50": 27.031,
+        "p95": 41.915,
+        "p99": 43.416,
+        "max": 43.416,
+        "mean": 26.953
+      },
+      "queue_lag_ms": {
+        "min": 0.028,
+        "p50": 0.958,
+        "p95": 1.803,
+        "p99": 1.906,
+        "max": 1.906,
+        "mean": 1.003
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 65,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 57.825,
+      "request_latency_ms": {
+        "min": 4.339,
+        "p50": 34.496,
+        "p95": 53.784,
+        "p99": 55.86,
+        "max": 55.86,
+        "mean": 34.036
+      },
+      "queue_lag_ms": {
+        "min": 0.012,
+        "p50": 1.025,
+        "p95": 1.87,
+        "p99": 1.963,
+        "max": 1.963,
+        "mean": 1.054
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 66,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 51.746,
+      "request_latency_ms": {
+        "min": 6.996,
+        "p50": 33.353,
+        "p95": 48.209,
+        "p99": 49.761,
+        "max": 49.761,
+        "mean": 31.864
+      },
+      "queue_lag_ms": {
+        "min": 0.028,
+        "p50": 1.056,
+        "p95": 1.893,
+        "p99": 1.984,
+        "max": 1.984,
+        "mean": 1.087
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 67,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 52.489,
+      "request_latency_ms": {
+        "min": 4.325,
+        "p50": 34.448,
+        "p95": 48.946,
+        "p99": 50.53,
+        "max": 50.53,
+        "mean": 31.104
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 1.011,
+        "p95": 1.834,
+        "p99": 1.957,
+        "max": 1.957,
+        "mean": 1.04
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 68,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.953,
+      "request_latency_ms": {
+        "min": 4.834,
+        "p50": 29.003,
+        "p95": 43.988,
+        "p99": 45.837,
+        "max": 45.837,
+        "mean": 27.031
+      },
+      "queue_lag_ms": {
+        "min": 0.019,
+        "p50": 1.199,
+        "p95": 2.025,
+        "p99": 2.114,
+        "max": 2.114,
+        "mean": 1.196
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 69,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.393,
+      "request_latency_ms": {
+        "min": 4.808,
+        "p50": 29.047,
+        "p95": 43.832,
+        "p99": 45.268,
+        "max": 45.268,
+        "mean": 26.39
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 1.208,
+        "p95": 2.037,
+        "p99": 2.124,
+        "max": 2.124,
+        "mean": 1.217
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 70,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.279,
+      "request_latency_ms": {
+        "min": 4.373,
+        "p50": 26.872,
+        "p95": 41.419,
+        "p99": 43.198,
+        "max": 43.198,
+        "mean": 24.361
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 1.074,
+        "p95": 1.991,
+        "p99": 2.08,
+        "max": 2.08,
+        "mean": 1.114
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 71,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 49.262,
+      "request_latency_ms": {
+        "min": 4.943,
+        "p50": 29.823,
+        "p95": 45.321,
+        "p99": 46.904,
+        "max": 46.904,
+        "mean": 26.392
+      },
+      "queue_lag_ms": {
+        "min": 0.022,
+        "p50": 1.318,
+        "p95": 2.252,
+        "p99": 2.353,
+        "max": 2.353,
+        "mean": 1.305
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 72,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.89,
+      "request_latency_ms": {
+        "min": 4.468,
+        "p50": 18.747,
+        "p95": 42.197,
+        "p99": 43.724,
+        "max": 43.724,
+        "mean": 23.979
+      },
+      "queue_lag_ms": {
+        "min": 0.029,
+        "p50": 1.125,
+        "p95": 2.058,
+        "p99": 2.165,
+        "max": 2.165,
+        "mean": 1.171
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 73,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.869,
+      "request_latency_ms": {
+        "min": 5.7,
+        "p50": 19.554,
+        "p95": 42.145,
+        "p99": 43.59,
+        "max": 43.59,
+        "mean": 24.011
+      },
+      "queue_lag_ms": {
+        "min": 0.024,
+        "p50": 1.132,
+        "p95": 2.155,
+        "p99": 2.277,
+        "max": 2.277,
+        "mean": 1.185
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 74,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 50.437,
+      "request_latency_ms": {
+        "min": 4.476,
+        "p50": 19.474,
+        "p95": 46.786,
+        "p99": 48.301,
+        "max": 48.301,
+        "mean": 25.253
+      },
+      "queue_lag_ms": {
+        "min": 0.013,
+        "p50": 1.196,
+        "p95": 2.047,
+        "p99": 2.134,
+        "max": 2.134,
+        "mean": 1.175
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 75,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 44.392,
+      "request_latency_ms": {
+        "min": 4.059,
+        "p50": 18.408,
+        "p95": 40.76,
+        "p99": 42.464,
+        "max": 42.464,
+        "mean": 21.953
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 0.996,
+        "p95": 1.837,
+        "p99": 1.926,
+        "max": 1.926,
+        "mean": 1.041
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 76,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.393,
+      "request_latency_ms": {
+        "min": 4.32,
+        "p50": 19.367,
+        "p95": 43.813,
+        "p99": 45.417,
+        "max": 45.417,
+        "mean": 22.786
+      },
+      "queue_lag_ms": {
+        "min": 0.019,
+        "p50": 0.993,
+        "p95": 1.885,
+        "p99": 1.975,
+        "max": 1.975,
+        "mean": 1.047
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 77,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 49.564,
+      "request_latency_ms": {
+        "min": 4.387,
+        "p50": 18.468,
+        "p95": 46.027,
+        "p99": 47.536,
+        "max": 47.536,
+        "mean": 22.608
+      },
+      "queue_lag_ms": {
+        "min": 0.013,
+        "p50": 1.053,
+        "p95": 1.929,
+        "p99": 2.025,
+        "max": 2.025,
+        "mean": 1.091
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 78,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.568,
+      "request_latency_ms": {
+        "min": 4.055,
+        "p50": 19.464,
+        "p95": 42.158,
+        "p99": 43.69,
+        "max": 43.69,
+        "mean": 21.584
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 0.97,
+        "p95": 1.788,
+        "p99": 1.875,
+        "max": 1.875,
+        "mean": 1.005
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 79,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 44.563,
+      "request_latency_ms": {
+        "min": 4.023,
+        "p50": 18.276,
+        "p95": 41.177,
+        "p99": 42.695,
+        "max": 42.695,
+        "mean": 20.293
+      },
+      "queue_lag_ms": {
+        "min": 0.014,
+        "p50": 0.966,
+        "p95": 1.78,
+        "p99": 1.866,
+        "max": 1.866,
+        "mean": 1.006
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 80,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.469,
+      "request_latency_ms": {
+        "min": 4.308,
+        "p50": 18.137,
+        "p95": 41.574,
+        "p99": 43.46,
+        "max": 43.46,
+        "mean": 20.093
+      },
+      "queue_lag_ms": {
+        "min": 0.013,
+        "p50": 1.039,
+        "p95": 1.915,
+        "p99": 2.007,
+        "max": 2.007,
+        "mean": 1.076
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 81,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.648,
+      "request_latency_ms": {
+        "min": 4.136,
+        "p50": 19.044,
+        "p95": 33.637,
+        "p99": 45.795,
+        "max": 45.795,
+        "mean": 20.325
+      },
+      "queue_lag_ms": {
+        "min": 0.014,
+        "p50": 0.958,
+        "p95": 1.765,
+        "p99": 1.851,
+        "max": 1.851,
+        "mean": 0.99
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 82,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 36.012,
+      "request_latency_ms": {
+        "min": 4.182,
+        "p50": 18.609,
+        "p95": 32.642,
+        "p99": 34.104,
+        "max": 34.104,
+        "mean": 19.327
+      },
+      "queue_lag_ms": {
+        "min": 0.025,
+        "p50": 0.978,
+        "p95": 1.82,
+        "p99": 1.907,
+        "max": 1.907,
+        "mean": 1.025
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 83,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 44.728,
+      "request_latency_ms": {
+        "min": 12.842,
+        "p50": 27.232,
+        "p95": 41.262,
+        "p99": 42.758,
+        "max": 42.758,
+        "mean": 27.955
+      },
+      "queue_lag_ms": {
+        "min": 0.013,
+        "p50": 1.027,
+        "p95": 1.879,
+        "p99": 1.969,
+        "max": 1.969,
+        "mean": 1.059
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 84,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 47.66,
+      "request_latency_ms": {
+        "min": 4.238,
+        "p50": 30.353,
+        "p95": 44.277,
+        "p99": 45.779,
+        "max": 45.779,
+        "mean": 30.418
+      },
+      "queue_lag_ms": {
+        "min": 0.018,
+        "p50": 0.97,
+        "p95": 1.787,
+        "p99": 1.879,
+        "max": 1.879,
+        "mean": 1.009
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 85,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.274,
+      "request_latency_ms": {
+        "min": 4.129,
+        "p50": 26.976,
+        "p95": 41.835,
+        "p99": 43.363,
+        "max": 43.363,
+        "mean": 27.006
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 0.981,
+        "p95": 1.822,
+        "p99": 1.909,
+        "max": 1.909,
+        "mean": 1.024
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 86,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.068,
+      "request_latency_ms": {
+        "min": 5.313,
+        "p50": 28.219,
+        "p95": 42.521,
+        "p99": 44.071,
+        "max": 44.071,
+        "mean": 27.686
+      },
+      "queue_lag_ms": {
+        "min": 0.015,
+        "p50": 1.055,
+        "p95": 1.9,
+        "p99": 1.996,
+        "max": 1.996,
+        "mean": 1.086
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 87,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 50.943,
+      "request_latency_ms": {
+        "min": 4.32,
+        "p50": 32.739,
+        "p95": 47.467,
+        "p99": 49.003,
+        "max": 49.003,
+        "mean": 30.911
+      },
+      "queue_lag_ms": {
+        "min": 0.012,
+        "p50": 1.009,
+        "p95": 1.853,
+        "p99": 1.938,
+        "max": 1.938,
+        "mean": 1.047
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 88,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.173,
+      "request_latency_ms": {
+        "min": 4.282,
+        "p50": 27.764,
+        "p95": 41.852,
+        "p99": 43.301,
+        "max": 43.301,
+        "mean": 26.265
+      },
+      "queue_lag_ms": {
+        "min": 0.018,
+        "p50": 0.972,
+        "p95": 1.783,
+        "p99": 1.87,
+        "max": 1.87,
+        "mean": 1.009
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 89,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.395,
+      "request_latency_ms": {
+        "min": 4.578,
+        "p50": 27.149,
+        "p95": 41.672,
+        "p99": 43.24,
+        "max": 43.24,
+        "mean": 25.373
+      },
+      "queue_lag_ms": {
+        "min": 0.013,
+        "p50": 1.03,
+        "p95": 2.063,
+        "p99": 2.151,
+        "max": 2.151,
+        "mean": 1.127
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 90,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.447,
+      "request_latency_ms": {
+        "min": 4.33,
+        "p50": 27.59,
+        "p95": 42.833,
+        "p99": 44.461,
+        "max": 44.461,
+        "mean": 25.535
+      },
+      "queue_lag_ms": {
+        "min": 0.014,
+        "p50": 1.025,
+        "p95": 1.89,
+        "p99": 1.985,
+        "max": 1.985,
+        "mean": 1.066
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 91,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 50.415,
+      "request_latency_ms": {
+        "min": 4.182,
+        "p50": 31.155,
+        "p95": 46.785,
+        "p99": 48.511,
+        "max": 48.511,
+        "mean": 27.365
+      },
+      "queue_lag_ms": {
+        "min": 0.014,
+        "p50": 0.989,
+        "p95": 1.813,
+        "p99": 1.902,
+        "max": 1.902,
+        "mean": 1.023
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 92,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.288,
+      "request_latency_ms": {
+        "min": 4.451,
+        "p50": 27.421,
+        "p95": 42.439,
+        "p99": 44.264,
+        "max": 44.264,
+        "mean": 24.515
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 1.083,
+        "p95": 1.932,
+        "p99": 2.023,
+        "max": 2.023,
+        "mean": 1.098
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 93,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.836,
+      "request_latency_ms": {
+        "min": 4.209,
+        "p50": 18.34,
+        "p95": 42.492,
+        "p99": 43.959,
+        "max": 43.959,
+        "mean": 23.99
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 0.976,
+        "p95": 1.786,
+        "p99": 1.876,
+        "max": 1.876,
+        "mean": 1.009
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 94,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 59.142,
+      "request_latency_ms": {
+        "min": 4.443,
+        "p50": 18.608,
+        "p95": 55.57,
+        "p99": 57.149,
+        "max": 57.149,
+        "mean": 29.619
+      },
+      "queue_lag_ms": {
+        "min": 0.015,
+        "p50": 1.018,
+        "p95": 1.897,
+        "p99": 1.991,
+        "max": 1.991,
+        "mean": 1.06
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 95,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.359,
+      "request_latency_ms": {
+        "min": 4.654,
+        "p50": 19.117,
+        "p95": 42.484,
+        "p99": 44.221,
+        "max": 44.221,
+        "mean": 23.582
+      },
+      "queue_lag_ms": {
+        "min": 0.013,
+        "p50": 1.135,
+        "p95": 2.036,
+        "p99": 2.136,
+        "max": 2.136,
+        "mean": 1.153
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 96,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 46.495,
+      "request_latency_ms": {
+        "min": 3.955,
+        "p50": 17.804,
+        "p95": 43.121,
+        "p99": 44.627,
+        "max": 44.627,
+        "mean": 22.611
+      },
+      "queue_lag_ms": {
+        "min": 0.017,
+        "p50": 0.964,
+        "p95": 1.776,
+        "p99": 1.866,
+        "max": 1.866,
+        "mean": 1.002
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 97,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.663,
+      "request_latency_ms": {
+        "min": 4.052,
+        "p50": 18.439,
+        "p95": 42.225,
+        "p99": 43.722,
+        "max": 43.722,
+        "mean": 22.119
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 1.038,
+        "p95": 1.85,
+        "p99": 1.939,
+        "max": 1.939,
+        "mean": 1.062
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 98,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.833,
+      "request_latency_ms": {
+        "min": 4.467,
+        "p50": 18.665,
+        "p95": 42.389,
+        "p99": 43.847,
+        "max": 43.847,
+        "mean": 21.922
+      },
+      "queue_lag_ms": {
+        "min": 0.014,
+        "p50": 1.029,
+        "p95": 1.885,
+        "p99": 1.981,
+        "max": 1.981,
+        "mean": 1.062
+      },
+      "status_counts": {
+        "200": 20
+      }
+    },
+    {
+      "burst_index": 99,
+      "requests": 20,
+      "events_sent": 4000,
+      "total_wall_ms": 45.287,
+      "request_latency_ms": {
+        "min": 4.178,
+        "p50": 17.683,
+        "p95": 41.736,
+        "p99": 43.266,
+        "max": 43.266,
+        "mean": 20.559
+      },
+      "queue_lag_ms": {
+        "min": 0.016,
+        "p50": 1.138,
+        "p95": 1.934,
+        "p99": 2.02,
+        "max": 2.02,
+        "mean": 1.143
+      },
+      "status_counts": {
+        "200": 20
+      }
+    }
+  ],
+  "memory_bytes": {
+    "driver": {
+      "before": {
+        "rss": 251478016,
+        "heap_total": 117424128,
+        "heap_used": 73104072,
+        "external": 11595586,
+        "array_buffers": 4475620
+      },
+      "after_drain": {
+        "rss": 428572672,
+        "heap_total": 217153536,
+        "heap_used": 59416608,
+        "external": 21076410,
+        "array_buffers": 13759796
+      },
+      "after_close": {
+        "rss": 428933120,
+        "heap_total": 217563136,
+        "heap_used": 60720800,
+        "external": 21076631,
+        "array_buffers": 13760017
+      }
+    },
+    "server": {
+      "ready": {
+        "rss": 286965760,
+        "heap_total": 122257408,
+        "heap_used": 52671344,
+        "external": 11490465,
+        "array_buffers": 4462389
+      },
+      "after_drain": {
+        "rss": 375783424,
+        "heap_total": 279019520,
+        "heap_used": 187433536,
+        "external": 16304653,
+        "array_buffers": 9125923
+      },
+      "after_close": {
+        "rss": 377749504,
+        "heap_total": 279543808,
+        "heap_used": 187894976,
+        "external": 16304738,
+        "array_buffers": 9114008
+      }
+    }
+  },
+  "notes": [
+    "The Hono server and load driver run in separate Node processes.",
+    "Fast clients parse SSE frames and count real delivered events.",
+    "Stalled clients open SSE responses and deliberately do not read response bodies until cleanup.",
+    "The server has no runtime runner; POST /events persists user.message rows and publishes them."
+  ]
+}
