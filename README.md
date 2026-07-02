@@ -8,6 +8,27 @@ that speak the Claude Managed Agents REST + SSE protocol should be able to point
 at this server with a base-URL change, while you keep execution, data, and
 sandboxes on infrastructure you control.
 
+## Quickstart
+
+From a checkout (Node ≥ 22.19):
+
+```bash
+npm install
+node bin/open-managed-agents.mjs
+```
+
+or with Docker:
+
+```bash
+docker compose up -d
+docker compose logs oma | grep x-api-key
+```
+
+The first boot initializes durable storage (default `~/.oma`, `/data` in the
+container) and prints your initial workspace API key once. Point any Anthropic
+SDK client at `http://127.0.0.1:4180` with that `x-api-key`. Details, overrides,
+and key provisioning: [Development and deployment setup](docs/dev-deployment.md).
+
 ## Why This Exists
 
 Managed Agents are useful because they give agents a durable place to work:
@@ -26,42 +47,46 @@ Open Managed Agents aims to be that control plane:
 
 ## Current Status
 
-This project is still early. It is now a working MVP control plane with proven
-Docker-local sandbox execution, but it is not yet a full Anthropic Managed
+A working single-node appliance: durable, authenticated, multi-tenant on one
+node, with proven sandboxed execution. Not yet a full Anthropic Managed
 Agents-compatible beta.
 
 Working today:
 
-- persisted agent, environment, and session APIs;
-- append-only session event log;
-- event listing and SSE streaming with reconnect support;
-- explicit Pi runtime wiring for agent execution;
-- public custom-tool pause/resume round trips;
-- durable runtime wait ledger and restart recovery for pending waits;
-- `span.model_request_start` / `span.model_request_end` model-request
-  observability events with required `model_usage`;
-- `user.tool_confirmation` allow/deny round trips for permission-gated tools;
-- `user.interrupt` aborts active Pi turns without disposing reusable sessions;
-- file upload resources and Docker-local session file mounts;
-- Docker session output file collection and indexing;
-- browser-based Managed Agents Console for read-only inspection of agents,
-  sessions, events, spans, and output files;
-- guarded local passthrough provider for development tests;
-- Docker-local sandbox provider as the first real isolation provider;
-- fail-closed provider selection;
-- trusted deployment config for enabling Docker-local;
-- live proof that a served session can execute `bash` inside Docker and record
-  the expected `agent.tool_use` / `agent.tool_result` events.
+- one-command appliance boot with first-boot API-key minting
+  ([plan 0115](docs/plans/0115-appliance-entrypoint.md));
+- persisted agent, environment, session, and file APIs on durable single-node
+  SQLite storage with crash-safe restart recovery;
+- append-only session event log; event listing and SSE streaming with
+  reconnect support;
+- Pi runtime execution with public custom-tool pause/resume round trips,
+  `user.tool_confirmation` allow/deny gating, and `user.interrupt`;
+- request idempotency for `events.send` and `POST /v1/sessions`;
+- `span.model_request_start` / `span.model_request_end` observability events
+  with required `model_usage`;
+- workspace authentication (`x-api-key`, hashed at rest, fail-closed
+  `OMA_AUTH_MODE`) with per-workspace admission limits and a provisioning CLI
+  ([plan 0113](docs/plans/0113-workspace-authentication-admission.md));
+- file upload resources, Docker-local session file mounts, and session output
+  file collection/indexing;
+- sandbox providers behind a fail-closed selection boundary: Docker-local and
+  microsandbox-local, plus a guarded local passthrough for development tests;
+- browser-based Managed Agents Console for read-only inspection.
 
-Still missing before claiming broad Anthropic Managed Agents parity:
+Still missing before claiming broad parity or production readiness (the
+[appliance product roadmap](docs/plans/0114-appliance-product-roadmap.md) is
+the authoritative sequencing):
 
-- request idempotency outside `events.send` (`POST /v1/sessions`, file uploads,
-  multipart fingerprints, and streaming replay semantics);
-- agent update/versioning;
-- broader event-topology parity;
-- managed remote sandbox providers such as Modal;
-- production auth, RBAC, tenancy, and billing boundaries;
-- CI and a real license.
+- admin HTTP API and a read-write console (Arc B);
+- operational observability: health endpoint, metrics, SLOs (Arc C);
+- session usage metering (`usage` is still `null`) (Arc D);
+- sandbox network egress, skills and MCP execution (wire-accepted today but
+  runtime-inert), and boundary secret injection
+  ([buy-vs-build survey](docs/references/egress-secrets-buy-vs-build.md));
+- agent update/versioning, broader event-topology parity, file-upload
+  idempotency, managed remote sandbox providers;
+- RBAC within a workspace, billing boundaries, npm publish, CI, and a real
+  license.
 
 ## Architecture
 
