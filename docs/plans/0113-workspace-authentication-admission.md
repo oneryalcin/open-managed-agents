@@ -130,7 +130,7 @@ A new auth middleware in `createControlPlaneApp`, enabled by an optional
 `auth` config on `ControlPlaneServices` construction:
 
 - Order: request-id -> **auth** -> beta gate -> body limit -> routes,
-  matching the probed hosted order.
+  matching the hosted order for matched route+method requests.
 - Scoped to the known Managed Agents route prefixes (the existing
   `isManagedAgentsRoute` set), so unknown paths still fall through to the 404
   handler without touching auth — hosted parity per probe row 10.

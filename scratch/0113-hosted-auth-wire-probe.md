@@ -10,8 +10,8 @@ authentication stays wire-compatible.
 
 - Host: macOS arm64, Darwin 25.4.0
 - Probe: Python 3 `urllib` against `https://api.anthropic.com`
-- Endpoints: `GET /v1/agents` (Managed Agents beta), `GET /v1/messages`,
-  `GET /v1/definitely-not-a-route`
+- Endpoints: `GET/PATCH/PUT/DELETE /v1/agents` (Managed Agents beta),
+  `GET /v1/messages`, `GET /v1/definitely-not-a-route`
 - Invalid-key probes used `x-api-key: sk-ant-invalid-probe-key`; valid-key
   probes used a real key from the local environment for read-only `GET
   /v1/agents` only.
