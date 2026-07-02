@@ -278,15 +278,16 @@ Refuse (YAGNI):
 
 ## Next steps (before any ADR)
 
-1. **Confidence probe** (the same probe class that killed the microsandbox
-   secret path, per #130's acceptance criteria): vendor srt's proxy files into
-   `scratch/`, run a Docker container whose only route is the proxy, and prove
-   end-to-end: (a) allowlisted host works, (b) non-allowlisted host denied,
-   (c) redirect to a non-allowlisted host denied, (d) sentinel substituted at
-   the boundary — the controlled echo target observes the real value (that is
-   the substitution proof), while the container's env, filesystem, and its own
-   outbound request construction never hold it, (e) private-IP literal /
-   CNAME-to-private denied once the smokescreen-style check is added.
+1. **Confidence probe** — ✅ DONE 2026-07-02, 8/8, deterministic
+   (`scratch/44-egress-proxy-probe.ts` + `.md`). Drove srt's proxy (deep
+   `dist/` import) with a real Docker container as the client and proved: (a)
+   allowlisted host works via TLS termination, (b) non-allowlisted host denied
+   (403 CONNECT), (c) redirect to a non-allowlisted host denied on re-entry,
+   (d) sentinel substituted at the boundary — the echo target observed the
+   real value while the container's env held only the sentinel, (e) missing
+   proxy auth rejected (407). The private-IP check (f) is confirmed **absent**
+   in srt (loopback served because allowlisted) — OMA's to add. Green light on
+   the survey's terms.
 
    Scope note on (d): boundary injection cannot hide the secret from a
    *reflective allowlisted upstream* — the request that leaves the boundary
