@@ -300,9 +300,14 @@ Refuse (YAGNI):
    (Osaurus's output scrubbing in
    [agentos-osaurus-prior-art.md](agentos-osaurus-prior-art.md) is the prior
    art).
-2. Envelope-encryption probe: throwaway script proving DEK/KEK
-   wrap–unwrap–rotate round-trip with `node:crypto` before pinning the
-   `SecretsStore` schema.
+2. **Envelope-encryption probe** — ✅ DONE 2026-07-02, 10/10
+   (`scratch/45-envelope-encryption-probe.ts` + `.md`). `node:crypto` alone
+   (AES-256-GCM per-secret DEK, KEK via HKDF from the master secret) proves
+   round-trip, fresh-DEK non-determinism, GCM tamper detection on both ct and
+   wrapped DEK, AAD record-binding (mutation-verified load-bearing), wrong-key
+   rejection, and KEK rotation that leaves the ciphertext byte-for-byte
+   identical (the KMS/OpenBao-transit seam). Record fields for the schema:
+   `version, kekId, wrapIv, wrapTag, wrappedDek, ctIv, ctTag, ct`.
 3. Then the ADR: egress policy contract + `SecretsStore`, citing this survey;
    it also closes #130 ("explicit ruling that provider secret proxy stays out
    of scope and OMA-level boundary injection is the design instead").
