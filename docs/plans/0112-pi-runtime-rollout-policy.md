@@ -100,8 +100,12 @@ Do not enable Pi runtime workers across multiple API/runtime processes until:
   boundary;
 - runtime event commits, output commits, session lifecycle, and pending-call
   recovery are enforced through durable cross-process transactions;
-- workspace authentication exists;
-- admission limits are tied to authenticated workspace identity;
+- workspace authentication exists — **done** (plan 0113, #129: `x-api-key`
+  workspaces, `OMA_AUTH_MODE=api-key`, hashed keys, provisioning CLI);
+- admission limits are tied to authenticated workspace identity — **done for
+  single-node** (0113 D9: per-workspace session/turn/upload/SSE caps, 429 +
+  `retry-after`, 529); counters are in-process, so multi-worker needs a
+  shared-state revisit;
 - operational telemetry exists for runtime turns, pending waits, sandbox
   lifecycle, provider errors, and reaper activity;
 - a threat model update covers tenant isolation, egress, secret handling, logs,
@@ -120,7 +124,8 @@ production gate by itself.
 | Timeout/TTL defaults | Runtime idle TTL defaults to 15 minutes; sandbox operation timeout defaults are provider-specific and configurable. | Acceptable for local/demo; durable rollout should record chosen values in deployment runbook. |
 | Cleanup/reaping | Docker-local and microsandbox-local have owned-resource cleanup/reap paths. | Required for long-running single-node deployments. |
 | Operational observability | Not sufficient for production. Logs exist, but no metrics/alerts/SLOs. | Blocks multi-worker/managed production. |
-| Admission control | Not sufficient for production. No authenticated workspace quotas. | Blocks multi-tenant production and managed-SaaS rollout. |
+| Workspace authentication | Done (plan 0113, #129). `OMA_AUTH_MODE=api-key` with hashed keys and the `scripts/oma-workspaces.ts` provisioning CLI. Any tier beyond trusted single-node requires `api-key` mode. | Was the keystone gate; now satisfied for single-node tiers. |
+| Admission control | Per-workspace caps shipped (0113 D9): active sessions, pending runtime turns, in-flight uploads, SSE streams; process-wide upload/stream caps. In-process counters. | Single-node multi-tenant unblocked. Multi-worker needs shared-state counters. |
 | Threat model | Stub exists; not complete. | Blocks untrusted multi-tenant deployment. |
 
 ## Operator Configuration Policy
@@ -178,6 +183,8 @@ The Pi runtime is allowed for local development and trusted single-node demos
 today. It may be described as single-node durable only when the deployment uses
 the shared durable store and explicit sandbox provider gates.
 
-It is not yet approved for multi-worker or managed-SaaS production. The next
-production-grade work is operational: admission limits, telemetry, auth-bound
-workspace identity, and the Postgres/async coordination boundary.
+It is not yet approved for multi-worker or managed-SaaS production.
+Auth-bound workspace identity and single-node admission limits landed with
+plan 0113 (#129). The remaining production-grade work is operational:
+telemetry, the threat-model completion, shared-state admission counters, and
+the Postgres/async coordination boundary.
