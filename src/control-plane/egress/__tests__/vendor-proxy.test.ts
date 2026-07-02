@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  createHttpProxyServer,
+  createEgressProxy,
   createMitmCA,
   disposeMitmCA,
   type MitmCA,
@@ -18,7 +18,9 @@ import {
 // proxy, and a dep-free manual CONNECT+TLS tunnel client. This is the in-suite
 // counterpart to scratch/44 (which uses a real container). Carries the
 // load-bearing invariants — allowlist, sentinel->real substitution, path deny,
-// proxy auth, verify-before-inject — so a bad re-pin of the vendor fails here.
+// proxy auth (missing + wrong token), and verify-before-inject (a wrong upstream
+// CA fails and the injected secret never leaves) — so a bad re-pin of the
+// vendor fails here.
 
 const SENTINEL = "Bearer sent-xyz";
 const REAL = "Bearer real-xyz";
@@ -105,7 +107,7 @@ describe("vendored egress proxy contract (plan 0117a)", () => {
     echoPort = (echo.address() as { port: number }).port;
 
     ca = createMitmCA({});
-    proxy = createHttpProxyServer({
+    proxy = createEgressProxy({
       filter: (port, host) => host === "localhost" && port === echoPort,
       mitmCA: ca,
       filterRequest: async (request) => {
@@ -161,6 +163,53 @@ describe("vendored egress proxy contract (plan 0117a)", () => {
   it("rejects a missing proxy-auth token (407)", async () => {
     const res = await tunnelGet(proxyPort, "localhost", echoPort, ca.certPem, {}, undefined);
     expect(res.connectStatus).toBe(407);
+  });
+
+  it("rejects a wrong proxy-auth token (407)", async () => {
+    const res = await tunnelGet(proxyPort, "localhost", echoPort, ca.certPem, {}, "not-the-token");
+    expect(res.connectStatus).toBe(407);
+  });
+
+  it("verify-before-inject: a wrong upstream CA fails and the injected secret never leaves", async () => {
+    // Second proxy: client-facing termination uses the trusted CA (so the
+    // client tunnels in fine), but the UPSTREAM leg is told to trust a
+    // freshly-minted bogus CA that never signed the echo cert. The upstream TLS
+    // verify must fail before any mutated bytes leave, so the echo never sees
+    // the request and the REAL secret is never transmitted.
+    const bogusCa = createMitmCA({});
+    const wrongProxy = createEgressProxy({
+      filter: (port, host) => host === "localhost" && port === echoPort,
+      mitmCA: ca,
+      filterRequest: async () => ({ action: "allow" }),
+      mutateHeaders: (headers, destHost) => {
+        if (destHost === "localhost" && headers.authorization === SENTINEL) {
+          headers.authorization = REAL;
+        }
+      },
+      tlsTerminateUpstreamCA: bogusCa.certPem,
+      proxyAuthToken: TOKEN,
+    });
+    await new Promise<void>((r) => wrongProxy.listen(0, "127.0.0.1", r));
+    const wrongPort = (wrongProxy.address() as { port: number }).port;
+    try {
+      const before = upstreamSeen.length;
+      const res = await tunnelGet(wrongPort, "localhost", echoPort, ca.certPem, { Authorization: SENTINEL }, TOKEN);
+      expect(upstreamSeen.length).toBe(before); // echo never received it
+      expect(res.httpStatus).not.toBe(200); // proxy returns 502 inside the tunnel
+      expect(res.body).not.toContain(REAL); // secret never appeared to the client either
+    } finally {
+      await new Promise<void>((r) => wrongProxy.close(() => r()));
+      await disposeMitmCA(bogusCa);
+    }
+  });
+
+  it("createEgressProxy throws without a proxy-auth token (no fail-open default)", () => {
+    expect(() =>
+      createEgressProxy({
+        filter: () => true,
+        proxyAuthToken: "",
+      }),
+    ).toThrow(/non-empty proxyAuthToken/);
   });
 });
 

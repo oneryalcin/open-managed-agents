@@ -44,10 +44,17 @@ exactly these).
 ### 0117a — Pure vendor, no behavior change
 
 Copy the six files + a debug shim into `src/control-plane/egress/vendor/`,
-add `node-forge`, expose a thin `createEgressProxy` wrapper. Typecheck clean.
-A port of probe 44's happy path becomes a real contract test
-(`egress/__tests__/`) so the vendored code is exercised in CI, not just by the
-scratch probe. No control-plane wiring yet.
+add `node-forge`, and expose the public surface in `egress/proxy.ts`: the
+`createEgressProxy` wrapper (mandates a non-empty per-session `proxyAuthToken`
+— the vendor default is fail-open — and rejects `parentProxy`, which the vendor
+ignores on the terminated leg) plus the CA/type re-exports. The raw fail-open
+`createHttpProxyServer` is NOT re-exported. Typecheck clean. A port of probe
+44's checks becomes a real contract test (`egress/__tests__/`) — allowlist,
+sentinel→real substitution, path deny, proxy auth (missing + wrong token),
+verify-before-inject (wrong upstream CA), and the mandatory-token guard — so
+the vendored code is exercised in CI, not just by the scratch probe.
+**Not a complete egress boundary yet**: the SSRF/private-IP deny (0117b) and
+wiring (0117c/d) are still owed; `proxy.ts` says so. No control-plane wiring.
 
 ### 0117b — SSRF/private-IP deny in the dial path (ADR 0016 §5)
 

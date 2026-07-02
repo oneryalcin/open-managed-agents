@@ -2,6 +2,8 @@
 
 **Upstream:** [anthropic-experimental/sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime)
 **Pinned tag:** `v0.0.63`
+**Commit:** `930cdb65795451b00804cc0e7c580f7a4a72f10a` (tags are mutable; the
+diff-on-release procedure below anchors on this SHA)
 **Source:** `src/sandbox/*.ts` at that tag (fetched 2026-07-03).
 **License:** Apache-2.0 (upstream `LICENSE`).
 **Why vendored, not depended on:** ADR 0016 §1 — srt exports no
@@ -15,11 +17,21 @@ preview. We adopt the code and track upstream.
 - `mitm-ca.ts` — `createMitmCA` / `disposeMitmCA`
 - `mitm-leaf.ts` — per-host leaf cert minting
 - `request-filter.ts` — the `filterRequest` decision plumbing
-- `parent-proxy.ts` — upstream-proxy chaining (unused in OMA v1, kept for
-  http-proxy's structural imports)
+- `parent-proxy.ts` — its upstream-proxy *chaining* is unused in OMA v1, but
+  this file is **runtime-load-bearing on every request**: it supplies
+  `dialDirect` / `openConnectTunnel` (the direct dial path used on every
+  allowed CONNECT — exactly the seam slice 0117b must harden against
+  SSRF/rebinding) and `stripHopByHop`. Do not deprioritize reviewing it.
 
 External runtime dependency: **`node-forge`** (cert minting), now a direct
 `dependency` pinned to the version srt used.
+
+**The vendored constructor is not the public API.** `createHttpProxyServer` is
+fail-open on auth (`checkAuth` returns true when `proxyAuthToken` is unset) and
+accepts `parentProxy` (which it does not honor on the TLS-terminated leg). OMA
+code must construct via `createEgressProxy` in `../proxy.ts`, which mandates a
+non-empty per-session token and rejects `parentProxy`. Nothing outside the
+`egress/` seam imports `vendor/` directly.
 
 ## Modifications from upstream (keep this list exhaustive)
 
