@@ -1,0 +1,153 @@
+{
+  "generated_at": "2026-07-02T07:53:28.398Z",
+  "started_at": "2026-07-02T07:53:27.020Z",
+  "run_id": "probe42_1782978807017_3vop5u",
+  "verdict": "PASS",
+  "topology": {
+    "server_process_id": 40301,
+    "driver_process_id": 40251,
+    "shared_event_loop": false
+  },
+  "config": {
+    "session_count": 400,
+    "events_per_request": 20,
+    "burst_count": 1,
+    "fast_clients_per_session": 1,
+    "stalled_clients": 20,
+    "drain_timeout_ms": 10000
+  },
+  "server": {
+    "base_url": "http://127.0.0.1:59018"
+  },
+  "storage": {
+    "sqlite_path": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782978807017_3vop5u-/oma.sqlite",
+    "object_root": "/var/folders/3m/2gjpgnsn4r329stcb4f8tbc00000gn/T/probe42_1782978807017_3vop5u-/objects",
+    "pragmas": {
+      "journalMode": "wal",
+      "busyTimeout": 5000,
+      "foreignKeys": 1,
+      "synchronous": 1
+    },
+    "file_sizes_bytes": {
+      "sqlite": 4460544,
+      "wal": 4173592,
+      "shm": 32768
+    }
+  },
+  "clients": {
+    "fast": {
+      "count": 400,
+      "expected_events": 8000,
+      "delivered_events": 8000,
+      "min_delivered_per_client": 20,
+      "max_delivered_per_client": 20,
+      "drain_wait_ms": 6.605
+    },
+    "stalled": {
+      "count": 20,
+      "session_ids": [
+        "sesn_http_probe42_1782978807017_3vop5u_0000",
+        "sesn_http_probe42_1782978807017_3vop5u_0001",
+        "sesn_http_probe42_1782978807017_3vop5u_0002",
+        "sesn_http_probe42_1782978807017_3vop5u_0003",
+        "sesn_http_probe42_1782978807017_3vop5u_0004",
+        "sesn_http_probe42_1782978807017_3vop5u_0005",
+        "sesn_http_probe42_1782978807017_3vop5u_0006",
+        "sesn_http_probe42_1782978807017_3vop5u_0007",
+        "sesn_http_probe42_1782978807017_3vop5u_0008",
+        "sesn_http_probe42_1782978807017_3vop5u_0009",
+        "sesn_http_probe42_1782978807017_3vop5u_0010",
+        "sesn_http_probe42_1782978807017_3vop5u_0011",
+        "sesn_http_probe42_1782978807017_3vop5u_0012",
+        "sesn_http_probe42_1782978807017_3vop5u_0013",
+        "sesn_http_probe42_1782978807017_3vop5u_0014",
+        "sesn_http_probe42_1782978807017_3vop5u_0015",
+        "sesn_http_probe42_1782978807017_3vop5u_0016",
+        "sesn_http_probe42_1782978807017_3vop5u_0017",
+        "sesn_http_probe42_1782978807017_3vop5u_0018",
+        "sesn_http_probe42_1782978807017_3vop5u_0019"
+      ]
+    }
+  },
+  "bursts": [
+    {
+      "burst_index": 0,
+      "requests": 400,
+      "events_sent": 8000,
+      "total_wall_ms": 277.164,
+      "request_latency_ms": {
+        "min": 74.785,
+        "p50": 146.628,
+        "p95": 223.369,
+        "p99": 229.419,
+        "max": 230.975,
+        "mean": 147.574
+      },
+      "queue_lag_ms": {
+        "min": 0.217,
+        "p50": 25.244,
+        "p95": 44.188,
+        "p99": 45.81,
+        "max": 46.185,
+        "mean": 24.038
+      },
+      "status_counts": {
+        "200": 400
+      }
+    }
+  ],
+  "memory_bytes": {
+    "driver": {
+      "before": {
+        "rss": 252870656,
+        "heap_total": 115064832,
+        "heap_used": 71687440,
+        "external": 12644162,
+        "array_buffers": 5524196
+      },
+      "after_drain": {
+        "rss": 333250560,
+        "heap_total": 205094912,
+        "heap_used": 96087056,
+        "external": 25547536,
+        "array_buffers": 18230922
+      },
+      "after_close": {
+        "rss": 337264640,
+        "heap_total": 206028800,
+        "heap_used": 106913112,
+        "external": 25547716,
+        "array_buffers": 18231102
+      }
+    },
+    "server": {
+      "ready": {
+        "rss": 284360704,
+        "heap_total": 121995264,
+        "heap_used": 53301672,
+        "external": 11490465,
+        "array_buffers": 4462389
+      },
+      "after_drain": {
+        "rss": 393969664,
+        "heap_total": 203522048,
+        "heap_used": 70809448,
+        "external": 11771826,
+        "array_buffers": 4581096
+      },
+      "after_close": {
+        "rss": 394592256,
+        "heap_total": 203784192,
+        "heap_used": 78650000,
+        "external": 11771881,
+        "array_buffers": 4581151
+      }
+    }
+  },
+  "notes": [
+    "The Hono server and load driver run in separate Node processes.",
+    "Fast clients parse SSE frames and count real delivered events.",
+    "Stalled clients open SSE responses and deliberately do not read response bodies until cleanup.",
+    "The server has no runtime runner; POST /events persists user.message rows and publishes them."
+  ]
+}

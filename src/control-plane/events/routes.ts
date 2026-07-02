@@ -154,18 +154,19 @@ function toSseBody(
   const encoder = new TextEncoder();
   const iterator = events[Symbol.asyncIterator]();
   return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      try {
-        while (true) {
-          const next = await iterator.next();
-          if (next.done) break;
-          const event = next.value;
-          controller.enqueue(encoder.encode(sseEventFrame(event)));
-        }
+    // Demand-gated on purpose: pull() runs only when the consumer has drained
+    // the stream's internal queue, so a slow/stalled client suspends the
+    // broadcaster iterator and its bounded live-queue overflow→refetch
+    // protection holds. An eager start() loop here drains the broadcaster
+    // into unbounded response/socket buffering (#127). A rejected pull()
+    // errors the stream, matching the previous controller.error() path.
+    async pull(controller) {
+      const next = await iterator.next();
+      if (next.done) {
         controller.close();
-      } catch (error) {
-        controller.error(error);
+        return;
       }
+      controller.enqueue(encoder.encode(sseEventFrame(next.value)));
     },
     async cancel() {
       abortController.abort();

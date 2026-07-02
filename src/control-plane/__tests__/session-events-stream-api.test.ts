@@ -5,9 +5,12 @@ import { DefaultAgentService } from "../agents/service.ts";
 import { SqliteAgentStore } from "../agents/store.ts";
 import { DefaultEnvironmentService } from "../environments/service.ts";
 import { SqliteEnvironmentStore } from "../environments/store.ts";
+import { newEventId } from "../../types/events.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
 import { DefaultSessionEventsService } from "../events/service.ts";
 import { EventStore } from "../events/store.ts";
+import type { PersistedSessionEvent } from "../events/types.ts";
+import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import { DefaultSessionService } from "../sessions/service.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
 import { STREAM_TEST_TIMEOUT_MS, hasTimedOut } from "./test-timeouts.ts";
@@ -130,6 +133,75 @@ describe("Session events stream API", () => {
     expect(body.request_id).toBe(requestId);
   });
 
+  it("stops draining the broadcaster while the client is not reading", async () => {
+    const fixture = makeFixture();
+    const session = await setupSession(fixture.app);
+    await sendMessage(fixture.app, session.id, "sentinel");
+
+    let nextCalls = 0;
+    const realStream = fixture.sessionEvents.stream.bind(fixture.sessionEvents);
+    fixture.sessionEvents.stream = (workspaceId, sessionId, opts) =>
+      countingIterable(realStream(workspaceId, sessionId, opts), () => {
+        nextCalls += 1;
+      });
+
+    const res = await fixture.app.request(`/v1/sessions/${session.id}/events/stream`, {
+      headers: { accept: "text/event-stream" },
+    });
+    const reader = sseReader(res);
+    const first = await reader.nextEvent();
+    expect(first?.data.content).toEqual([{ type: "text", text: "sentinel" }]);
+
+    // Let in-flight demand settle, then snapshot how far the route has pulled.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const stalledBaseline = nextCalls;
+
+    const batch = publishLiveBatch(fixture, session.id, 50);
+
+    // An eager route drains all 50 published events within one macrotask even
+    // though the client has stopped reading; a demand-gated route advances the
+    // iterator at most a queue's worth.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(nextCalls - stalledBaseline).toBeLessThanOrEqual(3);
+
+    // Resuming reads must deliver every published event, in order.
+    const ids: string[] = [];
+    while (ids.length < batch.length) {
+      const event = await reader.nextEvent();
+      if (!event?.id) throw new Error("Stream ended before all live events arrived");
+      ids.push(event.id);
+    }
+    expect(ids).toEqual(batch.map((event) => event.id));
+  });
+
+  it("delivers a gap-free sequence to a stalled client that overflowed the live queue", async () => {
+    const fixture = makeFixture();
+    const session = await setupSession(fixture.app);
+    await sendMessage(fixture.app, session.id, "sentinel");
+
+    const res = await fixture.app.request(`/v1/sessions/${session.id}/events/stream`, {
+      headers: { accept: "text/event-stream" },
+    });
+    const reader = sseReader(res);
+    const first = await reader.nextEvent();
+    expect(first?.data.content).toEqual([{ type: "text", text: "sentinel" }]);
+
+    // While the client is not reading, publish past the broadcaster's default
+    // live-queue bound (10_000) so the subscription overflows, drops its
+    // buffer, and must recover by refetching from the store.
+    const batch = publishLiveBatch(fixture, session.id, 10_050);
+
+    const ids: string[] = [];
+    const lastId = batch[batch.length - 1].id;
+    while (true) {
+      const event = await reader.nextEvent();
+      if (!event?.id) throw new Error("Stream ended before overflow recovery completed");
+      ids.push(event.id);
+      if (event.id === lastId) break;
+    }
+    expect(ids).toEqual(batch.map((event) => event.id));
+  });
+
   it("tears down subscriber on response-body cancel without requiring a later publish", async () => {
     const fixture = makeFixture();
     const session = await setupSession(fixture.app);
@@ -155,20 +227,68 @@ describe("Session events stream API", () => {
 function makeFixture(): {
   app: ReturnType<typeof createControlPlaneApp>;
   broadcaster: SessionEventBroadcaster;
+  eventStore: EventStore;
+  sessionEvents: DefaultSessionEventsService;
 } {
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
   const broadcaster = new SessionEventBroadcaster(eventStore);
+  const sessionEvents = new DefaultSessionEventsService(eventStore, sessionStore, broadcaster);
   return {
     broadcaster,
+    eventStore,
+    sessionEvents,
     app: createControlPlaneApp({
       agents: new DefaultAgentService(agentStore),
       environments: new DefaultEnvironmentService(environmentStore),
       sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore),
-      sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster),
+      sessionEvents,
     }),
+  };
+}
+
+/** Persist + publish a batch of live events, bypassing the HTTP send path. */
+function publishLiveBatch(
+  fixture: { eventStore: EventStore; broadcaster: SessionEventBroadcaster },
+  sessionId: string,
+  count: number,
+): PersistedSessionEvent[] {
+  const now = new Date().toISOString();
+  const batch: PersistedSessionEvent[] = [];
+  for (let i = 0; i < count; i += 1) {
+    batch.push({
+      id: newEventId(),
+      workspace_id: DEFAULT_WORKSPACE_ID,
+      session_id: sessionId,
+      type: "user.message",
+      processed_at: now,
+      payload: { content: [{ type: "text", text: String(i) }] },
+      created_at: now,
+    });
+  }
+  fixture.eventStore.appendBatch(batch);
+  fixture.broadcaster.publishPersisted(batch);
+  return batch;
+}
+
+function countingIterable<T>(
+  inner: AsyncIterable<T>,
+  onNext: () => void,
+): AsyncIterable<T> {
+  return {
+    [Symbol.asyncIterator]() {
+      const it = inner[Symbol.asyncIterator]();
+      return {
+        next(...args) {
+          onNext();
+          return it.next(...args);
+        },
+        return: it.return?.bind(it),
+        throw: it.throw?.bind(it),
+      };
+    },
   };
 }
 
