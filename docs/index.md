@@ -78,6 +78,10 @@ still tracked separately in the roadmap.
 - [Pi runtime rollout policy](plans/0112-pi-runtime-rollout-policy.md) —
   issue #16 policy for when the deployment Pi runtime may be used in local,
   demo, single-node durable, and future production modes.
+- [Workspace authentication and admission control](plans/0113-workspace-authentication-admission.md) —
+  issue #129 ADR for `x-api-key` workspace identity (wire-probed hosted 401
+  envelope and middleware ordering), hashed key storage, fail-closed
+  `OMA_AUTH_MODE`, and the admission-limit shape that keys off it.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
 - [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —
