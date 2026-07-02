@@ -105,6 +105,52 @@ This does not prove production concurrency. It does prove the local Docker
 provider can hold several isolated session sandboxes at once without spending
 model tokens.
 
+## Workspace authentication
+
+Design: [0113 - Workspace Authentication and Admission Control](plans/0113-workspace-authentication-admission.md).
+
+`OMA_AUTH_MODE` selects the mode:
+
+| Value | Behavior |
+| --- | --- |
+| `disabled` | No authentication. Every request resolves to `wrk_default`. |
+| unset | Same as `disabled`, with a startup warning. Fine for local dev and trusted single-node; nothing beyond that. |
+| `api-key` | Every Managed Agents request must send a valid, unrevoked key as the `x-api-key` header. Failures return the hosted API's 401 envelope. Zero provisioned keys means every request is 401 — the mode fails closed. |
+
+`api-key` mode requires durable storage (`OMA_SQLITE_PATH` +
+`OMA_FILE_STORAGE_ROOT`); the server refuses to start without it, because
+in-memory stores could never hold a provisioned key.
+
+### Provisioning workspaces and keys
+
+Provisioning is an operator CLI, not an HTTP API. It opens a second,
+pragma-configured connection to the live server's SQLite file — no restart
+or downtime; minted and revoked keys take effect on the next request.
+
+```bash
+export OMA_SQLITE_PATH=/path/to/oma.db   # same file the server uses
+
+npx tsx scripts/oma-workspaces.ts create-workspace "Acme Corp"
+npx tsx scripts/oma-workspaces.ts mint-key wrk_...  ci-bot
+npx tsx scripts/oma-workspaces.ts list-workspaces
+npx tsx scripts/oma-workspaces.ts list-keys wrk_...
+npx tsx scripts/oma-workspaces.ts revoke-key <key_sha256>
+```
+
+Key handling rules:
+
+- The plaintext key (`oma_...`) is printed **once** at mint time and never
+  stored; at rest only its SHA-256 digest exists. A lost key cannot be
+  recovered — revoke it and mint a new one.
+- Existing single-tenant data lives under `wrk_default`; mint a key for
+  `wrk_default` to keep it reachable after enabling auth. No migration.
+- Revocation gates **new requests only**. An SSE stream that was already
+  admitted keeps running until the client disconnects; restart the server to
+  sever a revoked tenant immediately.
+
+Rollback: set `OMA_AUTH_MODE=disabled` and restart. All data remains, requests
+resolve to `wrk_default` again, and keys become inert until re-enabled.
+
 ## Deployment target shape
 
 The current MVP is suitable for local development and single-node demos.

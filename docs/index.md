@@ -16,7 +16,8 @@ still tracked separately in the roadmap.
 4. [References](references.md) — upstream docs, SDK docs, related projects we evaluated
 5. [Examples](examples.md) — executable parity examples against external tutorial flows
 6. [Development and deployment setup](dev-deployment.md) — Make targets,
-   Docker-local's role, parallel-session smoke, and production deployment shape
+   Docker-local's role, parallel-session smoke, workspace authentication and
+   key provisioning, and production deployment shape
 
 ## Tutorials
 
