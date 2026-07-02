@@ -831,6 +831,15 @@ export class DefaultSessionEventsService implements SessionEventsService {
     });
   }
 
+  // 0113 D7: restart recovery must cover every workspace with pending turns,
+  // not just wrk_default — otherwise a restart silently abandons
+  // non-default-workspace turns.
+  recoverAllAbandonedRuntimeTurns(): void {
+    for (const workspaceId of this.events.listWorkspaceIdsWithPendingRuntimeTurns()) {
+      this.recoverAbandonedRuntimeTurns(workspaceId);
+    }
+  }
+
   recoverAbandonedRuntimeTurns(workspaceId: WorkspaceId): void {
     const turns = this.events.listPendingRuntimeTurns(workspaceId);
     let nextRetryAt: number | undefined;

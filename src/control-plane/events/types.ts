@@ -271,6 +271,7 @@ export interface SessionEventStore {
     actionId: string,
   ): PendingRuntimeActionRecord | undefined;
   listPendingRuntimeTurns(workspaceId: WorkspaceId): PendingRuntimeTurnRecord[];
+  listWorkspaceIdsWithPendingRuntimeTurns(): WorkspaceId[];
   claimAcceptedRuntimeTurnForRecovery(
     claim: RuntimeTurnRecoveryClaim,
   ): PendingRuntimeTurnRecord | undefined;

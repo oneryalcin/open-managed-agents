@@ -8,19 +8,13 @@ import {
   type ApiErrorBody,
 } from "../errors.ts";
 import { parseLimit } from "../http.ts";
-import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
+import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
 import type { FileService } from "./types.ts";
 
 export const MAX_FILE_UPLOAD_REQUEST_BYTES = 24 * 1024 * 1024;
 
-interface FilesRouteEnv {
-  Variables: {
-    requestId: string;
-  };
-}
-
-export function filesRoutes(service: FileService): Hono<FilesRouteEnv> {
-  const app = new Hono<FilesRouteEnv>();
+export function filesRoutes(service: FileService): Hono<ControlPlaneRouteEnv> {
+  const app = new Hono<ControlPlaneRouteEnv>();
 
   app.use(
     "/",
@@ -39,7 +33,7 @@ export function filesRoutes(service: FileService): Hono<FilesRouteEnv> {
     if (!isUploadedFile(file)) {
       throw invalidRequest("`file` is required");
     }
-    const uploaded = await service.upload(DEFAULT_WORKSPACE_ID, {
+    const uploaded = await service.upload(workspaceIdFrom(c), {
       filename: file.name,
       mimeType: file.type,
       body: new Uint8Array(await file.arrayBuffer()),
@@ -53,7 +47,7 @@ export function filesRoutes(service: FileService): Hono<FilesRouteEnv> {
     const beforeId = c.req.query("before_id") || undefined;
     const scopeId = c.req.query("scope_id") || undefined;
     return c.json(
-      await service.list(DEFAULT_WORKSPACE_ID, {
+      await service.list(workspaceIdFrom(c), {
         limit,
         afterId,
         beforeId,
@@ -65,14 +59,14 @@ export function filesRoutes(service: FileService): Hono<FilesRouteEnv> {
 
   app.get("/:id", async (c) => {
     return c.json(
-      await service.retrieveMetadata(DEFAULT_WORKSPACE_ID, c.req.param("id")),
+      await service.retrieveMetadata(workspaceIdFrom(c), c.req.param("id")),
       200,
     );
   });
 
   app.get("/:id/content", async (c) => {
     const download = await service.download(
-      DEFAULT_WORKSPACE_ID,
+      workspaceIdFrom(c),
       c.req.param("id"),
     );
     return new Response(asyncIterableToReadableStream(download.body), {
@@ -87,7 +81,7 @@ export function filesRoutes(service: FileService): Hono<FilesRouteEnv> {
 
   app.delete("/:id", async (c) => {
     return c.json(
-      await service.delete(DEFAULT_WORKSPACE_ID, c.req.param("id")),
+      await service.delete(workspaceIdFrom(c), c.req.param("id")),
       200,
     );
   });

@@ -196,6 +196,7 @@ export class EventStore implements SessionEventStore {
   private readonly retrieveStmt: StatementSync;
   private readonly findRuntimeActionStmt: StatementSync;
   private readonly listPendingRuntimeTurnsStmt: StatementSync;
+  private readonly listWorkspacesWithPendingRuntimeTurnsStmt: StatementSync;
   private readonly listRuntimeActionsForTurnStmt: StatementSync;
   private readonly insertRuntimeTurnStmt: StatementSync;
   private readonly insertRuntimeActionStmt: StatementSync;
@@ -264,6 +265,12 @@ export class EventStore implements SessionEventStore {
        FROM pending_runtime_turns
        WHERE workspace_id = ? AND state NOT IN ('completed', 'terminalized')
        ORDER BY turn_id ASC`,
+    );
+    this.listWorkspacesWithPendingRuntimeTurnsStmt = this.db.prepare(
+      `SELECT DISTINCT workspace_id
+       FROM pending_runtime_turns
+       WHERE state NOT IN ('completed', 'terminalized')
+       ORDER BY workspace_id ASC`,
     );
     this.listRuntimeActionsForTurnStmt = this.db.prepare(runtimeActionSelectSql(`
       WHERE a.workspace_id = ? AND a.session_id = ? AND a.turn_id = ?
@@ -655,6 +662,13 @@ export class EventStore implements SessionEventStore {
       workspaceId,
     ) as unknown as RuntimeTurnRow[];
     return rows.map(deserializeRuntimeTurn);
+  }
+
+  listWorkspaceIdsWithPendingRuntimeTurns(): WorkspaceId[] {
+    const rows = this.listWorkspacesWithPendingRuntimeTurnsStmt.all() as unknown as {
+      workspace_id: WorkspaceId;
+    }[];
+    return rows.map((row) => row.workspace_id);
   }
 
   claimAcceptedRuntimeTurnForRecovery(

@@ -38,11 +38,13 @@ import {
 import {
   ApiError,
   type ApiErrorBody,
+  authenticationFailed,
   ensureApiError,
   requestTooLarge,
   requestId,
   toApiErrorBody,
 } from "./errors.ts";
+import type { ControlPlaneRouteEnv, WorkspaceId } from "./workspace.ts";
 import { sessionsRoutes } from "./sessions/routes.ts";
 import { DefaultSessionService } from "./sessions/service.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
@@ -58,10 +60,10 @@ export const MAX_REQUEST_BODY_BYTES = 1_048_576;
 export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 export const FILES_API_BETA = "files-api-2025-04-14";
 
-interface AppEnv {
-  Variables: {
-    requestId: string;
-  };
+type AppEnv = ControlPlaneRouteEnv;
+
+export interface ControlPlaneAuth {
+  authenticate(plaintextKey: string): WorkspaceId | undefined;
 }
 
 export interface ControlPlaneServices {
@@ -70,6 +72,7 @@ export interface ControlPlaneServices {
   files?: FileService;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
+  auth?: ControlPlaneAuth;
 }
 
 export interface InMemoryControlPlaneAppOptions {
@@ -83,8 +86,36 @@ export interface DeploymentControlPlaneAppOptions {
   runner?: DeploymentPiSessionRunnerOptions;
 }
 
+export type DeploymentAuthMode = "api-key" | "disabled";
+
+export interface DeploymentAuthEnv {
+  OMA_AUTH_MODE?: string;
+}
+
 export type DeploymentControlPlaneEnv =
-  DeploymentRuntimeEnv & DeploymentStorageEnv;
+  DeploymentRuntimeEnv & DeploymentStorageEnv & DeploymentAuthEnv;
+
+// 0113 D5: exactly two values; unset stays disabled for the currently allowed
+// rollout tiers but warns loudly; anything else fails construction.
+export function parseDeploymentAuthMode(
+  env: DeploymentAuthEnv,
+  opts: { warn?: (message: string) => void } = {},
+): DeploymentAuthMode {
+  const raw = env.OMA_AUTH_MODE;
+  if (raw === undefined) {
+    (opts.warn ?? console.warn)(
+      "OMA_AUTH_MODE is unset; workspace authentication is DISABLED and all requests resolve to wrk_default. Set OMA_AUTH_MODE=api-key for any deployment beyond trusted single-node.",
+    );
+    return "disabled";
+  }
+  const mode = raw.trim();
+  if (mode === "api-key" || mode === "disabled") {
+    return mode;
+  }
+  throw new Error(
+    `Unsupported OMA_AUTH_MODE: ${JSON.stringify(raw)} (expected "api-key" or "disabled")`,
+  );
+}
 
 export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -102,6 +133,27 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     c.set("requestId", reqId);
     await next();
   });
+
+  // Auth before the beta gate, scoped to known Managed Agents prefixes, per
+  // the 0113 hosted probe: unknown paths 404 without touching auth; known
+  // paths 401 before beta/version are examined.
+  if (services.auth) {
+    const auth = services.auth;
+    app.use("*", async (c, next) => {
+      if (!isManagedAgentsRoute(c.req.path)) {
+        await next();
+        return;
+      }
+      const key = c.req.header("x-api-key");
+      const workspaceId = key === undefined ? undefined : auth.authenticate(key);
+      if (workspaceId === undefined) {
+        const err = authenticationFailed();
+        return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+      }
+      c.set("workspaceId", workspaceId);
+      await next();
+    });
+  }
 
   app.use("*", async (c, next) => {
     const betaFeatures = parseBetaFeatures(c.req.header("anthropic-beta"));
@@ -147,7 +199,15 @@ export function createDeploymentControlPlaneApp(
   opts: DeploymentControlPlaneAppOptions = {},
 ): Hono<AppEnv> {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
+  const authMode = parseDeploymentAuthMode(env);
   const stores = createDeploymentStoresFromEnv(env);
+  if (authMode === "api-key" && stores.mode !== "durable") {
+    stores.close();
+    throw new Error(
+      "OMA_AUTH_MODE=api-key requires durable deployment storage: set OMA_SQLITE_PATH and OMA_FILE_STORAGE_ROOT. " +
+        "In-memory stores are per-process, so no API key could ever be provisioned and every request would fail with 401.",
+    );
+  }
   const broadcaster = new SessionEventBroadcaster(stores.events);
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
@@ -174,8 +234,11 @@ export function createDeploymentControlPlaneApp(
       runtimeEventCoordinator: stores.runtimeEventCoordinator,
     },
   );
-  sessionEvents.recoverAbandonedRuntimeTurns("wrk_default");
+  sessionEvents.recoverAllAbandonedRuntimeTurns();
   return createControlPlaneApp({
+    ...(authMode === "api-key"
+      ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
+      : {}),
     agents: new DefaultAgentService(stores.agents),
     environments: new DefaultEnvironmentService(stores.environments),
     files: new DefaultFileService(stores.files),
