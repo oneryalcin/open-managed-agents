@@ -283,9 +283,22 @@ Refuse (YAGNI):
    `scratch/`, run a Docker container whose only route is the proxy, and prove
    end-to-end: (a) allowlisted host works, (b) non-allowlisted host denied,
    (c) redirect to a non-allowlisted host denied, (d) sentinel substituted at
-   the boundary with the real value never observable inside the container
-   (env, filesystem, or response bytes), (e) private-IP literal / CNAME-to-
-   private denied once the smokescreen-style check is added.
+   the boundary — the controlled echo target observes the real value (that is
+   the substitution proof), while the container's env, filesystem, and its own
+   outbound request construction never hold it, (e) private-IP literal /
+   CNAME-to-private denied once the smokescreen-style check is added.
+
+   Scope note on (d): boundary injection cannot hide the secret from a
+   *reflective allowlisted upstream* — the request that leaves the boundary
+   genuinely carries the real credential, and srt pipes upstream responses
+   back unmodified (`upRes.pipe(res)`, `tls-terminate-proxy.ts`; header
+   mutation is outbound-only). A cooperating echo endpoint therefore returns
+   the secret into the sandbox by design. Mitigations are allowlist trust
+   (only inject toward hosts that don't reflect credentials) and, optionally,
+   OMA-layer response redaction — an explicit design question for the ADR
+   (Osaurus's output scrubbing in
+   [agentos-osaurus-prior-art.md](agentos-osaurus-prior-art.md) is the prior
+   art).
 2. Envelope-encryption probe: throwaway script proving DEK/KEK
    wrap–unwrap–rotate round-trip with `node:crypto` before pinning the
    `SecretsStore` schema.

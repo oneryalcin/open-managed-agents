@@ -151,8 +151,11 @@ Deployment-mode terminology and sequencing are defined in
   vars (`src/control-plane/admission.ts`, documented in
   `docs/dev-deployment.md`). Rejections are hosted-shaped 429
   (`rate_limit_error`, `retry-after: 1`) / 529 (`overloaded_error`). Gates sit
-  before the expensive work (session cap reserves before async file prep;
-  upload cap precedes body buffering) — verified under 20-way concurrency in
+  before the expensive work; the two subtle placements (session cap reserving
+  before async file-resource prep, upload cap rejecting without draining the
+  body) are verified in
+  `src/control-plane/__tests__/admission-limits-api.test.ts`, and exact cap
+  adherence under 20-way concurrency in
   `scratch/43-admission-limits-load.ts`.
 - Counters are in-process: sufficient for single-node, not for multi-worker
   (needs shared state — see plan 0112 gate table).
