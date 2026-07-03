@@ -12,6 +12,10 @@ import {
 import type { SecretMetadata, SecretsStore } from "./types.ts";
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS secrets_config (
+  id              INTEGER PRIMARY KEY CHECK (id = 1),
+  current_kek_id  TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS secrets (
   id            TEXT PRIMARY KEY,
   workspace_id  TEXT NOT NULL,
@@ -49,6 +53,9 @@ interface SecretDbRow {
 export class SqliteSecretsStore implements SecretsStore {
   private readonly db: DatabaseSync;
   private masterKey: Buffer;
+  private kekId: string;
+  private readonly configGetStmt: StatementSync;
+  private readonly configSetStmt: StatementSync;
   private readonly insertStmt: StatementSync;
   private readonly resealStmt: StatementSync;
   private readonly selectStmt: StatementSync;
@@ -63,7 +70,32 @@ export class SqliteSecretsStore implements SecretsStore {
     // Copy: the caller's buffer must not be able to mutate the store's key,
     // and rotateMasterKey scrubs the old one.
     this.masterKey = Buffer.from(masterKey);
+    this.kekId = kekIdFor(this.masterKey);
     this.db.exec(SCHEMA);
+    this.configGetStmt = this.db.prepare(
+      `SELECT current_kek_id FROM secrets_config WHERE id = 1`,
+    );
+    this.configSetStmt = this.db.prepare(
+      `INSERT INTO secrets_config (id, current_kek_id) VALUES (1, ?)
+       ON CONFLICT (id) DO UPDATE SET current_kek_id = excluded.current_kek_id`,
+    );
+    // Claim or validate the database-wide key epoch (adversarial-review
+    // finding): the first store to open an empty DB records its key
+    // fingerprint; any later store must present the SAME key, so a process
+    // holding a retired key fails fast here instead of writing rows nobody
+    // can read.
+    withSqliteTransaction(this.db, () => {
+      const current = this.currentConfigKekId();
+      if (current === undefined) {
+        this.configSetStmt.run(this.kekId);
+      } else if (current !== this.kekId) {
+        throw new Error(
+          `secrets database is keyed to a different master key (current ` +
+            `kekId ${current}, supplied key is ${this.kekId}) — supply the ` +
+            `active key, or rotate from it`,
+        );
+      }
+    });
     this.insertStmt = this.db.prepare(
       `INSERT INTO secrets (
         id, workspace_id, name, version, kek_id,
@@ -104,18 +136,46 @@ export class SqliteSecretsStore implements SecretsStore {
       throw new Error("workspaceId and name must be non-empty");
     }
     const now = new Date().toISOString();
-    const existing = this.selectStmt.get(workspaceId, name) as
-      | unknown as SecretDbRow
-      | undefined;
-    // An upsert keeps the row id and re-seals under a fresh DEK.
-    const id = existing?.id ?? newSecretId();
-    const sealed = seal(
-      this.masterKey,
-      recordBinding(id, workspaceId, name),
-      Buffer.from(value, "utf8"),
-    );
-    if (existing) {
-      this.resealStmt.run(
+    // The write transaction re-checks the key epoch: a store constructed
+    // before a rotation must not seal new rows under the retired key — the
+    // rotated store could never read them (adversarial-review finding).
+    return withSqliteTransaction(this.db, () => {
+      this.assertActiveKey();
+      const existing = this.selectStmt.get(workspaceId, name) as
+        | unknown as SecretDbRow
+        | undefined;
+      // An upsert keeps the row id and re-seals under a fresh DEK.
+      const id = existing?.id ?? newSecretId();
+      const sealed = seal(
+        this.masterKey,
+        recordBinding(id, workspaceId, name),
+        Buffer.from(value, "utf8"),
+      );
+      if (existing) {
+        this.resealStmt.run(
+          sealed.version,
+          sealed.kekId,
+          sealed.wrapIv,
+          sealed.wrapTag,
+          sealed.wrappedDek,
+          sealed.ctIv,
+          sealed.ctTag,
+          sealed.ct,
+          now,
+          id,
+        );
+        return {
+          id,
+          workspace_id: workspaceId,
+          name,
+          created_at: existing.created_at,
+          updated_at: now,
+        };
+      }
+      this.insertStmt.run(
+        id,
+        workspaceId,
+        name,
         sealed.version,
         sealed.kekId,
         sealed.wrapIv,
@@ -125,38 +185,16 @@ export class SqliteSecretsStore implements SecretsStore {
         sealed.ctTag,
         sealed.ct,
         now,
-        id,
+        now,
       );
       return {
         id,
         workspace_id: workspaceId,
         name,
-        created_at: existing.created_at,
+        created_at: now,
         updated_at: now,
       };
-    }
-    this.insertStmt.run(
-      id,
-      workspaceId,
-      name,
-      sealed.version,
-      sealed.kekId,
-      sealed.wrapIv,
-      sealed.wrapTag,
-      sealed.wrappedDek,
-      sealed.ctIv,
-      sealed.ctTag,
-      sealed.ct,
-      now,
-      now,
-    );
-    return {
-      id,
-      workspace_id: workspaceId,
-      name,
-      created_at: now,
-      updated_at: now,
-    };
+    });
   }
 
   reveal(workspaceId: string, name: string): string | undefined {
@@ -195,7 +233,11 @@ export class SqliteSecretsStore implements SecretsStore {
     assertMasterKey(newMasterKey);
     const oldKey = this.masterKey;
     const next = Buffer.from(newMasterKey);
+    const nextKekId = kekIdFor(next);
     const count = withSqliteTransaction(this.db, () => {
+      // Only the store holding the ACTIVE key may rotate; the epoch flips in
+      // the same transaction as the rewraps, so writers serialize against it.
+      this.assertActiveKey();
       const rows = this.selectAllStmt.all() as unknown as SecretDbRow[];
       for (const row of rows) {
         const rotated = rewrap(
@@ -212,11 +254,30 @@ export class SqliteSecretsStore implements SecretsStore {
           row.id,
         );
       }
+      this.configSetStmt.run(nextKekId);
       return rows.length;
     });
     this.masterKey = next;
+    this.kekId = nextKekId;
     oldKey.fill(0);
     return count;
+  }
+
+  private currentConfigKekId(): string | undefined {
+    const row = this.configGetStmt.get() as
+      | { current_kek_id: string }
+      | undefined;
+    return row?.current_kek_id;
+  }
+
+  private assertActiveKey(): void {
+    const current = this.currentConfigKekId();
+    if (current !== this.kekId) {
+      throw new Error(
+        `this store holds a retired master key (kekId ${this.kekId}, the ` +
+          `database is keyed to ${current}) — reopen with the active key`,
+      );
+    }
   }
 
   /** Fingerprint of the store's current master key (for diagnostics/tests). */

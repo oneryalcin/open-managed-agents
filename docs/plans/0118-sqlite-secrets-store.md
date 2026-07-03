@@ -88,6 +88,17 @@ src/control-plane/secrets/
 - **Best-effort DEK zeroing** (`dek.fill(0)`) after each seal/open/rewrap.
   Node gives no hard guarantee; cheap and directionally right.
 
+- **Persisted key epoch** (`secrets_config.current_kek_id`; Codex adversarial
+  finding, confirmed by repro). Rotation alone is instance-local: a second
+  store over the same DB — a provisioning CLI, or the live server before its
+  restart — would keep sealing under the retired key, creating rows the
+  rotated store can never read. So the DB records the active key fingerprint:
+  the first store to open an empty DB claims it, any later constructor must
+  present the same key (fail fast, not GCM garbage), `put()` re-checks inside
+  its write transaction, and rotation flips the epoch atomically with the
+  rewraps. The envelope's row-level kekId check stays as defense in depth
+  (e.g. a backup restored from before a rotation).
+
 - **Considered and declined: FK `workspace_id REFERENCES workspaces`**
   (review finding). Precedent exists (`workspace_api_keys` FKs within the
   workspace store's own schema), but every cross-module workspace-scoped
@@ -111,8 +122,10 @@ src/control-plane/secrets/
   swap attack.
 - Row relabeled to another workspace/name → reveal throws — cross-tenant
   disclosure via metadata rewrite.
-- Wrong master key → descriptive kek-mismatch error, not bare GCM throw —
-  operator misdiagnoses a key mixup as corruption.
+- Wrong master key → fail-fast at construction with a kek diagnosis, not bare
+  GCM throw — operator misdiagnoses a key mixup as corruption.
+- Stale store `put()` after another store rotates → rejected, no unreadable
+  row — retired-key writes strand secrets (Codex adversarial finding).
 - Workspace isolation: reveal/list/delete scoped by workspace — tenant reads
   another tenant's secret.
 - `rotateMasterKey`: new key opens, old fingerprint gone, `ct` byte-identical

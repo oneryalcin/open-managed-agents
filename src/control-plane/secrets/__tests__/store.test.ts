@@ -99,12 +99,28 @@ describe("SqliteSecretsStore", () => {
     expect(() => store.reveal(WRK, "github")).toThrow();
   });
 
-  it("a store opened with the wrong master key fails with a kek diagnosis, not bare GCM garbage", () => {
+  it("opening the database with the wrong master key fails fast with a kek diagnosis", () => {
     store.put(WRK, "github", "ghp_secret_token");
-    const wrong = new SqliteSecretsStore(db, randomBytes(32));
-    expect(() => wrong.reveal(WRK, "github")).toThrow(
-      /sealed under a different master key/,
+    // The database is keyed to the first store's key; a process supplying a
+    // different key must fail at construction — not later, with GCM garbage,
+    // after it already wrote rows nobody can read.
+    expect(() => new SqliteSecretsStore(db, randomBytes(32))).toThrow(
+      /keyed to a different master key/,
     );
+  });
+
+  it("a stale store cannot write under a retired key after another store rotates", () => {
+    // Codex adversarial finding (confirmed by repro): without a persisted key
+    // epoch, a second store instance — a provisioning CLI, or the live server
+    // before its restart — keeps sealing with the retired key after rotation,
+    // creating rows the rotated store can never read.
+    const stale = new SqliteSecretsStore(db, master);
+    store.rotateMasterKey(randomBytes(32));
+    expect(() => stale.put(WRK, "github", "stranded")).toThrow(
+      /retired master key/,
+    );
+    // And no unreadable row was created.
+    expect(store.reveal(WRK, "github")).toBeUndefined();
   });
 
   it("scopes reveal/list/delete by workspace", () => {
@@ -151,12 +167,11 @@ describe("SqliteSecretsStore", () => {
       expect(store.reveal(WRK, "github")).toBe("secret-a");
       expect(store.reveal("wrk_other", "slack")).toBe("secret-b");
 
-      // A store still holding the retired key can no longer open the rows.
-      const stale = new SqliteSecretsStore(db, master);
-      expect(() => stale.reveal(WRK, "github")).toThrow(
-        /sealed under a different master key/,
+      // Opening with the retired key now fails at construction (epoch check).
+      expect(() => new SqliteSecretsStore(db, master)).toThrow(
+        /keyed to a different master key/,
       );
-      // A fresh store opened with the new key can.
+      // A fresh store opened with the new key can read everything.
       const fresh = new SqliteSecretsStore(db, next);
       expect(fresh.reveal(WRK, "github")).toBe("secret-a");
       expect(b.id).toBeTruthy();
