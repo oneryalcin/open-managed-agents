@@ -12,7 +12,6 @@ import {
   disposeMitmCA,
   type MitmCA,
 } from "../proxy.ts";
-
 // Contract test for the vendored srt egress proxy (plan 0117a). Exercises the
 // vendored code in CI without Docker: an in-process TLS echo upstream, the
 // proxy, and a dep-free manual CONNECT+TLS tunnel client. This is the in-suite
@@ -124,6 +123,7 @@ describe("vendored egress proxy contract (plan 0117a)", () => {
       },
       tlsTerminateUpstreamCA: readFileSync(join(work, "c.pem")),
       proxyAuthToken: TOKEN,
+      dangerouslyAllowPrivateAddressesForTest: true,
     });
     await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
     proxyPort = (proxy.address() as { port: number }).port;
@@ -188,6 +188,7 @@ describe("vendored egress proxy contract (plan 0117a)", () => {
       },
       tlsTerminateUpstreamCA: bogusCa.certPem,
       proxyAuthToken: TOKEN,
+      dangerouslyAllowPrivateAddressesForTest: true,
     });
     await new Promise<void>((r) => wrongProxy.listen(0, "127.0.0.1", r));
     const wrongPort = (wrongProxy.address() as { port: number }).port;
@@ -210,6 +211,39 @@ describe("vendored egress proxy contract (plan 0117a)", () => {
         proxyAuthToken: "",
       }),
     ).toThrow(/non-empty proxyAuthToken/);
+  });
+
+  // The SSRF boundary must be safe by construction: the public surface cannot
+  // hand back a proxy whose upstream resolution escapes the pinned lookup.
+  it("createEgressProxy rejects a caller lookup (would replace the SSRF resolver)", () => {
+    expect(() =>
+      createEgressProxy({
+        filter: () => true,
+        proxyAuthToken: "tok",
+        // deliberately bypass the type omission
+        lookup: (() => {}) as never,
+      } as never),
+    ).toThrow(/does not accept a caller lookup/);
+  });
+
+  it("createEgressProxy rejects getMitmSocketPath (external MITM route bypasses the lookup)", () => {
+    expect(() =>
+      createEgressProxy({
+        filter: () => true,
+        proxyAuthToken: "tok",
+        getMitmSocketPath: (() => "/tmp/x.sock") as never,
+      } as never),
+    ).toThrow(/does not support getMitmSocketPath/);
+  });
+
+  it("createEgressProxy rejects parentProxy", () => {
+    expect(() =>
+      createEgressProxy({
+        filter: () => true,
+        proxyAuthToken: "tok",
+        parentProxy: {} as never,
+      } as never),
+    ).toThrow(/does not support parentProxy/);
   });
 });
 

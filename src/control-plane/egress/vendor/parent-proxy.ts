@@ -491,9 +491,11 @@ export function dialDirect(
   host: string,
   port: number,
   timeoutMs = CONNECT_TIMEOUT_MS,
+  lookup?: import('node:net').LookupFunction, // OMA: validating lookup
 ): Promise<Socket> {
   return new Promise((resolve, reject) => {
-    const s = netConnect(port, host)
+    // OMA: pass host via options so the validating lookup (if any) gates the dial.
+    const s = netConnect(lookup ? { host, port, lookup } : { host, port })
     let settled = false
     const done = (err?: Error) => {
       if (settled) return

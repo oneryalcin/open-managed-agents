@@ -147,6 +147,26 @@ connect to that pinned IP** with the hostname preserved only as TLS `servername`
 path, not just the policy layer, so it is more than the "~50 lines" a
 filter-only check would be.
 
+**Implemented in two halves** (plan 0117b; review found the second is
+essential): (a) *DNS names* go through the pinned `lookup` above, wired to
+every upstream dial (CONNECT-terminated, plain-HTTP direct, opaque-tunnel);
+(b) *IP literals* — Node structurally skips the `lookup` hook for numeric
+hosts, so a literal like `169.254.169.254` would bypass (a) entirely. The
+literal half is enforced by wrapping the caller's `filter` (which runs before
+every dial on both handlers) to reject any host that is a blocked IP literal.
+The blocklist also denies IPv6 forms that embed a private IPv4 (IPv4-mapped,
+NAT64 `64:ff9b::/96`, 6to4 `2002::/16`, Teredo `2001::/32`), since those could
+reach private space through a transition gateway while looking public.
+
+**Safe by construction, enforced at the public surface** (review-driven): the
+`createEgressProxy` option type removes the vendor settings that would route a
+dial around this deny — `lookup` (a caller resolver would replace the validating
+one) and `getMitmSocketPath` (an external MITM route dials outside the check) —
+and the constructor rejects them at runtime too. The pinned lookup is applied
+*after* caller options so it cannot be overridden. The only relaxation is a
+loudly-named test flag (`dangerouslyAllowPrivateAddressesForTest`) for in-process
+loopback fixtures; the literal filter-wrap runs regardless of it.
+
 ### 6. Response redaction is deferred but named
 
 Boundary injection cannot hide a secret from a *reflective* allowlisted

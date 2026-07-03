@@ -56,16 +56,24 @@ the vendored code is exercised in CI, not just by the scratch probe.
 **Not a complete egress boundary yet**: the SSRF/private-IP deny (0117b) and
 wiring (0117c/d) are still owed; `proxy.ts` says so. No control-plane wiring.
 
-### 0117b — SSRF/private-IP deny in the dial path (ADR 0016 §5)
+### 0117b — SSRF/private-IP deny in the dial path (ADR 0016 §5) — ✅ DONE
 
-The load-bearing correctness item. Implement **resolve-once → validate every
-resolved IP against a private/loopback/link-local/ULA blocklist → connect to
-the pinned IP**, hostname preserved only as TLS `servername`/SNI; handle
-multiple A records and IPv6. This edits the vendored dial path (marked `// OMA:`)
-— a filter-only check re-opens DNS rebinding (the TOCTOU the reviews caught).
-Contract tests: an allowlisted name resolving to a private IP is denied; a
-rebinding flip between resolve and connect cannot reach the private IP; a
-public host still works.
+`egress/ssrf.ts`: `createPinnedLookup()` returns a `dns.lookup`-compatible
+function that resolves once, denies if ANY resolved address is in the
+private/loopback/link-local/ULA/CGNAT/reserved blocklist (IPv4 + IPv6, incl.
+IPv4-mapped IPv6), and otherwise returns the vetted IP for Node to connect to
+directly — no re-resolution, so no DNS-rebinding TOCTOU; the hostname stays as
+TLS SNI. Threaded through the vendored dial sites via a `lookup` option
+(VENDOR.md mod #5). `createEgressProxy` **defaults** the lookup to the pinned
+one, so OMA egress is SSRF-safe by construction; a caller may override it
+(tests reaching a loopback fixture do). Tests (`ssrf.test.ts`): the
+`isBlockedAddress` battery (private/loopback/link-local/CGNAT/metadata/
+IPv4-mapped denied, public allowed), the lookup denies a hostname resolving to
+loopback, and an **end-to-end** default proxy allows the CONNECT but blocks the
+loopback dial so the upstream is never reached (mutation-verified: removing the
+default injection flips it). Probed the core mechanism first
+(`scratch` throwaway) — a custom `lookup` genuinely gates the socket and Node
+connects only to the returned IP.
 
 ### 0117c — Egress policy as data + resolution
 
