@@ -52,6 +52,11 @@ export type FilterRequestCallback = (
 export type MutateForwardedHeaders = (
   headers: IncomingHttpHeaders,
   destHost: string,
+  // OMA: request context for path/method-scoped credential injection
+  // (ADR 0016 §6). `path` is the raw origin-form request-target; `port` is
+  // the CONNECT-verified destination port. Absent on hook call sites that
+  // predate the mod (none in the vendored set after 0117c).
+  context?: { method: string; path: string; port: number },
 ) => void
 
 const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])

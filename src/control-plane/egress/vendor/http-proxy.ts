@@ -69,6 +69,15 @@ export interface HttpProxyServerOptions {
    */
   shouldTerminateTLS?(hostname: string, port: number): boolean
 
+  // OMA: gate for the opaque-tunnel routes (ADR 0016 §3). When set, ANY
+  // CONNECT that would fall through to an uninspected byte tunnel — non-TLS
+  // first bytes, a shouldTerminateTLS opt-out, or no mitmCA at all — is
+  // rejected unless this returns true for the host:port. Unset preserves
+  // vendor behaviour (opaque tunnels allowed). OMA's wrapper defaults it to
+  // deny-all so path policy and injection guarantees cannot be sidestepped
+  // by a client that simply speaks non-TLS bytes into the tunnel.
+  allowOpaqueTunnel?(hostname: string, port: number): boolean
+
   /**
    * Per-request filter; runs on plain-HTTP proxy requests and on terminated
    * HTTPS requests. See request-filter.ts.
@@ -225,6 +234,25 @@ export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
         )
       }
 
+      // OMA: single choke point for every route that reaches the opaque
+      // tunnel below (non-TLS bytes after the sniff, a shouldTerminateTLS
+      // opt-out, or no mitmCA). ADR 0016 §3: path policy and injection are
+      // guarantees only for terminated TLS, so an uninspected byte tunnel
+      // must be an explicit per-host grant, not a fallback a client can
+      // trigger by speaking non-TLS bytes.
+      if (
+        options.allowOpaqueTunnel &&
+        !options.allowOpaqueTunnel(hostname, port)
+      ) {
+        logForDebugging(
+          `[tls-terminate] opaque tunnel to ${hostname}:${port} denied by policy`,
+          { level: 'error' },
+        )
+        if (wrote200) socket.destroy()
+        else socket.end('HTTP/1.1 403 Forbidden\r\n\r\n')
+        return
+      }
+
       const mitmSocketPath = options.getMitmSocketPath?.(hostname)
       const parentUrl =
         !mitmSocketPath &&
@@ -325,7 +353,12 @@ export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
       if (req.socket.destroyed) return
 
       const fwdHeaders = { ...stripHopByHop(req.headers), host: url.host }
-      options.mutateHeadersPlaintext?.(fwdHeaders, hostname)
+      // OMA: same request context as the terminated path (ADR 0016 §6).
+      options.mutateHeadersPlaintext?.(fwdHeaders, hostname, {
+        method: req.method ?? 'GET',
+        path: `${url.pathname}${url.search}`,
+        port,
+      })
 
       // Decide upstream route: MITM unix socket > parent HTTP proxy > direct.
       const mitmSocketPath = options.getMitmSocketPath?.(hostname)

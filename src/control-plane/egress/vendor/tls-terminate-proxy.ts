@@ -141,7 +141,17 @@ export function terminateAndForward(
   })
 
   inner.on('request', (req, res) => {
-    void forwardUpstream(filterRequest, mutateHeaders, req, res, target)
+    // OMA: fail closed — an unexpected throw inside the forward path (e.g. a
+    // hook) must kill this exchange, not become an unhandled rejection.
+    forwardUpstream(filterRequest, mutateHeaders, req, res, target).catch(
+      (err: Error) => {
+        logForDebugging(
+          `[tls-terminate] forward failed for ${target.hostname}: ${err.message}`,
+          { level: 'error' },
+        )
+        res.destroy()
+      },
+    )
   })
   inner.on('tlsClientError', (err, sock) => {
     logForDebugging(
@@ -256,7 +266,14 @@ async function forwardUpstream(
   // The upstream TLS handshake (rejectUnauthorized defaults to true)
   // completes before any HTTP bytes are written, so mutated headers never
   // reach an unverified server.
-  mutateHeaders?.(fwdHeaders, target.hostname)
+  // OMA: pass request context so injection can be path/method-scoped
+  // (ADR 0016 §6). method/path come from the decrypted request; port from the
+  // CONNECT-verified target (never the spoofable Host header).
+  mutateHeaders?.(fwdHeaders, target.hostname, {
+    method: req.method ?? 'GET',
+    path,
+    port: target.port,
+  })
 
   // TODO(terminating-tls): honour parentProxy for the upstream leg.
   const upstream = httpsRequest(
