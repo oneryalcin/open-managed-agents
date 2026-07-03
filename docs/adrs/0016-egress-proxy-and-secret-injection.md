@@ -158,6 +158,15 @@ The blocklist also denies IPv6 forms that embed a private IPv4 (IPv4-mapped,
 NAT64 `64:ff9b::/96`, 6to4 `2002::/16`, Teredo `2001::/32`), since those could
 reach private space through a transition gateway while looking public.
 
+**Safe by construction, enforced at the public surface** (review-driven): the
+`createEgressProxy` option type removes the vendor settings that would route a
+dial around this deny — `lookup` (a caller resolver would replace the validating
+one) and `getMitmSocketPath` (an external MITM route dials outside the check) —
+and the constructor rejects them at runtime too. The pinned lookup is applied
+*after* caller options so it cannot be overridden. The only relaxation is a
+loudly-named test flag (`dangerouslyAllowPrivateAddressesForTest`) for in-process
+loopback fixtures; the literal filter-wrap runs regardless of it.
+
 ### 6. Response redaction is deferred but named
 
 Boundary injection cannot hide a secret from a *reflective* allowlisted

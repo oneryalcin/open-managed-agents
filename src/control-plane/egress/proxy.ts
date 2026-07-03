@@ -26,17 +26,29 @@ export type {
   MutateForwardedHeaders,
 } from "./vendor/request-filter.ts";
 
-// The OMA-facing options: the raw vendor constructor is fail-open on auth
-// (`checkAuth` returns true when `proxyAuthToken` is unset) and supports
-// upstream-proxy chaining OMA v1 does not use (and which the vendor does not
-// honor on the TLS-terminated leg). This wrapper closes both: it mandates a
-// non-empty per-session token and structurally forbids `parentProxy`.
+// The OMA-facing options. The raw vendor constructor exposes several settings
+// that would undermine the boundary "by construction", so they are removed from
+// this surface and enforced here instead:
+//   - `proxyAuthToken` — vendor default is fail-open; made mandatory + non-empty.
+//   - `parentProxy` — upstream chaining OMA doesn't use and the vendor ignores
+//     on the terminated leg; forbidden.
+//   - `lookup` — must NOT be caller-overridable, or a caller could replace the
+//     SSRF-validating resolver and reach private space. The pinned lookup is
+//     applied here, after options, so it always wins.
+//   - `getMitmSocketPath` — routes dials through an external MITM unix socket
+//     that bypasses the pinned lookup; OMA uses in-process `mitmCA` instead.
 export type EgressProxyOptions = Omit<
   HttpProxyServerOptions,
-  "parentProxy" | "proxyAuthToken"
+  "parentProxy" | "proxyAuthToken" | "lookup" | "getMitmSocketPath"
 > & {
   /** Mandatory per-session bearer token; the vendor default (unset) is fail-open. */
   proxyAuthToken: string;
+  /**
+   * TEST ONLY. Disables the private-IP protection so an in-process loopback
+   * fixture is reachable. NEVER set in production — it turns off the SSRF deny.
+   * The name is deliberately loud and greppable.
+   */
+  dangerouslyAllowPrivateAddressesForTest?: boolean;
 };
 
 export function createEgressProxy(options: EgressProxyOptions) {
@@ -49,12 +61,27 @@ export function createEgressProxy(options: EgressProxyOptions) {
         "proxy is fail-open (any host process could reach it) without one.",
     );
   }
-  // Defensive against JS callers who bypass the Omit type: OMA v1 does not do
-  // upstream-proxy chaining, and the vendor ignores it on the terminated leg.
-  if ((options as { parentProxy?: unknown }).parentProxy !== undefined) {
+  // Defensive against JS callers who bypass the Omit type. Both routes would
+  // move dials outside the pinned-lookup SSRF check, so reject them at runtime.
+  const raw = options as { parentProxy?: unknown; getMitmSocketPath?: unknown; lookup?: unknown };
+  if (raw.parentProxy !== undefined) {
     throw new Error(
       "createEgressProxy does not support parentProxy: upstream-proxy chaining " +
         "is unused in OMA v1 and is not honored on the TLS-terminated leg.",
+    );
+  }
+  if (raw.getMitmSocketPath !== undefined) {
+    throw new Error(
+      "createEgressProxy does not support getMitmSocketPath: an external MITM " +
+        "unix-socket route bypasses the pinned-lookup SSRF check. OMA terminates " +
+        "TLS in-process via mitmCA.",
+    );
+  }
+  if (raw.lookup !== undefined) {
+    throw new Error(
+      "createEgressProxy does not accept a caller lookup: it would replace the " +
+        "SSRF-validating resolver. Use dangerouslyAllowPrivateAddressesForTest " +
+        "for loopback fixtures.",
     );
   }
   // SSRF/private-IP deny by default (ADR 0016 §5), in two halves:
@@ -74,9 +101,16 @@ export function createEgressProxy(options: EgressProxyOptions) {
     if (family !== 0 && isBlockedAddress(host, family)) return false;
     return callerFilter(port, host, socket);
   };
+  // The pinned lookup is set AFTER spreading options so a caller cannot replace
+  // it. The only relaxation is the loud test flag, which turns off the private-IP
+  // half (loopback fixtures) — the literal filter-wrap still runs regardless.
+  const lookup = options.dangerouslyAllowPrivateAddressesForTest
+    ? createPinnedLookup({ allowAddress: () => true })
+    : createPinnedLookup();
+  const { dangerouslyAllowPrivateAddressesForTest: _omit, ...rest } = options;
   return createHttpProxyServer({
-    lookup: createPinnedLookup(),
-    ...options,
+    ...rest,
     filter: guardedFilter,
+    lookup,
   });
 }
