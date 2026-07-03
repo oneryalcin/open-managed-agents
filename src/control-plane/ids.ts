@@ -27,3 +27,7 @@ export function newSessionResourceId(): string {
 export function newSessionId(): string {
   return `sesn_${uuidv7()}`;
 }
+
+export function newSecretId(): string {
+  return `sec_${uuidv7()}`;
+}
