@@ -8,11 +8,12 @@
 // Still owed: egress policy + credential injection (0117c) and Docker
 // proxy-only-egress wiring (0117d). Until those land, `createEgressProxy` is a
 // building block, not the wired control-plane boundary.
+import { isIP } from "node:net";
 import {
   createHttpProxyServer,
   type HttpProxyServerOptions,
 } from "./vendor/http-proxy.ts";
-import { createPinnedLookup } from "./ssrf.ts";
+import { createPinnedLookup, isBlockedAddress } from "./ssrf.ts";
 
 export {
   createMitmCA,
@@ -56,13 +57,26 @@ export function createEgressProxy(options: EgressProxyOptions) {
         "is unused in OMA v1 and is not honored on the TLS-terminated leg.",
     );
   }
-  // SSRF/private-IP deny by default (ADR 0016 §5): unless the caller supplies
-  // its own lookup, every upstream dial resolves through a validating lookup
-  // that denies private/loopback/reserved targets and pins the vetted IP. A
-  // caller CAN override `lookup` (tests reaching a loopback fixture do), which
-  // is why this is a default, not a hard-wire.
+  // SSRF/private-IP deny by default (ADR 0016 §5), in two halves:
+  //
+  //   1. DNS names: unless the caller overrides `lookup`, every upstream dial
+  //      resolves through a validating lookup that denies private/loopback/
+  //      reserved targets and pins the vetted IP.
+  //   2. IP LITERALS: Node structurally skips the `lookup` hook when the host
+  //      is already a numeric literal (verified), so a literal like
+  //      `169.254.169.254` would bypass half 1 entirely. Both the CONNECT and
+  //      plain-HTTP handlers call `filter(port, host)` before dialing, so we
+  //      wrap the caller's filter to also deny blocked IP literals. This is the
+  //      literal half of the deny and covers every dial path.
+  const callerFilter = options.filter;
+  const guardedFilter: HttpProxyServerOptions["filter"] = (port, host, socket) => {
+    const family = isIP(host);
+    if (family !== 0 && isBlockedAddress(host, family)) return false;
+    return callerFilter(port, host, socket);
+  };
   return createHttpProxyServer({
     lookup: createPinnedLookup(),
     ...options,
+    filter: guardedFilter,
   });
 }

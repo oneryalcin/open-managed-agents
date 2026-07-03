@@ -53,11 +53,13 @@ non-empty per-session token and rejects `parentProxy`. Nothing outside the
 5. **`lookup` threading** (plan 0117b, marked `// OMA:`) — a `lookup?: LookupFunction`
    field added to `HttpProxyServerOptions` (http-proxy.ts) and `TerminateTarget`
    (tls-terminate-proxy.ts), a `lookup` param added to `dialDirect`
-   (parent-proxy.ts), and the option threaded to both upstream dial sites
-   (`httpsRequest` on the terminated leg; `netConnect({host,port,lookup})` on the
-   opaque-tunnel leg). This is the seam ADR 0016 §5 predicted: OMA injects a
-   validating `lookup` (`egress/ssrf.ts`) so a hostname resolving to a
-   private/loopback IP is denied and Node connects to the vetted IP.
+   (parent-proxy.ts), and the option threaded to all three upstream dial sites
+   (`httpsRequest` on the terminated leg; the plain-HTTP direct request; and
+   `netConnect({host,port,lookup})` on the opaque-tunnel leg). This is the seam
+   ADR 0016 §5 predicted: OMA injects a validating `lookup` (`egress/ssrf.ts`)
+   so a hostname resolving to a private/loopback IP is denied and Node connects
+   to the vetted IP. (IP *literals* skip the lookup and are handled in
+   `egress/proxy.ts` by wrapping the caller's filter — not a vendored edit.)
 
 All changes are marked `// OMA:` in code (except the mechanical `.js`→`.ts`
 rewrite and the two shim files, which are noted here).

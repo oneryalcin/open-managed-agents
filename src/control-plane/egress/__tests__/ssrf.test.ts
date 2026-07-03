@@ -26,6 +26,10 @@ describe("isBlockedAddress", () => {
       ["fe80::1", 6], // link-local
       ["::ffff:127.0.0.1", 6], // ipv4-mapped loopback
       ["::ffff:10.0.0.1", 6], // ipv4-mapped private
+      ["64:ff9b::7f00:1", 6], // NAT64-embedded 127.0.0.1
+      ["64:ff9b::a00:1", 6], // NAT64-embedded 10.0.0.1
+      ["2002:0a00:0001::", 6], // 6to4-embedded 10.0.0.1
+      ["2001::1", 6], // Teredo
     ];
     for (const [addr, fam] of blocked) {
       expect(isBlockedAddress(addr, fam), `${addr} should be blocked`).toBe(true);
@@ -111,15 +115,74 @@ describe("createEgressProxy default SSRF deny (end-to-end)", () => {
     rmSync(work, { recursive: true, force: true });
   });
 
-  it("allows the hostname at CONNECT but the default lookup blocks the loopback dial (upstream never reached)", async () => {
+  it("allows the hostname at CONNECT but the default lookup blocks the loopback dial (502, upstream never reached)", async () => {
     // CONNECT is allowed by the hostname filter (tunnel opens), then the
     // terminated upstream leg resolves localhost -> loopback and the pinned
-    // lookup denies it, so the proxy returns 5xx and the echo never sees a hit.
+    // lookup denies it, so the proxy returns 502 and the echo never sees a hit.
     const status = await tunnelGetStatus(proxyPort, "localhost", echoPort, ca.certPem, "tok");
-    expect(status).not.toBe(200);
+    expect(status).toBe(502); // specific upstream-dial failure, not just any non-200
     expect(upstreamSeen.length).toBe(0);
   });
 });
+
+describe("createEgressProxy denies blocked IP literals at CONNECT (H1)", () => {
+  // Node skips the dns.lookup hook for IP literals, so the literal half of the
+  // deny lives in the wrapped filter. A permissive caller filter (allow all)
+  // must still not let a private/metadata literal through.
+  let proxy: ReturnType<typeof createEgressProxy>;
+  let proxyPort: number;
+
+  beforeAll(async () => {
+    proxy = createEgressProxy({
+      filter: () => true, // deliberately permissive: the guard must still deny literals
+      proxyAuthToken: "tok",
+    });
+    await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
+    proxyPort = (proxy.address() as { port: number }).port;
+  });
+  afterAll(async () => {
+    await new Promise<void>((r) => proxy.close(() => r()));
+  });
+
+  for (const literal of ["127.0.0.1", "169.254.169.254", "10.0.0.1", "::1", "::ffff:10.0.0.1"]) {
+    it(`denies CONNECT to blocked literal ${literal} (403) despite an allow-all filter`, async () => {
+      const status = await tunnelConnectStatus(proxyPort, literal, 80, "tok");
+      expect(status).toBe(403);
+    });
+  }
+  // A public literal is NOT denied by the guard: that path is covered by the
+  // isBlockedAddress unit battery (8.8.8.8 etc. → false) without a flaky real
+  // network dial. The guard is exactly `if (blocked) deny else callerFilter`.
+});
+
+// CONNECT-only helper: returns the CONNECT response status (never opens TLS).
+function tunnelConnectStatus(
+  proxyPort: number,
+  host: string,
+  port: number,
+  token: string,
+  timeoutMs = 8000,
+): Promise<number> {
+  // IPv6 literals must be bracketed in a CONNECT target ([::1]:80).
+  const target = host.includes(":") ? `[${host}]` : host;
+  return new Promise((resolve, reject) => {
+    const sock = netConnect(proxyPort, "127.0.0.1", () => {
+      const auth = `\r\nProxy-Authorization: Basic ${Buffer.from(`srt:${token}`).toString("base64")}`;
+      sock.write(`CONNECT ${target}:${port} HTTP/1.1\r\nHost: ${target}:${port}${auth}\r\n\r\n`);
+    });
+    const timer = setTimeout(() => { sock.destroy(); resolve(-1); }, timeoutMs);
+    let buf = "";
+    sock.on("data", (d) => {
+      buf += d.toString("latin1");
+      if (buf.includes("\r\n\r\n")) {
+        clearTimeout(timer);
+        sock.destroy();
+        resolve(Number(buf.match(/^HTTP\/1\.1 (\d+)/)?.[1] ?? 0));
+      }
+    });
+    sock.on("error", (e) => { clearTimeout(timer); reject(e); });
+  });
+}
 
 // Manual CONNECT -> TLS -> GET /, returns the inner HTTP status (0 if the
 // tunnel never opened).

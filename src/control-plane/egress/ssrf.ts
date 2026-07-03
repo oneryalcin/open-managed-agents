@@ -50,6 +50,17 @@ function buildBlockList(): BlockList {
   b.addSubnet("fe80::", 10, "ipv6"); // link-local
   b.addSubnet("ff00::", 8, "ipv6"); // multicast
   b.addSubnet("2001:db8::", 32, "ipv6"); // documentation
+  // Ranges that embed an IPv4 destination inside a global-scope IPv6 literal.
+  // A hostname resolving to one of these could reach a private IPv4 through a
+  // NAT64/6to4 gateway while the IPv6 address itself looks public. OMA does not
+  // egress via these transition mechanisms, so deny them outright (targets are
+  // reached over native dual-stack). If NAT64-only egress is ever needed, the
+  // enhancement is to decode the embedded IPv4 and run it through the IPv4
+  // rules instead of blanket-denying.
+  b.addSubnet("64:ff9b::", 96, "ipv6"); // NAT64 well-known prefix
+  b.addSubnet("64:ff9b:1::", 48, "ipv6"); // NAT64 local-use prefix
+  b.addSubnet("2002::", 16, "ipv6"); // 6to4
+  b.addSubnet("2001::", 32, "ipv6"); // Teredo
   return b;
 }
 

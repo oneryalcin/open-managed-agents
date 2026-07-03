@@ -413,6 +413,10 @@ export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
             path: url.pathname + url.search,
             method: req.method,
             headers: fwdHeaders,
+            // OMA: validating lookup on the plain-HTTP direct dial too, so a
+            // DNS name resolving to a private IP is denied here as well as on
+            // the CONNECT/terminated paths.
+            ...(options.lookup ? { lookup: options.lookup } : {}),
           },
           proxyRes => {
             res.writeHead(proxyRes.statusCode!, stripHopByHop(proxyRes.headers))
