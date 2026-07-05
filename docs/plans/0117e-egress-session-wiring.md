@@ -208,8 +208,32 @@ regardless), value write-only:
 - Register in `app.ts` alongside the other five route prefixes (`:186`,
   `isManagedAgentsRoute` `:429`), add `secrets` to `ControlPlaneServices`
   (`app.ts:76`).
-- **Tests:** put→list→reveal-not-exposed→delete; no-key deployment returns the
-  guard error; cross-workspace isolation (workspace A cannot see B's secret).
+
+**Authorization model (made explicit — Codex adversarial review, round on the
+plan).** OMA has a **single auth tier**: an `x-api-key` resolves to a
+`workspaceId` (`app.ts:158`, `workspaces/store.ts:157`); there is **no
+operator/admin tier** distinct from the workspace key, and every managed-agents
+route (agents, environments, sessions, files) is gated identically. Consequences
+that make workspace-scoping the correct boundary here — not a gap:
+- The **untrusted party never holds the workspace key.** The sandboxed agent
+  receives only sentinels (0117c/d); it cannot present `x-api-key` and cannot
+  reach `/v1/secrets`. There is no lesser-privileged client *below* the
+  workspace key to escalate from.
+- Managing secret **values** is the **same trust level** as managing
+  `environment.config.networking`, which the same key holder already fully
+  controls — that config names the allowlist AND which secret injects into which
+  endpoint. A distinct operator gate for secrets alone would be inconsistent
+  with the entire rest of the surface and is **out of scope**; if OMA later
+  introduces sub-workspace roles, secrets and environments adopt them together.
+- Secret-specific hardening that DOES apply: values are **write-only** (never
+  returned by GET/list — metadata only, so a stolen read cannot exfiltrate a
+  credential), and every route **4xx**s when no master key is configured.
+- **Tests (add the authz-explicit ones):** cross-workspace isolation — workspace
+  A's key cannot POST/GET/DELETE workspace B's secrets; a secret value never
+  appears in any response body (put→list→delete); the no-master-key guard error.
+  (An "agent cannot reach the API" test is unnecessary because the agent
+  structurally has no key — but state the property in the PR description.)
+
 - *Scope note:* if wire-compatibility with a hosted secrets API shape matters,
   confirm the endpoint/field names against the reference before finalizing;
   otherwise keep it OMA-minimal.
