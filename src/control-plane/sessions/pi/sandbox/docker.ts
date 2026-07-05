@@ -64,6 +64,13 @@ export interface DockerSandboxOptions {
   maxOutputBytes?: number;
   extraLabels?: Record<string, string>;
   reapStaleContainersOlderThanMs?: number;
+  /**
+   * Per-session proxy-only egress (plan 0117d). When present, the sandbox
+   * joins the sidecar's --internal network with the CA + proxy wired in, and
+   * the sidecar is torn down when the sandbox is disposed. Absent -> the
+   * container stays at --network none.
+   */
+  egress?: { wiring: SandboxEgressWiring; dispose: () => void };
 }
 
 export interface DockerSandboxReaperOptions {
@@ -171,6 +178,7 @@ export async function createDockerSandboxProvider(
       pidsLimit: resolved.pidsLimit,
       tmpfsSize: resolved.tmpfsSize,
       outputsTmpfsSize: resolved.outputsTmpfsSize,
+      egress: opts.egress?.wiring,
       labels: {
         [SANDBOX_LABEL_KEY]: SANDBOX_LABEL_VALUE,
         [OWNER_LABEL_KEY]: OWNER_LABEL_VALUE,
@@ -507,9 +515,32 @@ export async function createDockerSandboxProvider(
         killProcessGroup(pid);
       }
       forceRemoveDockerContainer(resolved.dockerCommand, containerName);
+      // Tear down the per-session sidecar + its --internal network last, so a
+      // granted egress session leaves no proxy container or network behind.
+      opts.egress?.dispose();
     },
   };
 }
+
+/**
+ * Proxy-only egress wiring (plan 0117d). When present, the sandbox joins the
+ * per-session --internal network (its sole route out is the sidecar) instead
+ * of `--network none`, trusts the sidecar's MITM CA, and points its HTTP
+ * clients at the proxy. Absent → the container stays fully network-isolated.
+ */
+export interface SandboxEgressWiring {
+  /** Per-session --internal network the sidecar is dual-homed on. */
+  networkName: string;
+  /** Host dir holding ca.crt; bind-mounted read-only at /etc/oma. */
+  caCertDirHostPath: string;
+  /** `http://srt:<token>@<sidecar>:<port>` — auth token in the password slot. */
+  proxyUrl: string;
+  /** Per-session sentinels (env var -> sentinel) the agent's tools see. */
+  sandboxEnv: Record<string, string>;
+}
+
+const SANDBOX_CA_MOUNT = "/etc/oma";
+const SANDBOX_CA_CERT_PATH = "/etc/oma/ca.crt";
 
 export function buildDockerRunArgs(opts: {
   containerName: string;
@@ -523,6 +554,7 @@ export function buildDockerRunArgs(opts: {
   tmpfsSize: string;
   outputsTmpfsSize?: string;
   labels?: Record<string, string>;
+  egress?: SandboxEgressWiring;
 }): string[] {
   assertTmpfsMemoryHeadroom(
     opts.memory,
@@ -537,6 +569,9 @@ export function buildDockerRunArgs(opts: {
   const outputsPath = opts.outputsPath ?? DEFAULT_OUTPUTS_PATH;
   const outputsTmpfsSize =
     opts.outputsTmpfsSize ?? DEFAULT_OUTPUTS_TMPFS_SIZE;
+  // Default deny (ADR 0016 §2): no egress wiring -> --network none, no proxy.
+  const network = opts.egress ? opts.egress.networkName : "none";
+  const egressArgs = opts.egress ? buildEgressRunArgs(opts.egress) : [];
   return [
     "run",
     "-d",
@@ -544,7 +579,8 @@ export function buildDockerRunArgs(opts: {
     opts.containerName,
     ...labels,
     "--network",
-    "none",
+    network,
+    ...egressArgs,
     "--cpus",
     opts.cpus,
     "--memory",
@@ -570,6 +606,30 @@ export function buildDockerRunArgs(opts: {
     "tail",
     "-f",
     "/dev/null",
+  ];
+}
+
+// Trust bundle + proxy env for an egress-granted sandbox. The trust vars point
+// at the sidecar's CA so the proxy can terminate TLS; the proxy vars route the
+// sandbox's HTTP clients through it. Trust/proxy vars win over sentinels so a
+// user-named sentinel cannot shadow the boundary wiring.
+function buildEgressRunArgs(egress: SandboxEgressWiring): string[] {
+  const env: Record<string, string> = {
+    ...egress.sandboxEnv,
+    SSL_CERT_FILE: SANDBOX_CA_CERT_PATH,
+    NODE_EXTRA_CA_CERTS: SANDBOX_CA_CERT_PATH,
+    GIT_SSL_CAINFO: SANDBOX_CA_CERT_PATH,
+    CURL_CA_BUNDLE: SANDBOX_CA_CERT_PATH,
+    REQUESTS_CA_BUNDLE: SANDBOX_CA_CERT_PATH,
+    HTTPS_PROXY: egress.proxyUrl,
+    HTTP_PROXY: egress.proxyUrl,
+    https_proxy: egress.proxyUrl,
+    http_proxy: egress.proxyUrl,
+  };
+  return [
+    "-v",
+    `${egress.caCertDirHostPath}:${SANDBOX_CA_MOUNT}:ro`,
+    ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]),
   ];
 }
 
