@@ -31,6 +31,16 @@ import {
   egressProxyUrl,
 } from "../docker-egress.ts";
 import { resolveSessionEgressBundle } from "../../../../egress/policy.ts";
+import { DatabaseSync } from "node:sqlite";
+import { createSessionEgressBundleResolver } from "../../../../app.ts";
+import { SqliteEnvironmentStore } from "../../../../environments/store.ts";
+import {
+  generateMasterKey,
+  parseMasterKey,
+} from "../../../../secrets/master-key.ts";
+import { SqliteSecretsStore } from "../../../../secrets/store.ts";
+import { SqliteSessionStore } from "../../../store.ts";
+import type { JsonObject } from "../../../../../types/json.ts";
 
 describe("Docker sandbox provider command construction", () => {
   it("constructs the Docker isolation bar explicitly", () => {
@@ -744,6 +754,124 @@ describe("Docker sandbox egress confinement (plan 0117d, ADR 0016 §2/§3)", () 
       provider.dispose(); // also disposes the sidecar + its --internal network
     }
   });
+});
+
+describe("Wired egress session path (plan 0117e-4)", () => {
+  // The full production wiring in real Docker: stores -> the app.ts bundle
+  // resolver -> the docker FACTORY closure (not a hand-built sidecar) ->
+  // sidecar + sandbox. Proves the granted session gets a sentinel (never the
+  // secret), trust + proxy wiring, and live CONNECT-layer enforcement with
+  // the per-session token — while a sibling session with no networking stays
+  // at --network none through the same factory (wired default-deny). The
+  // "upstream saw the REAL token" half of 0117e-4 lives in
+  // egress-session-wiring.test.ts (in-process twin — the sidecar's SSRF deny
+  // has no private-IP test override by design, so no local upstream here).
+  dockerIt("factory-wired sandbox enforces egress; no-networking sibling stays dark", async () => {
+    const db = new DatabaseSync(":memory:");
+    const sessions = new SqliteSessionStore(db);
+    const environments = new SqliteEnvironmentStore(db);
+    const secrets = new SqliteSecretsStore(
+      db,
+      parseMasterKey(generateMasterKey(), "test"),
+    );
+    secrets.put("wrk_default", "github", "REAL-TOKEN-0117e");
+    const now = new Date().toISOString();
+    const seed = (envId: string, sessionId: string, config: JsonObject) => {
+      environments.create({
+        row: {
+          id: envId, workspace_id: "wrk_default", type: "environment",
+          name: envId, config, created_at: now, updated_at: now,
+          archived_at: null,
+        },
+      });
+      sessions.create({
+        row: {
+          id: sessionId, workspace_id: "wrk_default", type: "session",
+          agent: { type: "agent", id: "agent_seed", version: 1 },
+          environment_id: envId, status: "idle", title: null, metadata: {},
+          created_at: now, updated_at: now, archived_at: null, usage: null,
+          resources: [],
+        },
+      });
+    };
+    const suffix = Math.random().toString(36).slice(2, 8);
+    seed(`env_wired_${suffix}`, `sesn_wired_${suffix}`, {
+      networking: {
+        allow: [{ host: "example.com", port: 443 }],
+        credentials: [
+          {
+            secret: "github", env: "GITHUB_TOKEN", host: "example.com",
+            port: 443, pathPrefix: "/", header: "authorization",
+          },
+        ],
+      },
+    });
+    seed(`env_dark_${suffix}`, `sesn_dark_${suffix}`, { type: "cloud" });
+
+    const factory = createDockerSandboxProviderFactory({
+      operationTimeoutMs: 20_000,
+      egress: {
+        sidecarImage: "node:24-slim",
+        sidecarRepoMount: process.cwd(),
+        resolveEgressBundle: createSessionEgressBundleResolver({
+          sessions, environments, secrets,
+        }),
+      },
+    });
+    const run = async (
+      provider: Awaited<ReturnType<typeof factory>>,
+      command: string,
+    ): Promise<string> => {
+      const chunks: Buffer[] = [];
+      await provider.operations.bash.exec(command, "/workspace", {
+        env: {},
+        onData: (c) => chunks.push(c),
+        timeout: 15,
+      });
+      return Buffer.concat(chunks).toString("utf8");
+    };
+
+    const granted = await factory("wrk_default", `sesn_wired_${suffix}`);
+    try {
+      // The agent's env holds the per-session sentinel, never the secret.
+      const tokenEnv = await run(granted, 'printf "%s" "$GITHUB_TOKEN"');
+      expect(tokenEnv).toMatch(/^oma-sentinel-[0-9a-f]{32}$/);
+      expect(tokenEnv).not.toContain("REAL-TOKEN");
+      // Trust + proxy wiring landed.
+      expect(await run(granted, "head -1 /etc/oma/ca.crt")).toContain(
+        "BEGIN CERTIFICATE",
+      );
+      expect(await run(granted, 'printf "%s" "$HTTPS_PROXY"')).toMatch(
+        /^http:\/\/srt:[0-9a-f]+@oma-egress-proxy-/,
+      );
+
+      // CONNECT-layer enforcement with the per-session token, derived
+      // in-sandbox from HTTPS_PROXY exactly as a real client would.
+      const connect = (host: string, withAuth: boolean): string =>
+        'H="${HTTPS_PROXY#http://}"; CRED="${H%%@*}"; HP="${H#*@}"; ' +
+        'PH="${HP%%:*}"; PP="${HP##*:}"; ' +
+        'AUTH=$(printf "%s" "$CRED" | base64 | tr -d "\\n"); ' +
+        `exec 3<>/dev/tcp/$PH/$PP && printf "CONNECT ${host}:443 HTTP/1.1\\r\\n` +
+        (withAuth ? 'Proxy-Authorization: Basic $AUTH\\r\\n' : "") +
+        `Host: ${host}:443\\r\\n\\r\\n" >&3 && head -1 <&3`;
+      expect(await run(granted, connect("example.com", false))).toContain("407");
+      expect(await run(granted, connect("www.google.com", true))).toContain("403");
+      expect(await run(granted, connect("example.com", true))).toContain("200");
+
+      // Wired default-deny: the SAME factory leaves a no-networking session
+      // at --network none — no proxy env, no CA mount, no sidecar.
+      const dark = await factory("wrk_default", `sesn_dark_${suffix}`);
+      try {
+        expect(await run(dark, 'printf "%s" "$HTTPS_PROXY"')).toBe("");
+        expect(await run(dark, 'ls /etc/oma 2>&1; true')).not.toContain("ca.crt");
+      } finally {
+        dark.dispose();
+      }
+    } finally {
+      granted.dispose(); // tears down the sidecar + --internal network
+      db.close();
+    }
+  }, 120_000);
 });
 
 describe("Docker sandbox provider integration", () => {

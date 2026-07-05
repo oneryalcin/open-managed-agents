@@ -4,11 +4,23 @@
 // session-create gate rejects egress-granting environments the deployment
 // cannot honor, while hosted-shape networking keeps today's behavior.
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer as createHttpsServer } from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   createDeploymentControlPlane,
   createSessionEgressBundleResolver,
 } from "../app.ts";
+import { buildHooksFromBundle } from "../egress/policy.ts";
+import {
+  createEgressProxy,
+  createMitmCA,
+  disposeMitmCA,
+} from "../egress/proxy.ts";
+import { tunnelRequest } from "../egress/__tests__/tunnel-helpers.ts";
 import { generateMasterKey, parseMasterKey } from "../secrets/master-key.ts";
 import { SqliteSecretsStore } from "../secrets/store.ts";
 import { SqliteEnvironmentStore } from "../environments/store.ts";
@@ -156,6 +168,105 @@ describe("fail-closed session-create gate", () => {
     const body = (await res.json()) as ApiErrorBody;
     expect(body.error.message).toContain("invalid networking config");
     plane.stores.close();
+  });
+});
+
+describe("wired bundle injection e2e (plan 0117e-4, in-process twin of the sidecar)", () => {
+  // The real sidecar's SSRF deny (0117b) is absolute — no private-IP upstream,
+  // no test override (0117d hardening). So the "upstream saw the REAL token"
+  // proof runs the WIRED bundle (real stores -> real resolver) through an
+  // in-process proxy built by buildHooksFromBundle — the exact hook code the
+  // sidecar runs — against a local HTTPS upstream. The gated Docker test in
+  // docker.test.ts proves the sidecar enforces this same bundle at the
+  // CONNECT layer; together they cover the wired path end to end.
+  it("injects the real secret in scope and denies off-path/off-method sentinels", async () => {
+    const work = mkdtempSync(join(tmpdir(), "oma-wired-e2e-"));
+    execFileSync("openssl", [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+      "-keyout", join(work, "k.pem"), "-out", join(work, "c.pem"),
+      "-days", "2", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
+    ]);
+    const upstreamSeen: Array<string | undefined> = [];
+    const echo = createHttpsServer(
+      { key: readFileSync(join(work, "k.pem")), cert: readFileSync(join(work, "c.pem")) },
+      (req, res) => {
+        upstreamSeen.push(req.headers.authorization);
+        res.end("ok");
+      },
+    );
+    await new Promise<void>((r) => echo.listen(0, "127.0.0.1", r));
+    const echoPort = (echo.address() as { port: number }).port;
+
+    const fixture = makeResolverFixture();
+    fixture.secrets.put("wrk_default", "github", "REAL-TOKEN");
+    const sessionId = fixture.seedSession({
+      networking: {
+        allow: [{ host: "localhost", port: echoPort }],
+        credentials: [
+          {
+            secret: "github",
+            env: "GITHUB_TOKEN",
+            host: "localhost",
+            port: echoPort,
+            pathPrefix: "/api",
+            methods: ["GET"],
+            header: "authorization",
+          },
+        ],
+      },
+    });
+    const resolved = (await fixture.resolve("wrk_default", sessionId))!;
+    const sentinel = resolved.sandboxEnv.GITHUB_TOKEN!;
+
+    const ca = createMitmCA({});
+    const proxy = createEgressProxy({
+      ...buildHooksFromBundle(resolved.bundle),
+      mitmCA: ca,
+      tlsTerminateUpstreamCA: readFileSync(join(work, "c.pem")),
+      proxyAuthToken: resolved.bundle.proxyAuthToken,
+      dangerouslyAllowPrivateAddressesForTest: true,
+    });
+    await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
+    const proxyPort = (proxy.address() as { port: number }).port;
+    const token = resolved.bundle.proxyAuthToken;
+
+    try {
+      // In scope: the agent sends the sentinel; the upstream sees the REAL
+      // token; neither the sentinel nor the secret round-trips to the agent.
+      const inScope = await tunnelRequest({
+        proxyPort, host: "localhost", port: echoPort, ca: ca.certPem,
+        headers: { Authorization: `Bearer ${sentinel}` },
+        token, path: "/api/data",
+      });
+      expect(inScope.httpStatus).toBe(200);
+      expect(upstreamSeen.at(-1)).toBe("Bearer REAL-TOKEN");
+
+      // Off-path: the sentinel cannot be steered to an ungranted endpoint.
+      const offPath = await tunnelRequest({
+        proxyPort, host: "localhost", port: echoPort, ca: ca.certPem,
+        headers: { Authorization: `Bearer ${sentinel}` },
+        token, path: "/other",
+      });
+      expect(offPath.httpStatus).toBe(403);
+
+      // Off-method: same grant, wrong verb.
+      const offMethod = await tunnelRequest({
+        proxyPort, host: "localhost", port: echoPort, ca: ca.certPem,
+        headers: { Authorization: `Bearer ${sentinel}` },
+        token, path: "/api/data", method: "POST",
+      });
+      expect(offMethod.httpStatus).toBe(403);
+
+      // Only the in-scope request ever reached the upstream.
+      expect(upstreamSeen).toHaveLength(1);
+      expect(upstreamSeen[0]).not.toContain(sentinel);
+    } finally {
+      await new Promise<void>((r) => proxy.close(() => r()));
+      await new Promise<void>((r) => echo.close(() => r()));
+      await disposeMitmCA(ca);
+      rmSync(work, { recursive: true, force: true });
+      fixture.close();
+    }
   });
 });
 
