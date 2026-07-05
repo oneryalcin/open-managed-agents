@@ -52,6 +52,8 @@ import {
   type AdmissionLimits,
   type DeploymentAdmissionEnv,
 } from "./admission.ts";
+import { secretsRoutes } from "./secrets/routes.ts";
+import { DefaultSecretsService, type SecretsService } from "./secrets/service.ts";
 import { sessionsRoutes } from "./sessions/routes.ts";
 import { DefaultSessionService } from "./sessions/service.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
@@ -77,6 +79,9 @@ export interface ControlPlaneServices {
   agents: AgentService;
   environments: EnvironmentService;
   files?: FileService;
+  // Absent = no secrets backend wired; the routes still register and return
+  // the clear "requires a master key" 400 (never a confusing 404).
+  secrets?: SecretsService;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
   auth?: ControlPlaneAuth;
@@ -192,6 +197,10 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
       services.admission,
     ),
   );
+  app.route(
+    "/v1/secrets",
+    secretsRoutes(services.secrets ?? new DefaultSecretsService(undefined)),
+  );
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route(
     "/v1/sessions/:sessionId/events",
@@ -287,6 +296,7 @@ export function createDeploymentControlPlane(
     agents: new DefaultAgentService(stores.agents),
     environments: new DefaultEnvironmentService(stores.environments),
     files: new DefaultFileService(stores.files),
+    secrets: new DefaultSecretsService(stores.secrets),
     sessions: new DefaultSessionService(
       stores.sessions,
       stores.agents,
@@ -430,6 +440,9 @@ function isManagedAgentsRoute(path: string): boolean {
     "/v1/agents",
     "/v1/environments",
     "/v1/files",
+    // Secrets MUST be auth-gated: leaving it off this list would skip the
+    // auth middleware and fall back to wrk_default (plan 0117e-2).
+    "/v1/secrets",
     "/v1/sessions",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
