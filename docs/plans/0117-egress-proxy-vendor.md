@@ -112,7 +112,7 @@ unhandled rejection).
 per-session proxy lifecycle. **Not here** (later): a secrets HTTP/management
 API.
 
-### 0117d — Wire proxy-only egress into the Docker provider
+### 0117d — Wire proxy-only egress into the Docker provider — ✅ DONE (boundary + confinement test)
 
 Replace `--network none` with a proxy-only internal network for environments
 that grant egress (default stays `--network none`, ADR 0016 §2). Inject the
@@ -120,13 +120,123 @@ per-session MITM CA into the sandbox trust bundle and the `HTTPS_PROXY` +
 per-session proxy-auth token. **The confinement test ADR 0016 owes**: a client
 with proxy env removed / using raw sockets cannot egress directly.
 
+**Topology — per-session dual-homed proxy sidecar** (probed 2026-07-05, all
+four Docker network modes tested). An in-process host proxy is unreachable
+from a confined sandbox: `--internal` drops even host-gateway traffic (good
+for confinement, but the sandbox can't reach a host process), and a plain
+bridge reaches the host but leaves the whole internet open (`INTERNET_OPEN`
+in the probe). The only mode giving *both* reachability and confinement is a
+**dual-homed proxy container**: the vendored `createEgressProxy` runs in its
+own container attached to a per-session `--internal` network (sandbox side)
+*and* a bridge (upstream side); the sandbox joins the internal-only network,
+whose sole route out is the proxy. Probe-confirmed: sandbox reaches the
+sidecar (`PORT_OPEN`) while a direct dial to `1.1.1.1:80` is dropped. Chosen
+over (a) UDS+in-container relay on `--network none` (operationally heavy: a
+relay binary + supervision inside every egress sandbox) and (b) control-plane
+dual-homing itself (puts the session-owning, secret-holding, docker.sock
+control plane on an attacker-controlled per-session network — wrong trust
+boundary; also only works when OMA itself is containerized). The sidecar
+keeps the control plane **off** the sandbox network.
+
+**The proxy leaves the control-plane process.** So the JS hook closures from
+`resolveSessionEgress` can't cross the boundary — the sidecar rebuilds them
+from serializable data. New seam in `policy.ts`:
+- `SessionEgressBundle` — a plain serializable object: `{ policy, grants
+  (with per-session sentinels), secrets (secretName → real value, resolved
+  ONCE at launch), proxyAuthToken, listenPort }`.
+- `resolveSessionEgressBundle({ environmentConfig, revealSecret })` →
+  `{ sandboxEnv, bundle }` (control-plane side): parse, mint sentinels,
+  resolve the session's granted secrets once. Returns undefined for
+  no-egress (→ `--network none`).
+- `buildHooksFromBundle(bundle)` (sidecar side): `revealSecret = (name) =>
+  bundle.secrets[name]`, then the *unchanged* `buildHooks`.
+The existing closure-based `resolveSessionEgress` stays for in-process use
+and its tests; both share `buildHooks`.
+
+**Secret + CA delivery (no plaintext via env, no key leaves the sidecar).**
+Per session, control-plane creates an OMA-owned host dir `oma-egress-<sid>/`.
+The **sidecar generates its own MITM CA** (`createMitmCA` with no paths → it
+mints an ephemeral CA), writes `ca.crt` + a `ready` marker into that dir; its
+CA *private key never leaves the sidecar container*. Control-plane writes the
+resolved `SessionEgressBundle` as `bundle.json` (mode 0600) into the same dir,
+bind-mounted **only** into the sidecar (never the sandbox). Env is not used
+for secrets — `docker inspect` exposes container env. Control-plane waits for
+`ready`, then bind-mounts `ca.crt` (read-only) into the sandbox trust bundle
+and sets `SSL_CERT_FILE` / `NODE_EXTRA_CA_CERTS` / `GIT_SSL_CAINFO` +
+`HTTPS_PROXY=http://<token>@proxy:PORT` + the proxy-auth token.
+**Tradeoff (documented):** secrets are resolved at launch, so mid-session
+master-key rotation is not picked up until the next session. Acceptable for
+bounded sessions.
+
+**Proxy entrypoint** `src/egress-proxy-main.ts` — reuses the appliance
+`node:24-slim` image with a different `CMD` (no second image to ship): reads
+`bundle.json`, generates the CA, `buildHooksFromBundle`, `createEgressProxy`,
+listens. Sidecar carries reaper labels + is torn down with the session
+(container + both networks).
+
+**Lifecycle (per egress-granted session).** create `oma-egress-<sid>`
+(`--internal`) → launch sidecar dual-homed (internal + bridge) → wait `ready`
+→ run sandbox on the internal net only, CA + proxy env injected → teardown
+removes sidecar + networks. Default (no networking config) is untouched:
+`--network none`, no sidecar, no networks.
+
+**What shipped.** `policy.ts` bundle seam (`SessionEgressBundle`,
+`resolveSessionEgressBundle`, `buildHooksFromBundle`); `src/egress-proxy-main.ts`
+sidecar entrypoint; `sandbox/docker-egress.ts` (`createEgressSidecar` +
+per-session network/sidecar lifecycle + `reapEgressSidecars`);
+`buildDockerRunArgs` egress mode (network swap + CA mount + trust/proxy/sentinel
+env) threaded through `createDockerSandboxProvider` (which disposes the sidecar
+on teardown). Tests: bundle-seam round-trip + fail-closed (5), run-args egress
+vs default-deny (2), sidecar arg construction (3), the sidecar's trust-bundle
+publish (1), the failure-cleanup path (1), the age-bounded reaper temp sweep (1),
+and the **gated confinement integration test** — a real `--internal` sandbox
+proves proxy-only egress at the CONNECT layer (407 no-auth, 403 off-allowlist,
+200 in-allowlist) and that a raw socket to a public IP is dropped;
+mutation-checked (sandbox on `bridge` breaks it). Design de-risked by two
+live-Docker probes (2026-07-05): the four network-mode reachability/confinement
+matrix, and the sidecar entrypoint running end-to-end in a container (MITM
+termination + CA trust + enforcement).
+
+**Review fixes (two Codex rounds, folded in, each mutation-checked).** Round 1:
+(1) a sandbox-start failure now disposes the already-created sidecar — else its
+container + the resolved-secret bundle leak; (2) the sidecar publishes the full
+**trust bundle** (MITM CA + public roots), not just the CA: the sandbox trust
+env vars *replace* the client store, so CA-only would break TLS verification for
+any opaque-tunnel host the proxy does not terminate; (3) crash cleanup hardened —
+`bundle.json` is unlinked the instant the sidecar signals ready (secrets at-rest
+window ~1s), the `--internal` networks are labelled + age-reaped with the sidecar
+containers, stale `oma-egress-*` temp roots are swept, and the egress reaper is
+wired into the same startup sweep as the container reaper. Round 2 (the sidecar
+IS the boundary now): (4) **least-privilege hardening** to the sandbox standard —
+`--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only` root, a small
+`--tmpfs /tmp` (CA minting) + `HOME=/tmp`, non-root `--user <control-plane
+uid:gid>` (so it can still read the 0600 bundle it must, without root), and
+memory/pids limits; probe-verified the hardened sidecar still boots + enforces
+407/403/200. (5) the proxy-auth token is percent-encoded in the proxy URL and
+constrained to a URL-safe charset at the seam, so a delimiter can't malform the
+URL or alter the credential. (6) caller labels can no longer shadow the reserved
+reaper/ownership labels (`sidecarLabels` applies reserved keys last).
+
+**Deliberately NOT in this slice — the session integration (next).** Nothing
+yet calls `resolveSessionEgressBundle`/`createEgressSidecar` from the *live*
+session runner, because that is where OMA first *consumes* secrets: it needs a
+per-workspace `SecretsStore` (0118) stood up in the deployment/workspace layer
+and `environment.config.networking` threaded into session start. That is a
+distinct slice (call it 0117e / "secrets consumption") — the egress boundary and
+its confinement proof land here first, on their own, behind a gated test.
+Follow-up to file: a dedicated egress-upstream bridge so sidecars are not
+adjacent on the default `bridge`.
+
 ## Tests owed (from ADR 0016 validation)
 
-- route-level confinement (0117d): proxy env removed / raw socket cannot egress;
-- private-IP deny actually denies, incl. the rebinding flip (0117b);
+- route-level confinement (0117d): proxy env removed / raw socket cannot egress
+  — ✅ DONE (gated confinement test: raw dial to a public IP is dropped by the
+  `--internal` net; egress works only through the auth'd, allowlisting proxy);
+- private-IP deny actually denies, incl. the rebinding flip (0117b) — ✅;
 - verify-before-inject holds in the wired path (carry probe 44 (g) into a
-  contract test);
-- path/method-scoped inject grants deny an off-path request (0117c).
+  contract test) — proven in the 0117d container probe (CA-verified MITM leaf);
+  a contract test in the *wired session* path lands with 0117e;
+- path/method-scoped inject grants deny an off-path request (0117c) — ✅.
 
 ## Non-goals
 

@@ -7,10 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  buildHooksFromBundle,
   EgressPolicyError,
   parseNetworkingConfig,
   pathWithinPrefix,
   resolveSessionEgress,
+  resolveSessionEgressBundle,
 } from "../policy.ts";
 import { createEgressProxy, createMitmCA, disposeMitmCA, type MitmCA } from "../proxy.ts";
 import { absoluteFormProxyRequest, rawTunnel, tunnelRequest } from "./tunnel-helpers.ts";
@@ -205,6 +207,109 @@ describe("mutateHeaders scope guard (defense in depth)", () => {
     };
     egress.hooks.mutateHeaders!(headers, "api.x", context);
     expect(headers.authorization).toBeUndefined();
+  });
+});
+
+describe("resolveSessionEgressBundle + buildHooksFromBundle (sidecar seam, 0117d)", () => {
+  const config = {
+    networking: {
+      allow: [{ host: "api.x", pathPrefix: "/api/repos" }],
+      credentials: [
+        {
+          secret: "gh",
+          env: "TOKEN",
+          host: "api.x",
+          pathPrefix: "/api/repos",
+          methods: ["GET"],
+        },
+      ],
+    },
+  };
+
+  it("returns undefined when the environment grants no egress (default deny holds)", () => {
+    expect(
+      resolveSessionEgressBundle({
+        environmentConfig: {},
+        revealSecret: () => undefined,
+        listenPort: 8080,
+        proxyAuthToken: "tok",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects an empty proxy auth token (the vendored proxy is fail-open without one)", () => {
+    expect(() =>
+      resolveSessionEgressBundle({
+        environmentConfig: config,
+        revealSecret: () => "REAL",
+        listenPort: 8080,
+        proxyAuthToken: "  ",
+      }),
+    ).toThrow(EgressPolicyError);
+  });
+
+  it("mints sentinels into both the sandbox env and the bundle grants, resolving secrets once", () => {
+    let reveals = 0;
+    const resolved = resolveSessionEgressBundle({
+      environmentConfig: config,
+      revealSecret: (name) => {
+        reveals += 1;
+        return name === "gh" ? "REAL" : undefined;
+      },
+      listenPort: 8080,
+      proxyAuthToken: "tok",
+    })!;
+    const sentinel = resolved.sandboxEnv["TOKEN"]!;
+    expect(sentinel).toMatch(/^oma-sentinel-[0-9a-f]{32}$/);
+    // The sidecar's grant must carry the SAME sentinel the sandbox holds.
+    expect(resolved.bundle.grants[0]!.sentinel).toBe(sentinel);
+    expect(resolved.bundle.secrets).toEqual({ gh: "REAL" });
+    expect(resolved.bundle.proxyAuthToken).toBe("tok");
+    expect(resolved.bundle.listenPort).toBe(8080);
+    expect(reveals).toBe(1); // resolved once at launch, not per request
+  });
+
+  it("round-trips: hooks rebuilt from the serialized bundle inject the real secret in scope", () => {
+    const resolved = resolveSessionEgressBundle({
+      environmentConfig: config,
+      revealSecret: () => "REAL",
+      listenPort: 8080,
+      proxyAuthToken: "tok",
+    })!;
+    // Serialize and rebuild exactly as the sidecar does.
+    const bundle = JSON.parse(JSON.stringify(resolved.bundle));
+    const hooks = buildHooksFromBundle(bundle);
+    const headers: Record<string, string | string[] | undefined> = {
+      authorization: `Bearer ${resolved.sandboxEnv["TOKEN"]}`,
+    };
+    hooks.mutateHeaders!(headers, "api.x", {
+      method: "GET",
+      path: "/api/repos/oma",
+      port: 443,
+    });
+    expect(headers.authorization).toBe("Bearer REAL");
+  });
+
+  it("a grant whose secret cannot be revealed is absent from the bundle and stripped (fail closed survives serialization)", () => {
+    const resolved = resolveSessionEgressBundle({
+      environmentConfig: config,
+      revealSecret: () => undefined, // deleted secret / retired key
+      listenPort: 8080,
+      proxyAuthToken: "tok",
+    })!;
+    expect(resolved.bundle.secrets).toEqual({});
+    const hooks = buildHooksFromBundle(
+      JSON.parse(JSON.stringify(resolved.bundle)),
+    );
+    const headers: Record<string, string | string[] | undefined> = {
+      authorization: `Bearer ${resolved.sandboxEnv["TOKEN"]}`,
+    };
+    hooks.mutateHeaders!(headers, "api.x", {
+      method: "GET",
+      path: "/api/repos/oma",
+      port: 443,
+    });
+    expect(headers.authorization).toBeUndefined(); // never the sentinel, never a secret
   });
 });
 

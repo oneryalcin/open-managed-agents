@@ -26,6 +26,11 @@ import {
   filterDockerEnv,
   reapDockerSandboxContainers,
 } from "../docker.ts";
+import {
+  createEgressSidecar,
+  egressProxyUrl,
+} from "../docker-egress.ts";
+import { resolveSessionEgressBundle } from "../../../../egress/policy.ts";
 
 describe("Docker sandbox provider command construction", () => {
   it("constructs the Docker isolation bar explicitly", () => {
@@ -62,6 +67,51 @@ describe("Docker sandbox provider command construction", () => {
       "/mnt/session/outputs:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=100m",
     );
     expect(args).not.toContain("/var/run/docker.sock");
+  });
+
+  it("swaps --network none for the sidecar net and wires CA + proxy + sentinels under egress (0117d)", () => {
+    const args = buildDockerRunArgs({
+      containerName: "oma-test",
+      workspacePath: "/workspace",
+      image: "alpine:3.19",
+      memory: "256m",
+      cpus: "1",
+      pidsLimit: "64",
+      tmpfsSize: "64m",
+      egress: {
+        networkName: "oma-egress-sess-abc",
+        caCertDirHostPath: "/host/oma-egress/shared",
+        proxyUrl: "http://srt:tok@oma-egress-proxy-sess:8080",
+        sandboxEnv: { GITHUB_TOKEN: "oma-sentinel-deadbeef" },
+      },
+    });
+    // Joins the sidecar's --internal net instead of being fully isolated.
+    expect(args).toContain("oma-egress-sess-abc");
+    expect(args).not.toContain("none");
+    // CA mounted read-only; trust + proxy env point the sandbox at the sidecar.
+    expect(args).toContain("/host/oma-egress/shared:/etc/oma:ro");
+    expect(args).toContain("SSL_CERT_FILE=/etc/oma/ca.crt");
+    expect(args).toContain("NODE_EXTRA_CA_CERTS=/etc/oma/ca.crt");
+    expect(args).toContain("HTTPS_PROXY=http://srt:tok@oma-egress-proxy-sess:8080");
+    expect(args).toContain("https_proxy=http://srt:tok@oma-egress-proxy-sess:8080");
+    // The per-session sentinel reaches the agent's environment.
+    expect(args).toContain("GITHUB_TOKEN=oma-sentinel-deadbeef");
+  });
+
+  it("keeps --network none and injects no proxy env when egress is absent (default deny)", () => {
+    const args = buildDockerRunArgs({
+      containerName: "oma-test",
+      workspacePath: "/workspace",
+      image: "alpine:3.19",
+      memory: "256m",
+      cpus: "1",
+      pidsLimit: "64",
+      tmpfsSize: "64m",
+    });
+    expect(args).toContain("--network");
+    expect(args).toContain("none");
+    expect(args.join(" ")).not.toContain("HTTPS_PROXY");
+    expect(args.join(" ")).not.toContain("/etc/oma");
   });
 
   it("rejects Docker tmpfs sizing that leaves no process memory headroom", () => {
@@ -399,7 +449,14 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "${logPath}"
 case "$1" in
   ps)
-    printf 'stale-container\\n'
+    if [[ "$*" == *egress-sidecar* ]]; then
+      : # egress-sidecar sweep: no orphans
+    else
+      printf 'stale-container\\n'
+    fi
+    ;;
+  network)
+    : # egress-sidecar network sweep: no orphans
     ;;
   inspect)
     printf '"2000-01-01T00:00:00.000000000Z"\\n'
@@ -429,7 +486,15 @@ esac
       providers.forEach((provider) => provider.dispose());
 
       const calls = (await readFile(logPath, "utf8")).trim().split("\n");
-      expect(calls.filter((call) => call.startsWith("ps "))).toHaveLength(1);
+      // The container sweep (sandbox label) runs exactly once despite two
+      // concurrent first sessions; the egress sweep rides the same barrier.
+      expect(
+        calls.filter(
+          (call) =>
+            call.startsWith("ps ") &&
+            call.includes("open-managed-agents.sandbox"),
+        ),
+      ).toHaveLength(1);
       expect(calls.filter((call) => call.startsWith("inspect "))).toHaveLength(
         1,
       );
@@ -451,11 +516,15 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "${logPath}"
 case "$1" in
   ps)
-    if [[ ! -f "${statePath}" ]]; then
+    if [[ "$*" == *egress-sidecar* ]]; then
+      : # egress-sidecar sweep: no orphans
+    elif [[ ! -f "${statePath}" ]]; then
       : > "${statePath}"
       printf 'transient docker failure\\n' >&2
       exit 1
     fi
+    ;;
+  network)
     ;;
   run)
     ;;
@@ -482,7 +551,14 @@ esac
       provider.dispose();
 
       const calls = (await readFile(logPath, "utf8")).trim().split("\n");
-      expect(calls.filter((call) => call.startsWith("ps "))).toHaveLength(2);
+      // The container sweep (sandbox label) fails once, then retries: two ps.
+      expect(
+        calls.filter(
+          (call) =>
+            call.startsWith("ps ") &&
+            call.includes("open-managed-agents.sandbox"),
+        ),
+      ).toHaveLength(2);
       expect(calls.filter((call) => call.startsWith("run "))).toHaveLength(1);
     } finally {
       await rm(dir, { force: true, recursive: true });
@@ -542,6 +618,133 @@ esac
 });
 
 const dockerIt = dockerIsAvailable() ? it : it.skip;
+
+describe("Docker sandbox egress cleanup on failure (plan 0117d)", () => {
+  it("disposes the egress sidecar when sandbox container creation fails", async () => {
+    let disposed = false;
+    await expect(
+      createDockerSandboxProvider("wrk_x", "sesn_x", {
+        // A docker command that cannot be spawned makes the sandbox `docker
+        // run` fail AFTER the (fake) sidecar was already created.
+        dockerCommand: "/nonexistent-docker-binary-oma-test",
+        operationTimeoutMs: 5_000,
+        egress: {
+          wiring: {
+            networkName: "oma-egress-x",
+            caCertDirHostPath: "/tmp/x",
+            proxyUrl: "http://srt:t@oma-egress-proxy-x:8080",
+            sandboxEnv: {},
+          },
+          dispose: () => {
+            disposed = true;
+          },
+        },
+      }),
+    ).rejects.toThrow();
+    // Without the cleanup path this leaks the sidecar container + its resolved
+    // secret bundle on disk.
+    expect(disposed).toBe(true);
+  });
+});
+
+describe("Docker sandbox egress confinement (plan 0117d, ADR 0016 §2/§3)", () => {
+  // The ADR-owed test: a proxy-only-egress sandbox reaches the internet ONLY
+  // through the sidecar proxy, which enforces auth + allowlist; a raw socket
+  // to anything else is dropped by the --internal network. Runs the sidecar
+  // from node:24-slim with the repo bind-mounted (no built appliance image in
+  // CI). Enforcement is asserted at the plaintext CONNECT layer, so no real
+  // upstream is needed and the test is hermetic.
+  dockerIt("routes egress only through the auth'd, allowlisting proxy — raw sockets cannot escape", async () => {
+    const resolved = resolveSessionEgressBundle({
+      environmentConfig: {
+        networking: {
+          allow: [{ host: "example.com", port: 443 }],
+        },
+      },
+      revealSecret: () => undefined,
+      listenPort: 8080,
+      proxyAuthToken: "confine-tok-123",
+    })!;
+
+    const sidecar = await createEgressSidecar({
+      dockerCommand: "docker",
+      sessionId: `sesn_confine_${Math.random().toString(36).slice(2, 8)}`,
+      bundle: resolved.bundle,
+      sidecarImage: "node:24-slim",
+      sidecarRepoMount: process.cwd(),
+      operationTimeoutMs: 30_000,
+      readinessTimeoutMs: 40_000,
+    });
+
+    const provider = await createDockerSandboxProvider("wrk_confine", "sesn_confine", {
+      operationTimeoutMs: 20_000,
+      egress: {
+        wiring: {
+          networkName: sidecar.networkName,
+          caCertDirHostPath: sidecar.sharedDirHostPath,
+          proxyUrl: egressProxyUrl(sidecar),
+          sandboxEnv: resolved.sandboxEnv,
+        },
+        dispose: sidecar.dispose,
+      },
+    });
+
+    const run = async (command: string): Promise<string> => {
+      const chunks: Buffer[] = [];
+      await provider.operations.bash.exec(command, "/workspace", {
+        env: {},
+        onData: (c) => chunks.push(c),
+        timeout: 15,
+      });
+      return Buffer.concat(chunks).toString("utf8");
+    };
+
+    try {
+      // The boundary wiring reached the sandbox: proxy env + trusted CA file.
+      expect(await run('printf "%s" "$HTTPS_PROXY"')).toContain(
+        `@${sidecar.proxyHost}:${sidecar.proxyPort}`,
+      );
+      expect(await run("cat /etc/oma/ca.crt | head -1")).toContain(
+        "BEGIN CERTIFICATE",
+      );
+
+      // A plaintext CONNECT to the proxy: no auth -> 407, so the proxy is live
+      // AND fails closed on the vendored fail-open default.
+      const noAuth = await run(
+        'exec 3<>/dev/tcp/' + sidecar.proxyHost + '/' + sidecar.proxyPort +
+          ' && printf "CONNECT example.com:443 HTTP/1.1\\r\\nHost: example.com:443\\r\\n\\r\\n" >&3 && head -1 <&3',
+      );
+      expect(noAuth).toContain("407");
+
+      // With auth but a NON-allowlisted host -> 403 (allowlist enforced).
+      const auth = Buffer.from("srt:confine-tok-123").toString("base64");
+      const offAllow = await run(
+        'exec 3<>/dev/tcp/' + sidecar.proxyHost + '/' + sidecar.proxyPort +
+          ' && printf "CONNECT www.google.com:443 HTTP/1.1\\r\\nProxy-Authorization: Basic ' + auth +
+          '\\r\\nHost: www.google.com:443\\r\\n\\r\\n" >&3 && head -1 <&3',
+      );
+      expect(offAllow).toContain("403");
+
+      // With auth AND an allowlisted host -> 200 Connection Established.
+      const allowed = await run(
+        'exec 3<>/dev/tcp/' + sidecar.proxyHost + '/' + sidecar.proxyPort +
+          ' && printf "CONNECT example.com:443 HTTP/1.1\\r\\nProxy-Authorization: Basic ' + auth +
+          '\\r\\nHost: example.com:443\\r\\n\\r\\n" >&3 && head -1 <&3',
+      );
+      expect(allowed).toContain("200");
+
+      // CONFINEMENT: a raw socket straight to a public IP, bypassing the proxy,
+      // cannot escape the --internal network.
+      const direct = await run(
+        'timeout 6 bash -c "exec 3<>/dev/tcp/1.1.1.1/443 && echo ESCAPED" ; echo "rc=$?"',
+      );
+      expect(direct).not.toContain("ESCAPED");
+      expect(direct).toContain("rc="); // the dial failed/timed out, did not connect
+    } finally {
+      provider.dispose(); // also disposes the sidecar + its --internal network
+    }
+  });
+});
 
 describe("Docker sandbox provider integration", () => {
   dockerIt("runs bash and file operations inside an isolated container", async () => {

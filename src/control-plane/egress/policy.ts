@@ -309,8 +309,25 @@ export function pathWithinPrefix(pathname: string, prefix: string): boolean {
 // ---------------------------------------------------------------------------
 // Resolution
 
-interface SentinelGrant extends EgressCredentialGrant {
+export interface SentinelGrant extends EgressCredentialGrant {
   sentinel: string;
+}
+
+/**
+ * The serializable hand-off to a proxy running OUT of the control-plane
+ * process (0117d: the per-session sidecar). Plain JSON — no closures — so it
+ * can be written to the sidecar's mount and rebuilt there via
+ * `buildHooksFromBundle`. `secrets` is resolved ONCE at launch (secretName ->
+ * real value); mid-session rotation is therefore not picked up until the next
+ * session. It holds real secret material and MUST be delivered only to the
+ * sidecar (mode 0600, never env, never the sandbox).
+ */
+export interface SessionEgressBundle {
+  policy: EgressPolicy;
+  grants: SentinelGrant[];
+  secrets: Record<string, string>;
+  proxyAuthToken: string;
+  listenPort: number;
 }
 
 export interface ResolveSessionEgressOptions {
@@ -332,7 +349,18 @@ export function resolveSessionEgress(
 ): SessionEgress | undefined {
   const policy = parseNetworkingConfig(opts.environmentConfig);
   if (policy === undefined) return undefined;
+  const { grants, sandboxEnv } = mintSentinelGrants(policy);
+  return {
+    policy,
+    sandboxEnv,
+    hooks: buildHooks(policy, grants, opts.revealSecret),
+  };
+}
 
+function mintSentinelGrants(policy: EgressPolicy): {
+  grants: SentinelGrant[];
+  sandboxEnv: Record<string, string>;
+} {
   const grants: SentinelGrant[] = policy.credentials.map((grant) => ({
     ...grant,
     sentinel: `oma-sentinel-${randomBytes(16).toString("hex")}`,
@@ -341,12 +369,87 @@ export function resolveSessionEgress(
   for (const grant of grants) {
     sandboxEnv[grant.env] = grant.sentinel;
   }
+  return { grants, sandboxEnv };
+}
+
+export interface ResolveSessionEgressBundleOptions {
+  environmentConfig: JsonObject;
+  /** Workspace-scoped SecretsStore.reveal. Called ONCE per granted secret. */
+  revealSecret: (name: string) => string | undefined;
+  /** The port the sidecar proxy will listen on inside its container. */
+  listenPort: number;
+  /** Non-empty per-session bearer token the sandbox presents to the proxy. */
+  proxyAuthToken: string;
+}
+
+/**
+ * Control-plane side of the sidecar seam (0117d). Parses the env's networking
+ * config, mints per-session sentinels, and resolves the session's granted
+ * secrets ONCE into a serializable {@link SessionEgressBundle}. Returns
+ * undefined when the environment grants no egress (no sidecar; --network none).
+ *
+ * A grant whose secret cannot be revealed is simply absent from `secrets` —
+ * the sidecar's injection hook strips that credential header (fail closed),
+ * exactly as the in-process path does.
+ */
+export function resolveSessionEgressBundle(
+  opts: ResolveSessionEgressBundleOptions,
+): { sandboxEnv: Record<string, string>; bundle: SessionEgressBundle } | undefined {
+  // The token rides in a proxy-URL userinfo slot; constrain it to a URL-safe
+  // charset so a delimiter can't malform the URL or alter the credential the
+  // sandbox client sends. OMA mints the token, so this is a contract, not a
+  // parser — callers should pass hex / base64url.
+  if (
+    typeof opts.proxyAuthToken !== "string" ||
+    !/^[A-Za-z0-9._~-]+$/.test(opts.proxyAuthToken)
+  ) {
+    throw new EgressPolicyError(
+      "resolveSessionEgressBundle requires a non-empty URL-safe proxyAuthToken " +
+        "([A-Za-z0-9._~-]); use hex or base64url",
+    );
+  }
+  const policy = parseNetworkingConfig(opts.environmentConfig);
+  if (policy === undefined) return undefined;
+  const { grants, sandboxEnv } = mintSentinelGrants(policy);
+
+  const secrets: Record<string, string> = {};
+  for (const grant of grants) {
+    if (grant.secret in secrets) continue; // resolve each secret once
+    let real: string | undefined;
+    try {
+      real = opts.revealSecret(grant.secret);
+    } catch {
+      real = undefined;
+    }
+    if (real !== undefined) secrets[grant.secret] = real;
+  }
 
   return {
-    policy,
     sandboxEnv,
-    hooks: buildHooks(policy, grants, opts.revealSecret),
+    bundle: {
+      policy,
+      grants,
+      secrets,
+      proxyAuthToken: opts.proxyAuthToken,
+      listenPort: opts.listenPort,
+    },
   };
+}
+
+/**
+ * Sidecar side of the seam: rebuild the proxy hook set from a serialized
+ * {@link SessionEgressBundle}. `revealSecret` becomes a lookup into the
+ * launch-time resolved map, and the SAME {@link buildHooks} runs — so the
+ * sidecar and the in-process path share one enforcement implementation.
+ */
+export function buildHooksFromBundle(
+  bundle: SessionEgressBundle,
+): EgressPolicyHooks {
+  return buildHooks(
+    bundle.policy,
+    bundle.grants,
+    (name) => bundle.secrets[name],
+  );
 }
 
 function buildHooks(
