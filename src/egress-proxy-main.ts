@@ -22,7 +22,7 @@
  * dangerous test flag) and never sets mutateHeadersPlaintext, so secrets are
  * injected only on the TLS-terminated leg.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Server } from "node:http";
@@ -86,11 +86,15 @@ export async function startEgressProxySidecar(
   const bindHost = env.OMA_EGRESS_BIND_HOST ?? "0.0.0.0";
   const bundle = loadSessionEgressBundle(bundlePath);
 
-  // Ephemeral CA minted here; only its certificate is published. The sandbox
-  // trusts this cert so the proxy can terminate its TLS; the private key that
-  // could forge certs for any host stays inside this container.
+  // Ephemeral CA minted here; only the trust BUNDLE is published (never the
+  // key, which could forge certs for any host — it stays in this container).
+  // The bundle is the MITM CA followed by the host's public roots: the sandbox
+  // trust env vars (SSL_CERT_FILE, CURL_CA_BUNDLE, ...) REPLACE the client's
+  // store, so publishing the CA alone would break verification for any host we
+  // do NOT terminate (opaque-tunnel / cert-pinned upstreams talk to the real
+  // upstream cert). trustBundlePath already contains CA + roots.
   const ca = createMitmCA({});
-  writeFileSync(join(sharedDir, "ca.crt"), ca.certPem, { mode: 0o644 });
+  copyFileSync(ca.trustBundlePath, join(sharedDir, "ca.crt"));
 
   const server = createEgressProxy({
     ...buildHooksFromBundle(bundle),

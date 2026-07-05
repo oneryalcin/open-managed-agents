@@ -449,7 +449,14 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "${logPath}"
 case "$1" in
   ps)
-    printf 'stale-container\\n'
+    if [[ "$*" == *egress-sidecar* ]]; then
+      : # egress-sidecar sweep: no orphans
+    else
+      printf 'stale-container\\n'
+    fi
+    ;;
+  network)
+    : # egress-sidecar network sweep: no orphans
     ;;
   inspect)
     printf '"2000-01-01T00:00:00.000000000Z"\\n'
@@ -479,7 +486,15 @@ esac
       providers.forEach((provider) => provider.dispose());
 
       const calls = (await readFile(logPath, "utf8")).trim().split("\n");
-      expect(calls.filter((call) => call.startsWith("ps "))).toHaveLength(1);
+      // The container sweep (sandbox label) runs exactly once despite two
+      // concurrent first sessions; the egress sweep rides the same barrier.
+      expect(
+        calls.filter(
+          (call) =>
+            call.startsWith("ps ") &&
+            call.includes("open-managed-agents.sandbox"),
+        ),
+      ).toHaveLength(1);
       expect(calls.filter((call) => call.startsWith("inspect "))).toHaveLength(
         1,
       );
@@ -501,11 +516,15 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "${logPath}"
 case "$1" in
   ps)
-    if [[ ! -f "${statePath}" ]]; then
+    if [[ "$*" == *egress-sidecar* ]]; then
+      : # egress-sidecar sweep: no orphans
+    elif [[ ! -f "${statePath}" ]]; then
       : > "${statePath}"
       printf 'transient docker failure\\n' >&2
       exit 1
     fi
+    ;;
+  network)
     ;;
   run)
     ;;
@@ -532,7 +551,14 @@ esac
       provider.dispose();
 
       const calls = (await readFile(logPath, "utf8")).trim().split("\n");
-      expect(calls.filter((call) => call.startsWith("ps "))).toHaveLength(2);
+      // The container sweep (sandbox label) fails once, then retries: two ps.
+      expect(
+        calls.filter(
+          (call) =>
+            call.startsWith("ps ") &&
+            call.includes("open-managed-agents.sandbox"),
+        ),
+      ).toHaveLength(2);
       expect(calls.filter((call) => call.startsWith("run "))).toHaveLength(1);
     } finally {
       await rm(dir, { force: true, recursive: true });
@@ -592,6 +618,34 @@ esac
 });
 
 const dockerIt = dockerIsAvailable() ? it : it.skip;
+
+describe("Docker sandbox egress cleanup on failure (plan 0117d)", () => {
+  it("disposes the egress sidecar when sandbox container creation fails", async () => {
+    let disposed = false;
+    await expect(
+      createDockerSandboxProvider("wrk_x", "sesn_x", {
+        // A docker command that cannot be spawned makes the sandbox `docker
+        // run` fail AFTER the (fake) sidecar was already created.
+        dockerCommand: "/nonexistent-docker-binary-oma-test",
+        operationTimeoutMs: 5_000,
+        egress: {
+          wiring: {
+            networkName: "oma-egress-x",
+            caCertDirHostPath: "/tmp/x",
+            proxyUrl: "http://srt:t@oma-egress-proxy-x:8080",
+            sandboxEnv: {},
+          },
+          dispose: () => {
+            disposed = true;
+          },
+        },
+      }),
+    ).rejects.toThrow();
+    // Without the cleanup path this leaks the sidecar container + its resolved
+    // secret bundle on disk.
+    expect(disposed).toBe(true);
+  });
+});
 
 describe("Docker sandbox egress confinement (plan 0117d, ADR 0016 §2/§3)", () => {
   // The ADR-owed test: a proxy-only-egress sandbox reaches the internet ONLY

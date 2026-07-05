@@ -187,13 +187,26 @@ per-session network/sidecar lifecycle + `reapEgressSidecars`);
 `buildDockerRunArgs` egress mode (network swap + CA mount + trust/proxy/sentinel
 env) threaded through `createDockerSandboxProvider` (which disposes the sidecar
 on teardown). Tests: bundle-seam round-trip + fail-closed (5), run-args egress
-vs default-deny (2), sidecar arg construction (3), and the **gated confinement
-integration test** — a real `--internal` sandbox proves proxy-only egress at the
-CONNECT layer (407 no-auth, 403 off-allowlist, 200 in-allowlist) and that a raw
-socket to a public IP is dropped; mutation-checked (sandbox on `bridge` breaks
-it). Design de-risked by two live-Docker probes (2026-07-05): the four
-network-mode reachability/confinement matrix, and the sidecar entrypoint running
-end-to-end in a container (MITM termination + CA trust + enforcement).
+vs default-deny (2), sidecar arg construction (3), the sidecar's trust-bundle
+publish (1), the failure-cleanup path (1), the age-bounded reaper temp sweep (1),
+and the **gated confinement integration test** — a real `--internal` sandbox
+proves proxy-only egress at the CONNECT layer (407 no-auth, 403 off-allowlist,
+200 in-allowlist) and that a raw socket to a public IP is dropped;
+mutation-checked (sandbox on `bridge` breaks it). Design de-risked by two
+live-Docker probes (2026-07-05): the four network-mode reachability/confinement
+matrix, and the sidecar entrypoint running end-to-end in a container (MITM
+termination + CA trust + enforcement).
+
+**Review fixes (Codex adversarial + standard, folded in, each mutation-checked).**
+(1) A sandbox-start failure now disposes the already-created sidecar — else its
+container + the resolved-secret bundle leak. (2) The sidecar publishes the full
+**trust bundle** (MITM CA + public roots), not just the CA: the sandbox trust
+env vars *replace* the client store, so CA-only would break TLS verification for
+any opaque-tunnel host the proxy does not terminate. (3) Crash cleanup hardened —
+`bundle.json` is unlinked the instant the sidecar signals ready (secrets at-rest
+window ~1s), the `--internal` networks are labelled + age-reaped with the sidecar
+containers, stale `oma-egress-*` temp roots are swept, and the egress reaper is
+wired into the same startup sweep as the container reaper.
 
 **Deliberately NOT in this slice — the session integration (next).** Nothing
 yet calls `resolveSessionEgressBundle`/`createEgressSidecar` from the *live*
@@ -202,9 +215,7 @@ per-workspace `SecretsStore` (0118) stood up in the deployment/workspace layer
 and `environment.config.networking` threaded into session start. That is a
 distinct slice (call it 0117e / "secrets consumption") — the egress boundary and
 its confinement proof land here first, on their own, behind a gated test.
-Follow-ups to file: orphan **network** reaping on crash (containers are
-labelled + reaped; the `--internal` networks are removed on normal teardown but
-want a sweep too), and a dedicated egress-upstream bridge so sidecars are not
+Follow-up to file: a dedicated egress-upstream bridge so sidecars are not
 adjacent on the default `bridge`.
 
 ## Tests owed (from ADR 0016 validation)

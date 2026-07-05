@@ -13,6 +13,7 @@ import type {
   WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 import { matchGlob } from "./glob.ts";
+import { reapEgressSidecars } from "./docker-egress.ts";
 import {
   createSandboxInvocationStats,
   createSandboxToolDefinitions,
@@ -136,11 +137,15 @@ export function createDockerSandboxProviderFactory(
   let sweepPromise: Promise<void> | undefined;
   return async (workspaceId, sessionId) => {
     if (!swept && opts.reapStaleContainersOlderThanMs !== undefined) {
+      const olderThanMs = opts.reapStaleContainersOlderThanMs;
       sweepPromise ??= reapDockerSandboxContainers({
         dockerCommand: opts.dockerCommand,
-        olderThanMs: opts.reapStaleContainersOlderThanMs,
+        olderThanMs,
       }).then(
         () => {
+          // Same startup sweep reaps egress sidecars a crash orphaned:
+          // containers, their --internal networks, and stale temp roots.
+          reapEgressSidecars({ dockerCommand: opts.dockerCommand, olderThanMs });
           swept = true;
         },
         (error: unknown) => {
@@ -165,31 +170,40 @@ export async function createDockerSandboxProvider(
     workspaceId,
     sessionId,
   );
-  await dockerChecked(
-    resolved.dockerCommand,
-    buildDockerRunArgs({
-      containerName,
-      workspacePath: resolved.workspacePath,
-      uploadsPath: resolved.uploadsPath,
-      outputsPath: resolved.outputsPath,
-      image: resolved.image,
-      memory: resolved.memory,
-      cpus: resolved.cpus,
-      pidsLimit: resolved.pidsLimit,
-      tmpfsSize: resolved.tmpfsSize,
-      outputsTmpfsSize: resolved.outputsTmpfsSize,
-      egress: opts.egress?.wiring,
-      labels: {
-        [SANDBOX_LABEL_KEY]: SANDBOX_LABEL_VALUE,
-        [OWNER_LABEL_KEY]: OWNER_LABEL_VALUE,
-        "open-managed-agents.workspace-id": workspaceId,
-        "open-managed-agents.session-id": sessionId,
-        "open-managed-agents.created-at": new Date().toISOString(),
-        ...resolved.extraLabels,
-      },
-    }),
-    { timeoutMs: resolved.operationTimeoutMs },
-  );
+  try {
+    await dockerChecked(
+      resolved.dockerCommand,
+      buildDockerRunArgs({
+        containerName,
+        workspacePath: resolved.workspacePath,
+        uploadsPath: resolved.uploadsPath,
+        outputsPath: resolved.outputsPath,
+        image: resolved.image,
+        memory: resolved.memory,
+        cpus: resolved.cpus,
+        pidsLimit: resolved.pidsLimit,
+        tmpfsSize: resolved.tmpfsSize,
+        outputsTmpfsSize: resolved.outputsTmpfsSize,
+        egress: opts.egress?.wiring,
+        labels: {
+          [SANDBOX_LABEL_KEY]: SANDBOX_LABEL_VALUE,
+          [OWNER_LABEL_KEY]: OWNER_LABEL_VALUE,
+          "open-managed-agents.workspace-id": workspaceId,
+          "open-managed-agents.session-id": sessionId,
+          "open-managed-agents.created-at": new Date().toISOString(),
+          ...resolved.extraLabels,
+        },
+      }),
+      { timeoutMs: resolved.operationTimeoutMs },
+    );
+  } catch (error) {
+    // Sandbox creation failed after the sidecar was already stood up. The
+    // provider whose dispose() tears the sidecar down is never returned, so
+    // dispose here — else the sidecar container and its resolved-secret bundle
+    // on disk leak.
+    opts.egress?.dispose();
+    throw error;
+  }
 
   const invocations = createSandboxInvocationStats();
   const disposed: SandboxDisposedFlag = { value: false };

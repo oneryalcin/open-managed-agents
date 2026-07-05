@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildSidecarRunArgs,
   egressProxyUrl,
+  reapEgressSidecars,
 } from "../docker-egress.ts";
 
 describe("egress sidecar arg construction (0117d)", () => {
@@ -49,5 +53,41 @@ describe("egress sidecar arg construction (0117d)", () => {
         proxyAuthToken: "tok-123",
       }),
     ).toBe("http://srt:tok-123@oma-egress-proxy-x:8080");
+  });
+});
+
+describe("reapEgressSidecars temp-root sweep (crash cleanup, age-bounded)", () => {
+  let parent: string;
+  beforeEach(() => {
+    parent = mkdtempSync(join(tmpdir(), "oma-egress-reap-test-"));
+  });
+  afterEach(() => {
+    rmSync(parent, { recursive: true, force: true });
+  });
+
+  it("removes only stale oma-egress-* roots and never unrelated dirs", () => {
+    const now = 1_000_000_000_000;
+    const stale = join(parent, "oma-egress-stale");
+    const fresh = join(parent, "oma-egress-fresh");
+    const unrelated = join(parent, "some-other-tmpdir");
+    for (const d of [stale, fresh, unrelated]) mkdirSync(d);
+    // Backdate the stale root well beyond the threshold; leave the others new.
+    const staleSecs = (now - 60_000) / 1000;
+    utimesSync(stale, staleSecs, staleSecs);
+    const freshSecs = (now - 1_000) / 1000;
+    utimesSync(fresh, freshSecs, freshSecs);
+    utimesSync(unrelated, staleSecs, staleSecs);
+
+    // `true` no-ops the docker container/network calls; the sweep is what we test.
+    reapEgressSidecars({
+      dockerCommand: "true",
+      olderThanMs: 30_000,
+      now: () => now,
+      tmpDir: parent,
+    });
+
+    expect(existsSync(stale)).toBe(false); // stale egress root reaped
+    expect(existsSync(fresh)).toBe(true); // within threshold — a live session's
+    expect(existsSync(unrelated)).toBe(true); // never touch non-egress dirs
   });
 });

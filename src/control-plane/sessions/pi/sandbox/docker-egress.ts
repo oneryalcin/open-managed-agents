@@ -20,7 +20,14 @@
 // waits for the sidecar's `ready` marker, then mounts that cert into the
 // sandbox trust bundle.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionEgressBundle } from "../../../egress/policy.ts";
@@ -106,7 +113,16 @@ export async function createEgressSidecar(
   try {
     dockerOrThrow(
       opts.dockerCommand,
-      ["network", "create", "--internal", networkName],
+      [
+        "network",
+        "create",
+        "--internal",
+        "--label",
+        `${SIDECAR_LABEL_KEY}=${SIDECAR_LABEL_VALUE}`,
+        "--label",
+        `open-managed-agents.session-id=${opts.sessionId}`,
+        networkName,
+      ],
       opts.operationTimeoutMs,
     );
     networkCreated = true;
@@ -144,6 +160,11 @@ export async function createEgressSidecar(
       opts.sleepMs ?? sleepAsync,
       () => sidecarLogs(opts.dockerCommand, containerName),
     );
+    // The sidecar has read the bundle into memory by the time it signals ready.
+    // Drop the plaintext-secret file from disk now so a later control-plane
+    // crash (before dispose) leaves no resolved secrets behind — the at-rest
+    // window shrinks to the ~1s of sidecar startup.
+    rmSync(bundlePath, { force: true });
 
     return {
       networkName,
@@ -265,18 +286,98 @@ function sanitize(value: string): string {
 
 export interface EgressSidecarReaperOptions {
   dockerCommand?: string;
+  /** Only reap resources older than this. 0 (default) reaps everything. */
+  olderThanMs?: number;
+  now?: () => number;
+  /** Temp root parent to sweep for orphaned oma-egress-* dirs. */
+  tmpDir?: string;
 }
 
-/** Remove orphaned egress sidecars (crash cleanup). Networks are pruned too. */
+/**
+ * Crash cleanup for egress sidecars — the happy path is `EgressSidecar.dispose`;
+ * this reaps what a control-plane crash orphaned. Removes labelled sidecar
+ * CONTAINERS and per-session `--internal` NETWORKS older than the threshold,
+ * and sweeps stale `oma-egress-*` temp roots (which hold only ca.crt/ready once
+ * the bundle is unlinked at readiness, but are cleaned for tidiness). Meant to
+ * run once at startup, like `reapDockerSandboxContainers`, so it never races a
+ * live session's own sidecar.
+ */
 export function reapEgressSidecars(opts: EgressSidecarReaperOptions = {}): void {
   const dockerCommand = opts.dockerCommand ?? "docker";
-  const listed = spawnSync(
-    dockerCommand,
-    ["ps", "-aq", "--filter", `label=${SIDECAR_LABEL_KEY}=${SIDECAR_LABEL_VALUE}`],
-    { encoding: "utf8" },
-  );
-  const ids = (listed.stdout ?? "").split("\n").filter(Boolean);
-  if (ids.length > 0) {
-    spawnSync(dockerCommand, ["rm", "-f", ...ids], { stdio: "ignore" });
+  const olderThanMs = opts.olderThanMs ?? 0;
+  const now = opts.now?.() ?? Date.now();
+  const filter = ["--filter", `label=${SIDECAR_LABEL_KEY}=${SIDECAR_LABEL_VALUE}`];
+
+  const expired = (kind: "container" | "network", ids: string[]): string[] =>
+    ids.filter((id) => {
+      const created = dockerCreatedAt(dockerCommand, kind, id);
+      return created === undefined || now - created >= olderThanMs;
+    });
+
+  const containers = dockerList(dockerCommand, ["ps", "-aq", ...filter]);
+  const staleContainers = expired("container", containers);
+  if (staleContainers.length > 0) {
+    spawnSync(dockerCommand, ["rm", "-f", ...staleContainers], { stdio: "ignore" });
+  }
+
+  const networks = dockerList(dockerCommand, ["network", "ls", "-q", ...filter]);
+  const staleNetworks = expired("network", networks);
+  for (const id of staleNetworks) {
+    // A network with a still-live endpoint refuses removal; that is correct —
+    // only orphans are reaped.
+    spawnSync(dockerCommand, ["network", "rm", id], { stdio: "ignore" });
+  }
+
+  sweepStaleTempRoots(opts.tmpDir ?? tmpdir(), olderThanMs, now);
+}
+
+function dockerList(dockerCommand: string, args: string[]): string[] {
+  const result = spawnSync(dockerCommand, args, { encoding: "utf8" });
+  return (result.stdout ?? "").split("\n").filter(Boolean);
+}
+
+function dockerCreatedAt(
+  dockerCommand: string,
+  kind: "container" | "network",
+  id: string,
+): number | undefined {
+  const args =
+    kind === "network"
+      ? ["network", "inspect", id, "--format", "{{json .Created}}"]
+      : ["inspect", id, "--format", "{{json .Created}}"];
+  const result = spawnSync(dockerCommand, args, { encoding: "utf8" });
+  if (result.status !== 0) return undefined;
+  try {
+    const created = JSON.parse(result.stdout) as string;
+    const ms = new Date(created).getTime();
+    return Number.isFinite(ms) ? ms : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sweepStaleTempRoots(
+  parent: string,
+  olderThanMs: number,
+  now: number,
+): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(parent);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (!name.startsWith("oma-egress-")) continue;
+    const full = join(parent, name);
+    try {
+      const stat = statSync(full);
+      if (!stat.isDirectory()) continue;
+      if (now - stat.mtimeMs >= olderThanMs) {
+        rmSync(full, { recursive: true, force: true });
+      }
+    } catch {
+      // gone already / racing another reaper — fine
+    }
   }
 }
