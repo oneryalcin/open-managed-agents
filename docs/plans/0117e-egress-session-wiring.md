@@ -1,6 +1,21 @@
 # 0117e — Wire credentialed egress into the live session path
 
-Date: 2026-07-05
+Date: 2026-07-05 · **Status: DONE (2026-07-06)** — all four sub-slices landed
+on `dev/0117e-egress-session-wiring` (0117e-1 `ae53af6`, 0117e-2 `da7f48e`,
+0117e-3 `ecab709`, 0117e-4 `f44b6ca`). Settled at implementation time:
+in-memory mode honors the master key; sub-slices landed as sequential commits
+on one branch (user's call), not four PRs. Two deviations from the letter of
+the plan, both forced by verified constraints: (1) 0117e-4's "upstream saw the
+REAL token" cannot run through the real sidecar (its SSRF deny has no
+private-IP test override, by 0117d hardening design), so it is proven
+in-process via `buildHooksFromBundle` on the wired bundle, while the gated
+Docker test proves the factory-wired sidecar enforces the same bundle at the
+CONNECT layer. (2) Added `hasEgressNetworkingConfig` (not in the plan):
+hosted-shape `networking: {type:"unrestricted"}` — which every pre-egress
+test environment uses — keeps its historical ignored behavior; only the OMA
+`allow`/`credentials` shape is strict-parsed, resolved, and gated. Routing
+all networking configs into the strict parser would have broken every
+existing environment.
 Implements: [ADR 0016](../adrs/0016-egress-proxy-and-secret-injection.md) §2–§6.
 Depends on: 0117a–d (vendored proxy, SSRF deny, egress policy, dual-homed
 sidecar) and [0118](0118-sqlite-secrets-store.md) (SqliteSecretsStore), all

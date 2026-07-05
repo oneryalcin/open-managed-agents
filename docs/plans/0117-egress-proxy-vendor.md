@@ -234,8 +234,11 @@ adjacent on the default `bridge`.
   `--internal` net; egress works only through the auth'd, allowlisting proxy);
 - private-IP deny actually denies, incl. the rebinding flip (0117b) — ✅;
 - verify-before-inject holds in the wired path (carry probe 44 (g) into a
-  contract test) — proven in the 0117d container probe (CA-verified MITM leaf);
-  a contract test in the *wired session* path lands with 0117e;
+  contract test) — ✅ DONE with 0117e-4: the wired bundle (stores → resolver)
+  drives buildHooksFromBundle in-process against a recording HTTPS upstream
+  (upstream sees REAL token, off-path/off-method denied), and the gated Docker
+  test proves the factory-wired sidecar enforces that same bundle
+  (sentinel-only env, CONNECT 407/403/200, wired default-deny sibling);
 - path/method-scoped inject grants deny an off-path request (0117c) — ✅.
 
 ## Non-goals
