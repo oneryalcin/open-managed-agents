@@ -75,15 +75,42 @@ default injection flips it). Probed the core mechanism first
 (`scratch` throwaway) — a custom `lookup` genuinely gates the socket and Node
 connects only to the returned IP.
 
-### 0117c — Egress policy as data + resolution
+### 0117c — Egress policy as data + resolution — ✅ DONE
 
-Define the serializable egress policy (allowlist entries: host + optional path
-prefix; credential grants: sentinel → secret ref + inject hosts, **path/method
-scoped** per ADR 0016 §6). Resolve it from the authenticated workspace + the
-session environment's `networking` config. Reject non-TLS CONNECT payloads
-unless a host is explicitly flagged (ADR 0016 §3 opaque-tunnel boundary).
-Credential grants resolve their secret ref against `SecretsStore` (0118) — so
-0117c depends on 0118 landing first, or stubs the resolver behind an interface.
+`egress/policy.ts`: the serializable policy (allow entries: host + port +
+optional path prefix + opaqueTunnel flag; credential grants: secret name → env
+sentinel + host/port + **required pathPrefix** + optional methods + header).
+`parseNetworkingConfig` strictly validates `environment.config.networking`
+(unknown keys rejected — a typo must not widen policy; credentials must target
+an allowlisted, non-opaque host; pathPrefix mandatory per ADR 0016 §6).
+`resolveSessionEgress` returns undefined when there's no networking config (the
+env stays `--network none`, no proxy) or else mints per-session sentinels
+(`sandboxEnv`) and the proxy hook set. Hooks: `filter` (host+port allowlist),
+`shouldTerminateTLS` (opaque opt-out), `allowOpaqueTunnel` (per-host raw-tunnel
+grant), `filterRequest` (path-prefix + **sentinel-scope enforcement**: a
+sentinel in the wrong header/host/path/method, or over plain HTTP, is denied),
+`mutateHeaders` (grant-scoped sentinel→`reveal()`ed secret, revealed lazily per
+request so rotation is picked up, **never throws** — reveal failure strips the
+header).
+
+Secret resolution is injected as a pre-bound `revealSecret(name)` closure, so
+`policy.ts` has no `SecretsStore` import — the 0118 store is wired in by the
+caller (0117d / service layer), and tests drive a stub.
+
+**Path-prefix hardening** (probed first): the URL parser collapses `..` and
+`%2e%2e` dot segments, but `..%2f` / `%2f..` survive in `pathname` — an upstream
+that decodes them would escape the prefix. `pathWithinPrefix` matches on segment
+boundaries AND denies any decoded form containing a `..` path step (fails closed
+on malformed encoding too).
+
+**Vendor mods** (all `// OMA:`, in VENDOR.md #6–8): request context on the
+mutate-headers hooks; the `allowOpaqueTunnel` choke point; a fail-closed
+`.catch` on the terminated forward path (a throwing hook must not become an
+unhandled rejection).
+
+**Not here** (0117d): Docker proxy-only-egress wiring, sandbox env delivery,
+per-session proxy lifecycle. **Not here** (later): a secrets HTTP/management
+API.
 
 ### 0117d — Wire proxy-only egress into the Docker provider
 

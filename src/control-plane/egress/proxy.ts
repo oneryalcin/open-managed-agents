@@ -112,5 +112,9 @@ export function createEgressProxy(options: EgressProxyOptions) {
     ...rest,
     filter: guardedFilter,
     lookup,
+    // Opaque (uninspected) byte tunnels are an explicit per-host grant, never
+    // a fallback (ADR 0016 §3): the vendor default allows them, OMA denies
+    // unless the caller's hook (from the egress policy) says otherwise.
+    allowOpaqueTunnel: options.allowOpaqueTunnel ?? (() => false),
   });
 }

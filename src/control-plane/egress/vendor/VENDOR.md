@@ -61,6 +61,37 @@ non-empty per-session token and rejects `parentProxy`. Nothing outside the
    to the vetted IP. (IP *literals* skip the lookup and are handled in
    `egress/proxy.ts` by wrapping the caller's filter — not a vendored edit.)
 
+6. **Request context on the header-mutation hooks** (plan 0117c, marked
+   `// OMA:`) — `MutateForwardedHeaders` (request-filter.ts) gains an optional
+   third arg `context?: { method, path, port }`, and both call sites pass it:
+   `mutateHeaders` on the terminated leg (tls-terminate-proxy.ts, method/path
+   from the decrypted request, port from the CONNECT-verified target) and
+   `mutateHeadersPlaintext` on the plain-HTTP leg (http-proxy.ts). ADR 0016 §6
+   needs path/method scope to enforce inject grants per-endpoint.
+7. **`allowOpaqueTunnel` gate** (plan 0117c, marked `// OMA:`) — a
+   `allowOpaqueTunnel?(hostname, port)` option (http-proxy.ts), checked at the
+   single choke point where a CONNECT falls through to an uninspected byte
+   tunnel (non-TLS first bytes, a `shouldTerminateTLS` opt-out, or no mitmCA).
+   Unset preserves vendor behavior; `createEgressProxy` defaults it to
+   deny-all. ADR 0016 §3: path policy and injection hold only for terminated
+   TLS, so an opaque tunnel must be an explicit per-host grant, not a fallback
+   a client triggers by speaking non-TLS bytes.
+8. **Fail-closed forward** (plan 0117c, marked `// OMA:`) —
+   `inner.on('request', ...)` in `terminateAndForward` (tls-terminate-proxy.ts)
+   now `.catch()`es the `forwardUpstream` promise and destroys the response,
+   instead of `void`-ing it. A throw anywhere in the forward path (e.g. a
+   header hook) must kill the exchange, not become an unhandled rejection that
+   crashes the proxy process.
+9. **Request-leg discriminator for filterRequest** (plan 0117c, marked
+   `// OMA:`) — `RequestFilterContext` (request-filter.ts) adds
+   `leg: 'terminated' | 'plain'`, `decideAndRespond` passes it to
+   `filterRequest`, and the two call sites set it explicitly:
+   `tls-terminate-proxy.ts` marks the TLS-terminated leg as `terminated`, while
+   `http-proxy.ts` marks the absolute-form `server.on('request')` leg as
+   `plain`. ADR 0016 §3/§6 require sentinels to transit only where the proxy
+   can inspect and inject; without this discriminator both legs present
+   `https:` URLs to policy.
+
 All changes are marked `// OMA:` in code (except the mechanical `.js`→`.ts`
 rewrite and the two shim files, which are noted here).
 

@@ -26,6 +26,12 @@ export type RequestDecision = {
   reason?: string
 }
 
+// OMA: discriminator for proxy legs that both present HTTPS URLs to policy.
+// The terminated leg is the only leg where mutateHeaders can inject secrets.
+export type RequestFilterContext = {
+  leg: 'terminated' | 'plain'
+}
+
 /**
  * Called once per HTTP request that the proxy parses.
  *
@@ -38,6 +44,7 @@ export type RequestDecision = {
  */
 export type FilterRequestCallback = (
   request: Request,
+  context: RequestFilterContext, // OMA: see RequestFilterContext above.
 ) => Promise<RequestDecision>
 
 /**
@@ -52,6 +59,11 @@ export type FilterRequestCallback = (
 export type MutateForwardedHeaders = (
   headers: IncomingHttpHeaders,
   destHost: string,
+  // OMA: request context for path/method-scoped credential injection
+  // (ADR 0016 §6). `path` is the raw origin-form request-target; `port` is
+  // the CONNECT-verified destination port. Absent on hook call sites that
+  // predate the mod (none in the vendored set after 0117c).
+  context?: { method: string; path: string; port: number },
 ) => void
 
 const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -75,6 +87,7 @@ export async function decideAndRespond(
   res: ServerResponse,
   url: string,
   signal: AbortSignal,
+  context: RequestFilterContext, // OMA: pass the proxy leg into policy.
 ): Promise<Readable | null> {
   let forCallback: ReadableStream<Uint8Array> | undefined
   let forUpstream: Readable = req
@@ -106,7 +119,7 @@ export async function decideAndRespond(
 
   let decision: RequestDecision
   try {
-    decision = await filterRequest(webReq)
+    decision = await filterRequest(webReq, context)
   } catch (err) {
     decision = {
       action: 'deny',
