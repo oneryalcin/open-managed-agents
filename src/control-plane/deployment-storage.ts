@@ -31,12 +31,36 @@ import { SqliteEnvironmentStore } from "./environments/store.ts";
 import { EventStore } from "./events/store.ts";
 import { InMemoryFileStorage, LocalObjectFileStorage } from "./files/store.ts";
 import type { FileStorage } from "./files/types.ts";
+import {
+  loadMasterKey,
+  MASTER_KEY_ENV,
+  MASTER_KEY_FILE_ENV,
+} from "./secrets/master-key.ts";
+import { SqliteSecretsStore } from "./secrets/store.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
 import { SqliteWorkspaceStore } from "./workspaces/store.ts";
 
 export interface DeploymentStorageEnv {
   OMA_SQLITE_PATH?: string;
   OMA_FILE_STORAGE_ROOT?: string;
+  OMA_MASTER_KEY?: string;
+  OMA_MASTER_KEY_FILE?: string;
+}
+
+// Load the secrets master key only when the operator configured one. Returns
+// undefined when NEITHER env var is set (no-secrets deployment — the store
+// stays absent and the secrets API 4xxs). A malformed/ambiguous key still
+// THROWS (fail-fast): a bad key must fail startup, not silently disable
+// secrets. `loadMasterKey` throws its own "neither set" error, so we guard
+// that one case before delegating.
+function tryLoadMasterKey(env: DeploymentStorageEnv): Buffer | undefined {
+  if (env[MASTER_KEY_ENV] === undefined && env[MASTER_KEY_FILE_ENV] === undefined) {
+    return undefined;
+  }
+  return loadMasterKey({
+    [MASTER_KEY_ENV]: env[MASTER_KEY_ENV],
+    [MASTER_KEY_FILE_ENV]: env[MASTER_KEY_FILE_ENV],
+  });
 }
 
 export interface DeploymentStores {
@@ -46,6 +70,9 @@ export interface DeploymentStores {
   sessions: SqliteSessionStore;
   events: EventStore;
   files: FileStorage;
+  // Present only when a master key is configured (OMA_MASTER_KEY[_FILE]);
+  // undefined otherwise. The secrets HTTP API 4xxs when this is absent.
+  secrets?: SqliteSecretsStore;
   mode: "memory" | "durable";
   sessionCoordinator: DeploymentSessionCoordinator;
   sessionOutputCoordinator: DeploymentSessionOutputCoordinator;
@@ -71,21 +98,32 @@ export function createDeploymentStoresFromEnv(
       "OMA_SQLITE_PATH and OMA_FILE_STORAGE_ROOT must be set together for durable deployment storage",
     );
   }
+  // Fail-fast on a malformed key regardless of storage mode, before opening
+  // any database.
+  const masterKey = tryLoadMasterKey(env);
   if (sqlitePath === undefined || objectRoot === undefined) {
-    return createInMemoryDeploymentStores();
+    return createInMemoryDeploymentStores(masterKey);
   }
   if (sqlitePath === ":memory:") {
     throw new Error("OMA_SQLITE_PATH must be a file path, not :memory:");
   }
-  return createDurableDeploymentStores(sqlitePath, objectRoot);
+  return createDurableDeploymentStores(sqlitePath, objectRoot, masterKey);
 }
 
-function createInMemoryDeploymentStores(): DeploymentStores {
+function createInMemoryDeploymentStores(
+  masterKey: Buffer | undefined,
+): DeploymentStores {
   const agents = SqliteAgentStore.open(":memory:");
   const environments = SqliteEnvironmentStore.open(":memory:");
   const sessions = SqliteSessionStore.open(":memory:");
   const events = EventStore.open(":memory:");
   const workspaces = SqliteWorkspaceStore.open(":memory:");
+  // Honor the key even in memory so tests can exercise the secrets path; each
+  // in-memory store owns its own :memory: db and closes it individually.
+  const secrets =
+    masterKey === undefined
+      ? undefined
+      : SqliteSecretsStore.open(":memory:", masterKey);
   const files = new InMemoryFileStorage();
   const sessionCoordinator = createInMemorySessionCoordinator({
     sessions,
@@ -107,6 +145,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
     sessions,
     events,
     files,
+    secrets,
     mode: "memory",
     sessionCoordinator,
     sessionOutputCoordinator,
@@ -117,6 +156,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
       sessions.close();
       events.close();
       workspaces.close();
+      secrets?.close();
     },
   };
 }
@@ -124,6 +164,7 @@ function createInMemoryDeploymentStores(): DeploymentStores {
 function createDurableDeploymentStores(
   sqlitePath: string,
   objectRoot: string,
+  masterKey: Buffer | undefined,
 ): DeploymentStores {
   const resolvedSqlitePath = resolve(sqlitePath);
   const requestedObjectRoot = resolve(objectRoot);
@@ -142,6 +183,11 @@ function createDurableDeploymentStores(
     const sessions = new SqliteSessionStore(db);
     const events = new EventStore(db);
     const workspaces = new SqliteWorkspaceStore(db);
+    // Shares the single durable connection with every other store; its own
+    // close() is intentionally NOT wired into close() below, which closes the
+    // shared db exactly once.
+    const secrets =
+      masterKey === undefined ? undefined : new SqliteSecretsStore(db, masterKey);
     const files = new LocalObjectFileStorage(db, resolvedObjectRoot);
     const sessionCoordinator = createSingleDatabaseSessionCoordinator({
       sessions,
@@ -164,6 +210,7 @@ function createDurableDeploymentStores(
       sessions,
       events,
       files,
+      secrets,
       mode: "durable",
       sessionCoordinator,
       sessionOutputCoordinator,
