@@ -52,6 +52,14 @@ import {
   type AdmissionLimits,
   type DeploymentAdmissionEnv,
 } from "./admission.ts";
+import { randomBytes } from "node:crypto";
+import {
+  hasEgressNetworkingConfig,
+  resolveSessionEgressBundle,
+} from "./egress/policy.ts";
+import type { SecretsStore } from "./secrets/types.ts";
+import { DEFAULT_SIDECAR_PORT } from "./sessions/pi/sandbox/docker-egress.ts";
+import type { EgressBundleResolver } from "./sessions/pi/sandbox/docker.ts";
 import { secretsRoutes } from "./secrets/routes.ts";
 import { DefaultSecretsService, type SecretsService } from "./secrets/service.ts";
 import { sessionsRoutes } from "./sessions/routes.ts";
@@ -259,6 +267,13 @@ export function createDeploymentControlPlane(
   const broadcaster = new SessionEventBroadcaster(stores.events);
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
+    resolveEgressBundle:
+      opts.runner?.resolveEgressBundle ??
+      createSessionEgressBundleResolver({
+        sessions: stores.sessions,
+        environments: stores.environments,
+        ...(stores.secrets === undefined ? {} : { secrets: stores.secrets }),
+      }),
     fileMountResolver: createFileMountResolver(stores.sessions, stores.files),
     customTools:
       opts.runner?.customTools ??
@@ -304,6 +319,10 @@ export function createDeploymentControlPlane(
       stores.files,
       {
         runtime: runner,
+        egressCapability: {
+          canHonorNetworking: runtimeConfig.egress !== undefined,
+          hasSecretsStore: stores.secrets !== undefined,
+        },
         deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,
         idempotencyLedger: stores.events,
         createSessionRowsWithIdempotency:
@@ -365,6 +384,39 @@ export function createInMemoryControlPlaneApp(
         : undefined,
     ),
   });
+}
+
+/**
+ * Per-session egress bundle resolution (plan 0117e-3, Option A): session ->
+ * environment -> networking config -> secrets, resolved at sandbox-create
+ * time inside the docker factory closure. Returns undefined for a session
+ * whose environment grants no egress — including hosted-shape networking
+ * (`{type:"unrestricted"}`), which OMA has always ignored. Mints a fresh
+ * URL-safe proxy-auth token per session.
+ */
+export function createSessionEgressBundleResolver(stores: {
+  sessions: Pick<SqliteSessionStore, "retrieveAny">;
+  environments: Pick<SqliteEnvironmentStore, "retrieve">;
+  secrets?: Pick<SecretsStore, "reveal">;
+}): EgressBundleResolver {
+  return async (workspaceId, sessionId) => {
+    const session = stores.sessions.retrieveAny(workspaceId, sessionId);
+    if (!session) return undefined;
+    const environment = stores.environments.retrieve(
+      workspaceId,
+      session.environment_id,
+    );
+    if (!environment) return undefined;
+    if (!hasEgressNetworkingConfig(environment.config)) return undefined;
+    const resolved = resolveSessionEgressBundle({
+      environmentConfig: environment.config,
+      revealSecret: (name) => stores.secrets?.reveal(workspaceId, name),
+      listenPort: DEFAULT_SIDECAR_PORT,
+      proxyAuthToken: randomBytes(24).toString("hex"),
+    });
+    if (resolved === undefined) return undefined;
+    return { bundle: resolved.bundle, sandboxEnv: resolved.sandboxEnv };
+  };
 }
 
 function createFileMountResolver(

@@ -143,4 +143,41 @@ describe("sandbox provider selection (Cycle E.3)", () => {
       }),
     ).toBeTypeOf("function");
   });
+
+  it("rejects egress on every provider except docker-local", () => {
+    // 0117e-3: microsandbox keeps its no-secret posture and host-passthrough
+    // has no network boundary — egress there must be a loud error, never a
+    // silent ignore that runs credentialed sessions without the boundary.
+    const egress = {
+      sidecarImage: "oma-appliance:test",
+      resolveEgressBundle: async () => undefined,
+    };
+    expect(() =>
+      resolveSandboxProviderFactory(
+        parseSandboxProviderSelection({
+          type: "microsandbox-local",
+        }),
+        { allowMicrosandboxLocal: true, egress },
+      ),
+    ).toThrow("egress is only supported by docker-local, not microsandbox-local");
+    expect(() =>
+      resolveSandboxProviderFactory(
+        parseSandboxProviderSelection({
+          type: "host-passthrough",
+          unsafeAllowHostPassthrough: true,
+        }),
+        {
+          allowUnsafeHostPassthrough: true,
+          hostPassthroughWorkspaceRoot: "/tmp/oma",
+          egress,
+        },
+      ),
+    ).toThrow("egress is only supported by docker-local, not host-passthrough");
+    expect(
+      resolveSandboxProviderFactory(
+        parseSandboxProviderSelection({ type: "docker-local" }),
+        { allowDockerLocal: true, egress },
+      ),
+    ).toBeTypeOf("function");
+  });
 });

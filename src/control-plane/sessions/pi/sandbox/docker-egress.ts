@@ -35,7 +35,7 @@ import type { SessionEgressBundle } from "../../../egress/policy.ts";
 const SIDECAR_LABEL_KEY = "open-managed-agents.egress-sidecar";
 const SIDECAR_LABEL_VALUE = "docker-local";
 const DEFAULT_READINESS_TIMEOUT_MS = 20_000;
-const DEFAULT_SIDECAR_PORT = 8080;
+export const DEFAULT_SIDECAR_PORT = 8080;
 const DEFAULT_SIDECAR_MEMORY = "256m";
 const DEFAULT_SIDECAR_PIDS_LIMIT = "128";
 const DEFAULT_SIDECAR_TMPFS_SIZE = "64m";

@@ -1,4 +1,5 @@
 import { PiSessionRunner } from "./sessions/pi/runner.ts";
+import type { EgressBundleResolver } from "./sessions/pi/sandbox/docker.ts";
 import {
   parseSandboxProviderSelection,
   resolveSandboxProviderFactory,
@@ -17,6 +18,9 @@ export const DEPLOYMENT_RUNTIME_ENV_KEYS = [
   "OMA_ALLOW_UNSAFE_HOST_PASSTHROUGH",
   "OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH",
   "OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT",
+  "OMA_ENABLE_EGRESS",
+  "OMA_EGRESS_SIDECAR_IMAGE",
+  "OMA_EGRESS_SIDECAR_REPO_MOUNT",
 ] as const;
 
 export const DEFAULT_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS =
@@ -35,6 +39,13 @@ export type DeploymentRuntimeEnv = Partial<
 export interface DeploymentRuntimeConfig {
   sandboxProviderSelection?: SandboxProviderSelection;
   sandboxProviderSelectionOptions?: SandboxProviderSelectionResolverOptions;
+  /**
+   * Deployment-static egress config (plan 0117e-3), set only when
+   * OMA_ENABLE_EGRESS=true on docker-local. The per-session
+   * `resolveEgressBundle` closure is bound later, at runner construction —
+   * it needs the stores, which env parsing does not have.
+   */
+  egress?: { sidecarImage: string; sidecarRepoMount?: string };
 }
 
 type PiSessionRunnerOptions = NonNullable<
@@ -46,7 +57,14 @@ export type DeploymentPiSessionRunnerOptions = Omit<
   | "sandboxProviderFactory"
   | "sandboxProviderSelection"
   | "sandboxProviderSelectionOptions"
->;
+> & {
+  /**
+   * Required when config.egress is set (fail-closed: enabled egress with
+   * nothing able to resolve bundles must not boot). Unused — never silently
+   * wired — when egress is off.
+   */
+  resolveEgressBundle?: EgressBundleResolver;
+};
 
 export function parseDeploymentRuntimeConfigFromEnv(
   env: DeploymentRuntimeEnv,
@@ -72,6 +90,7 @@ export function parseDeploymentRuntimeConfigFromEnv(
       reapStaleContainersOlderThanMs:
         dockerReapStaleContainersOlderThanMs(env),
     });
+    const egress = egressConfig(env);
     return validateDeploymentRuntimeConfig({
       sandboxProviderSelection: selection,
       sandboxProviderSelectionOptions: {
@@ -80,12 +99,14 @@ export function parseDeploymentRuntimeConfigFromEnv(
           name: "OMA_ALLOW_DOCKER_LOCAL",
         }),
       },
+      ...(egress === undefined ? {} : { egress }),
     });
   }
   if (provider === "microsandbox-local") {
     rejectDockerEnv(env, "OMA_SANDBOX_PROVIDER=microsandbox-local");
     rejectHostPassthroughEnv(env, "OMA_SANDBOX_PROVIDER=microsandbox-local");
     rejectEnvAllowlist(env, "OMA_SANDBOX_PROVIDER=microsandbox-local");
+    rejectEgressEnv(env, "OMA_SANDBOX_PROVIDER=microsandbox-local");
     const selection = parseSandboxProviderSelection({
       type: "microsandbox-local",
       ...operationTimeoutMs(env),
@@ -109,6 +130,7 @@ export function parseDeploymentRuntimeConfigFromEnv(
     rejectDockerEnv(env, "OMA_SANDBOX_PROVIDER=host-passthrough");
     rejectMicrosandboxEnv(env, "OMA_SANDBOX_PROVIDER=host-passthrough");
     rejectOperationTimeoutEnv(env, "OMA_SANDBOX_PROVIDER=host-passthrough");
+    rejectEgressEnv(env, "OMA_SANDBOX_PROVIDER=host-passthrough");
     const unsafeAllowHostPassthrough = parseBoolean(
       env.OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH,
       {
@@ -144,6 +166,12 @@ export function validateDeploymentRuntimeConfig(
   config: DeploymentRuntimeConfig,
 ): DeploymentRuntimeConfig {
   rejectIgnoredResolverOptions(config);
+  if (
+    config.egress !== undefined &&
+    config.sandboxProviderSelection?.type !== "docker-local"
+  ) {
+    throw new Error("egress requires the docker-local sandbox provider");
+  }
   resolveSandboxProviderFactory(
     config.sandboxProviderSelection,
     config.sandboxProviderSelectionOptions,
@@ -165,10 +193,23 @@ export function createDeploymentPiSessionRunner(
       "Deployment runner options cannot override sandbox provider config",
     );
   }
+  const { resolveEgressBundle, ...runnerOpts } = opts;
+  if (config.egress !== undefined && resolveEgressBundle === undefined) {
+    throw new Error(
+      "egress is enabled but no egress bundle resolver was provided",
+    );
+  }
+  const selectionOptions =
+    config.egress === undefined || resolveEgressBundle === undefined
+      ? config.sandboxProviderSelectionOptions
+      : {
+          ...config.sandboxProviderSelectionOptions,
+          egress: { ...config.egress, resolveEgressBundle },
+        };
   return new PiSessionRunner({
-    ...opts,
+    ...runnerOpts,
     sandboxProviderSelection: config.sandboxProviderSelection,
-    sandboxProviderSelectionOptions: config.sandboxProviderSelectionOptions,
+    sandboxProviderSelectionOptions: selectionOptions,
   });
 }
 
@@ -210,6 +251,42 @@ function operationTimeoutMs(
     "OMA_SANDBOX_OPERATION_TIMEOUT_MS",
   );
   return { operationTimeoutMs: value };
+}
+
+// 0117e-3: egress requires BOTH the explicit boolean AND the image — setting
+// an image alone must never silently change network posture, and (this
+// file's idiom) partially-applied env is a loud startup error, not a warning.
+function egressConfig(
+  env: DeploymentRuntimeEnv,
+): { sidecarImage: string; sidecarRepoMount?: string } | undefined {
+  const enabled = parseBoolean(env.OMA_ENABLE_EGRESS, {
+    defaultValue: false,
+    name: "OMA_ENABLE_EGRESS",
+  });
+  const sidecarImage = optionalString(env.OMA_EGRESS_SIDECAR_IMAGE);
+  const sidecarRepoMount = optionalString(env.OMA_EGRESS_SIDECAR_REPO_MOUNT);
+  if (!enabled) {
+    if (sidecarImage !== undefined) {
+      throw new Error(
+        "OMA_EGRESS_SIDECAR_IMAGE is ignored without OMA_ENABLE_EGRESS=true",
+      );
+    }
+    if (sidecarRepoMount !== undefined) {
+      throw new Error(
+        "OMA_EGRESS_SIDECAR_REPO_MOUNT is ignored without OMA_ENABLE_EGRESS=true",
+      );
+    }
+    return undefined;
+  }
+  if (sidecarImage === undefined) {
+    throw new Error(
+      "OMA_ENABLE_EGRESS=true requires OMA_EGRESS_SIDECAR_IMAGE (the appliance cannot introspect its own image tag)",
+    );
+  }
+  return {
+    sidecarImage,
+    ...(sidecarRepoMount === undefined ? {} : { sidecarRepoMount }),
+  };
 }
 
 function dockerReapStaleContainersOlderThanMs(
@@ -258,6 +335,19 @@ function rejectProviderSpecificEnv(
   rejectMicrosandboxEnv(env, context);
   rejectEnvAllowlist(env, context);
   rejectOperationTimeoutEnv(env, context);
+  rejectEgressEnv(env, context);
+}
+
+function rejectEgressEnv(env: DeploymentRuntimeEnv, context: string): void {
+  for (const key of [
+    "OMA_ENABLE_EGRESS",
+    "OMA_EGRESS_SIDECAR_IMAGE",
+    "OMA_EGRESS_SIDECAR_REPO_MOUNT",
+  ] as const) {
+    if (env[key] !== undefined) {
+      throw new Error(`${key} is ignored by ${context}`);
+    }
+  }
 }
 
 function rejectIgnoredResolverOptions(config: DeploymentRuntimeConfig): void {

@@ -122,6 +122,71 @@ describe("deployment runtime config", () => {
     expect(() => createDeploymentPiSessionRunner(config)).not.toThrow();
   });
 
+  it("enables egress only with both the flag and the sidecar image", () => {
+    const config = parseDeploymentRuntimeConfigFromEnv({
+      OMA_SANDBOX_PROVIDER: "docker-local",
+      OMA_ALLOW_DOCKER_LOCAL: "true",
+      OMA_ENABLE_EGRESS: "true",
+      OMA_EGRESS_SIDECAR_IMAGE: "oma-appliance:test",
+      OMA_EGRESS_SIDECAR_REPO_MOUNT: "/repo",
+    });
+    expect(config.egress).toEqual({
+      sidecarImage: "oma-appliance:test",
+      sidecarRepoMount: "/repo",
+    });
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "docker-local",
+        OMA_ALLOW_DOCKER_LOCAL: "true",
+        OMA_ENABLE_EGRESS: "true",
+      }),
+    ).toThrow("OMA_ENABLE_EGRESS=true requires OMA_EGRESS_SIDECAR_IMAGE");
+  });
+
+  it("rejects a sidecar image that would silently change nothing", () => {
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "docker-local",
+        OMA_ALLOW_DOCKER_LOCAL: "true",
+        OMA_EGRESS_SIDECAR_IMAGE: "oma-appliance:test",
+      }),
+    ).toThrow("OMA_EGRESS_SIDECAR_IMAGE is ignored without OMA_ENABLE_EGRESS=true");
+  });
+
+  it("rejects egress env on non-docker providers", () => {
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "microsandbox-local",
+        OMA_ALLOW_MICROSANDBOX_LOCAL: "true",
+        OMA_ENABLE_EGRESS: "true",
+      }),
+    ).toThrow("OMA_ENABLE_EGRESS is ignored by OMA_SANDBOX_PROVIDER=microsandbox-local");
+
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_EGRESS_SIDECAR_IMAGE: "oma-appliance:test",
+      }),
+    ).toThrow("OMA_EGRESS_SIDECAR_IMAGE is ignored by set OMA_SANDBOX_PROVIDER first");
+  });
+
+  it("fails runner construction when egress is enabled without a bundle resolver", () => {
+    const config = parseDeploymentRuntimeConfigFromEnv({
+      OMA_SANDBOX_PROVIDER: "docker-local",
+      OMA_ALLOW_DOCKER_LOCAL: "true",
+      OMA_ENABLE_EGRESS: "true",
+      OMA_EGRESS_SIDECAR_IMAGE: "oma-appliance:test",
+    });
+    expect(() => createDeploymentPiSessionRunner(config)).toThrow(
+      "egress is enabled but no egress bundle resolver was provided",
+    );
+    expect(() =>
+      createDeploymentPiSessionRunner(config, {
+        resolveEgressBundle: async () => undefined,
+      }),
+    ).not.toThrow();
+  });
+
   it("does not let runner construction options replace deployment provider config", () => {
     expect(() =>
       createDeploymentPiSessionRunner(

@@ -9,7 +9,12 @@ import type {
 } from "../../types/sessions.ts";
 import { isJsonObject } from "../../types/json.ts";
 import type { AgentStore } from "../agents/types.ts";
-import type { EnvironmentStore } from "../environments/types.ts";
+import {
+  EgressPolicyError,
+  hasEgressNetworkingConfig,
+  parseNetworkingConfig,
+} from "../egress/policy.ts";
+import type { EnvironmentRow, EnvironmentStore } from "../environments/types.ts";
 import { ApiError, invalidRequest, notFound, rateLimited, toApiErrorBody } from "../errors.ts";
 import type {
   JsonHttpResponse,
@@ -74,10 +79,24 @@ interface DeleteSessionRowsResult {
   deletedSessionOutputFiles?: readonly FileStorageRecord[];
 }
 
+/**
+ * What the deployment's active sandbox provider can actually enforce (plan
+ * 0117e-3). Absent (or all-false) = reject session creation against any
+ * environment that grants egress — never run a credential-granting
+ * environment without the boundary.
+ */
+export interface SessionEgressCapability {
+  /** docker-local with OMA_ENABLE_EGRESS + a sidecar image. */
+  canHonorNetworking: boolean;
+  /** A SecretsStore exists (OMA_MASTER_KEY configured). */
+  hasSecretsStore: boolean;
+}
+
 export interface DefaultSessionServiceOptions {
   maxActiveSessionsPerWorkspace?: number;
   maxFileResources?: number;
   maxMountedBytes?: number;
+  egressCapability?: SessionEgressCapability;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
   deleteSessionRows?: (
     workspaceId: WorkspaceId,
@@ -94,6 +113,7 @@ export interface DefaultSessionServiceOptions {
 
 export class DefaultSessionService implements SessionService {
   private readonly maxActiveSessionsPerWorkspace: number | undefined;
+  private readonly egressCapability: SessionEgressCapability | undefined;
   private readonly maxFileResources: number;
   private readonly maxMountedBytes: number;
   private readonly runtime:
@@ -137,6 +157,7 @@ export class DefaultSessionService implements SessionService {
     this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
+    this.egressCapability = opts.egressCapability;
     this.runtime = opts.runtime;
     this.deleteSessionRows = opts.deleteSessionRows;
     this.idempotencyLedger = opts.idempotencyLedger;
@@ -270,6 +291,41 @@ export class DefaultSessionService implements SessionService {
     };
   }
 
+  // Fail-closed egress gate (plan 0117e-3, the slice's key safety property):
+  // an environment granting egress (OMA `networking.allow`/`.credentials`
+  // shape) must be REJECTED at session create when the deployment cannot
+  // honor it — silently running such a session at --network none (or worse,
+  // with credentials it cannot inject) hides a broken boundary from the
+  // operator. Hosted-shape networking (`{type:"unrestricted"}`) stays what it
+  // has always been in OMA: ignored, --network none.
+  private assertEgressHonorable(environment: EnvironmentRow): void {
+    if (!hasEgressNetworkingConfig(environment.config)) return;
+    let policy;
+    try {
+      policy = parseNetworkingConfig(environment.config);
+    } catch (error) {
+      if (error instanceof EgressPolicyError) {
+        throw invalidRequest(
+          `Environment ${environment.id} has an invalid networking config: ${error.message}`,
+        );
+      }
+      throw error;
+    }
+    if (policy === undefined) return;
+    if (this.egressCapability?.canHonorNetworking !== true) {
+      throw invalidRequest(
+        `Environment ${environment.id} grants network egress, but this deployment cannot honor it ` +
+          "(requires OMA_SANDBOX_PROVIDER=docker-local with OMA_ENABLE_EGRESS=true and OMA_EGRESS_SIDECAR_IMAGE)",
+      );
+    }
+    if (policy.credentials.length > 0 && !this.egressCapability.hasSecretsStore) {
+      throw invalidRequest(
+        `Environment ${environment.id} grants credentials, but this deployment has no secrets store ` +
+          "(set OMA_MASTER_KEY or OMA_MASTER_KEY_FILE)",
+      );
+    }
+  }
+
   private async createInternalReserved(
     workspaceId: WorkspaceId,
     input: unknown,
@@ -295,6 +351,7 @@ export class DefaultSessionService implements SessionService {
     if (!environment) {
       throw invalidRequest(`Environment ${req.environment_id} not found`);
     }
+    this.assertEgressHonorable(environment);
 
     const now = new Date().toISOString();
     const sessionId = newSessionId();
