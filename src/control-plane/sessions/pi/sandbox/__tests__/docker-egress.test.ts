@@ -6,6 +6,7 @@ import {
   buildSidecarRunArgs,
   egressProxyUrl,
   reapEgressSidecars,
+  sidecarLabels,
 } from "../docker-egress.ts";
 
 describe("egress sidecar arg construction (0117d)", () => {
@@ -15,6 +16,7 @@ describe("egress sidecar arg construction (0117d)", () => {
       image: "oma-appliance:latest",
       sharedDir: "/host/e/shared",
       bundlePath: "/host/e/bundle.json",
+      user: "501:20",
       labels: { "open-managed-agents.session-id": "sesn_1" },
     });
     // Upstream egress via the default bridge; the internal net is attached
@@ -33,6 +35,32 @@ describe("egress sidecar arg construction (0117d)", () => {
     expect(args.join(" ")).not.toContain(":/app:ro");
   });
 
+  it("hardens the sidecar to the sandbox's least-privilege standard", () => {
+    // The sidecar holds resolved secrets + the MITM CA and is reachable by the
+    // sandbox, so a proxy/vendor RCE must not gain more than the sandbox has.
+    const args = buildSidecarRunArgs({
+      containerName: "oma-egress-proxy-x",
+      image: "oma-appliance:latest",
+      sharedDir: "/host/e/shared",
+      bundlePath: "/host/e/bundle.json",
+      user: "501:20",
+      labels: {},
+    });
+    expect(args).toContain("--cap-drop");
+    expect(args).toContain("ALL");
+    expect(args).toContain("--security-opt");
+    expect(args).toContain("no-new-privileges");
+    expect(args).toContain("--read-only");
+    expect(args).toContain("--user");
+    expect(args).toContain("501:20");
+    expect(args).toContain("--memory");
+    expect(args).toContain("--pids-limit");
+    // Read-only root: node needs a writable tmpfs for CA minting + HOME.
+    expect(args).toContain("--tmpfs");
+    expect(args.some((a) => a.startsWith("/tmp:rw"))).toBe(true);
+    expect(args).toContain("HOME=/tmp");
+  });
+
   it("bind-mounts the repo when the image lacks baked source (dev/test)", () => {
     const args = buildSidecarRunArgs({
       containerName: "oma-egress-proxy-x",
@@ -40,19 +68,44 @@ describe("egress sidecar arg construction (0117d)", () => {
       sharedDir: "/host/e/shared",
       bundlePath: "/host/e/bundle.json",
       repoMount: "/repo",
+      user: "501:20",
       labels: {},
     });
     expect(args).toContain("/repo:/app:ro");
   });
 
-  it("puts the auth token in the password slot (matches the proxy's Basic check)", () => {
-    expect(
-      egressProxyUrl({
-        proxyHost: "oma-egress-proxy-x",
-        proxyPort: 8080,
-        proxyAuthToken: "tok-123",
-      }),
-    ).toBe("http://srt:tok-123@oma-egress-proxy-x:8080");
+  it("percent-encodes the auth token so a URL delimiter cannot malform the proxy URL", () => {
+    const url = egressProxyUrl({
+      proxyHost: "oma-egress-proxy-x",
+      proxyPort: 8080,
+      proxyAuthToken: "tok-123",
+    });
+    expect(url).toBe("http://srt:tok-123@oma-egress-proxy-x:8080");
+    // A delimiter-bearing token round-trips: the parsed password decodes back
+    // to the exact token, and the host is not hijacked by an embedded '@'.
+    const nasty = egressProxyUrl({
+      proxyHost: "oma-egress-proxy-x",
+      proxyPort: 8080,
+      proxyAuthToken: "a@b:c/d?e#f",
+    });
+    const parsed = new URL(nasty);
+    expect(parsed.hostname).toBe("oma-egress-proxy-x");
+    expect(decodeURIComponent(parsed.password)).toBe("a@b:c/d?e#f");
+  });
+
+  it("never lets caller labels shadow the reserved reaper/ownership labels", () => {
+    const merged = sidecarLabels(
+      {
+        // A caller trying to hide the sidecar from the crash reaper.
+        "open-managed-agents.egress-sidecar": "not-docker-local",
+        "open-managed-agents.session-id": "spoofed",
+        "team": "blue",
+      },
+      "sesn_real",
+    );
+    expect(merged["open-managed-agents.egress-sidecar"]).toBe("docker-local");
+    expect(merged["open-managed-agents.session-id"]).toBe("sesn_real");
+    expect(merged["team"]).toBe("blue"); // unrelated caller labels still pass through
   });
 });
 

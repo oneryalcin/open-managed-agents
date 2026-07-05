@@ -197,16 +197,25 @@ live-Docker probes (2026-07-05): the four network-mode reachability/confinement
 matrix, and the sidecar entrypoint running end-to-end in a container (MITM
 termination + CA trust + enforcement).
 
-**Review fixes (Codex adversarial + standard, folded in, each mutation-checked).**
-(1) A sandbox-start failure now disposes the already-created sidecar — else its
-container + the resolved-secret bundle leak. (2) The sidecar publishes the full
+**Review fixes (two Codex rounds, folded in, each mutation-checked).** Round 1:
+(1) a sandbox-start failure now disposes the already-created sidecar — else its
+container + the resolved-secret bundle leak; (2) the sidecar publishes the full
 **trust bundle** (MITM CA + public roots), not just the CA: the sandbox trust
 env vars *replace* the client store, so CA-only would break TLS verification for
-any opaque-tunnel host the proxy does not terminate. (3) Crash cleanup hardened —
+any opaque-tunnel host the proxy does not terminate; (3) crash cleanup hardened —
 `bundle.json` is unlinked the instant the sidecar signals ready (secrets at-rest
 window ~1s), the `--internal` networks are labelled + age-reaped with the sidecar
 containers, stale `oma-egress-*` temp roots are swept, and the egress reaper is
-wired into the same startup sweep as the container reaper.
+wired into the same startup sweep as the container reaper. Round 2 (the sidecar
+IS the boundary now): (4) **least-privilege hardening** to the sandbox standard —
+`--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only` root, a small
+`--tmpfs /tmp` (CA minting) + `HOME=/tmp`, non-root `--user <control-plane
+uid:gid>` (so it can still read the 0600 bundle it must, without root), and
+memory/pids limits; probe-verified the hardened sidecar still boots + enforces
+407/403/200. (5) the proxy-auth token is percent-encoded in the proxy URL and
+constrained to a URL-safe charset at the seam, so a delimiter can't malform the
+URL or alter the credential. (6) caller labels can no longer shadow the reserved
+reaper/ownership labels (`sidecarLabels` applies reserved keys last).
 
 **Deliberately NOT in this slice — the session integration (next).** Nothing
 yet calls `resolveSessionEgressBundle`/`createEgressSidecar` from the *live*

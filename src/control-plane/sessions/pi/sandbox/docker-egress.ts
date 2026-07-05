@@ -36,6 +36,16 @@ const SIDECAR_LABEL_KEY = "open-managed-agents.egress-sidecar";
 const SIDECAR_LABEL_VALUE = "docker-local";
 const DEFAULT_READINESS_TIMEOUT_MS = 20_000;
 const DEFAULT_SIDECAR_PORT = 8080;
+const DEFAULT_SIDECAR_MEMORY = "256m";
+const DEFAULT_SIDECAR_PIDS_LIMIT = "128";
+const DEFAULT_SIDECAR_TMPFS_SIZE = "64m";
+
+/** `<uid>:<gid>` the sidecar runs as: the control-plane's own ids. */
+function currentUserSpec(): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0;
+  return `${uid}:${gid}`;
+}
 
 export interface CreateEgressSidecarOptions {
   dockerCommand: string;
@@ -68,13 +78,19 @@ export interface EgressSidecar {
   dispose(): void;
 }
 
-/** The proxy URL a sandbox uses: auth token rides in the password slot. */
+/**
+ * The proxy URL a sandbox uses: auth token rides in the password slot. The
+ * token is percent-encoded so a URL delimiter (`@ : / ? #`) can't malform the
+ * URL or change the credentials the client sends (the seam also constrains the
+ * charset — {@link resolveSessionEgressBundle} — so this is defense in depth).
+ */
 export function egressProxyUrl(sidecar: {
   proxyHost: string;
   proxyPort: number;
   proxyAuthToken: string;
 }): string {
-  return `http://srt:${sidecar.proxyAuthToken}@${sidecar.proxyHost}:${sidecar.proxyPort}`;
+  const token = encodeURIComponent(sidecar.proxyAuthToken);
+  return `http://srt:${token}@${sidecar.proxyHost}:${sidecar.proxyPort}`;
 }
 
 export async function createEgressSidecar(
@@ -135,11 +151,8 @@ export async function createEgressSidecar(
         sharedDir,
         bundlePath,
         repoMount: opts.sidecarRepoMount,
-        labels: {
-          [SIDECAR_LABEL_KEY]: SIDECAR_LABEL_VALUE,
-          "open-managed-agents.session-id": opts.sessionId,
-          ...opts.labels,
-        },
+        user: currentUserSpec(),
+        labels: sidecarLabels(opts.labels, opts.sessionId),
       }),
       opts.operationTimeoutMs,
     );
@@ -180,6 +193,22 @@ export async function createEgressSidecar(
   }
 }
 
+/**
+ * Merge caller labels with the reserved ownership labels the crash reaper
+ * matches on. Caller labels are applied FIRST so they can never shadow the
+ * reserved keys — otherwise a caller could hide a sidecar from reaping.
+ */
+export function sidecarLabels(
+  callerLabels: Record<string, string> | undefined,
+  sessionId: string,
+): Record<string, string> {
+  return {
+    ...callerLabels,
+    [SIDECAR_LABEL_KEY]: SIDECAR_LABEL_VALUE,
+    "open-managed-agents.session-id": sessionId,
+  };
+}
+
 export function buildSidecarRunArgs(opts: {
   containerName: string;
   image: string;
@@ -187,6 +216,15 @@ export function buildSidecarRunArgs(opts: {
   bundlePath: string;
   repoMount?: string;
   labels: Record<string, string>;
+  /**
+   * `<uid>:<gid>` the sidecar runs as — the control-plane's own ids, so the
+   * process can read the 0600 secret bundle and write the shared dir it
+   * mounts (both host-owned by the control plane) while still being non-root.
+   */
+  user: string;
+  memory?: string;
+  pidsLimit?: string;
+  tmpfsSize?: string;
 }): string[] {
   const labels = Object.entries(opts.labels).flatMap(([k, v]) => [
     "--label",
@@ -198,9 +236,27 @@ export function buildSidecarRunArgs(opts: {
     "--name",
     opts.containerName,
     // Start on the default bridge for upstream egress; the internal net is
-    // attached afterwards. Sidecar is hardened but must reach real upstreams.
+    // attached afterwards. The sidecar is now part of the security boundary
+    // (it holds resolved secrets + the MITM CA and is reachable by the
+    // sandbox), so it gets the same least-privilege hardening as the sandbox
+    // (docker.ts buildDockerRunArgs): no caps, no new privs, read-only root,
+    // non-root, resource-bounded. Its ONLY writable surface is a small tmpfs
+    // (CA minting) plus the shared dir it must publish ca.crt/ready to.
     "--network",
     "bridge",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "--read-only",
+    "--tmpfs",
+    `/tmp:rw,nosuid,nodev,size=${opts.tmpfsSize ?? DEFAULT_SIDECAR_TMPFS_SIZE}`,
+    "--user",
+    opts.user,
+    "--memory",
+    opts.memory ?? DEFAULT_SIDECAR_MEMORY,
+    "--pids-limit",
+    opts.pidsLimit ?? DEFAULT_SIDECAR_PIDS_LIMIT,
     ...labels,
     ...(opts.repoMount ? ["-v", `${opts.repoMount}:/app:ro`] : []),
     "-v",
@@ -211,6 +267,9 @@ export function buildSidecarRunArgs(opts: {
     "OMA_EGRESS_BUNDLE_PATH=/bundle.json",
     "--env",
     "OMA_EGRESS_SHARED_DIR=/shared",
+    // Read-only root + non-root: give node a writable HOME on the tmpfs.
+    "--env",
+    "HOME=/tmp",
     "--workdir",
     "/app",
     opts.image,

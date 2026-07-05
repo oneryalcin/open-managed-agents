@@ -395,12 +395,17 @@ export interface ResolveSessionEgressBundleOptions {
 export function resolveSessionEgressBundle(
   opts: ResolveSessionEgressBundleOptions,
 ): { sandboxEnv: Record<string, string>; bundle: SessionEgressBundle } | undefined {
+  // The token rides in a proxy-URL userinfo slot; constrain it to a URL-safe
+  // charset so a delimiter can't malform the URL or alter the credential the
+  // sandbox client sends. OMA mints the token, so this is a contract, not a
+  // parser — callers should pass hex / base64url.
   if (
     typeof opts.proxyAuthToken !== "string" ||
-    opts.proxyAuthToken.trim() === ""
+    !/^[A-Za-z0-9._~-]+$/.test(opts.proxyAuthToken)
   ) {
     throw new EgressPolicyError(
-      "resolveSessionEgressBundle requires a non-empty proxyAuthToken",
+      "resolveSessionEgressBundle requires a non-empty URL-safe proxyAuthToken " +
+        "([A-Za-z0-9._~-]); use hex or base64url",
     );
   }
   const policy = parseNetworkingConfig(opts.environmentConfig);
