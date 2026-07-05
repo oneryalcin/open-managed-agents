@@ -381,7 +381,7 @@ function buildHooks(
     allowOpaqueTunnel: (host, port) =>
       findAllow(host, port)?.opaqueTunnel === true,
 
-    filterRequest: async (request) => {
+    filterRequest: async (request, context) => {
       const url = new URL(request.url);
       const host = url.hostname.toLowerCase();
       const port = url.port
@@ -404,11 +404,18 @@ function buildHooks(
       // Sentinel scope enforcement (ADR 0016 §6): a request carrying a
       // sentinel ANYWHERE outside its grant's (host, port, path, method,
       // header) scope is denied — the agent cannot steer a granted
-      // credential to an ungranted endpoint, and a sentinel can never
-      // transit where injection would not happen (e.g. plain HTTP).
+      // credential to an ungranted endpoint. The vendor leg discriminator is
+      // also load-bearing: only the TLS-terminated leg runs mutateHeaders, so
+      // a sentinel on the plain request leg must fail closed before forwarding.
       for (const grant of grants) {
         for (const [headerName, headerValue] of request.headers) {
           if (!headerValue.includes(grant.sentinel)) continue;
+          if (context.leg === "plain") {
+            return {
+              action: "deny",
+              reason: `credential ${grant.env} cannot transit the plain proxy leg`,
+            };
+          }
           if (headerName.toLowerCase() !== grant.header) {
             return {
               action: "deny",

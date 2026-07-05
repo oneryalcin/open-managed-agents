@@ -2,6 +2,7 @@
 // HTTP (the sandbox-client shape the proxy terminates), and a raw-bytes
 // CONNECT for opaque-tunnel behavior. Kept out of the test files so the
 // vendor contract test (0117a) and the policy e2e (0117c) share one client.
+import { request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 
@@ -77,6 +78,51 @@ export function tunnelRequest(
     };
     sock.on("data", onData);
     sock.on("error", reject);
+  });
+}
+
+export interface AbsoluteFormProxyResult {
+  httpStatus: number;
+  body: string;
+}
+
+export function absoluteFormProxyRequest(opts: {
+  proxyPort: number;
+  targetUrl: string;
+  headers?: Record<string, string>;
+  token?: string;
+  method?: string;
+}): Promise<AbsoluteFormProxyResult> {
+  const method = opts.method ?? "GET";
+  return new Promise((resolve, reject) => {
+    const headers = { ...(opts.headers ?? {}) };
+    if (opts.token) {
+      headers["proxy-authorization"] =
+        `Basic ${Buffer.from(`srt:${opts.token}`).toString("base64")}`;
+    }
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port: opts.proxyPort,
+        method,
+        path: opts.targetUrl,
+        headers,
+        // Fresh socket per call. Node 19+ globalAgent keep-alives by default;
+        // on a denied request the proxy RSTs the socket without Connection:
+        // close, so a pooled socket would be dead on the next request and the
+        // reuse would surface as a spurious ECONNRESET.
+        agent: false,
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (d) => (body += d.toString("utf8")));
+        res.on("end", () => {
+          resolve({ httpStatus: res.statusCode ?? 0, body });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.end();
   });
 }
 

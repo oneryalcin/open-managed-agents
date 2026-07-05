@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { request as httpRequest } from "node:http";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { createServer as createTcpServer, type Server as TcpServer } from "node:net";
@@ -14,7 +13,7 @@ import {
   resolveSessionEgress,
 } from "../policy.ts";
 import { createEgressProxy, createMitmCA, disposeMitmCA, type MitmCA } from "../proxy.ts";
-import { rawTunnel, tunnelRequest } from "./tunnel-helpers.ts";
+import { absoluteFormProxyRequest, rawTunnel, tunnelRequest } from "./tunnel-helpers.ts";
 
 // Policy tests for plan 0117c (ADR 0016 §2/§3/§6). Three layers:
 //  - strict parsing: a typo'd or over-broad config must be rejected, never
@@ -434,23 +433,30 @@ describe("credentialed egress e2e (plan 0117c)", () => {
   });
 
   it("denies a sentinel over plain HTTP (injection is TLS-only)", async () => {
-    const status = await new Promise<number>((resolve, reject) => {
-      const req = httpRequest(
-        {
-          host: "127.0.0.1",
-          port: proxyPort,
-          method: "GET",
-          path: `http://localhost:${plainEchoPort}/whatever`,
-          headers: {
-            authorization: `Bearer ${sentinel}`,
-            "proxy-authorization": `Basic ${Buffer.from(`srt:${TOKEN}`).toString("base64")}`,
-          },
-        },
-        (res) => resolve(res.statusCode ?? 0),
-      );
-      req.on("error", reject);
-      req.end();
+    const res = await absoluteFormProxyRequest({
+      proxyPort,
+      targetUrl: `http://localhost:${plainEchoPort}/whatever`,
+      token: TOKEN,
+      headers: {
+        authorization: `Bearer ${sentinel}`,
+      },
     });
-    expect(status).toBe(403);
+    expect(res.httpStatus).toBe(403);
+  });
+
+  it("denies an in-scope sentinel on the plain absolute-form HTTPS leg", async () => {
+    const before = upstreamSeen.length;
+    const res = await absoluteFormProxyRequest({
+      proxyPort,
+      targetUrl: `https://localhost:${echoPort}/api/repos/oma`,
+      token: TOKEN,
+      headers: {
+        authorization: `Bearer ${sentinel}`,
+      },
+    });
+    expect(res.httpStatus).toBe(403);
+    expect(res.body).toMatch(/plain proxy leg/);
+    expect(upstreamSeen.length).toBe(before);
+    expect(upstreamSeen.slice(before).some((seen) => seen.auth?.includes(sentinel))).toBe(false);
   });
 });

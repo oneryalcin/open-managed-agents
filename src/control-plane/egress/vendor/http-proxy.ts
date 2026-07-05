@@ -389,6 +389,7 @@ export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
           res,
           absUrl,
           ac.signal,
+          { leg: 'plain' }, // OMA: plain request leg never runs mutateHeaders.
         )
         if (out === null) return
         body = out

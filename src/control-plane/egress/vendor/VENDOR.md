@@ -82,6 +82,15 @@ non-empty per-session token and rejects `parentProxy`. Nothing outside the
    instead of `void`-ing it. A throw anywhere in the forward path (e.g. a
    header hook) must kill the exchange, not become an unhandled rejection that
    crashes the proxy process.
+9. **Request-leg discriminator for filterRequest** (plan 0117c, marked
+   `// OMA:`) — `RequestFilterContext` (request-filter.ts) adds
+   `leg: 'terminated' | 'plain'`, `decideAndRespond` passes it to
+   `filterRequest`, and the two call sites set it explicitly:
+   `tls-terminate-proxy.ts` marks the TLS-terminated leg as `terminated`, while
+   `http-proxy.ts` marks the absolute-form `server.on('request')` leg as
+   `plain`. ADR 0016 §3/§6 require sentinels to transit only where the proxy
+   can inspect and inject; without this discriminator both legs present
+   `https:` URLs to policy.
 
 All changes are marked `// OMA:` in code (except the mechanical `.js`→`.ts`
 rewrite and the two shim files, which are noted here).

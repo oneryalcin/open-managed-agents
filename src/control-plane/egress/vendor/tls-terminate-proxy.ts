@@ -251,6 +251,7 @@ async function forwardUpstream(
       res,
       `https://${host}${path}`,
       ac.signal,
+      { leg: 'terminated' }, // OMA: this leg runs mutateHeaders.
     )
     if (out === null) return
     body = out
