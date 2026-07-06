@@ -43,7 +43,13 @@ Standing constraints that follow from this:
   secrets and egress in
   [egress-secrets-buy-vs-build.md](../references/egress-secrets-buy-vs-build.md).
 
-## Where the repo stands against that vision (verified 2026-07-02)
+## Where the repo stands against that vision (verified 2026-07-02; updated 2026-07-06)
+
+> **Progress since first draft (2026-07-06).** Two of the items below moved:
+> the **capability track's egress + secrets boundary is DONE** (0117a–e + 0118,
+> #136–#150 — the enabling gap is closed), and **Arc A slice 1 shipped**
+> (#135 — appliance entrypoint, Dockerfile, compose, `bin`, first-boot key
+> mint). Corrected inline below.
 
 Done — the invisible hard parts:
 
@@ -53,16 +59,27 @@ Done — the invisible hard parts:
 - Multi-tenancy on one node: hashed API-key workspaces, fail-closed
   `OMA_AUTH_MODE`, per-workspace admission limits, operator CLI, rollback
   runbook, load harness (plan 0113 / #129).
+- **Credentialed egress boundary + secrets at rest** (2026-07-06): vendored
+  SSRF-denying proxy, per-session dual-homed sidecar, envelope-encrypted
+  `SqliteSecretsStore`, `/v1/secrets` API, fail-closed session wiring
+  (0117a–e, 0118; ADR 0016). Sandboxed agents reach allowlisted hosts through
+  injected credentials they never see. Closes #130 and threat model §3/§4.
 
 Greenfield or stub — the visible product parts:
 
-- **Packaging: nothing.** No Dockerfile, no compose, no `bin` entry; the
-  server boots via `npx tsx examples/.../oma-server.ts`.
-- **First boot: nothing.** Provisioning is a separate CLI with direct DB
-  access.
+- **Packaging: Arc A slice 1 shipped (#135, plan 0115).** `Dockerfile` +
+  `docker-compose.yml` + `bin/open-managed-agents` + `src/main.ts` boot a
+  durable, authenticated server (Hono via `@hono/node-server`, `OMA_PORT`
+  4180) and mint + print the first-boot key. **Remaining in Arc A:** serve the
+  console from the same process; compose docs for docker-local egress
+  (docker.sock + `OMA_EGRESS_SIDECAR_IMAGE` + `OMA_MASTER_KEY`).
+- **First boot: key minting done (#135).** First boot initializes durable
+  storage and prints the initial API key; the separate provisioning CLI path
+  still exists for later keys.
 - **Dashboard: read-only stub.** `ui/managed-agents-console` is a static
   console with a dev proxy and demo-data fallback; all mutations disabled; no
-  admin capability, and no admin HTTP API for it to call.
+  admin capability, and no admin HTTP API for it to call. Not served by the
+  appliance process yet.
 - **Observability: logs only.** No metrics, health endpoint, alerts, or SLOs
   (0112 gate: blocks production).
 - **Usage metering: `usage: null`** on sessions; operator's Anthropic key does
@@ -77,24 +94,41 @@ implementing any row** (house discipline; the 0113 probes are the model).
 
 | Capability | Hosted | OMA today | Note |
 | --- | --- | --- | --- |
-| Skills | Loaded into session container | **Wire-accepted, runtime-inert** (`skills` parsed/stored/echoed; nothing in `sessions/pi/` consumes it) | Fundamentally files + instructions into the sandbox; no heavy dependency |
-| MCP servers | Sessions connect, auth handled | **Wire-accepted, runtime-inert** (`mcp_servers` same story) | Client is a small protocol dep; blocked by egress |
-| Sandbox networking | `environment.config.networking: {type: "limited", allowed_hosts}` | Absent — env `config` is opaque `JsonObject`; sandbox is `--network none` | **The enabling gap**: skills, MCP, web tools, repo mounts all sit behind it |
-| Secret handling | Vault + boundary injection; secrets never in sandbox | Absent (design decided: see buy-vs-build survey; #130) | Same egress boundary does allowlist + injection |
+| Skills | Loaded into session container | **Wire-accepted, runtime-inert** (`skills` parsed/stored/echoed; nothing in `sessions/pi/` consumes it) | Fundamentally files + instructions into the sandbox; no heavy dependency. **Now unblocked** (egress done) |
+| MCP servers | Sessions connect, auth handled | **Wire-accepted, runtime-inert** (`mcp_servers` same story) | Client is a small protocol dep; **egress + secrets now present** |
+| Sandbox networking | `environment.config.networking: {type: "limited", allowed_hosts}` | **DONE (2026-07-06)** — `networking.allow`/`credentials` parsed into a per-session egress policy; docker-local sidecar honors it, else `--network none` (0117c–e) | The enabling gap — now closed; skills, MCP, web tools, repo mounts unblocked |
+| Secret handling | Vault + boundary injection; secrets never in sandbox | **DONE (2026-07-06)** — envelope-encrypted `SqliteSecretsStore`, sentinels in the sandbox, real values injected only at the TLS-terminated proxy leg (0117c/d, 0118) | Same egress boundary does allowlist + injection; #130 closed |
 | Session usage | Cumulative token usage per session | `usage: null` | Wire schema + span-level usage already captured in [observability schema findings](../references/managed-agents-observability-schema-findings.md); metering = aggregation |
 | GitHub repo mounts | With out-of-band token injection | Absent | After egress + secrets |
 | Task budgets | `task_budgets` token caps | Absent | Threat model §8 open item |
 | Memory stores | Early hosted feature | Absent | Deliberately deferred; Osaurus notes in [agentos-osaurus-prior-art.md](../references/agentos-osaurus-prior-art.md) are the shelf material |
 | Event topology | Full vocabulary incl. streaming chunks, MCP tool events | Partial — tracked in [managed-agents-event-topology.md](../references/managed-agents-event-topology.md) (#77) | Parity polish, not capability |
 
+## Current focus (2026-07-06)
+
+With the capability track's foundation (egress + secrets) done, the next pass
+is a **deliberate turn to the product layer (Arcs A–D)** — finish what makes an
+operator able to hold the appliance — **before** returning to the capability
+track's skills + MCP. Rationale: the enabling gap is closed, so skills/MCP are
+unblocked whenever we return; meanwhile the visible product (packaging polish,
+admin API + dashboard, health, metering) is what turns "the hard parts work"
+into "the appliance exists" (exit criteria below).
+
 ## Arcs, in order
 
-### Arc A — Appliance packaging + first boot
+### Arc A — Appliance packaging + first boot — 🟡 slice 1 shipped (#135)
 
 One entrypoint (`npx open-managed-agents` and/or one Dockerfile + compose with
 a volume): start → init durable DB → mint admin credential, print once → serve
 API and console from one process. Small; forces every "how does an operator
 hold this" question to be answered. Ship first.
+
+**Done (slice 1, #135):** `bin/open-managed-agents` + `src/main.ts` +
+Dockerfile + compose boot the durable authenticated server and mint/print the
+first-boot key. **Remaining:** serve the static console from the same process
+so an operator reaches a dashboard without a dev proxy; compose/docs for
+docker-local egress (docker.sock mount + `OMA_EGRESS_SIDECAR_IMAGE` +
+`OMA_MASTER_KEY`).
 
 ### Arc B — Admin API + real dashboard
 
@@ -122,12 +156,15 @@ SaaS; immediately useful in the dashboard.
 Runs alongside A–D rather than after them (an appliance whose agents can't
 reach the network or use skills demos poorly):
 
-1. Egress proxy + secrets: confidence probes, then the ADR, per the
+1. ✅ **DONE (2026-07-06).** Egress proxy + secrets: confidence probes, then
+   the ADR, per the
    [buy-vs-build survey](../references/egress-secrets-buy-vs-build.md)
    (vendored sandbox-runtime proxy stack; envelope-encrypted `SecretsStore` in
-   SQLite). Closes #130 and threat model §3/§4.
-2. Skills execution (mount skill files/instructions into the sandbox).
-3. MCP server connections (MCP TS SDK client; tokens via `SecretsStore`,
+   SQLite). Shipped as 0117a–e + 0118 (#136–#150); ADR 0016. Closed #130 and
+   threat model §3/§4.
+2. ⬜ Skills execution (mount skill files/instructions into the sandbox). **Now
+   unblocked** — the next capability step when the product-layer pass pauses.
+3. ⬜ MCP server connections (MCP TS SDK client; tokens via `SecretsStore`,
    injected at the boundary).
 
 ## Deferred, with seams kept clean
