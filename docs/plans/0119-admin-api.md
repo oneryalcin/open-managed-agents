@@ -146,7 +146,7 @@ Mounted at `/admin`, gated by the admin middleware (§5). Error envelope reuses
 | GET | `/admin/workspaces/:id` | — | 200 `Workspace` | 404 if absent |
 | POST | `/admin/workspaces/:id/keys` | `{ label? }` | 201 `MintedKey` | **plaintext returned ONCE**; label defaults `"default"`; 404 if workspace absent |
 | GET | `/admin/workspaces/:id/keys` | — | 200 `KeyMetadata[]` | digests/labels/revocation only, never plaintext; 404 if workspace absent |
-| DELETE | `/admin/keys/:sha256` | — | 200 `{ key_sha256, workspace_id, revoked }` | 404 if key absent; already-revoked → 200 with `revoked` unchanged |
+| DELETE | `/admin/keys/:sha256` | — | 200 `KeyMetadata` | 404 if key absent; already-revoked → 200 with `revoked_at` unchanged |
 
 Serialized shapes (define in `admin/service.ts`; do not leak raw rows):
 ```

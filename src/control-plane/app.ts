@@ -1,5 +1,8 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { createAdminAuth, loadAdminKey, type AdminAuth } from "./admin/auth.ts";
+import { adminRoutes } from "./admin/routes.ts";
+import { DefaultAdminService, type AdminService } from "./admin/service.ts";
 import { agentsRoutes } from "./agents/routes.ts";
 import { DefaultAgentService } from "./agents/service.ts";
 import { SqliteAgentStore } from "./agents/store.ts";
@@ -84,6 +87,10 @@ export interface ControlPlaneAuth {
 }
 
 export interface ControlPlaneServices {
+  admin?: {
+    service: AdminService;
+    auth: AdminAuth;
+  };
   agents: AgentService;
   environments: EnvironmentService;
   files?: FileService;
@@ -111,6 +118,8 @@ export type DeploymentAuthMode = "api-key" | "disabled";
 
 export interface DeploymentAuthEnv {
   OMA_AUTH_MODE?: string;
+  OMA_ADMIN_KEY?: string;
+  OMA_ADMIN_KEY_FILE?: string;
 }
 
 export type DeploymentControlPlaneEnv =
@@ -179,6 +188,22 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     });
   }
 
+  if (services.admin) {
+    const adminAuth = services.admin.auth;
+    app.use("*", async (c, next) => {
+      if (!isAdminRoute(c.req.path)) {
+        await next();
+        return;
+      }
+      const key = c.req.header("x-admin-key");
+      if (key === undefined || !adminAuth.verify(key)) {
+        const err = authenticationFailed();
+        return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+      }
+      await next();
+    });
+  }
+
   app.use("*", async (c, next) => {
     const betaFeatures = parseBetaFeatures(c.req.header("anthropic-beta"));
     if (isManagedAgentsRoute(c.req.path) && !hasRequiredBeta(c.req.path, betaFeatures)) {
@@ -214,6 +239,9 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     "/v1/sessions/:sessionId/events",
     sessionEventsRoutes(services.sessionEvents, services.admission),
   );
+  if (services.admin) {
+    app.route("/admin", adminRoutes(services.admin.service));
+  }
 
   app.notFound((c) => {
     const err = new ApiError(404, "not_found_error", "Route not found");
@@ -256,6 +284,7 @@ export function createDeploymentControlPlane(
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
   const admission = createAdmissionLimits(parseAdmissionLimitsFromEnv(env));
+  const adminKey = loadAdminKey(env);
   const stores = createDeploymentStoresFromEnv(env);
   if (authMode === "api-key" && stores.mode !== "durable") {
     stores.close();
@@ -277,6 +306,20 @@ export function createDeploymentControlPlane(
       "A secrets master key (OMA_MASTER_KEY/OMA_MASTER_KEY_FILE) requires OMA_AUTH_MODE=api-key: " +
         "without it the /v1/secrets API is unauthenticated and resolves to wrk_default, so anyone " +
         "reaching the server could read metadata and overwrite the credentials used for egress injection.",
+    );
+  }
+  if (adminKey !== undefined && stores.mode !== "durable") {
+    stores.close();
+    throw new Error(
+      "OMA_ADMIN_KEY/OMA_ADMIN_KEY_FILE requires durable deployment storage: set OMA_SQLITE_PATH and OMA_FILE_STORAGE_ROOT. " +
+        "In-memory admin management would not survive restart.",
+    );
+  }
+  if (adminKey !== undefined && authMode !== "api-key") {
+    stores.close();
+    throw new Error(
+      "OMA_ADMIN_KEY/OMA_ADMIN_KEY_FILE requires OMA_AUTH_MODE=api-key: " +
+        "the admin API mints workspace keys for /v1 routes, so workspace authentication must be enabled.",
     );
   }
   const broadcaster = new SessionEventBroadcaster(stores.events);
@@ -320,6 +363,14 @@ export function createDeploymentControlPlane(
   );
   sessionEvents.recoverAllAbandonedRuntimeTurns();
   const app = createControlPlaneApp({
+    ...(adminKey === undefined
+      ? {}
+      : {
+          admin: {
+            service: new DefaultAdminService(stores.workspaces),
+            auth: createAdminAuth(adminKey),
+          },
+        }),
     ...(authMode === "api-key"
       ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
       : {}),
@@ -521,6 +572,10 @@ function isManagedAgentsRoute(path: string): boolean {
     "/v1/secrets",
     "/v1/sessions",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function isAdminRoute(path: string): boolean {
+  return path === "/admin" || path.startsWith("/admin/");
 }
 
 function hasRequiredBeta(path: string, betaFeatures: Set<string>): boolean {
