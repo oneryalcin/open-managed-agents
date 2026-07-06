@@ -458,9 +458,13 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   it("prepareSession materializes file mounts and reuses the prepared session", async () => {
     const factory = new FakeSessionFactory();
     const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
+    const seenSandboxContexts: unknown[] = [];
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
-      sandboxProviderFactory: async () => sandbox,
+      sandboxProviderFactory: async (_workspaceId, _sessionId, context) => {
+        seenSandboxContexts.push(context);
+        return sandbox;
+      },
       idleTtlMs: 0,
     });
     const mounts: PiSessionFileMount[] = [
@@ -473,9 +477,13 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
       },
     ];
 
-    await runner.prepareSession("wrk", "sesn_1", { fileMounts: mounts });
+    await runner.prepareSession("wrk", "sesn_1", {
+      fileMounts: mounts,
+      environmentId: "env_1",
+    });
     await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
 
+    expect(seenSandboxContexts).toEqual([{ environmentId: "env_1" }]);
     expect(sandbox.materialized).toEqual([mounts]);
     expect(factory.sessions).toHaveLength(1);
     expect(factory.sessions[0]?.prompts).toEqual(["one"]);

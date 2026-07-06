@@ -902,6 +902,91 @@ describe("Wired egress session path (plan 0117e-4)", () => {
       db.close();
     }
   }, 120_000);
+
+  // #142: a file-resource session prepares its sandbox BEFORE its row is
+  // committed, so the factory is called with the environmentId hint and NO
+  // persisted session row. Proves that prepare-time path stands up a real,
+  // enforcing sidecar in Docker (the unit tests prove the bundle resolves;
+  // this proves it becomes a working confined sandbox).
+  dockerIt("factory hint path (pre-commit prepare) stands up an enforcing sidecar", async () => {
+    const db = new DatabaseSync(":memory:");
+    const sessions = new SqliteSessionStore(db);
+    const environments = new SqliteEnvironmentStore(db);
+    const secrets = new SqliteSecretsStore(
+      db,
+      parseMasterKey(generateMasterKey(), "test"),
+    );
+    secrets.put("wrk_default", "github", "REAL-TOKEN-142");
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const envId = `env_hint_${suffix}`;
+    const now = new Date().toISOString();
+    environments.create({
+      row: {
+        id: envId, workspace_id: "wrk_default", type: "environment",
+        name: envId, created_at: now, updated_at: now, archived_at: null,
+        config: {
+          networking: {
+            allow: [{ host: "example.com", port: 443 }],
+            credentials: [
+              {
+                secret: "github", env: "GITHUB_TOKEN", host: "example.com",
+                port: 443, pathPrefix: "/", header: "authorization",
+              },
+            ],
+          },
+        },
+      },
+    });
+    // Deliberately NO sessions.create(...) — this is the pre-commit condition.
+
+    const factory = createDockerSandboxProviderFactory({
+      operationTimeoutMs: 20_000,
+      egress: {
+        sidecarImage: "node:24-slim",
+        sidecarRepoMount: process.cwd(),
+        resolveEgressBundle: createSessionEgressBundleResolver({
+          sessions, environments, secrets,
+        }),
+      },
+    });
+    const run = async (
+      provider: Awaited<ReturnType<typeof factory>>,
+      command: string,
+    ): Promise<string> => {
+      const chunks: Buffer[] = [];
+      await provider.operations.bash.exec(command, "/workspace", {
+        env: {},
+        onData: (c) => chunks.push(c),
+        timeout: 15,
+      });
+      return Buffer.concat(chunks).toString("utf8");
+    };
+
+    const sessionId = `sesn_hint_${suffix}`;
+    // The hint the runner forwards from prepareSession; the row does not exist.
+    const provider = await factory("wrk_default", sessionId, { environmentId: envId });
+    try {
+      const tokenEnv = await run(provider, 'printf "%s" "$GITHUB_TOKEN"');
+      expect(tokenEnv).toMatch(/^oma-sentinel-[0-9a-f]{32}$/);
+      expect(tokenEnv).not.toContain("REAL-TOKEN");
+      expect(await run(provider, 'printf "%s" "$HTTPS_PROXY"')).toMatch(
+        /^http:\/\/srt:[0-9a-f]+@oma-egress-proxy-/,
+      );
+      const connect = (host: string, withAuth: boolean): string =>
+        'H="${HTTPS_PROXY#http://}"; CRED="${H%%@*}"; HP="${H#*@}"; ' +
+        'PH="${HP%%:*}"; PP="${HP##*:}"; ' +
+        'AUTH=$(printf "%s" "$CRED" | base64 | tr -d "\\n"); ' +
+        `exec 3<>/dev/tcp/$PH/$PP && printf "CONNECT ${host}:443 HTTP/1.1\\r\\n` +
+        (withAuth ? 'Proxy-Authorization: Basic $AUTH\\r\\n' : "") +
+        `Host: ${host}:443\\r\\n\\r\\n" >&3 && head -1 <&3`;
+      expect(await run(provider, connect("example.com", false))).toContain("407");
+      expect(await run(provider, connect("example.com", true))).toContain("200");
+      expect(await run(provider, connect("www.google.com", true))).toContain("403");
+    } finally {
+      provider.dispose();
+      db.close();
+    }
+  }, 120_000);
 });
 
 describe("Docker sandbox provider integration", () => {

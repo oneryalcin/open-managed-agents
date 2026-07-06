@@ -2,7 +2,9 @@
 // (1) the per-session bundle resolver maps environment networking config into
 // a sidecar bundle (or undefined — default deny), and (2) the fail-closed
 // session-create gate rejects egress-granting environments the deployment
-// cannot honor, while hosted-shape networking keeps today's behavior.
+// cannot honor, while hosted-shape networking keeps today's behavior. The
+// resolver also supports create-time sandbox preparation before the session
+// row is committed by accepting an environmentId hint.
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -121,6 +123,24 @@ describe("createSessionEgressBundleResolver", () => {
     expect(resolved!.sandboxEnv.GITHUB_TOKEN).toMatch(/^oma-sentinel-/);
     fixture.close();
   });
+
+  it("uses the creation-time environment hint before the session row is committed", async () => {
+    const fixture = makeResolverFixture();
+    fixture.secrets.put("wrk_default", "github", "REAL-TOKEN");
+    const environmentId = fixture.seedEnvironment({
+      networking: GRANTING_NETWORKING,
+    });
+
+    const resolved = await fixture.resolve("wrk_default", "sesn_precommit", {
+      environmentId,
+    });
+
+    expect(resolved).toBeDefined();
+    expect(resolved!.sandboxEnv.GITHUB_TOKEN).toMatch(/^oma-sentinel-/);
+    expect(resolved!.sandboxEnv.GITHUB_TOKEN).not.toContain("REAL-TOKEN");
+    expect(resolved!.bundle.secrets).toEqual({ github: "REAL-TOKEN" });
+    fixture.close();
+  });
 });
 
 describe("fail-closed session-create gate", () => {
@@ -181,11 +201,7 @@ describe("fail-closed session-create gate", () => {
     plane.stores.close();
   });
 
-  it("rejects an egress-granting environment combined with file resources", async () => {
-    // Fail-closed on the prepare-before-row-insert limitation (Codex review):
-    // a file-resource session builds its sandbox before its row is persisted,
-    // so the egress resolver can't find the environment and the boundary would
-    // silently vanish. Reject rather than run credentialed egress unprotected.
+  it("does not reject egress-granting environments solely because resources are present", async () => {
     const plane = makeDurableEgressPlane();
     const env = await createEnvironment(
       plane.app,
@@ -198,7 +214,8 @@ describe("fail-closed session-create gate", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as ApiErrorBody;
-    expect(body.error.message).toContain("not yet supported together");
+    expect(body.error.message).toContain("File file_x not found");
+    expect(body.error.message).not.toContain("not yet supported together");
     plane.stores.close();
   });
 
@@ -379,10 +396,9 @@ function makeResolverFixture() {
     secrets,
   });
   let seq = 0;
-  const seedSession = (config: JsonObject): string => {
+  const seedEnvironment = (config: JsonObject): string => {
     const now = new Date().toISOString();
     const envId = `env_wire_${seq}`;
-    const sessionId = `sesn_wire_${seq}`;
     seq += 1;
     environments.create({
       row: {
@@ -396,6 +412,13 @@ function makeResolverFixture() {
         archived_at: null,
       },
     });
+    return envId;
+  };
+  const seedSession = (config: JsonObject): string => {
+    const now = new Date().toISOString();
+    const envId = seedEnvironment(config);
+    const sessionId = `sesn_wire_${seq}`;
+    seq += 1;
     const row: SessionRow = {
       id: sessionId,
       workspace_id: "wrk_default",
@@ -417,6 +440,7 @@ function makeResolverFixture() {
   return {
     resolve,
     secrets,
+    seedEnvironment,
     seedSession,
     close: () => db.close(),
   };

@@ -427,6 +427,11 @@ export interface RuntimeSessionFileMount {
 
 export interface RuntimeSessionPrepareOptions {
   fileMounts?: readonly RuntimeSessionFileMount[];
+  /**
+   * Creation-time hint for runtimes that prepare a sandbox before the session
+   * row is committed. The committed row remains authoritative after create.
+   */
+  environmentId?: string;
   agent?: {
     type: "agent";
     id: string;

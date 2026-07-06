@@ -414,17 +414,21 @@ export function createSessionEgressBundleResolver(stores: {
   environments: Pick<SqliteEnvironmentStore, "retrieve">;
   secrets?: Pick<SecretsStore, "reveal">;
 }): EgressBundleResolver {
-  return async (workspaceId, sessionId) => {
-    // Reads the PERSISTED session row to reach environment_id. This is why
-    // DefaultSessionService.assertEgressHonorable rejects egress + file
-    // resources: that path runs prepareSession (which lands here via the
-    // docker factory) BEFORE store.create inserts the row, so a lookup here
-    // would miss and the boundary would silently vanish. Keep the two in sync.
-    const session = stores.sessions.retrieveAny(workspaceId, sessionId);
-    if (!session) return undefined;
+  return async (workspaceId, sessionId, context) => {
+    // Normal prompt-time sandbox creation reads the persisted session row. The
+    // file-resource create path prepares its sandbox before that row is
+    // committed, so DefaultSessionService passes the already-validated
+    // environmentId as a creation-time hint.
+    const environmentId = context?.environmentId;
+    const session =
+      environmentId === undefined
+        ? stores.sessions.retrieveAny(workspaceId, sessionId)
+        : undefined;
+    if (environmentId === undefined && !session) return undefined;
+    const resolvedEnvironmentId = environmentId ?? session!.environment_id;
     const environment = stores.environments.retrieve(
       workspaceId,
-      session.environment_id,
+      resolvedEnvironmentId,
     );
     if (!environment) return undefined;
     if (!hasEgressNetworkingConfig(environment.config)) return undefined;

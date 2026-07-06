@@ -409,15 +409,19 @@ verdicted **ship**; the two Codex lanes surfaced two real issues, both fixed in
   `store.create` inserts the row, so the resolver misses the environment and the
   boundary vanishes (fail-closed — no leak — but silent). Interim fix:
   fail-closed rejection of egress + file resources at session create, with
-  cross-referencing comments. **The proper fix is deferred below.**
+  cross-referencing comments. Follow-up #142 replaced that interim guard with a
+  creation-time `environmentId` hint threaded through the sandbox factory, so
+  the resolver can honor egress while the session row is still uncommitted.
 
 ### Deferred follow-ups (no Linear access from the authoring session — track these)
 
-1. **Proper egress + file-resources support.** Reorder so the session row is
-   persisted before `prepareSession` (or thread the resolved bundle through the
-   prepare path) without breaking the idempotency-transactional
-   `createAndCompleteIdempotency` create. Then lift the interim rejection in
-   `DefaultSessionService.assertEgressHonorable`.
+1. **Resolved in #142 — egress + file-resource support.** The implementation
+   chose the lower-risk context-hint shape instead of reordering
+   `createAndCompleteIdempotency`: `DefaultSessionService` passes the validated
+   `environment_id` into `runtime.prepareSession`, the Pi runner forwards it to
+   the sandbox provider factory, and the Docker egress resolver uses it when the
+   session row is not yet committed. The row lookup remains the fallback for
+   normal prompt-time sandbox creation.
 2. **Crash-orphaned secret bundle at-rest window (Opus low, 0117d scope).** The
    0600 resolved-secret bundle is unlinked at sidecar readiness, but a crash
    between write and readiness leaves it until the startup sweep — which reuses

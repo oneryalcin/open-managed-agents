@@ -28,6 +28,7 @@ import {
   type SandboxOutputFile,
   type SandboxProvider,
   type SandboxProviderFactory,
+  type SandboxProviderSessionContext,
 } from "./provider.ts";
 import type { RuntimeSessionFileMount } from "../../../events/types.ts";
 import {
@@ -88,6 +89,7 @@ export interface DockerSandboxOptions {
 export type EgressBundleResolver = (
   workspaceId: string,
   sessionId: string,
+  context?: SandboxProviderSessionContext,
 ) => Promise<
   { bundle: SessionEgressBundle; sandboxEnv: Record<string, string> } | undefined
 >;
@@ -172,7 +174,7 @@ export function createDockerSandboxProviderFactory(
   const { egress: egressConfig, ...baseOpts } = opts;
   let swept = false;
   let sweepPromise: Promise<void> | undefined;
-  return async (workspaceId, sessionId) => {
+  return async (workspaceId, sessionId, context) => {
     if (!swept && opts.reapStaleContainersOlderThanMs !== undefined) {
       const olderThanMs = opts.reapStaleContainersOlderThanMs;
       sweepPromise ??= reapDockerSandboxContainers({
@@ -193,7 +195,13 @@ export function createDockerSandboxProviderFactory(
       await sweepPromise;
     }
     const egress = egressConfig
-      ? await createSessionEgress(workspaceId, sessionId, egressConfig, baseOpts)
+      ? await createSessionEgress(
+          workspaceId,
+          sessionId,
+          egressConfig,
+          baseOpts,
+          context,
+        )
       : undefined;
     try {
       return await createDockerSandboxProvider(workspaceId, sessionId, {
@@ -220,8 +228,13 @@ async function createSessionEgress(
   sessionId: string,
   egressConfig: DockerSandboxEgressFactoryOptions,
   baseOpts: Omit<DockerSandboxOptions, "egress">,
+  context: SandboxProviderSessionContext | undefined,
 ): Promise<NonNullable<DockerSandboxOptions["egress"]> | undefined> {
-  const resolved = await egressConfig.resolveEgressBundle(workspaceId, sessionId);
+  const resolved = await egressConfig.resolveEgressBundle(
+    workspaceId,
+    sessionId,
+    context,
+  );
   if (resolved === undefined) return undefined;
   const sidecar = await createEgressSidecar({
     dockerCommand: baseOpts.dockerCommand ?? "docker",
