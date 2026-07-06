@@ -118,6 +118,7 @@ function parseCreateAgent(input: unknown): CreateManagedAgentRequest {
   const tools = toolArrayField(obj, "tools");
   const skills = skillArrayField(obj, "skills");
   const mcpServers = mcpServerArrayField(obj, "mcp_servers");
+  assertMcpServerToolsetCrossReferences(mcpServers, tools);
   const metadata = metadataField(obj);
   const multiagent = multiagentField(obj);
 
@@ -260,6 +261,10 @@ function skillArrayField(
   });
 }
 
+const MAX_MCP_SERVERS = 20;
+const MAX_MCP_SERVER_NAME_LENGTH = 255;
+const MAX_MCP_SERVER_URL_LENGTH = 2048;
+
 function mcpServerArrayField(
   obj: Record<string, unknown>,
   field: string,
@@ -267,18 +272,101 @@ function mcpServerArrayField(
   const value = obj[field];
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw invalidRequest(`\`${field}\` must be an array`);
+  if (value.length > MAX_MCP_SERVERS) {
+    throw invalidRequest(
+      `\`${field}\` may contain at most ${MAX_MCP_SERVERS} servers`,
+    );
+  }
+  const seenNames = new Set<string>();
   return value.map((v) => {
     const server = jsonObjectField(v, field);
+    rejectUnknownMcpServerFields(server, field);
     const type = stringField(server, "type", { required: true });
     if (type !== "url") {
       throw invalidRequest("Only url MCP server definitions are supported in MVP");
     }
-    return {
-      type,
-      name: stringField(server, "name", { required: true }),
-      url: stringField(server, "url", { required: true }),
-    };
+    const name = stringField(server, "name", { required: true });
+    if (name.length > MAX_MCP_SERVER_NAME_LENGTH) {
+      throw invalidRequest(
+        `\`${field}[].name\` must be at most ${MAX_MCP_SERVER_NAME_LENGTH} characters`,
+      );
+    }
+    // Name comparisons are case-sensitive throughout (uniqueness here,
+    // toolset cross-references below, config tool matching at runtime).
+    if (seenNames.has(name)) {
+      throw invalidRequest(`\`${field}\` contains duplicate server name: ${name}`);
+    }
+    seenNames.add(name);
+    // `url` is validated via `new URL` but the RAW input string is what gets
+    // stored: URL normalization (port stripping, host lowercasing, trailing
+    // slash) would silently break M2's byte-exact credential matching.
+    const url = stringField(server, "url", { required: true });
+    if (url.length > MAX_MCP_SERVER_URL_LENGTH) {
+      throw invalidRequest(
+        `\`${field}[].url\` must be at most ${MAX_MCP_SERVER_URL_LENGTH} characters`,
+      );
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw invalidRequest(`\`${field}[].url\` must be a valid URL: ${url}`);
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw invalidRequest(
+        `\`${field}[].url\` must use http or https: ${url}`,
+      );
+    }
+    if (parsed.username !== "" || parsed.password !== "") {
+      throw invalidRequest(
+        `\`${field}[].url\` must not embed credentials; use vault credentials instead`,
+      );
+    }
+    return { type, name, url };
   });
+}
+
+function rejectUnknownMcpServerFields(
+  server: Record<string, unknown>,
+  field: string,
+): void {
+  for (const key of Object.keys(server)) {
+    if (key === "type" || key === "name" || key === "url") continue;
+    throw invalidRequest(`Unsupported \`${field}[]\` field: ${key}`);
+  }
+}
+
+// Upstream rejects agent definitions with unreferenced servers or dangling
+// toolsets (both-ways referencing). Rejecting two toolsets for one server is
+// an OMA tightening pending a hosted probe (plan 0122 §4.1).
+function assertMcpServerToolsetCrossReferences(
+  servers: ManagedAgentsMcpServer[] | undefined,
+  tools: ManagedAgentsTool[] | undefined,
+): void {
+  const serverNames = new Set((servers ?? []).map((server) => server.name));
+  const referenced = new Set<string>();
+  for (const tool of tools ?? []) {
+    if (tool.type !== "mcp_toolset") continue;
+    if (!serverNames.has(tool.mcp_server_name)) {
+      throw invalidRequest(
+        `\`tools[]\` mcp_toolset references undeclared MCP server: ${tool.mcp_server_name}`,
+      );
+    }
+    if (referenced.has(tool.mcp_server_name)) {
+      throw invalidRequest(
+        `\`tools\` may contain at most one mcp_toolset per server: ${tool.mcp_server_name}`,
+      );
+    }
+    referenced.add(tool.mcp_server_name);
+  }
+  // Covers both a `tools` array without a matching toolset and a request
+  // with `tools` absent entirely — an unreferenced server either way.
+  for (const name of serverNames) {
+    if (referenced.has(name)) continue;
+    throw invalidRequest(
+      `\`mcp_servers\` entry is not referenced by any mcp_toolset: ${name}`,
+    );
+  }
 }
 
 function metadataField(
