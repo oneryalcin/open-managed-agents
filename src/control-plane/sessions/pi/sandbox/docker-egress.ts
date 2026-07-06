@@ -356,10 +356,12 @@ export interface EgressSidecarReaperOptions {
  * Crash cleanup for egress sidecars — the happy path is `EgressSidecar.dispose`;
  * this reaps what a control-plane crash orphaned. Removes labelled sidecar
  * CONTAINERS and per-session `--internal` NETWORKS older than the threshold,
- * and sweeps stale `oma-egress-*` temp roots (which hold only ca.crt/ready once
- * the bundle is unlinked at readiness, but are cleaned for tidiness). Meant to
- * run once at startup, like `reapDockerSandboxContainers`, so it never races a
- * live session's own sidecar.
+ * and sweeps stale `oma-egress-*` temp roots. A crash-orphaned 0600
+ * `bundle.json` (real secrets) is scrubbed aggressively — gated only on the
+ * readiness timeout, not the whole-dir threshold — so leftover secret material
+ * does not sit at rest for up to the (24h-default) container threshold; the dir
+ * itself keeps that threshold because its ca.crt is bind-mounted into a live
+ * sandbox. Meant to run once at startup, like `reapDockerSandboxContainers`.
  */
 export function reapEgressSidecars(opts: EgressSidecarReaperOptions = {}): void {
   const dockerCommand = opts.dockerCommand ?? "docker";
@@ -432,11 +434,38 @@ function sweepStaleTempRoots(
     try {
       const stat = statSync(full);
       if (!stat.isDirectory()) continue;
+      // Scrub a crash-orphaned resolved-secret bundle aggressively, decoupled
+      // from the (conservative, live-sidecar-safe) whole-dir threshold. The
+      // dir's ca.crt is bind-mounted read-only into a LIVE sandbox for its
+      // lifetime, so the dir keeps olderThanMs — but bundle.json (mode 0600,
+      // real secrets) is unlinked at readiness, so its mere presence means the
+      // sidecar died before readiness. Gate on the readiness timeout, not zero
+      // age, so we never race a sibling process's still-booting sidecar.
+      scrubOrphanedSecretBundle(join(full, "bundle.json"), now);
       if (now - stat.mtimeMs >= olderThanMs) {
         rmSync(full, { recursive: true, force: true });
       }
     } catch {
       // gone already / racing another reaper — fine
     }
+  }
+}
+
+// A bundle.json older than the readiness timeout cannot belong to a healthy or
+// still-booting sidecar (a healthy one unlinks it within ~1s of start; a
+// readiness-timed-out one disposes its own root). Older than that ⇒ the
+// control plane crashed before readiness — remove the secret file now rather
+// than let it wait for the whole-dir reap (up to 24h). force ⇒ no-op if absent.
+const ORPHAN_SECRET_BUNDLE_MIN_AGE_MS = DEFAULT_READINESS_TIMEOUT_MS;
+
+function scrubOrphanedSecretBundle(bundlePath: string, now: number): void {
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(bundlePath).mtimeMs;
+  } catch {
+    return; // no bundle.json (the normal post-readiness case)
+  }
+  if (now - mtimeMs >= ORPHAN_SECRET_BUNDLE_MIN_AGE_MS) {
+    rmSync(bundlePath, { force: true });
   }
 }

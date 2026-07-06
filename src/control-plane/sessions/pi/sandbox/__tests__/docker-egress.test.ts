@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -142,5 +149,43 @@ describe("reapEgressSidecars temp-root sweep (crash cleanup, age-bounded)", () =
     expect(existsSync(stale)).toBe(false); // stale egress root reaped
     expect(existsSync(fresh)).toBe(true); // within threshold — a live session's
     expect(existsSync(unrelated)).toBe(true); // never touch non-egress dirs
+  });
+
+  it("scrubs a crash-orphaned bundle.json from a still-young root, keeping the dir", () => {
+    // #143: a control-plane crash before sidecar readiness can leave a 0600
+    // bundle.json inside a temp root that is younger than the (24h) whole-dir
+    // threshold — so the dir must NOT be reaped (its ca.crt could be bind-
+    // mounted into a live sandbox), but the secret file must not linger.
+    const now = 1_000_000_000_000;
+    const crashed = join(parent, "oma-egress-crashed");
+    const booting = join(parent, "oma-egress-booting");
+    for (const d of [crashed, booting]) mkdirSync(d);
+    // Both dirs are young (well within the 30s dir threshold): live/recent.
+    const youngSecs = (now - 2_000) / 1000;
+    utimesSync(crashed, youngSecs, youngSecs);
+    utimesSync(booting, youngSecs, youngSecs);
+
+    const crashedBundle = join(crashed, "bundle.json");
+    const bootingBundle = join(booting, "bundle.json");
+    writeFileSync(crashedBundle, "SECRETS", { mode: 0o600 });
+    writeFileSync(bootingBundle, "SECRETS", { mode: 0o600 });
+    // Crash orphan: bundle older than any readiness timeout (60s) -> scrub.
+    const orphanSecs = (now - 60_000) / 1000;
+    utimesSync(crashedBundle, orphanSecs, orphanSecs);
+    // Sibling process still booting: bundle just written (1s) -> must be kept.
+    const freshSecs = (now - 1_000) / 1000;
+    utimesSync(bootingBundle, freshSecs, freshSecs);
+
+    reapEgressSidecars({
+      dockerCommand: "true",
+      olderThanMs: 30_000,
+      now: () => now,
+      tmpDir: parent,
+    });
+
+    expect(existsSync(crashed)).toBe(true); // young dir kept (live-sandbox safe)
+    expect(existsSync(crashedBundle)).toBe(false); // orphaned secret scrubbed
+    expect(existsSync(booting)).toBe(true);
+    expect(existsSync(bootingBundle)).toBe(true); // not raced out from under boot
   });
 });
