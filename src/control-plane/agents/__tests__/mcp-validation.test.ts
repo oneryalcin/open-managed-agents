@@ -55,7 +55,7 @@ describe("mcp_servers validation (plan 0122 §4.1)", () => {
     ).toThrow("not referenced by any mcp_toolset: github");
   });
 
-  it("rejects two mcp_toolsets naming the same server (OMA tightening)", () => {
+  it("rejects two mcp_toolsets naming the same server (hosted parity, probe 47)", () => {
     expect(() =>
       service().create("wrk_a", agentWithMcp({
         mcp_servers: [SERVER],

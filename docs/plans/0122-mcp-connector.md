@@ -282,8 +282,9 @@ Extend `mcpServerArrayField` + a new post-parse cross-check in
 - per-server: `name` 1–255 chars; `url` ≤ 2048, parses via `new URL`,
   scheme `http:`/`https:`, **no embedded userinfo** (`user:pass@host` is
   rejected — a credential in a shared agent config is exactly the leak
-  class this arc exists to prevent); `rejectUnknownFields` on
-  `{type, name, url}`. **The raw input string is what gets persisted** —
+  class this arc exists to prevent; **probe 47: hosted ACCEPTS these, so
+  this is a deliberate OMA deviation**, documented in dev-deployment);
+  `rejectUnknownFields` on `{type, name, url}`. **The raw input string is what gets persisted** —
   `new URL` is used to *check*, never to re-serialize (URL normalization
   would silently break M2's byte-exact credential matching, §3.1; test
   locks round-trip byte-equality).
@@ -296,10 +297,9 @@ Extend `mcpServerArrayField` + a new post-parse cross-check in
   the message. A non-empty `mcp_servers` with **no `tools` field at all**
   is the same rejection (unreferenced servers), called out so the
   undefined-`tools` code path can't skip the check. Two `mcp_toolset`
-  entries naming the same server are rejected — **an OMA tightening, not a
-  cited upstream rule** (upstream docs state only both-ways referencing);
-  the live probe (§5) revisits it, and loosening later is
-  backward-compatible.
+  entries naming the same server are rejected — **confirmed upstream
+  behavior by live probe 47** (hosted 400: "each MCP server may have at
+  most one mcp_toolset"), not an OMA tightening.
 - No validation of reachability, and **no SSRF check at create time** —
   the URL's resolution is a connect-time property (DNS changes); rejecting
   at create would be both bypassable and a parity break. The guard lives at
@@ -692,9 +692,18 @@ clusters, all folded:
 **Open questions (for the live hosted probe / implementation):**
 
 1. **Model-visible tool naming** — `mcp__{server}__{tool}` with
-   collision-rejection is the M1 design; what hosted actually shows the
-   model is unverified. The live probe revisits; wire parity (events) is
-   unaffected either way.
+   collision-rejection is the M1 design; what hosted shows the model is
+   not observable on the wire (live probe 47 confirmed events carry only
+   the bare name + `mcp_server_name`). Our call stands; wire parity
+   unaffected.
+
+**Live probe 47 (2026-07-07, `scratch/47-mcp-hosted-probe.{py,md}`):** all
+M1 wire shapes confirmed against hosted (allow + ask flows, requires_action
+`event_ids`, `user.tool_confirmation` round-trip, bare names,
+`mcp_tool_use_id` correlation). Validation: dangling-toolset, unreferenced-
+server, and duplicate-toolset rejections are hosted parity; userinfo-URL
+rejection is an OMA deviation (hosted accepts). §5's "no claimed hosted
+parity without the probe" condition is satisfied.
 2. **Deployment gate default off** (§4.6) — parity purists could argue MCP
    should work out of the box like hosted; the opt-in posture matches every
    other outbound capability in the appliance. No reviewer objected;

@@ -385,7 +385,7 @@ input, so control-plane dials are SSRF-guarded: hostnames resolving to
 private/loopback/link-local/reserved ranges (including cloud metadata
 addresses), IP-literal targets in those ranges, and any redirect are refused.
 Validation also rejects URLs with embedded `user:pass@` credentials at agent
-creation. There is no operator override; if you need a private MCP server,
+creation (an OMA deviation — hosted accepts these; probe 47). There is no operator override; if you need a private MCP server,
 front it with a public, authenticated endpoint (M2).
 
 **Permissions.** MCP toolsets default to `always_ask` (upstream parity): each

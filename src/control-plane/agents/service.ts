@@ -336,9 +336,11 @@ function rejectUnknownMcpServerFields(
   }
 }
 
-// Upstream rejects agent definitions with unreferenced servers or dangling
-// toolsets (both-ways referencing). Rejecting two toolsets for one server is
-// an OMA tightening pending a hosted probe (plan 0122 §4.1).
+// Upstream rejects agent definitions with unreferenced servers, dangling
+// toolsets (both-ways referencing), and duplicate toolsets per server — all
+// confirmed against hosted by live probe 47 (scratch/47-mcp-hosted-probe.md).
+// The userinfo-URL rejection below is a deliberate OMA deviation (hosted
+// accepts embedded credentials; we refuse the leak class).
 function assertMcpServerToolsetCrossReferences(
   servers: ManagedAgentsMcpServer[] | undefined,
   tools: ManagedAgentsTool[] | undefined,
