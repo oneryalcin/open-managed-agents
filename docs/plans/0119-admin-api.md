@@ -85,8 +85,8 @@ reference — mirror its validation and messages (e.g. mint-key defaults label t
 ## 3. Design decision — the admin credential model (the first RBAC decision)
 
 **CHOSEN: a single bootstrap admin token from `OMA_ADMIN_KEY` (or
-`OMA_ADMIN_KEY_FILE`), constant-time compared.** Two authorization tiers, no
-sub-workspace roles:
+`OMA_ADMIN_KEY_FILE`), verified by constant-time comparison of fixed-length
+SHA-256 digests.** Two authorization tiers, no sub-workspace roles:
 
 | Tier | Credential | Can do |
 |---|---|---|
@@ -117,14 +117,20 @@ Rejected alternatives:
 1. `OMA_ADMIN_KEY` unset → `/admin` is **not registered** (any `/admin/*` →
    404, indistinguishable from an unknown route; no "admin exists but locked"
    signal).
-2. `OMA_ADMIN_KEY` set but storage is not durable → **refuse to boot** (mirror
-   the `api-key`-requires-durable guard, `app.ts:260`): in-memory admin
-   management persists nothing.
+2. `OMA_ADMIN_KEY` set but storage is not durable **or**
+   `OMA_AUTH_MODE` is not `api-key` → **refuse to boot**. Durable storage is
+   required because admin changes must persist; `api-key` auth is required
+   because this API mints workspace keys for `/v1/*`. Letting admin mint keys
+   while `/v1` is still anonymous `wrk_default` would create a false product
+   surface: keys exist, but they do not gate the API.
 3. Admin key minimum strength: reject a key shorter than 32 chars at boot (a
    weak operator token is the whole attack surface). Not a KDF — same spirit as
    the master-key strictness.
-4. Constant-time compare (`crypto.timingSafeEqual` on equal-length buffers;
-   length-mismatch → fail without leaking length via early return).
+4. Constant-time compare: hash the configured admin key once at construction
+   and hash the presented value on every request; compare the two fixed-length
+   SHA-256 digests with `crypto.timingSafeEqual`. Do **not** compare raw
+   variable-length strings, where a length check or thrown `timingSafeEqual`
+   precondition becomes the timing side channel.
 
 ---
 
@@ -191,19 +197,21 @@ app.use("*", async (c, next) => {
   CLI's messages).
 - `admin/routes.ts`: `adminRoutes(service)` → `Hono` sub-app (mirror
   `secrets/routes.ts`).
-- `admin/auth.ts`: `createAdminAuth(key): { verify(presented): boolean }` using
-  `timingSafeEqual`; plus `loadAdminKey(env)` (exactly one of
-  `OMA_ADMIN_KEY`/`OMA_ADMIN_KEY_FILE`; min length; else undefined) — model on
-  `secrets/master-key.ts:38`.
+- `admin/auth.ts`: `createAdminAuth(key): { verify(presented): boolean }`.
+  Store only `sha256(key)` in the verifier object; on request compare
+  `sha256(presented)` with `timingSafeEqual`. `loadAdminKey(env)` accepts
+  exactly one of `OMA_ADMIN_KEY`/`OMA_ADMIN_KEY_FILE`; min length; else
+  undefined — model on `secrets/master-key.ts:38`.
 - `app.ts`:
   - `ControlPlaneServices.admin?: { service: AdminService; auth: AdminAuth }`
     (`:86`).
   - Install the middleware (§5) + `app.route("/admin", adminRoutes(...))` only
     when `services.admin` is set (`:199` neighborhood).
   - `createDeploymentControlPlane` (`:252`): `const adminKey =
-    tryLoadAdminKey(env)`; if set and `stores.mode !== "durable"` → close + throw
-    (§3 rule 2); if set → `admin: { service: new DefaultAdminService(
-    stores.workspaces), auth: createAdminAuth(adminKey) }`.
+    tryLoadAdminKey(env)`; if set and `stores.mode !== "durable"` **or**
+    `authMode !== "api-key"` → close + throw (§3 rule 2); if set →
+    `admin: { service: new DefaultAdminService(stores.workspaces), auth:
+    createAdminAuth(adminKey) }`.
   - `DeploymentAuthEnv` (`:112`) gains `OMA_ADMIN_KEY`/`OMA_ADMIN_KEY_FILE`.
 
 ---
@@ -229,34 +237,32 @@ Behavior each test pins — every one maps to a real failure:
 8. **revoke** — revoke via `/admin`, the key then 401s against `/v1`;
    revoking an unknown sha → 404; double-revoke → 200 benign.
 9. **fail-closed boot** — `OMA_ADMIN_KEY` set with in-memory storage → throws;
+   `OMA_ADMIN_KEY` set while `OMA_AUTH_MODE` is unset/`disabled` → throws;
    too-short key → throws.
 10. **cross-workspace** — admin can mint/list keys for any workspace (that is
     the operator tier — assert two workspaces are both manageable).
 
 Plus a unit test for `admin/auth.ts`: `verify` true only for the exact key;
-false for wrong value AND wrong length; a mutation that swaps `timingSafeEqual`
-for `===` still passes functionally (constant-time is not behaviorally testable)
-— so assert via a **comment + code review**, not a flaky timing test.
+false for wrong value AND wrong length. Also assert that the verifier does not
+retain the plaintext key in an enumerable field; the fixed-length digest compare
+is still primarily code-review enforced, not timing-tested.
 
 ---
 
 ## 8. Settled decisions & open questions
 
 **Settled:**
-- Admin credential = env bootstrap token (`OMA_ADMIN_KEY[_FILE]`), constant-time
-  compared; two tiers, no sub-roles (§3).
-- `/admin` disabled (404) when unset; requires durable storage; min key length.
+- Admin credential = env bootstrap token (`OMA_ADMIN_KEY[_FILE]`), verified by
+  constant-time fixed-digest comparison; two tiers, no sub-roles (§3).
+- `/admin` disabled (404) when unset; requires durable storage **and**
+  `OMA_AUTH_MODE=api-key`; min key length.
 - OMA-minimal wire shape (no hosted parity to match).
+- Header name: `x-admin-key`, chosen for symmetry with `x-api-key`.
+- No ADR for slice 1: §3 is the decision record. Promote to an ADR only if OMA
+  grows DB-backed admin keys, multi-admin, or role scopes.
 
-**Open (decide at implementation time):**
-1. **Header name:** `x-admin-key` (chosen, parallels `x-api-key`) vs
-   `Authorization: Bearer`. Recommend `x-admin-key` for symmetry; revisit if the
-   dashboard's fetch layer prefers `Authorization`.
-2. **ADR?** This is the first authorization tier above the workspace key. Leaning
-   *plan-only* (this doc's §3 is the decision record, as the secrets authz was
-   handled in 0117e) — but if we expect RBAC to grow, promote §3 to an ADR.
-   Flag for review.
-3. **Delete/rename workspace, key rotation** — omitted (the CLI has neither).
+**Deferred:**
+1. **Delete/rename workspace, key rotation** — omitted (the CLI has neither).
    Add when the dashboard needs them; not in slice 1.
 
 ---
