@@ -94,11 +94,22 @@ export type EgressBundleResolver = (
   { bundle: SessionEgressBundle; sandboxEnv: Record<string, string> } | undefined
 >;
 
-export interface DockerSandboxEgressFactoryOptions {
+/**
+ * Deployment-static egress sidecar image config — the part of the egress
+ * configuration known at boot, before any session exists. Shared base so the
+ * one "egress config" shape is greppable across the runtime-config, selection,
+ * and docker-factory layers (the factory options add the per-session
+ * `resolveEgressBundle`).
+ */
+export interface EgressSidecarImageConfig {
   /** Image running egress-proxy-main. Production: the appliance's own tag. */
   sidecarImage: string;
   /** Dev/test: repo bind-mounted at /app when the image lacks OMA source. */
   sidecarRepoMount?: string;
+}
+
+export interface DockerSandboxEgressFactoryOptions
+  extends EgressSidecarImageConfig {
   resolveEgressBundle: EgressBundleResolver;
 }
 
