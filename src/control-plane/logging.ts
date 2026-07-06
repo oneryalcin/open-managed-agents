@@ -209,6 +209,16 @@ export function parseLogConfig(env: {
 
 export type LogWriter = (level: LogLevel, line: string) => void;
 
+// 0121 C2: oma_log_events_total feed. Module-level because `log` is a
+// module singleton; exactly one deployment assembly sets it per process
+// (matching the in-process admission-counter scope). Must not throw —
+// defensively wrapped at the call site anyway.
+let logEventHook: ((level: LogLevel) => void) | undefined;
+
+export function setLogEventHook(hook: (level: LogLevel) => void): void {
+  logEventHook = hook;
+}
+
 // Looked up per call, not captured: test spies on console.* must intercept,
 // and console keeps the debug/info→stdout, warn/error→stderr split. Audit
 // lines ride console.info (stdout) — existing admin_audit consumers grep
@@ -221,6 +231,11 @@ export function createLogger(config: LoggerConfig, write: LogWriter = defaultWri
   const threshold = LEVEL_RANK[config.level];
   const emit = (level: LogLevel, event: string, fields?: LogFields): void => {
     if (LEVEL_RANK[level] < threshold) return;
+    try {
+      logEventHook?.(level);
+    } catch {
+      // Telemetry must never fail a log emission.
+    }
     try {
       const record: Record<string, unknown> = {
         ts: new Date().toISOString(),

@@ -56,6 +56,13 @@ CREATE TABLE IF NOT EXISTS pending_runtime_turns (
   terminalized_at TEXT,
   PRIMARY KEY (workspace_id, session_id, turn_id)
 );
+-- Closed turns are retained as history (UPDATE, not DELETE), so live-turn
+-- counts need a partial index or every /metrics scrape and /health check
+-- scans all history (0121 C2 review, Codex-adv HIGH). Serves both the
+-- workspace-scoped and unscoped counts.
+CREATE INDEX IF NOT EXISTS idx_runtime_turns_live
+ON pending_runtime_turns (workspace_id)
+WHERE state NOT IN ('completed', 'terminalized');
 CREATE TABLE IF NOT EXISTS pending_runtime_actions (
   workspace_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
@@ -198,6 +205,10 @@ export class EventStore implements SessionEventStore {
   private readonly listPendingRuntimeTurnsStmt: StatementSync;
   private readonly listWorkspacesWithPendingRuntimeTurnsStmt: StatementSync;
   private readonly countPendingRuntimeTurnsStmt: StatementSync;
+  private readonly countAllPendingRuntimeTurnsStmt: StatementSync;
+  private runtimeChangesObserver?: (changes: EventStoreRuntimeChanges) => void;
+  private readonly pendingRuntimeChangeObservations: EventStoreRuntimeChanges[] = [];
+  private txDepth = 0;
   private readonly listRuntimeActionsForTurnStmt: StatementSync;
   private readonly insertRuntimeTurnStmt: StatementSync;
   private readonly insertRuntimeActionStmt: StatementSync;
@@ -276,6 +287,10 @@ export class EventStore implements SessionEventStore {
     this.countPendingRuntimeTurnsStmt = this.db.prepare(
       `SELECT COUNT(*) AS n FROM pending_runtime_turns
        WHERE workspace_id = ? AND state NOT IN ('completed', 'terminalized')`,
+    );
+    this.countAllPendingRuntimeTurnsStmt = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM pending_runtime_turns
+       WHERE state NOT IN ('completed', 'terminalized')`,
     );
     this.listRuntimeActionsForTurnStmt = this.db.prepare(runtimeActionSelectSql(`
       WHERE a.workspace_id = ? AND a.session_id = ? AND a.turn_id = ?
@@ -606,7 +621,47 @@ export class EventStore implements SessionEventStore {
   }
 
   withTransaction<T>(fn: () => T): T {
-    return withSqliteTransaction(this.db, fn);
+    this.txDepth += 1;
+    try {
+      return withSqliteTransaction(this.db, fn);
+    } catch (error) {
+      // This savepoint rolled back; the recorded changes never committed.
+      // (Dropping ALL pending observations undercounts if a sibling nested
+      // transaction already succeeded — the safe direction for a counter.)
+      this.pendingRuntimeChangeObservations.length = 0;
+      throw error;
+    } finally {
+      this.txDepth -= 1;
+      if (this.txDepth === 0) this.flushRuntimeChangeObservations();
+    }
+  }
+
+  // Post-commit observation seam for /metrics (plan 0121 §2): fires AFTER
+  // the outermost store transaction releases, never inside it, so metrics
+  // can't alter commit semantics. One seam covers every apply path — the
+  // service's direct appends, persist.ts helpers, and both runtime-event
+  // coordinators. Caveat (documented, accepted): when an EventStore
+  // transaction is nested inside another store's savepoint on the same
+  // connection, the observer fires before that OUTER commit — a rare
+  // rollback there overcounts a turn; gauges self-correct from DB truth.
+  setRuntimeChangesObserver(
+    observer: (changes: EventStoreRuntimeChanges) => void,
+  ): void {
+    this.runtimeChangesObserver = observer;
+  }
+
+  private flushRuntimeChangeObservations(): void {
+    if (this.pendingRuntimeChangeObservations.length === 0) return;
+    const batches = this.pendingRuntimeChangeObservations.splice(0);
+    const observer = this.runtimeChangesObserver;
+    if (observer === undefined) return;
+    for (const changes of batches) {
+      try {
+        observer(changes);
+      } catch {
+        // Observers are telemetry; they must never fail a request.
+      }
+    }
   }
 
   list(
@@ -671,6 +726,12 @@ export class EventStore implements SessionEventStore {
 
   countPendingRuntimeTurns(workspaceId: WorkspaceId): number {
     return (this.countPendingRuntimeTurnsStmt.get(workspaceId) as { n: number }).n;
+  }
+
+  // Unscoped, for the /metrics gauge (0121 C2). Bounded by in-flight work,
+  // so no dedicated index is needed.
+  countAllPendingRuntimeTurns(): number {
+    return (this.countAllPendingRuntimeTurnsStmt.get() as { n: number }).n;
   }
 
   listWorkspaceIdsWithPendingRuntimeTurns(): WorkspaceId[] {
@@ -779,6 +840,13 @@ export class EventStore implements SessionEventStore {
   }
 
   private applyRuntimeChanges(changes: EventStoreRuntimeChanges): void {
+    if (
+      this.runtimeChangesObserver !== undefined &&
+      ((changes.acceptedTurns?.length ?? 0) > 0 ||
+        (changes.closedTurns?.length ?? 0) > 0)
+    ) {
+      this.pendingRuntimeChangeObservations.push(changes);
+    }
     for (const turn of changes.acceptedTurns ?? []) {
       this.insertRuntimeTurnStmt.run(
         turn.workspaceId,

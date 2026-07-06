@@ -251,11 +251,84 @@ Notes:
   dedicated sandbox cap is deliberately absent in v1: sandboxes are one per
   live session handle, so the session cap bounds them.
 
-## Structured logs
+## Observability
 
-Design: [0121 §3.3](plans/0121-observability.md) (Arc C slice 1; `/health`
-and `/metrics` follow in slice 2). Every control-plane log line is one JSON
-object on stdout (info/debug) or stderr (warn/error):
+Design: [0121](plans/0121-observability.md) (Arc C). Three surfaces:
+structured logs, `GET /health`, and `GET /metrics`.
+
+### /health
+
+Unauthenticated (probes can't send keys; the body carries no tenant data).
+`200` when the process answers and every check passes, `503 degraded`
+otherwise:
+
+```json
+{"status":"ok","version":"0.0.1","uptime_seconds":123,
+ "checks":{"storage":{"status":"ok","free_bytes":123456789},"runtime":{"status":"ok"}}}
+```
+
+What readiness does **not** prove: the storage check shows the DB is
+*readable*, not writable. `free_bytes` (statfs on the file-storage root)
+never gates a 503 on *low space* — a disk threshold would flap the single
+node and drive compose restart loops, so alert on it instead (table below).
+A root that cannot be statfs'd at all (deleted, unmounted,
+permission-broken) **does** fail the check: that's an absent store, not a
+threshold.
+In-memory deployments report `"mode": "in-memory"` rather than lying about
+durability. The shipped `docker-compose.yml` healthcheck probes `/health`
+with a node one-liner (the image has no curl/wget).
+
+### /metrics
+
+Prometheus text format, **fail-closed** by bind host (resolved at boot from
+`OMA_HOST`, never per-request):
+
+| Bind | no `OMA_METRICS_TOKEN` | `OMA_METRICS_TOKEN` set |
+| --- | --- | --- |
+| loopback (default) | open, unauthenticated | `Authorization: Bearer` required |
+| non-loopback | **404 — fail closed** | `Authorization: Bearer` required |
+
+`OMA_METRICS=0` disables the endpoint everywhere; unknown values refuse
+boot. `OMA_METRICS_TOKEN_FILE` is the file variant (set exactly one). The
+token is a read-only operational credential compared constant-time —
+strictly weaker than the admin key; do **not** reuse the admin key as the
+metrics token. The Docker container binds non-loopback internally, so
+compose deployments need a token to scrape. Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: oma
+    authorization:
+      credentials: <the OMA_METRICS_TOKEN value>
+    static_configs:
+      - targets: ["127.0.0.1:4180"]
+```
+
+Metric inventory (all labels are closed enums; no per-tenant labels —
+metering is Arc D): `oma_http_requests_total{route_class,method,status}`,
+`oma_http_request_duration_seconds{route_class}`, `oma_sessions_active`,
+`oma_runtime_turns_pending`, `oma_runtime_turns_total{outcome}`,
+`oma_runtime_turn_duration_seconds`,
+`oma_admission_rejections_total{limit,status}`, `oma_sse_streams_active`,
+`oma_sandboxes_total{event,provider}`,
+`oma_sandbox_provider_errors_total{provider}`,
+`oma_log_events_total{level}`, and `oma_process_*` gauges.
+
+Suggested alerts (no bundled alerting; these are the signals to wire up):
+
+| Signal | Expression sketch |
+| --- | --- |
+| Error-log rate | `rate(oma_log_events_total{level="error"}[5m]) > 0.1` |
+| 5xx rate | `rate(oma_http_requests_total{status=~"5.."}[5m]) > 0` |
+| Pending-turns growth | `deriv(oma_runtime_turns_pending[15m]) > 0` sustained |
+| Admission rejections | `rate(oma_admission_rejections_total[5m]) > 0` |
+| Event-loop delay | `oma_process_event_loop_delay_seconds > 0.1` |
+| Disk headroom | `/health` `checks.storage.free_bytes` below your floor |
+
+### Structured logs
+
+Design: [0121 §3.3](plans/0121-observability.md). Every control-plane log
+line is one JSON object on stdout (info/debug) or stderr (warn/error):
 
 ```json
 {"ts":"2026-07-06T13:47:03.074Z","level":"info","event":"admin_audit","type":"admin_audit","request_id":"req_…","action":"create_workspace","workspace_id":"wrk_…"}

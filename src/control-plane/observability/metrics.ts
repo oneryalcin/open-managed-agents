@@ -1,0 +1,160 @@
+// Hand-rolled Prometheus registry (plan 0121 §3.2). Deliberately not
+// prom-client (dissent recorded in the plan): zero dependencies, and the
+// label-safety property that makes exposition escaping unnecessary by
+// construction — every label value is a CLOSED ENUM declared at metric
+// registration. A value outside the declared set is bucketed to "other" at
+// record time; dynamic strings can never reach the exposition. Record
+// paths never throw. If this file outgrows ~150 lines of real logic or
+// needs a fourth metric shape, switch to prom-client (plan §9).
+
+export const EXPOSITION_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8";
+
+const OTHER = "other";
+
+type LabelSchema = Record<string, readonly string[]>;
+
+// Validated, ordered label values → stable series key.
+function seriesKey(values: readonly string[]): string {
+  return values.join("\u0000");
+}
+
+function validateLabels(
+  schema: LabelSchema,
+  names: readonly string[],
+  labels: Record<string, string> | undefined,
+): string[] {
+  return names.map((name) => {
+    const value = labels?.[name];
+    return value !== undefined && schema[name]!.includes(value) ? value : OTHER;
+  });
+}
+
+function renderLabels(names: readonly string[], values: readonly string[]): string {
+  if (names.length === 0) return "";
+  const parts = names.map((name, i) => `${name}="${values[i]}"`);
+  return `{${parts.join(",")}}`;
+}
+
+export interface Counter {
+  inc(labels?: Record<string, string>, delta?: number): void;
+}
+
+export interface Histogram {
+  observe(seconds: number, labels?: Record<string, string>): void;
+}
+
+export class MetricsRegistry {
+  private readonly names = new Set<string>();
+  private readonly renderers: Array<() => string> = [];
+
+  private claim(name: string): void {
+    if (this.names.has(name)) {
+      throw new Error(`Metric ${name} is already registered`);
+    }
+    this.names.add(name);
+  }
+
+  counter(name: string, help: string, schema: LabelSchema = {}): Counter {
+    this.claim(name);
+    const labelNames = Object.keys(schema);
+    const series = new Map<string, { values: string[]; total: number }>();
+    this.renderers.push(() => {
+      const lines = [`# HELP ${name} ${help}`, `# TYPE ${name} counter`];
+      for (const { values, total } of series.values()) {
+        lines.push(`${name}${renderLabels(labelNames, values)} ${total}`);
+      }
+      return lines.join("\n");
+    });
+    return {
+      inc: (labels, delta = 1) => {
+        const values = validateLabels(schema, labelNames, labels);
+        const key = seriesKey(values);
+        const entry = series.get(key);
+        if (entry) entry.total += delta;
+        else series.set(key, { values, total: delta });
+      },
+    };
+  }
+
+  // All gauges are scrape-time collectors: counters drift across crash and
+  // recovery paths, so gauge truth lives wherever the state lives (DB,
+  // InFlightGauge, process) and is read at exposition time. A collector
+  // that throws reports NaN rather than breaking the whole scrape.
+  gauge(name: string, help: string, collect: () => number): void {
+    this.claim(name);
+    this.renderers.push(() => {
+      let value: number;
+      try {
+        value = collect();
+      } catch {
+        value = Number.NaN;
+      }
+      return [
+        `# HELP ${name} ${help}`,
+        `# TYPE ${name} gauge`,
+        `${name} ${value}`,
+      ].join("\n");
+    });
+  }
+
+  histogram(
+    name: string,
+    help: string,
+    buckets: readonly number[],
+    schema: LabelSchema = {},
+  ): Histogram {
+    this.claim(name);
+    const labelNames = Object.keys(schema);
+    const sorted = [...buckets].sort((a, b) => a - b);
+    interface Series {
+      values: string[];
+      counts: number[]; // one per finite bucket
+      sum: number;
+      count: number;
+    }
+    const series = new Map<string, Series>();
+    this.renderers.push(() => {
+      const lines = [`# HELP ${name} ${help}`, `# TYPE ${name} histogram`];
+      for (const s of series.values()) {
+        let cumulative = 0;
+        for (let i = 0; i < sorted.length; i++) {
+          cumulative += s.counts[i]!;
+          const values = [...s.values, String(sorted[i])];
+          lines.push(
+            `${name}_bucket${renderLabels([...labelNames, "le"], values)} ${cumulative}`,
+          );
+        }
+        lines.push(
+          `${name}_bucket${renderLabels([...labelNames, "le"], [...s.values, "+Inf"])} ${s.count}`,
+        );
+        lines.push(`${name}_sum${renderLabels(labelNames, s.values)} ${s.sum}`);
+        lines.push(`${name}_count${renderLabels(labelNames, s.values)} ${s.count}`);
+      }
+      return lines.join("\n");
+    });
+    return {
+      observe: (seconds, labels) => {
+        if (!Number.isFinite(seconds)) return;
+        const values = validateLabels(schema, labelNames, labels);
+        const key = seriesKey(values);
+        let s = series.get(key);
+        if (!s) {
+          s = { values, counts: sorted.map(() => 0), sum: 0, count: 0 };
+          series.set(key, s);
+        }
+        for (let i = 0; i < sorted.length; i++) {
+          if (seconds <= sorted[i]!) {
+            s.counts[i]! += 1;
+            break;
+          }
+        }
+        s.sum += seconds;
+        s.count += 1;
+      },
+    };
+  }
+
+  exposition(): string {
+    return this.renderers.map((render) => render()).join("\n") + "\n";
+  }
+}

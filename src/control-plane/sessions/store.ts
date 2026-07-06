@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_by_workspace ON sessions (workspace_id, id);
 CREATE INDEX IF NOT EXISTS sessions_by_workspace_agent ON sessions (workspace_id, agent_id, id);
+-- Partial index so the /metrics active-sessions gauge scans O(active), not
+-- O(history) (plan 0121 §3.2).
+CREATE INDEX IF NOT EXISTS idx_sessions_live ON sessions (archived_at) WHERE archived_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS session_resources (
   id          TEXT PRIMARY KEY,
@@ -115,6 +118,7 @@ export class SqliteSessionStore implements SessionStore {
   private readonly insertSnapshotStmt: StatementSync;
   private readonly retrieveActiveStmt: StatementSync;
   private readonly countActiveStmt: StatementSync;
+  private readonly countAllActiveStmt: StatementSync;
   private readonly retrieveAnyStmt: StatementSync;
   private readonly archiveStmt: StatementSync;
   private readonly insertPendingSnapshotDeletesStmt: StatementSync;
@@ -164,6 +168,9 @@ export class SqliteSessionStore implements SessionStore {
     this.countActiveStmt = this.db.prepare(
       `SELECT COUNT(*) AS n FROM sessions
        WHERE workspace_id = ? AND archived_at IS NULL`,
+    );
+    this.countAllActiveStmt = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM sessions WHERE archived_at IS NULL`,
     );
     this.retrieveAnyStmt = this.db.prepare(
       `SELECT * FROM sessions
@@ -348,6 +355,11 @@ export class SqliteSessionStore implements SessionStore {
 
   countActive(workspaceId: string): number {
     return (this.countActiveStmt.get(workspaceId) as { n: number }).n;
+  }
+
+  // Unscoped, for the /metrics gauge (0121 C2) — served by idx_sessions_live.
+  countAllActive(): number {
+    return (this.countAllActiveStmt.get() as { n: number }).n;
   }
 
   retrieveAny(workspaceId: string, sessionId: string): SessionRow | undefined {

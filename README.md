@@ -116,11 +116,16 @@ What works today, at outcome level:
   [plan 0120](docs/plans/0120-dashboard.md)). Fully self-contained — no CDN
   at first paint; browser keys live in page memory only.
 
+- **Observability.** `GET /health` (liveness + readiness, compose
+  healthcheck), fail-closed Prometheus `/metrics`, and structured JSON logs
+  with programmatically enforced secret redaction
+  ([plan 0121](docs/plans/0121-observability.md)).
+
 What's still missing — the
 [appliance product roadmap](docs/plans/0114-appliance-product-roadmap.md) is
 the authoritative sequencing:
 
-- health/metrics observability and session usage metering (`usage` is `null`);
+- session usage metering (`usage` is `null`);
 - skills and MCP execution (both wire-accepted today but runtime-inert; now
   unblocked by the egress + secrets boundary);
 - agent versioning, broader event-topology parity, file-upload idempotency,

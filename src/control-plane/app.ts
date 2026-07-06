@@ -4,7 +4,19 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAdminAuth, loadAdminKey, type AdminAuth } from "./admin/auth.ts";
-import { log, parseBooleanFlag } from "./logging.ts";
+import { log, parseBooleanFlag, setLogEventHook } from "./logging.ts";
+import {
+  loadMetricsToken,
+  registerObservabilityRoutes,
+  sha256Token,
+  storageFreeBytes,
+  type ObservabilityRoutesConfig,
+} from "./observability/routes.ts";
+import {
+  createControlPlaneMetrics,
+  registerProcessGauges,
+  type ControlPlaneMetrics,
+} from "./observability/instruments.ts";
 import {
   CONSOLE_MOUNT,
   registerConsoleRoutes,
@@ -113,6 +125,18 @@ export interface ControlPlaneServices {
   sessionEvents: SessionEventsService;
   auth?: ControlPlaneAuth;
   admission?: AdmissionLimits;
+  // 0121 C2. Absent = no /health, no /metrics, no HTTP metrics middleware
+  // (in-memory test assemblies see no change). The deployment assembly
+  // always passes health; metrics only when the exposure matrix allows.
+  observability?: AppObservability;
+}
+
+export interface AppObservability {
+  health: ObservabilityRoutesConfig["health"];
+  /** Absent = no instrumentation and no /metrics (fail-closed). */
+  metrics?: ControlPlaneMetrics;
+  /** Bearer requirement for /metrics; absent = unauthenticated (loopback). */
+  metricsTokenSha256?: Buffer;
 }
 
 export interface InMemoryControlPlaneAppOptions {
@@ -140,11 +164,19 @@ export interface DeploymentAuthEnv {
   OMA_ALLOW_INSECURE_TRANSPORT?: string;
 }
 
+export interface DeploymentObservabilityEnv {
+  /** "0" disables /metrics everywhere; default on (subject to the exposure matrix). */
+  OMA_METRICS?: string;
+  OMA_METRICS_TOKEN?: string;
+  OMA_METRICS_TOKEN_FILE?: string;
+}
+
 export type DeploymentControlPlaneEnv =
   DeploymentRuntimeEnv &
   DeploymentStorageEnv &
   DeploymentAuthEnv &
-  DeploymentAdmissionEnv;
+  DeploymentAdmissionEnv &
+  DeploymentObservabilityEnv;
 
 // 0113 D5: exactly two values; unset stays disabled for the currently allowed
 // rollout tiers but warns loudly; anything else fails construction.
@@ -183,6 +215,28 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
       );
     },
   });
+
+  // Metrics middleware registers FIRST: a first-registered middleware that
+  // awaits next() sees the FINAL response status — including onError-,
+  // notFound-, and bodyLimit-produced responses (verified against Hono's
+  // compose(); the context is mutated in place). Plan 0121 §2.
+  const observedMetrics = services.observability?.metrics;
+  if (observedMetrics !== undefined) {
+    app.use("*", async (c, next) => {
+      const startedAt = performance.now();
+      await next();
+      const route_class = routeClassForPath(c.req.path);
+      observedMetrics.httpRequests.inc({
+        route_class,
+        method: c.req.method,
+        status: String(c.res.status),
+      });
+      observedMetrics.httpDuration.observe(
+        (performance.now() - startedAt) / 1000,
+        { route_class },
+      );
+    });
+  }
 
   app.use("*", async (c, next) => {
     const reqId = requestId();
@@ -275,6 +329,21 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   if (services.console) {
     registerConsoleRoutes(app, services.console);
   }
+  if (services.observability) {
+    registerObservabilityRoutes(app, {
+      health: services.observability.health,
+      ...(services.observability.metrics === undefined
+        ? {}
+        : {
+            metrics: {
+              registry: services.observability.metrics.registry,
+              ...(services.observability.metricsTokenSha256 === undefined
+                ? {}
+                : { tokenSha256: services.observability.metricsTokenSha256 }),
+            },
+          }),
+    });
+  }
 
   app.notFound((c) => {
     const err = new ApiError(404, "not_found_error", "Route not found");
@@ -331,13 +400,30 @@ export function createDeploymentControlPlane(
 ): DeploymentControlPlane {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
-  const admission = createAdmissionLimits(parseAdmissionLimitsFromEnv(env));
   const adminKey = loadAdminKey(env);
   // Parsed before any store opens so a malformed flag can't leak a store.
   const tlsTerminated = parseBooleanFlag(env.OMA_TLS_TERMINATED, "OMA_TLS_TERMINATED");
   const allowInsecureTransport = parseBooleanFlag(
     env.OMA_ALLOW_INSECURE_TRANSPORT,
     "OMA_ALLOW_INSECURE_TRANSPORT",
+  );
+  // 0121 §3.2 exposure matrix, resolved HERE from the configured bind host —
+  // the same source of truth as the transport gate below — and passed down
+  // as data. Never inferred per-request from headers or socket info. The
+  // `?? "1"` is load-bearing: a bare parse would default the flag OFF.
+  const metricsEnabled = parseBooleanFlag(env.OMA_METRICS ?? "1", "OMA_METRICS");
+  // Token is loaded only when the kill switch is on: OMA_METRICS=0 must be
+  // able to recover a deployment whose metrics-secret config is broken
+  // (missing token file, both variants set) — C2 review, Codex P2.
+  const metricsToken = metricsEnabled ? loadMetricsToken(env) : undefined;
+  const metricsServed =
+    metricsEnabled && (metricsToken !== undefined || isLoopbackHost(env.OMA_HOST));
+  const metrics = metricsServed ? createControlPlaneMetrics() : undefined;
+  const admission = createAdmissionLimits(
+    parseAdmissionLimitsFromEnv(env),
+    metrics === undefined
+      ? undefined
+      : (limit, status) => metrics.admissionRejections.inc({ limit, status }),
   );
   const stores = createDeploymentStoresFromEnv(env);
   if (authMode === "api-key" && stores.mode !== "durable") {
@@ -400,8 +486,65 @@ export function createDeploymentControlPlane(
     );
   }
   const broadcaster = new SessionEventBroadcaster(stores.events);
+  const sandboxProviderName = runtimeConfig.sandboxProviderSelection?.type ?? "none";
+  if (metrics !== undefined) {
+    // Turn outcomes/durations at the single post-commit chokepoint (plan
+    // 0121 §2): the store observer fires after the outermost events-store
+    // transaction releases, covering every apply path. archived/deleted are
+    // session lifecycle, not turn outcomes — their map entries are dropped
+    // without observation, so the map cannot grow unbounded.
+    const turnAcceptedAtMs = new Map<string, number>();
+    stores.events.setRuntimeChangesObserver((changes) => {
+      for (const turn of changes.acceptedTurns ?? []) {
+        turnAcceptedAtMs.set(turn.turnId, performance.now());
+      }
+      for (const closure of changes.closedTurns ?? []) {
+        const acceptedAt = turnAcceptedAtMs.get(closure.turnId);
+        turnAcceptedAtMs.delete(closure.turnId);
+        const outcome = TURN_OUTCOME_BY_REASON[closure.reason];
+        if (outcome === undefined) continue;
+        metrics.turnsTotal.inc({ outcome });
+        if (outcome === "completed" && acceptedAt !== undefined) {
+          metrics.turnDuration.observe((performance.now() - acceptedAt) / 1000);
+        }
+      }
+    });
+    registerProcessGauges(metrics.registry);
+    metrics.registry.gauge(
+      "oma_sessions_active",
+      "Unarchived sessions (scrape-time count; served by idx_sessions_live).",
+      () => stores.sessions.countAllActive(),
+    );
+    metrics.registry.gauge(
+      "oma_runtime_turns_pending",
+      "Pending runtime turns awaiting completion (scrape-time count).",
+      () => stores.events.countAllPendingRuntimeTurns(),
+    );
+    metrics.registry.gauge(
+      "oma_sse_streams_active",
+      "Open SSE event streams.",
+      () => admission.sseStreams.totalInFlight,
+    );
+    setLogEventHook((level) => metrics.logEvents.inc({ level }));
+  }
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
+    ...(metrics === undefined
+      ? {}
+      : {
+          onSandboxEvent: (event: "created" | "disposed" | "error") => {
+            if (event === "error") {
+              metrics.sandboxProviderErrors.inc({ provider: sandboxProviderName });
+            } else {
+              metrics.sandboxes.inc({ event, provider: sandboxProviderName });
+            }
+          },
+          onSandboxesReaped: (count: number) =>
+            metrics.sandboxes.inc(
+              { event: "reaped", provider: sandboxProviderName },
+              count,
+            ),
+        }),
     resolveEgressBundle:
       opts.runner?.resolveEgressBundle ??
       createSessionEgressBundleResolver({
@@ -431,12 +574,20 @@ export function createDeploymentControlPlane(
       sessionOutputCoordinator: stores.sessionOutputCoordinator,
       runtimeEventCoordinator: stores.runtimeEventCoordinator,
     },
-    admission.maxPendingRuntimeTurnsPerWorkspace === undefined
-      ? {}
-      : {
-          maxPendingRuntimeTurnsPerWorkspace:
-            admission.maxPendingRuntimeTurnsPerWorkspace,
-        },
+    {
+      ...(admission.maxPendingRuntimeTurnsPerWorkspace === undefined
+        ? {}
+        : {
+            maxPendingRuntimeTurnsPerWorkspace:
+              admission.maxPendingRuntimeTurnsPerWorkspace,
+          }),
+      ...(metrics === undefined
+        ? {}
+        : {
+            onAdmissionRejected: () =>
+              metrics.admissionRejections.inc({ limit: "turns", status: "429" }),
+          }),
+    },
   );
   sessionEvents.recoverAllAbandonedRuntimeTurns();
   const consoleRoot = bundledConsoleRoot();
@@ -481,10 +632,52 @@ export function createDeploymentControlPlane(
               maxActiveSessionsPerWorkspace:
                 admission.maxActiveSessionsPerWorkspace,
             }),
+        ...(metrics === undefined
+          ? {}
+          : {
+              onAdmissionRejected: () =>
+                metrics.admissionRejections.inc({
+                  limit: "sessions",
+                  status: "429",
+                }),
+            }),
       },
     ),
     sessionEvents,
     admission,
+    observability: {
+      health: {
+        storage:
+          stores.mode === "durable"
+            ? () => {
+                stores.sessions.countAllActive();
+                // A configured object root that cannot be statfs'd (deleted,
+                // unmounted, permission-broken) is a FAILED check, not a
+                // silently-omitted field — C2 review, Codex-adv MEDIUM.
+                const free =
+                  env.OMA_FILE_STORAGE_ROOT === undefined
+                    ? undefined
+                    : storageFreeBytes(env.OMA_FILE_STORAGE_ROOT);
+                if (env.OMA_FILE_STORAGE_ROOT !== undefined && free === undefined) {
+                  return { status: "failed" as const };
+                }
+                return {
+                  status: "ok" as const,
+                  ...(free === undefined ? {} : { free_bytes: free }),
+                };
+              }
+            : // In-memory reports its mode rather than lying about durability.
+              () => ({ status: "ok" as const, mode: "in-memory" }),
+        runtime: () => {
+          stores.events.countAllPendingRuntimeTurns();
+          return { status: "ok" as const };
+        },
+      },
+      ...(metrics === undefined ? {} : { metrics }),
+      ...(metricsToken === undefined
+        ? {}
+        : { metricsTokenSha256: sha256Token(metricsToken) }),
+    },
   });
   return { app, stores, authMode };
 }
@@ -676,6 +869,14 @@ function isManagedAgentsRoute(path: string): boolean {
 function isAdminRoute(path: string): boolean {
   return path === "/admin" || path.startsWith("/admin/");
 }
+
+// Turn close reasons → metric outcomes (plan 0121 §3.2): archived/deleted
+// are session lifecycle, not turn outcomes, and are deliberately unmapped.
+const TURN_OUTCOME_BY_REASON: Partial<Record<string, string>> = {
+  completed: "completed",
+  interrupted: "interrupted",
+  terminalized: "abandoned",
+};
 
 // Closed enum shared by the request_failed log line and (C2) the HTTP
 // metrics middleware — dynamic paths must never reach a metric label.

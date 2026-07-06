@@ -111,6 +111,8 @@ export interface MicrosandboxSandboxOptions {
   reapStaleSandboxesOlderThanMs?: number;
   now?: () => number;
   random?: () => number;
+  /** 0121 C2 telemetry: startup sweep reported reaping N stale sandboxes. */
+  onReaped?: (count: number) => void;
 }
 
 export interface MicrosandboxSandboxReaperOptions {
@@ -217,7 +219,8 @@ export function createMicrosandboxSandboxProviderFactory(
         resourceNamePrefix: opts.resourceNamePrefix,
         now: opts.now,
       }).then(
-        () => {
+        (count) => {
+          if (count > 0) opts.onReaped?.(count);
           swept = true;
         },
         (error: unknown) => {

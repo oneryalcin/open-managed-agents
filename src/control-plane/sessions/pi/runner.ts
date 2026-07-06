@@ -120,6 +120,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
       customToolTimeoutMs?: number;
       toolConfirmationTimeoutMs?: number;
       builtinToolAccess?: BuiltinToolAccessResolver;
+      /** 0121 C2 telemetry: sandbox lifecycle events. Must not throw. */
+      onSandboxEvent?: (event: "created" | "disposed" | "error") => void;
     } = {},
   ) {
     this.resolveSandboxProviderFactory();
@@ -554,11 +556,17 @@ export class PiSessionRunner implements RuntimeEventRunner {
         let sandbox: SandboxProvider | undefined;
         let session: PiRuntimeSession | undefined;
         try {
-          sandbox = await sandboxProviderFactory?.(
-            workspaceId,
-            sessionId,
-            context,
-          );
+          try {
+            sandbox = await sandboxProviderFactory?.(
+              workspaceId,
+              sessionId,
+              context,
+            );
+          } catch (providerError) {
+            this.opts.onSandboxEvent?.("error");
+            throw providerError;
+          }
+          if (sandbox !== undefined) this.opts.onSandboxEvent?.("created");
           const mounts =
             fileMounts ??
             (await this.opts.fileMountResolver?.(workspaceId, sessionId)) ??
@@ -585,7 +593,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
             customToolNames,
           );
         } catch (error) {
-          sandbox?.dispose();
+          this.disposeSandbox(sandbox);
           session?.dispose();
           throw error;
         }
@@ -602,7 +610,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           emitInternal: undefined,
         };
         if (this.closed || this.closedSessionIds.has(sessionId)) {
-          sandbox?.dispose();
+          this.disposeSandbox(sandbox);
           session.dispose();
           this.pendingSessions.delete(sessionId);
           throw new Error(
@@ -813,8 +821,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
       sessionId,
       new Error("Runtime session evicted"),
     );
-    handle.sandbox?.dispose();
+    this.disposeSandbox(handle.sandbox);
     handle.session.dispose();
+  }
+
+  private disposeSandbox(sandbox: SandboxProvider | undefined): void {
+    if (sandbox === undefined) return;
+    sandbox.dispose();
+    this.opts.onSandboxEvent?.("disposed");
   }
 }
 

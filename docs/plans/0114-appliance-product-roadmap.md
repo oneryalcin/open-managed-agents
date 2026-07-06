@@ -146,11 +146,13 @@ Follow-ups: #152 (mint idempotency guard), #155 (vendored-asset checksums),
 
 ### Arc C — Observability
 
-Health endpoint, Prometheus-style `/metrics`, structured logs; surfaced in the
-console. This is the 0112 gate "blocks multi-worker/managed production" and
-the precondition for admitting less-trusted tenants. Log-redaction design
-(threat model §5) belongs to this arc — what we emit and what we persist are
-one decision.
+**DONE (2026-07-06, plan [0121](0121-observability.md), two PRs: C1 logger +
+redaction, C2 endpoints + metrics).** `GET /health` (liveness + readiness,
+node-based compose healthcheck), fail-closed `/metrics` (loopback open,
+non-loopback 404 unless `OMA_METRICS_TOKEN`; hand-rolled zero-dep registry
+with closed-enum labels), structured JSON logs through one redacting
+chokepoint, threat-model §5 decided. Console surfacing deferred to a later
+console polish slice (the API it needs now exists).
 
 ### Arc D — Usage metering
 
