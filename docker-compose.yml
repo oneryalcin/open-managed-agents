@@ -1,12 +1,25 @@
 # docker compose up -> first boot prints the initial API key in the logs:
 #   docker compose logs oma | grep x-api-key
+# The console is served at http://127.0.0.1:4180/console
 services:
   oma:
     build: .
     ports:
-      - "4180:4180"
+      # Published on the host's loopback only. Change to "4180:4180" to expose
+      # on the network — then put TLS in front.
+      - "127.0.0.1:4180:4180"
     volumes:
       - oma-data:/data
+    # To enable the admin API + console admin mode, uncomment both lines. The
+    # container binds 0.0.0.0 internally, so the appliance cannot tell that
+    # traffic never leaves this host — OMA_ADMIN_ALLOW_INSECURE=1 is the
+    # explicit opt-in (safe with the loopback-only port mapping above; with an
+    # exposed port, terminate TLS in front and set OMA_TLS_TERMINATED=1
+    # instead). Generate a key:
+    #   node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+    # environment:
+    #   OMA_ADMIN_KEY: "<paste generated key>"
+    #   OMA_ADMIN_ALLOW_INSECURE: "1"
 
 volumes:
   oma-data:

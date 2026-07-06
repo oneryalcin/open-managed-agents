@@ -299,6 +299,16 @@ minimal mutations; no UI redesign; appliance replaces the dev proxy.
 2. **Fonts:** self-host woff2 vs. a system-font stack (system stack is smallest).
 3. Whether to keep SRI hashes on the now-local vendor files (harmless either way).
 
+**Resolved at implementation (2026-07-06):** (1) boot-time check — the gate
+refuses construction in `createDeploymentControlPlane` (mirrors the existing
+admin guards), with `OMA_TLS_TERMINATED=1` as the operator's explicit
+assertion; `X-Forwarded-Proto` not trusted. (2) System-font stack — the CSS
+vars already carried full fallbacks, so dropping the Google Fonts link needed
+zero CSS changes. (3) SRI dropped on local files. Bonus finding: the browser
+smoke proved Babel-standalone needs `script-src 'unsafe-inline'` in addition
+to `'unsafe-eval'` (it executes transformed text/babel blocks inline);
+`connect-src 'self'` — the directive that actually guards the key — holds.
+
 ---
 
 ## 8. Non-goals / follow-ups

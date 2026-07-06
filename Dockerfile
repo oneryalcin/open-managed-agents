@@ -11,6 +11,8 @@ RUN npm ci --omit=dev
 COPY src ./src
 COPY bin ./bin
 COPY scripts ./scripts
+# The operator console, served by the same process at /console (plan 0120).
+COPY ui ./ui
 
 ENV OMA_HOME=/data \
     OMA_HOST=0.0.0.0 \

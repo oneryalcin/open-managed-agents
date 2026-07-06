@@ -4,7 +4,10 @@ docs
 scratch
 specs
 examples
-ui
+# ui ships in the image (COPY ui ./ui serves /console) — only its dev/test
+# clutter stays out of the build context.
+ui/managed-agents-console/serve.mjs
+ui/**/__tests__
 *.md
 .envrc
 gcs-creds.json

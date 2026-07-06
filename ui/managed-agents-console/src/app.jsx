@@ -79,6 +79,7 @@ function routeHash(route) {
   if (route.name === 'agent') return `#agent=${encodeURIComponent(route.agent.id)}`;
   if (route.name === 'agents') return '#agents';
   if (route.name === 'files') return '#files';
+  if (route.name === 'admin') return '#admin';
   return '#sessions';
 }
 
@@ -119,8 +120,13 @@ function App() {
   const [agents, setAgents] = useState(AGENTS);
   const [environments, setEnvironments] = useState(ENVIRONMENTS);
   const [files, setFiles] = useState(FILES);
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [apiState, setApiState] = useState({ state:'loading', mode: demoMode ? 'demo' : 'api', error:null, warnings:[] });
   const [modal, setModal] = useState(null);   // { kind:'session', presetAgent } | { kind:'agent' }
+  // Auth phase (plan 0120 §3.4): 'boot' tries /v1 once without a key (an
+  // auth-disabled server just works); a 401 lands on 'login' instead of the
+  // old silent demo-data fallback. Keys themselves live in api.js memory.
+  const [auth, setAuth] = useState({ phase: demoMode ? 'ready' : 'boot', admin:false, error:null, busy:false });
 
   useEffect(() => {
     const r = document.documentElement;
@@ -131,6 +137,20 @@ function App() {
     r.style.setProperty('--mono', MONO_FONTS[t.mono] || MONO_FONTS.geist);
   }, [t]);
 
+  const loadLiveData = () => OmaConsoleApi.loadConsoleData()
+    .then((data) => {
+      const linkedAgents = linkSessionsToAgents(data.agents, data.sessions);
+      setAgents(linkedAgents);
+      setSessions(data.sessions);
+      setEnvironments(data.environments);
+      setFiles(data.files);
+      setApiState({ state:'loaded', mode:'api', error:null, warnings:data.warnings || [] });
+      setWorkspaceLoaded(true);
+      const target = readRouteTarget(data.sessions, linkedAgents);
+      if (target?.name === 'session') openSession(target.session, 'api');
+      else if (target) setRoute(target);
+    });
+
   useEffect(() => {
     let alive = true;
     if (demoMode) {
@@ -139,27 +159,57 @@ function App() {
       if (target) setRoute(target);
       return () => { alive = false; };
     }
-    OmaConsoleApi.loadConsoleData()
-      .then((data) => {
-        if (!alive) return;
-        const linkedAgents = linkSessionsToAgents(data.agents, data.sessions);
-        setAgents(linkedAgents);
-        setSessions(data.sessions);
-        setEnvironments(data.environments);
-        setFiles(data.files);
-        setApiState({ state:'loaded', mode:'api', error:null, warnings:data.warnings || [] });
-        const target = readRouteTarget(data.sessions, linkedAgents);
-        if (target?.name === 'session') openSession(target.session, 'api');
-        else if (target) setRoute(target);
-      })
+    loadLiveData()
+      .then(() => { if (alive) setAuth((a) => ({ ...a, phase:'ready' })); })
       .catch((error) => {
         if (!alive) return;
+        if (error.status === 401) {
+          // Server requires a key: ask for one instead of quietly showing
+          // bundled demo data behind a login wall.
+          setAuth((a) => ({ ...a, phase:'login' }));
+          return;
+        }
         setApiState({ state:'loaded', mode:'mock', error, warnings:[] });
+        setAuth((a) => ({ ...a, phase:'ready' }));
         const target = readRouteTarget(SESSIONS, AGENTS);
         if (target) setRoute(target);
       });
     return () => { alive = false; };
   }, [demoMode]);
+
+  const adminLogin = (key) => {
+    setAuth((a) => ({ ...a, busy:true, error:null }));
+    OmaConsoleApi.setAdminKey(key);
+    OmaConsoleApi.listWorkspaces()
+      .then(() => {
+        setAuth({ phase:'ready', admin:true, error:null, busy:false });
+        setApiState({ state:'loaded', mode:'api', error:null, warnings:[] });
+        setRoute({ name:'admin' });
+      })
+      .catch((error) => {
+        setAuth((a) => ({ ...a, busy:false, error: error.status === 401
+          ? 'The server rejected that admin key.'
+          : error.message }));
+      });
+  };
+  const workspaceLogin = (key) => {
+    setAuth((a) => ({ ...a, busy:true, error:null }));
+    OmaConsoleApi.setWorkspaceKey(key);
+    loadLiveData()
+      .then(() => setAuth((a) => ({ ...a, phase:'ready', busy:false, error:null })))
+      .catch((error) => {
+        setAuth((a) => ({ ...a, busy:false, error: error.status === 401
+          ? 'The server rejected that workspace key.'
+          : error.message }));
+      });
+  };
+  const browseAsWorkspace = (plaintextKey) => {
+    OmaConsoleApi.setWorkspaceKey(plaintextKey);
+    loadLiveData()
+      .then(() => { setRoute({ name:'sessions' }); writeRouteHash({ name:'sessions' }); })
+      .catch(() => {});
+  };
+  const reauth = () => setAuth((a) => ({ ...a, phase:'login', admin:false, error:'Session expired — the admin key was rejected. Enter it again.' }));
 
   const go = (name) => {
     const next = { name };
@@ -230,9 +280,34 @@ function App() {
     setRoute({ name:'agent', agent: upd });
   };
 
+  if (auth.phase === 'login') {
+    return (
+      <div className="app">
+        <Sidebar route="login" go={() => {}} />
+        <main className="main">
+          <LoginView onAdminLogin={adminLogin} onWorkspaceLogin={workspaceLogin}
+            error={auth.error} busy={auth.busy} />
+        </main>
+      </div>
+    );
+  }
+
   let view;
   const dataState = apiState.state === 'loading' ? 'loading' : t.dataState;
-  if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={readOnly} />;
+  // Admin-only sessions never loaded /v1: the state still holds the bundled
+  // demo rows, which must not render as if they were live tenant data.
+  const needsWorkspaceKey = apiState.mode === 'api' && !demoMode
+    && !workspaceLoaded && route.name !== 'admin';
+  if (needsWorkspaceKey) view = (
+    <div className="main-scroll scroll fade-in">
+      <PageHead title="No workspace selected" sub="Browsing /v1 needs a workspace key." />
+      <EmptyState icon="database" title="Connect a workspace"
+        message="Mint a key in Admin and choose “Browse as this workspace”, or reload and enter a workspace key."
+        actionLabel={auth.admin ? 'Open Admin' : null} onAction={() => go('admin')} />
+    </div>
+  );
+  else if (route.name === 'admin') view = <AdminPanel onBrowseWorkspace={browseAsWorkspace} onReauth={reauth} />;
+  else if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={readOnly} />;
   else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={dataState} apiMode={apiState.mode} readOnly={readOnly} />;
   else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={dataState} readOnly={readOnly} />;
   else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} readOnly={readOnly} />;
@@ -240,7 +315,7 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar route={route.name} go={go} />
+      <Sidebar route={route.name} go={go} showAdmin={auth.admin} />
       <main className="main">
         {apiState.state !== 'loading' && <ModeBar mode={apiState.mode} warnings={apiState.warnings} />}
         {view}
