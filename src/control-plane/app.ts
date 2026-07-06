@@ -1,6 +1,13 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createAdminAuth, loadAdminKey, type AdminAuth } from "./admin/auth.ts";
+import {
+  registerConsoleRoutes,
+  type ConsoleStaticConfig,
+} from "./console/static.ts";
 import { adminRoutes } from "./admin/routes.ts";
 import { DefaultAdminService, type AdminService } from "./admin/service.ts";
 import { agentsRoutes } from "./agents/routes.ts";
@@ -91,6 +98,9 @@ export interface ControlPlaneServices {
     service: AdminService;
     auth: AdminAuth;
   };
+  // Absent = no console shipped alongside this process (in-memory test
+  // assemblies); the deployment assembly passes the bundled ui/ dir.
+  console?: ConsoleStaticConfig;
   agents: AgentService;
   environments: EnvironmentService;
   files?: FileService;
@@ -120,6 +130,12 @@ export interface DeploymentAuthEnv {
   OMA_AUTH_MODE?: string;
   OMA_ADMIN_KEY?: string;
   OMA_ADMIN_KEY_FILE?: string;
+  /** Bind address (set by the appliance entrypoint; undefined = loopback default). */
+  OMA_HOST?: string;
+  /** "1" = a TLS terminator fronts this process (operator's assertion). */
+  OMA_TLS_TERMINATED?: string;
+  /** "1" = consciously accept API keys over a plaintext non-loopback bind. */
+  OMA_ALLOW_INSECURE_TRANSPORT?: string;
 }
 
 export type DeploymentControlPlaneEnv =
@@ -254,6 +270,9 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   if (services.admin) {
     app.route("/admin", adminRoutes(services.admin.service));
   }
+  if (services.console) {
+    registerConsoleRoutes(app, services.console);
+  }
 
   app.notFound((c) => {
     const err = new ApiError(404, "not_found_error", "Route not found");
@@ -303,6 +322,12 @@ export function createDeploymentControlPlane(
   const authMode = parseDeploymentAuthMode(env);
   const admission = createAdmissionLimits(parseAdmissionLimitsFromEnv(env));
   const adminKey = loadAdminKey(env);
+  // Parsed before any store opens so a malformed flag can't leak a store.
+  const tlsTerminated = parseBooleanFlag(env.OMA_TLS_TERMINATED, "OMA_TLS_TERMINATED");
+  const allowInsecureTransport = parseBooleanFlag(
+    env.OMA_ALLOW_INSECURE_TRANSPORT,
+    "OMA_ALLOW_INSECURE_TRANSPORT",
+  );
   const stores = createDeploymentStoresFromEnv(env);
   if (authMode === "api-key" && stores.mode !== "durable") {
     stores.close();
@@ -338,6 +363,29 @@ export function createDeploymentControlPlane(
     throw new Error(
       "OMA_ADMIN_KEY/OMA_ADMIN_KEY_FILE requires OMA_AUTH_MODE=api-key: " +
         "the admin API mints workspace keys for /v1 routes, so workspace authentication must be enabled.",
+    );
+  }
+  // 0120 §3.2 (extended after implementation review): every credentialed
+  // request — the admin key and each workspace x-api-key — travels in the
+  // clear over a plaintext non-loopback bind. Refuse that combination at
+  // boot unless the operator asserts a TLS front (OMA_TLS_TERMINATED=1 — an
+  // explicit assertion; X-Forwarded-Proto from the request is
+  // attacker-suppliable and deliberately not trusted) or consciously opts
+  // into plaintext (OMA_ALLOW_INSECURE_TRANSPORT=1, e.g. a Docker bind
+  // published only on the host's loopback). Auth-disabled deployments carry
+  // no credentials, so they are not gated.
+  if (
+    authMode === "api-key" &&
+    !isLoopbackHost(env.OMA_HOST) &&
+    !tlsTerminated &&
+    !allowInsecureTransport
+  ) {
+    stores.close();
+    throw new Error(
+      `API-key authentication on a non-loopback bind (OMA_HOST=${JSON.stringify(env.OMA_HOST)}) without TLS would send ` +
+        "every API key — and the admin key, if set — in cleartext. Either front the appliance with TLS and set " +
+        "OMA_TLS_TERMINATED=1, bind to loopback (unset OMA_HOST), or set OMA_ALLOW_INSECURE_TRANSPORT=1 if the " +
+        "plaintext exposure is intentional (e.g. a container port published only on the host's loopback).",
     );
   }
   const broadcaster = new SessionEventBroadcaster(stores.events);
@@ -380,6 +428,7 @@ export function createDeploymentControlPlane(
         },
   );
   sessionEvents.recoverAllAbandonedRuntimeTurns();
+  const consoleRoot = bundledConsoleRoot();
   const app = createControlPlaneApp({
     ...(adminKey === undefined
       ? {}
@@ -389,6 +438,10 @@ export function createDeploymentControlPlane(
             auth: createAdminAuth(adminKey),
           },
         }),
+    // Secret-free static content, so it serves whenever the dir shipped —
+    // deliberately not coupled to admin being enabled (0120 §3.1): a
+    // read-only /v1 browser is useful without an admin key.
+    ...(consoleRoot === undefined ? {} : { console: { root: consoleRoot } }),
     ...(authMode === "api-key"
       ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
       : {}),
@@ -423,6 +476,32 @@ export function createDeploymentControlPlane(
     admission,
   });
   return { app, stores, authMode };
+}
+
+// undefined = the appliance's 127.0.0.1 default. Everything not provably
+// loopback (0.0.0.0, ::, LAN addresses, hostnames) counts as non-loopback —
+// the safe direction for a check that gates a root credential.
+export function isLoopbackHost(host: string | undefined): boolean {
+  if (host === undefined) return true;
+  const h = host.trim().toLowerCase();
+  if (h === "localhost" || h === "::1" || h === "[::1]") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+// House rule: unknown config values refuse to start, never silently coerce.
+function parseBooleanFlag(raw: string | undefined, name: string): boolean {
+  if (raw === undefined || raw === "0") return false;
+  if (raw === "1") return true;
+  throw new Error(
+    `Unsupported ${name}: ${JSON.stringify(raw)} (expected "1" or "0")`,
+  );
+}
+
+// App-root-relative so the same derivation works from a checkout
+// (<repo>/ui/…) and inside the Docker image (/app/ui/…, COPY ui ./ui).
+function bundledConsoleRoot(): string | undefined {
+  const root = fileURLToPath(new URL("../../ui/managed-agents-console", import.meta.url));
+  return existsSync(join(root, "index.html")) ? root : undefined;
 }
 
 export function createInMemoryControlPlaneApp(

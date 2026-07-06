@@ -71,7 +71,7 @@ const NAV = [
   { key:'files', label:'Files', icon:'folder' },
 ];
 
-function Sidebar({ route, go }) {
+function Sidebar({ route, go, showAdmin = false }) {
   const top = route === 'session' ? 'sessions' : route === 'agent' ? 'agents' : route;
   return (
     <aside className="sidebar">
@@ -89,6 +89,12 @@ function Sidebar({ route, go }) {
           <Icon name={n.icon} size={16} />{n.label}
         </div>
       ))}
+      {showAdmin && <>
+        <div className="nav-label">Operator</div>
+        <div className={'nav-item' + (top === 'admin' ? ' active' : '')} onClick={() => go('admin')}>
+          <Icon name="database" size={16} />Admin
+        </div>
+      </>}
       <div className="nav-label">Read-only</div>
       <div className="nav-item dim"><Icon name="database" size={16} />Environments</div>
       <div className="sidebar-spacer" />

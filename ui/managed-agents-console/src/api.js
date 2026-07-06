@@ -1,4 +1,6 @@
-// api.js — public OMA REST adapter for the static Managed Agents Console.
+// api.js — OMA REST adapter for the static Managed Agents Console.
+// ES module (plan 0120 §3.3): loaded with type="module" in index.html so the
+// pure header logic below is importable by Node tests without a browser.
 
 const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 const FILES_API_BETA = "files-api-2025-04-14";
@@ -7,23 +9,150 @@ const PAGE_LIMIT = 100;
 const EVENT_PAGE_LIMIT = 1000;
 const MAX_AUTO_PAGES = 100;
 
-async function fetchJson(path) {
-  const response = await fetch(path, {
-    headers: {
-      "anthropic-beta": BETA_HEADER,
-      "accept": "application/json",
-    },
-  });
+// Session-scoped credentials, in module memory only (plan 0120 §3.2):
+// never localStorage, sessionStorage, or a cookie — a reload means
+// re-entering the key, and nothing touches disk. The admin key goes to
+// /admin routes only, the workspace key to /v1 only; neither crosses tiers.
+const credentials = {
+  adminKey: null,
+  workspaceKey: null,
+};
+
+export function setAdminKey(key) {
+  credentials.adminKey = key || null;
+}
+
+export function setWorkspaceKey(key) {
+  credentials.workspaceKey = key || null;
+}
+
+export function clearCredentials() {
+  credentials.adminKey = null;
+  credentials.workspaceKey = null;
+}
+
+export function hasWorkspaceKey() {
+  return credentials.workspaceKey !== null;
+}
+
+// Pure: (path, creds) -> headers. Exported for unit tests — this routing is
+// the guarantee that the admin key never rides a /v1 request and the
+// workspace key never rides an /admin one.
+export function buildRequestHeaders(path, creds) {
+  const headers = { accept: "application/json" };
+  if (path === "/admin" || path.startsWith("/admin/")) {
+    if (creds.adminKey) headers["x-admin-key"] = creds.adminKey;
+  } else if (path.startsWith("/v1/")) {
+    headers["anthropic-beta"] = BETA_HEADER;
+    if (creds.workspaceKey) headers["x-api-key"] = creds.workspaceKey;
+  }
+  return headers;
+}
+
+// A 401 means the key for that tier is wrong or revoked; keeping it would
+// just replay the failure, so drop it and let the UI re-prompt.
+export function clearKeyForPath(path, creds) {
+  if (path === "/admin" || path.startsWith("/admin/")) {
+    creds.adminKey = null;
+  } else if (path.startsWith("/v1/")) {
+    creds.workspaceKey = null;
+  }
+}
+
+async function request(path, { method = "GET", body } = {}) {
+  const headers = buildRequestHeaders(path, credentials);
+  const init = { method, headers };
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, init);
   const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
+  // A fronting proxy (TLS terminator, LB) can answer 502/504 with HTML; that
+  // must surface as "Request failed (5xx)", not a JSON.parse SyntaxError.
+  let parsed = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+  }
   if (!response.ok) {
-    const message = body?.error?.message ?? `Request failed (${response.status})`;
+    if (response.status === 401) clearKeyForPath(path, credentials);
+    const message = parsed?.error?.message ?? `Request failed (${response.status})`;
     const error = new Error(message);
-    error.response = body;
+    error.response = parsed;
     error.status = response.status;
     throw error;
   }
-  return body;
+  return parsed;
+}
+
+const fetchJson = request;
+
+// --- Admin API (0119 §4). Lists return bare arrays; mint returns the
+// plaintext exactly once — render it, never store or log it.
+
+export function createWorkspace(name) {
+  return request("/admin/workspaces", { method: "POST", body: { name } });
+}
+
+export function listWorkspaces() {
+  return request("/admin/workspaces");
+}
+
+// Minting is deduplicated while in flight: a double-click or nervous retry
+// must not create a second active credential whose plaintext instantly
+// replaces the first in the UI — the orphaned key would stay active with
+// nobody holding its plaintext. Both clicks resolve to the same mint.
+const mintsInFlight = new Map();
+
+export function mintKey(workspaceId, label) {
+  const pending = mintsInFlight.get(workspaceId);
+  if (pending) return pending;
+  const mint = request(`/admin/workspaces/${encodeURIComponent(workspaceId)}/keys`, {
+    method: "POST",
+    ...(label ? { body: { label } } : {}),
+  }).finally(() => mintsInFlight.delete(workspaceId));
+  mintsInFlight.set(workspaceId, mint);
+  return mint;
+}
+
+export function listKeys(workspaceId) {
+  return request(`/admin/workspaces/${encodeURIComponent(workspaceId)}/keys`);
+}
+
+export function revokeKey(keySha256) {
+  return request(`/admin/keys/${encodeURIComponent(keySha256)}`, {
+    method: "DELETE",
+  });
+}
+
+// Browser navigation on an <a href> cannot attach x-api-key, so authenticated
+// file content downloads go through fetch -> Blob -> object URL instead
+// (0120 review, Codex finding).
+export async function downloadFile(href, filename) {
+  const response = await fetch(href, {
+    headers: buildRequestHeaders(href, credentials),
+  });
+  if (!response.ok) {
+    if (response.status === 401) clearKeyForPath(href, credentials);
+    const error = new Error(`Download failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Deferred a tick: revoking synchronously races the browser's grab of the
+  // blob in some engines.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 async function fetchCursorPages(path, { limit = PAGE_LIMIT, cursorParam = "page" } = {}) {
@@ -366,7 +495,21 @@ function formatBytes(value) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
-window.OmaConsoleApi = {
-  loadConsoleData,
-  hydrateSession,
-};
+// The JSX (compiled by in-browser Babel, not module-scoped) reaches the API
+// through this global; Node tests import the module exports directly.
+if (typeof window !== "undefined") {
+  window.OmaConsoleApi = {
+    loadConsoleData,
+    hydrateSession,
+    setAdminKey,
+    setWorkspaceKey,
+    clearCredentials,
+    hasWorkspaceKey,
+    createWorkspace,
+    listWorkspaces,
+    mintKey,
+    listKeys,
+    revokeKey,
+    downloadFile,
+  };
+}

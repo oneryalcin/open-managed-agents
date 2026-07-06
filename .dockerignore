@@ -4,7 +4,12 @@ docs
 scratch
 specs
 examples
-ui
+# ui ships in the image (COPY ui ./ui serves /console) — only its dev/test
+# clutter stays out of the build context. NB: dockerignore patterns are not
+# gitignore-recursive — a bare *.md only matches at the root.
+ui/managed-agents-console/serve.mjs
+ui/**/__tests__
+ui/**/*.md
 *.md
 .envrc
 gcs-creds.json

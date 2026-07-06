@@ -191,7 +191,7 @@ function FilesView({ files = FILES, dataState = 'loaded', readOnly = false }) {
             <span className="td mono" style={{ width:80, color:'var(--soft)' }}>{f.size}</span>
             <span className="td mono" style={{ width:70, color:'var(--faint)' }}>{f.created}</span>
             <span className="td" style={{ width:110 }}>
-              {f.dl ? <a className="dl" href={f.href || '#'}><Icon name="download" size={14} />Download</a> : <span className="inert">— mounted input</span>}
+              {f.dl && f.href ? <a className="dl" href="#" onClick={(e) => { e.preventDefault(); OmaConsoleApi.downloadFile(f.href, f.name); }}><Icon name="download" size={14} />Download</a> : <span className="inert">{f.dl ? '— demo file' : '— mounted input'}</span>}
             </span>
           </div>
         ))}
