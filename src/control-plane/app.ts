@@ -151,6 +151,9 @@ export function parseDeploymentAuthMode(
 }
 
 export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppEnv> {
+  if (services.admin && !services.auth) {
+    throw new Error("Admin API requires workspace authentication to be enabled");
+  }
   const app = new Hono<AppEnv>();
   const defaultBodyLimit = bodyLimit({
     maxSize: MAX_REQUEST_BODY_BYTES,
@@ -195,10 +198,16 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
         await next();
         return;
       }
+      c.header("cache-control", "no-store");
       const key = c.req.header("x-admin-key");
       if (key === undefined || !adminAuth.verify(key)) {
         const err = authenticationFailed();
-        return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+        const response = jsonError(
+          toApiErrorBody(err, c.get("requestId")),
+          err.status,
+        );
+        response.headers.set("cache-control", "no-store");
+        return response;
       }
       await next();
     });

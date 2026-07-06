@@ -99,10 +99,12 @@ Why this model:
   how the appliance already handles privileged config (`OMA_MASTER_KEY`,
   `OMA_AUTH_MODE`) and dodges the *bootstrap-the-first-admin-key* regress that a
   DB-backed admin-key table would create (how do you mint the first one?).
-- **Consistent with the secrets-API authz decision (0117e §"Authorization
-  model").** OMA has one workspace tier and, above it, one operator tier;
-  neither has sub-roles. If OMA later grows RBAC, admin routes and the secrets
-  API adopt it together — not piecemeal here.
+- **Extends the secrets-API authz decision deliberately.** 0117e kept secrets
+  inside the existing workspace tier and explicitly did not introduce an
+  operator tier. This slice is the first operator tier, so it stays narrow:
+  one root appliance credential above workspace keys, no sub-roles. If OMA
+  later grows RBAC, admin routes and the secrets API adopt it together — not
+  piecemeal here.
 - **Ruthless simplicity.** No role tables, no session tokens, no login flow —
   a deploy-time secret checked in constant time. The dashboard (slice 2) holds
   the admin key the way any operator tool holds a root credential.
@@ -114,18 +116,18 @@ Rejected alternatives:
   a leaked workspace key must never be privilege-escalatable to admin.
 
 **Fail-closed rules (all enforced at construction / request time):**
-1. `OMA_ADMIN_KEY` unset → `/admin` is **not registered** (any `/admin/*` →
-   404, indistinguishable from an unknown route; no "admin exists but locked"
-   signal).
-2. `OMA_ADMIN_KEY` set but storage is not durable **or**
+1. Neither `OMA_ADMIN_KEY` nor `OMA_ADMIN_KEY_FILE` set → `/admin` is **not
+   registered** (any `/admin/*` → 404, indistinguishable from an unknown route;
+   no "admin exists but locked" signal).
+2. Admin key set but storage is not durable **or**
    `OMA_AUTH_MODE` is not `api-key` → **refuse to boot**. Durable storage is
    required because admin changes must persist; `api-key` auth is required
    because this API mints workspace keys for `/v1/*`. Letting admin mint keys
    while `/v1` is still anonymous `wrk_default` would create a false product
    surface: keys exist, but they do not gate the API.
-3. Admin key minimum strength: reject a key shorter than 32 chars at boot (a
-   weak operator token is the whole attack surface). Not a KDF — same spirit as
-   the master-key strictness.
+3. Admin key format: exactly 32 random bytes, base64-encoded. `admin/auth.ts`
+   exposes `generateAdminKey()` for this. A 32-character passphrase is not
+   accepted; the root appliance credential must be structurally unguessable.
 4. Constant-time compare: hash the configured admin key once at construction
    and hash the presented value on every request; compare the two fixed-length
    SHA-256 digests with `crypto.timingSafeEqual`. Do **not** compare raw
@@ -137,7 +139,9 @@ Rejected alternatives:
 ## 4. Routes (OMA-minimal; not hosted-wire — hosted has no public admin API)
 
 Mounted at `/admin`, gated by the admin middleware (§5). Error envelope reuses
-`ApiError`/`toApiErrorBody` (`errors.ts`). All bodies JSON.
+`ApiError`/`toApiErrorBody` (`errors.ts`). All bodies JSON. Every enabled
+`/admin` response carries `Cache-Control: no-store`, because mint responses can
+contain one-time plaintext API keys.
 
 | Method | Path | Body | Success | Notes |
 |---|---|---|---|---|
@@ -180,12 +184,15 @@ app.use("*", async (c, next) => {
 ```
 
 - `adminAuth.verify(presented)`: constant-time compare of `presented` against
-  the configured key. Length-mismatch and value-mismatch are both a plain
-  `false` (no early-length leak). Never logs either value.
+  the configured key's digest. Both configured and presented values are hashed
+  to fixed-length SHA-256 digests before `timingSafeEqual`; no raw
+  variable-length key compare. Never logs either value.
 - `isAdminRoute(path)`: `path === "/admin" || path.startsWith("/admin/")`.
 - Placed so an unauthenticated `/admin/*` returns **401** (not 404) — but only
   when admin is *enabled*; when disabled the route is absent so it is 404 (§3
   rule 1). This asymmetry is intentional: a disabled deployment reveals nothing.
+- Sets `Cache-Control: no-store` for every enabled `/admin` response, including
+  401s.
 
 ---
 
@@ -199,9 +206,15 @@ app.use("*", async (c, next) => {
   `secrets/routes.ts`).
 - `admin/auth.ts`: `createAdminAuth(key): { verify(presented): boolean }`.
   Store only `sha256(key)` in the verifier object; on request compare
-  `sha256(presented)` with `timingSafeEqual`. `loadAdminKey(env)` accepts
-  exactly one of `OMA_ADMIN_KEY`/`OMA_ADMIN_KEY_FILE`; min length; else
-  undefined — model on `secrets/master-key.ts:38`.
+  `sha256(presented)` with `timingSafeEqual`. `generateAdminKey()` produces the
+  required 32 random bytes as canonical base64. `loadAdminKey(env)` accepts
+  exactly one of `OMA_ADMIN_KEY`/`OMA_ADMIN_KEY_FILE`; strict base64-32-byte
+  format; else undefined — model on `secrets/master-key.ts:38`.
+- Admin mutation audit: `admin/routes.ts` emits one structured `console.info`
+  JSON line per create-workspace, mint-key, and revoke-key mutation with
+  `request_id`, `action`, `workspace_id`, and `key_sha256` where applicable.
+  Never log plaintext API keys or admin keys. Surfacing/search UI is deferred;
+  emitting the line is in this slice.
 - `app.ts`:
   - `ControlPlaneServices.admin?: { service: AdminService; auth: AdminAuth }`
     (`:86`).
@@ -230,17 +243,24 @@ Behavior each test pins — every one maps to a real failure:
    (it is not a workspace key).
 5. **create/list/get workspaces** round-trip.
 6. **mint → the plaintext authenticates** — mint a key via `/admin`, then use
-   it as `x-api-key` against `/v1/agents` → 200. (Proves the API mints *real*
-   keys, end to end.)
+   it as `x-api-key` against `/v1/agents` with the normal
+   `anthropic-beta: managed-agents-2026-04-01` header → 200. (Proves the API
+   mints *real* keys, end to end, without weakening the beta gate.)
 7. **mint response is the only plaintext** — `list-keys` never contains the
    plaintext (only digest); a second GET never re-reveals it.
 8. **revoke** — revoke via `/admin`, the key then 401s against `/v1`;
    revoking an unknown sha → 404; double-revoke → 200 benign.
-9. **fail-closed boot** — `OMA_ADMIN_KEY` set with in-memory storage → throws;
-   `OMA_ADMIN_KEY` set while `OMA_AUTH_MODE` is unset/`disabled` → throws;
-   too-short key → throws.
+9. **fail-closed boot** — admin key set with in-memory storage → throws;
+   admin key set while `OMA_AUTH_MODE` is unset/`disabled` → throws;
+   malformed/non-canonical admin key → throws; both admin-key env vars set →
+   throws.
 10. **cross-workspace** — admin can mint/list keys for any workspace (that is
     the operator tier — assert two workspaces are both manageable).
+11. **malformed payloads** — bad workspace names, bad labels, array bodies, and
+    invalid JSON return 400.
+12. **admin hardening** — enabled `/admin` responses include
+    `Cache-Control: no-store`; mutation audit logs include ids/digests and never
+    plaintext.
 
 Plus a unit test for `admin/auth.ts`: `verify` true only for the exact key;
 false for wrong value AND wrong length. Also assert that the verifier does not
@@ -252,10 +272,11 @@ is still primarily code-review enforced, not timing-tested.
 ## 8. Settled decisions & open questions
 
 **Settled:**
-- Admin credential = env bootstrap token (`OMA_ADMIN_KEY[_FILE]`), verified by
-  constant-time fixed-digest comparison; two tiers, no sub-roles (§3).
+- Admin credential = generated env bootstrap token (`OMA_ADMIN_KEY[_FILE]`),
+  exactly 32 random bytes as canonical base64, verified by constant-time
+  fixed-digest comparison; two tiers, no sub-roles (§3).
 - `/admin` disabled (404) when unset; requires durable storage **and**
-  `OMA_AUTH_MODE=api-key`; min key length.
+  `OMA_AUTH_MODE=api-key`.
 - OMA-minimal wire shape (no hosted parity to match).
 - Header name: `x-admin-key`, chosen for symmetry with `x-api-key`.
 - No ADR for slice 1: §3 is the decision record. Promote to an ADR only if OMA

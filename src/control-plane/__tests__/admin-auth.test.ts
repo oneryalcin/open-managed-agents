@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createAdminAuth,
+  generateAdminKey,
   loadAdminKey,
-  MIN_ADMIN_KEY_LENGTH,
 } from "../admin/auth.ts";
 
-const ADMIN_KEY = "admin_key_123456789012345678901234567890";
+const ADMIN_KEY = generateAdminKey();
 
 const tempRoots: string[] = [];
 afterEach(() => {
@@ -33,8 +33,8 @@ describe("admin auth", () => {
       }),
     ).toThrow("set exactly one");
     expect(() =>
-      loadAdminKey({ OMA_ADMIN_KEY: "x".repeat(MIN_ADMIN_KEY_LENGTH - 1) }),
-    ).toThrow("at least");
+      loadAdminKey({ OMA_ADMIN_KEY: "not-a-canonical-256-bit-key" }),
+    ).toThrow("exactly 32 random bytes");
   });
 
   it("verifies only the exact admin key without retaining plaintext fields", () => {

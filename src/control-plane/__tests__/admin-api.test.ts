@@ -1,19 +1,24 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDeploymentControlPlane,
   type DeploymentControlPlane,
 } from "../app.ts";
+import { generateAdminKey } from "../admin/auth.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import { MANAGED_AGENTS_BETA } from "./helpers.ts";
 
-const ADMIN_KEY = "admin_key_123456789012345678901234567890";
+const ADMIN_KEY = generateAdminKey();
 
 const tempRoots: string[] = [];
+beforeEach(() => {
+  vi.spyOn(console, "info").mockImplementation(() => {});
+});
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -39,6 +44,7 @@ describe("admin API", () => {
         adminKey: key,
       });
       expect(res.status, name).toBe(401);
+      expect(res.headers.get("cache-control")).toBe("no-store");
       const body = (await res.json()) as ApiErrorBody;
       expect(body.error.message).toBe("Authentication failed");
     }
@@ -47,6 +53,7 @@ describe("admin API", () => {
       adminKey: ADMIN_KEY,
     });
     expect(ok.status).toBe(200);
+    expect(ok.headers.get("cache-control")).toBe("no-store");
     plane.stores.close();
   });
 
@@ -67,6 +74,7 @@ describe("admin API", () => {
       body: { name: "tenant-a" },
     });
     expect(created.status).toBe(201);
+    expect(created.headers.get("cache-control")).toBe("no-store");
     const workspace = (await created.json()) as { id: string; name: string };
     expect(workspace.id).toMatch(/^wrk_/);
     expect(workspace.name).toBe("tenant-a");
@@ -89,6 +97,12 @@ describe("admin API", () => {
       adminKey: ADMIN_KEY,
     });
     expect(missing.status).toBe(404);
+    expect(console.info).toHaveBeenCalledWith(
+      expect.stringContaining('"action":"create_workspace"'),
+    );
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(
+      ADMIN_KEY,
+    );
     plane.stores.close();
   });
 
@@ -115,6 +129,7 @@ describe("admin API", () => {
     expect(body.workspace_id).toBe(workspace.workspace_id);
     expect(body.label).toBe("ci");
     expect(body.api_key).toMatch(/^oma_/);
+    expect(minted.headers.get("cache-control")).toBe("no-store");
 
     const list = await adminRequest(
       plane.app,
@@ -124,6 +139,75 @@ describe("admin API", () => {
     const listText = await list.text();
     expect(listText).toContain(body.key_sha256);
     expect(listText).not.toContain(body.api_key);
+    expect(console.info).toHaveBeenCalledWith(
+      expect.stringContaining(`"key_sha256":"${body.key_sha256}"`),
+    );
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(
+      body.api_key,
+    );
+    plane.stores.close();
+  });
+
+  it("returns 404 for key operations on nonexistent workspaces", async () => {
+    const plane = makePlane();
+    const minted = await adminRequest(
+      plane.app,
+      "/admin/workspaces/wrk_missing/keys",
+      { method: "POST", adminKey: ADMIN_KEY },
+    );
+    expect(minted.status).toBe(404);
+
+    const listed = await adminRequest(
+      plane.app,
+      "/admin/workspaces/wrk_missing/keys",
+      { adminKey: ADMIN_KEY },
+    );
+    expect(listed.status).toBe(404);
+    plane.stores.close();
+  });
+
+  it("rejects malformed admin payloads", async () => {
+    const plane = makePlane();
+    const workspace = plane.stores.workspaces.createWorkspace("tenant-a");
+
+    for (const body of [
+      [],
+      {},
+      { name: "" },
+      { name: 123 },
+    ]) {
+      const res = await adminRequest(plane.app, "/admin/workspaces", {
+        method: "POST",
+        adminKey: ADMIN_KEY,
+        body,
+      });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
+
+    for (const body of [
+      [],
+      { label: "" },
+      { label: 123 },
+    ]) {
+      const res = await adminRequest(
+        plane.app,
+        `/admin/workspaces/${workspace.workspace_id}/keys`,
+        { method: "POST", adminKey: ADMIN_KEY, body },
+      );
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
+
+    const invalidJson = await Promise.resolve(
+      plane.app.request(`/admin/workspaces/${workspace.workspace_id}/keys`, {
+        method: "POST",
+        headers: {
+          "x-admin-key": ADMIN_KEY,
+          "content-type": "application/json",
+        },
+        body: "{",
+      }),
+    );
+    expect(invalidJson.status).toBe(400);
     plane.stores.close();
   });
 
@@ -172,6 +256,9 @@ describe("admin API", () => {
       key_sha256: keySha256,
       revoked_at: revokedBody.revoked_at,
     });
+    expect(console.info).toHaveBeenCalledWith(
+      expect.stringContaining(`"key_sha256":"${keySha256}"`),
+    );
 
     const managed = await managedRequest(plane.app, "/v1/agents", {
       key: plaintextKey,
@@ -219,7 +306,9 @@ describe("admin API", () => {
   });
 
   it("fails closed at boot for weak or misleading admin configurations", () => {
-    expect(() => makePlane({ adminKey: "x".repeat(31) })).toThrow("at least");
+    expect(() => makePlane({ adminKey: "not-a-canonical-256-bit-key" })).toThrow(
+      "exactly 32 random bytes",
+    );
     expect(() =>
       makePlane({ durable: false, authMode: "api-key" }),
     ).toThrow("requires durable deployment storage");

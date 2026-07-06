@@ -9,7 +9,12 @@ export function adminRoutes(service: AdminService): Hono<ControlPlaneRouteEnv> {
 
   app.post("/workspaces", async (c) => {
     const body = await parseJsonBody(c.req);
-    return c.json(service.createWorkspace(body), 201);
+    const workspace = service.createWorkspace(body);
+    emitAdminAudit(c.get("requestId"), {
+      action: "create_workspace",
+      workspace_id: workspace.id,
+    });
+    return c.json(workspace, 201);
   });
 
   app.get("/workspaces", (c) => {
@@ -22,7 +27,13 @@ export function adminRoutes(service: AdminService): Hono<ControlPlaneRouteEnv> {
 
   app.post("/workspaces/:id/keys", async (c) => {
     const body = await parseOptionalJsonBody(c.req);
-    return c.json(service.mintKey(c.req.param("id"), body), 201);
+    const minted = service.mintKey(c.req.param("id"), body);
+    emitAdminAudit(c.get("requestId"), {
+      action: "mint_key",
+      workspace_id: minted.workspace_id,
+      key_sha256: minted.key_sha256,
+    });
+    return c.json(minted, 201);
   });
 
   app.get("/workspaces/:id/keys", (c) => {
@@ -30,10 +41,33 @@ export function adminRoutes(service: AdminService): Hono<ControlPlaneRouteEnv> {
   });
 
   app.delete("/keys/:sha256", (c) => {
-    return c.json(service.revokeKey(c.req.param("sha256")), 200);
+    const revoked = service.revokeKey(c.req.param("sha256"));
+    emitAdminAudit(c.get("requestId"), {
+      action: "revoke_key",
+      workspace_id: revoked.workspace_id,
+      key_sha256: revoked.key_sha256,
+    });
+    return c.json(revoked, 200);
   });
 
   return app;
+}
+
+function emitAdminAudit(
+  requestId: string,
+  event: {
+    action: "create_workspace" | "mint_key" | "revoke_key";
+    workspace_id: string;
+    key_sha256?: string;
+  },
+): void {
+  console.info(
+    JSON.stringify({
+      type: "admin_audit",
+      request_id: requestId,
+      ...event,
+    }),
+  );
 }
 
 async function parseOptionalJsonBody(req: {
