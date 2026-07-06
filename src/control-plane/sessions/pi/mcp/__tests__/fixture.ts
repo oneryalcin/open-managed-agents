@@ -28,7 +28,7 @@ export interface McpFixture {
 
 export async function startMcpFixture(
   tools: readonly McpFixtureTool[],
-  opts: { path?: string } = {},
+  opts: { path?: string; port?: number } = {},
 ): Promise<McpFixture> {
   const path = opts.path ?? "/mcp";
   const toolCalls: McpFixture["toolCalls"] = [];
@@ -65,7 +65,9 @@ export async function startMcpFixture(
     }
     await transport.handleRequest(req, res, body);
   });
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) =>
+    http.listen(opts.port ?? 0, "127.0.0.1", resolve),
+  );
   const address = http.address();
   if (address === null || typeof address !== "object") {
     throw new Error("fixture failed to bind");
