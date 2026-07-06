@@ -134,8 +134,8 @@ export interface DeploymentAuthEnv {
   OMA_HOST?: string;
   /** "1" = a TLS terminator fronts this process (operator's assertion). */
   OMA_TLS_TERMINATED?: string;
-  /** "1" = consciously accept the admin key over plaintext non-loopback. */
-  OMA_ADMIN_ALLOW_INSECURE?: string;
+  /** "1" = consciously accept API keys over a plaintext non-loopback bind. */
+  OMA_ALLOW_INSECURE_TRANSPORT?: string;
 }
 
 export type DeploymentControlPlaneEnv =
@@ -324,9 +324,9 @@ export function createDeploymentControlPlane(
   const adminKey = loadAdminKey(env);
   // Parsed before any store opens so a malformed flag can't leak a store.
   const tlsTerminated = parseBooleanFlag(env.OMA_TLS_TERMINATED, "OMA_TLS_TERMINATED");
-  const adminAllowInsecure = parseBooleanFlag(
-    env.OMA_ADMIN_ALLOW_INSECURE,
-    "OMA_ADMIN_ALLOW_INSECURE",
+  const allowInsecureTransport = parseBooleanFlag(
+    env.OMA_ALLOW_INSECURE_TRANSPORT,
+    "OMA_ALLOW_INSECURE_TRANSPORT",
   );
   const stores = createDeploymentStoresFromEnv(env);
   if (authMode === "api-key" && stores.mode !== "durable") {
@@ -365,25 +365,27 @@ export function createDeploymentControlPlane(
         "the admin API mints workspace keys for /v1 routes, so workspace authentication must be enabled.",
     );
   }
-  // 0120 §3.2: the admin key is the root credential; over a plaintext
-  // non-loopback bind it (and every key it mints) travels cleartext. Refuse
-  // that combination at boot unless the operator asserts a TLS front
-  // (OMA_TLS_TERMINATED=1 — an explicit assertion; X-Forwarded-Proto from the
-  // request is attacker-suppliable and deliberately not trusted) or
-  // consciously opts into plaintext (OMA_ADMIN_ALLOW_INSECURE=1, e.g. a
-  // Docker bind published only on the host's loopback).
+  // 0120 §3.2 (extended after implementation review): every credentialed
+  // request — the admin key and each workspace x-api-key — travels in the
+  // clear over a plaintext non-loopback bind. Refuse that combination at
+  // boot unless the operator asserts a TLS front (OMA_TLS_TERMINATED=1 — an
+  // explicit assertion; X-Forwarded-Proto from the request is
+  // attacker-suppliable and deliberately not trusted) or consciously opts
+  // into plaintext (OMA_ALLOW_INSECURE_TRANSPORT=1, e.g. a Docker bind
+  // published only on the host's loopback). Auth-disabled deployments carry
+  // no credentials, so they are not gated.
   if (
-    adminKey !== undefined &&
+    authMode === "api-key" &&
     !isLoopbackHost(env.OMA_HOST) &&
     !tlsTerminated &&
-    !adminAllowInsecure
+    !allowInsecureTransport
   ) {
     stores.close();
     throw new Error(
-      `OMA_ADMIN_KEY on a non-loopback bind (OMA_HOST=${JSON.stringify(env.OMA_HOST)}) without TLS would send the admin key ` +
-        "and every minted workspace key in cleartext. Either front the appliance with TLS and set OMA_TLS_TERMINATED=1, " +
-        "bind to loopback (unset OMA_HOST), or set OMA_ADMIN_ALLOW_INSECURE=1 if the plaintext exposure is intentional " +
-        "(e.g. a container port published only on the host's loopback).",
+      `API-key authentication on a non-loopback bind (OMA_HOST=${JSON.stringify(env.OMA_HOST)}) without TLS would send ` +
+        "every API key — and the admin key, if set — in cleartext. Either front the appliance with TLS and set " +
+        "OMA_TLS_TERMINATED=1, bind to loopback (unset OMA_HOST), or set OMA_ALLOW_INSECURE_TRANSPORT=1 if the " +
+        "plaintext exposure is intentional (e.g. a container port published only on the host's loopback).",
     );
   }
   const broadcaster = new SessionEventBroadcaster(stores.events);

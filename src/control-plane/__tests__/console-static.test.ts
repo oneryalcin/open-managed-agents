@@ -5,8 +5,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerConsoleRoutes } from "../console/static.ts";
@@ -94,6 +96,8 @@ describe("console static serving", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     const csp = res.headers.get("content-security-policy") ?? "";
     expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("base-uri 'self'");
+    expect(csp).toContain("form-action 'self'");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(res.headers.get("x-frame-options")).toBe("DENY");
   });
@@ -127,6 +131,41 @@ describe("console static serving", () => {
   it("blocks a symlink inside the tree that points outside it", async () => {
     const res = await get(makeConsoleFixture(), "/console/escape.html");
     expect(res.status).toBe(404);
+  });
+
+  it("blocks a literal ../ delivered raw through the node server (production input shape)", async () => {
+    // app.fetch(new Request(...)) WHATWG-normalizes ../ away before routing,
+    // but @hono/node-server hands the handler the RAW request target — the
+    // most common traversal shape only exists in production. Drive it with
+    // Node's http client, which sends the path verbatim.
+    const app = makeConsoleFixture();
+    const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
+      const s = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, () =>
+        resolve(s),
+      );
+    });
+    try {
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      const status = (path: string) =>
+        new Promise<number>((resolve, reject) => {
+          const req = httpRequest({ host: "127.0.0.1", port, path }, (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          });
+          req.on("error", reject);
+          req.end();
+        });
+      // Control first: the live-socket path serves real assets…
+      expect(await status("/console/index.html")).toBe(200);
+      // …and the raw traversal forms 404.
+      expect(await status("/console/../secret.html")).toBe(404);
+      expect(await status("/console/../../etc/passwd")).toBe(404);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
   });
 
   it("does not shadow non-console routes", async () => {

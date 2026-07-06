@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildRequestHeaders, clearKeyForPath } from "../api.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildRequestHeaders, clearKeyForPath, mintKey } from "../api.js";
 
 // The console's credential-routing contract (plan 0120 §3.3): the admin key
 // rides /admin requests only, the workspace key /v1 only. A bug that crossed
@@ -40,6 +40,50 @@ describe("buildRequestHeaders", () => {
       .toBeUndefined();
     expect(buildRequestHeaders("/v1/agents", none)["x-api-key"])
       .toBeUndefined();
+  });
+});
+
+describe("mintKey in-flight dedup", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const okResponse = () => ({
+    ok: true,
+    status: 201,
+    text: () => Promise.resolve(JSON.stringify({ api_key: "oma_x" })),
+  });
+
+  it("coalesces a double-click into one POST (an orphaned second key would stay active unseen)", async () => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const fetchMock = vi.fn(() => gate.then(okResponse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = mintKey("wrk_a", "label");
+    const second = mintKey("wrk_a"); // while the first is still in flight
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(b).toBe(a);
+  });
+
+  it("allows a fresh mint once the previous one settled", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(okResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    await mintKey("wrk_a");
+    await mintKey("wrk_a");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not couple mints for different workspaces", async () => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const fetchMock = vi.fn(() => gate.then(okResponse));
+    vi.stubGlobal("fetch", fetchMock);
+    const a = mintKey("wrk_a");
+    const b = mintKey("wrk_b");
+    release();
+    await Promise.all([a, b]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

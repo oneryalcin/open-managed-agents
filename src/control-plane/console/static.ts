@@ -35,14 +35,18 @@ const CONTENT_TYPES = new Map([
 
 // unsafe-eval is the price of in-browser Babel; unsafe-inline (script) is the
 // price of Babel executing transformed <script type="text/babel"> blocks.
-// The directive that protects the admin key is connect-src 'self': even an
-// injected script cannot exfiltrate credentials to another origin.
+// connect-src 'self' blocks fetch/XHR/WebSocket exfiltration of the keys in
+// page memory; base-uri and form-action close the <base>-hijack and form-post
+// channels. Top-level navigation remains uncoverable by CSP — this is
+// defense-in-depth behind React's escaping, not a substitute for it.
 const CONSOLE_CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
   "connect-src 'self'",
   "img-src 'self' data:",
+  "base-uri 'self'",
+  "form-action 'self'",
   "frame-ancestors 'none'",
 ].join("; ");
 

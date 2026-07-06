@@ -10,16 +10,17 @@ services:
       - "127.0.0.1:4180:4180"
     volumes:
       - oma-data:/data
-    # To enable the admin API + console admin mode, uncomment both lines. The
-    # container binds 0.0.0.0 internally, so the appliance cannot tell that
-    # traffic never leaves this host — OMA_ADMIN_ALLOW_INSECURE=1 is the
-    # explicit opt-in (safe with the loopback-only port mapping above; with an
-    # exposed port, terminate TLS in front and set OMA_TLS_TERMINATED=1
-    # instead). Generate a key:
-    #   node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
-    # environment:
-    #   OMA_ADMIN_KEY: "<paste generated key>"
-    #   OMA_ADMIN_ALLOW_INSECURE: "1"
+    environment:
+      # The container binds 0.0.0.0 internally, so the appliance cannot tell
+      # that traffic never leaves this host; with the loopback-only port
+      # mapping above the plaintext transport is confined to your machine and
+      # this opt-in is safe. If you expose the port instead, terminate TLS in
+      # front, set OMA_TLS_TERMINATED=1, and REMOVE this line.
+      OMA_ALLOW_INSECURE_TRANSPORT: "1"
+      # To enable the admin API + console admin mode, uncomment and paste a
+      # key generated with:
+      #   node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+      # OMA_ADMIN_KEY: "<paste generated key>"
 
 volumes:
   oma-data:

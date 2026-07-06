@@ -68,7 +68,16 @@ async function request(path, { method = "GET", body } = {}) {
   }
   const response = await fetch(path, init);
   const text = await response.text();
-  const parsed = text ? JSON.parse(text) : null;
+  // A fronting proxy (TLS terminator, LB) can answer 502/504 with HTML; that
+  // must surface as "Request failed (5xx)", not a JSON.parse SyntaxError.
+  let parsed = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+  }
   if (!response.ok) {
     if (response.status === 401) clearKeyForPath(path, credentials);
     const message = parsed?.error?.message ?? `Request failed (${response.status})`;
@@ -93,11 +102,21 @@ export function listWorkspaces() {
   return request("/admin/workspaces");
 }
 
+// Minting is deduplicated while in flight: a double-click or nervous retry
+// must not create a second active credential whose plaintext instantly
+// replaces the first in the UI — the orphaned key would stay active with
+// nobody holding its plaintext. Both clicks resolve to the same mint.
+const mintsInFlight = new Map();
+
 export function mintKey(workspaceId, label) {
-  return request(`/admin/workspaces/${encodeURIComponent(workspaceId)}/keys`, {
+  const pending = mintsInFlight.get(workspaceId);
+  if (pending) return pending;
+  const mint = request(`/admin/workspaces/${encodeURIComponent(workspaceId)}/keys`, {
     method: "POST",
     ...(label ? { body: { label } } : {}),
-  });
+  }).finally(() => mintsInFlight.delete(workspaceId));
+  mintsInFlight.set(workspaceId, mint);
+  return mint;
 }
 
 export function listKeys(workspaceId) {
@@ -125,16 +144,15 @@ export async function downloadFile(href, filename) {
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
-  try {
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Deferred a tick: revoking synchronously races the browser's grab of the
+  // blob in some engines.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 async function fetchCursorPages(path, { limit = PAGE_LIMIT, cursorParam = "page" } = {}) {

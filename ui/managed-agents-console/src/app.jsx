@@ -207,7 +207,12 @@ function App() {
     OmaConsoleApi.setWorkspaceKey(plaintextKey);
     loadLiveData()
       .then(() => { setRoute({ name:'sessions' }); writeRouteHash({ name:'sessions' }); })
-      .catch(() => {});
+      .catch((error) => {
+        // A just-minted key failing to browse is worth a loud re-login, not
+        // a silently ignored click.
+        setAuth((a) => ({ ...a, phase:'login', error:
+          `Browsing with the minted key failed (${error.status ?? error.message}). Enter a key to continue.` }));
+      });
   };
   const reauth = () => setAuth((a) => ({ ...a, phase:'login', admin:false, error:'Session expired — the admin key was rejected. Enter it again.' }));
 
@@ -296,8 +301,8 @@ function App() {
   const dataState = apiState.state === 'loading' ? 'loading' : t.dataState;
   // Admin-only sessions never loaded /v1: the state still holds the bundled
   // demo rows, which must not render as if they were live tenant data.
-  const needsWorkspaceKey = apiState.mode === 'api' && !demoMode
-    && !workspaceLoaded && route.name !== 'admin';
+  const needsWorkspaceKey = apiState.state !== 'loading' && apiState.mode === 'api'
+    && !demoMode && !workspaceLoaded && route.name !== 'admin';
   if (needsWorkspaceKey) view = (
     <div className="main-scroll scroll fade-in">
       <PageHead title="No workspace selected" sub="Browsing /v1 needs a workspace key." />

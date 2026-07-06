@@ -30,9 +30,15 @@ async function main(): Promise<void> {
   sh("docker", ["build", "-q", "-t", IMAGE, "."]);
 
   console.log("[2/3] boot container …");
-  // -P publishes 4180 on an ephemeral host port; auth stays on (api-key) but
-  // no admin key, so no transport-gate opt-in is needed.
-  sh("docker", ["run", "-d", "--rm", "--name", NAME, "-P", IMAGE]);
+  // -P publishes 4180 on an ephemeral host port. The image binds 0.0.0.0 in
+  // api-key mode, so the transport gate requires the explicit opt-in (the
+  // published port only reaches this host's loopback here — same posture as
+  // docker-compose.yml).
+  sh("docker", [
+    "run", "-d", "--rm", "--name", NAME, "-P",
+    "-e", "OMA_ALLOW_INSECURE_TRANSPORT=1",
+    IMAGE,
+  ]);
   try {
     const portLine = sh("docker", ["port", NAME, "4180/tcp"]).trim().split("\n")[0]!;
     const base = `http://127.0.0.1:${portLine.split(":").pop()}`;

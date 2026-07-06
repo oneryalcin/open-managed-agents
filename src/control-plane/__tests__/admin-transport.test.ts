@@ -5,12 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeploymentControlPlane, isLoopbackHost } from "../app.ts";
 import { generateAdminKey } from "../admin/auth.ts";
 
-// 0120 §3.2 (review finding H2): the admin key is the root credential. A
-// plaintext non-loopback bind would send it — and every workspace key it
-// mints — cleartext, so that combination must refuse to boot unless the
-// operator explicitly asserts TLS or opts into the exposure. The production
-// bug locked in: Docker's OMA_HOST=0.0.0.0 + OMA_ADMIN_KEY silently serving
-// a root credential over plain HTTP.
+// 0120 §3.2 (review finding H2, extended post-implementation-review to all
+// API keys): a plaintext non-loopback bind sends every credential — the
+// admin key and each workspace x-api-key — in cleartext, so api-key mode on
+// such a bind must refuse to boot unless the operator explicitly asserts
+// TLS or opts into the exposure. The production bug locked in: Docker's
+// OMA_HOST=0.0.0.0 silently serving credentials over plain HTTP.
 
 const ADMIN_KEY = generateAdminKey();
 
@@ -33,7 +33,11 @@ function boot(env: Record<string, string>): void {
   plane.stores.close();
 }
 
-describe("admin key transport gate", () => {
+describe("credential transport gate", () => {
+  it("refuses api-key mode on a non-loopback bind without TLS", () => {
+    expect(() => boot({ OMA_HOST: "0.0.0.0" })).toThrow(/cleartext/);
+  });
+
   it("refuses an admin key on a non-loopback bind without TLS", () => {
     expect(() => boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: "0.0.0.0" }))
       .toThrow(/cleartext/);
@@ -47,7 +51,7 @@ describe("admin key transport gate", () => {
 
   it("boots when the operator explicitly allows insecure transport", () => {
     expect(() =>
-      boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: "0.0.0.0", OMA_ADMIN_ALLOW_INSECURE: "1" }),
+      boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: "0.0.0.0", OMA_ALLOW_INSECURE_TRANSPORT: "1" }),
     ).not.toThrow();
   });
 
@@ -62,8 +66,10 @@ describe("admin key transport gate", () => {
     expect(() => boot({ OMA_ADMIN_KEY: ADMIN_KEY })).not.toThrow();
   });
 
-  it("does not gate deployments without an admin key", () => {
-    expect(() => boot({ OMA_HOST: "0.0.0.0" })).not.toThrow();
+  it("does not gate auth-disabled deployments (no credentials in transit)", () => {
+    expect(() =>
+      boot({ OMA_AUTH_MODE: "disabled", OMA_HOST: "0.0.0.0" }),
+    ).not.toThrow();
   });
 
   it("refuses an unrecognized flag value instead of coercing it", () => {

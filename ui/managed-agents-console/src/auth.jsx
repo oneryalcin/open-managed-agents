@@ -54,7 +54,11 @@ function LoginView({ onAdminLogin, onWorkspaceLogin, error, busy }) {
 function MintedKeyModal({ minted, onClose, onBrowse }) {
   const [copied, setCopied] = useStateA(false);
   const copy = () => {
-    navigator.clipboard.writeText(minted.api_key).then(() => setCopied(true));
+    // Clipboard can be unavailable (non-secure context, denied permission);
+    // the plaintext stays visible in the modal either way.
+    navigator.clipboard.writeText(minted.api_key)
+      .then(() => setCopied(true))
+      .catch(() => {});
   };
   return (
     <Modal icon="hash" title="Workspace key minted"
@@ -83,6 +87,7 @@ function AdminPanel({ onBrowseWorkspace, onReauth }) {
   const [keys, setKeys] = useStateA({});        // workspace id -> metadata[]
   const [label, setLabel] = useStateA('');
   const [minted, setMinted] = useStateA(null);
+  const [minting, setMinting] = useStateA(false);
   const [revoking, setRevoking] = useStateA(null);
 
   const fail = (err) => {
@@ -113,9 +118,12 @@ function AdminPanel({ onBrowseWorkspace, onReauth }) {
     if (next) refreshKeys(next);
   };
   const mint = (workspaceId) => {
+    if (minting) return; // UI guard; api.js also dedupes in-flight mints
+    setMinting(true);
     OmaConsoleApi.mintKey(workspaceId, label.trim() || undefined)
       .then((key) => { setMinted(key); setLabel(''); refreshKeys(workspaceId); })
-      .catch(fail);
+      .catch(fail)
+      .finally(() => setMinting(false));
   };
   const revoke = (key) => {
     OmaConsoleApi.revokeKey(key.key_sha256)
@@ -158,8 +166,9 @@ function AdminPanel({ onBrowseWorkspace, onReauth }) {
               <div style={{ padding: '10px 14px 16px', borderBottom: '1px solid var(--border)' }}>
                 <div className="toolbar" style={{ marginBottom: 8 }}>
                   <Field icon="hash" placeholder="Key label (optional)" value={label} onChange={setLabel} style={{ width: 240 }} />
-                  <button className="btn btn-primary" onClick={() => mint(workspace.id)}>
-                    <Icon name="plus" size={15} />Mint key</button>
+                  <button className="btn btn-primary" onClick={() => mint(workspace.id)}
+                    disabled={minting} style={{ opacity: minting ? .5 : 1 }}>
+                    <Icon name="plus" size={15} />{minting ? 'Minting…' : 'Mint key'}</button>
                 </div>
                 {(keys[workspace.id] || []).length === 0
                   ? <div className="field-hint">No keys yet.</div>

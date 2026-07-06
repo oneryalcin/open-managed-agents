@@ -309,6 +309,22 @@ smoke proved Babel-standalone needs `script-src 'unsafe-inline'` in addition
 to `'unsafe-eval'` (it executes transformed text/babel blocks inline);
 `connect-src 'self'` — the directive that actually guards the key — holds.
 
+**Post-implementation review round (2026-07-06, Codex/Codex-adv/Opus/Sonnet):**
+the transport gate was **extended to all API keys** (Opus: gating only the
+admin key left workspace `x-api-key`s plaintext-ungated on the same bind) —
+it now fires on `OMA_AUTH_MODE=api-key` + non-loopback + no TLS, and the
+opt-in flag is the general **`OMA_ALLOW_INSECURE_TRANSPORT=1`** (renamed from
+`OMA_ADMIN_ALLOW_INSECURE` while unreleased; docker-compose sets it, justified
+by its loopback-only port mapping). Also folded in: in-flight mint dedup in
+`api.js` + disabled mint button (Codex-adv: double-click minted an orphaned
+active key whose plaintext was overwritten); demo-file download guard
+(`f.href` missing in mock data); `ui/**/*.md` in `.dockerignore` (Sonnet:
+dockerignore globs are not gitignore-recursive — verified by image build);
+CSP `base-uri`/`form-action` + softened comment; raw-socket traversal test
+(Opus: WHATWG-normalized test requests never exercised the literal `../`
+shape node-server actually delivers); non-JSON error-body fallback in
+`request()`; boot-flash gate; surfaced browse/clipboard failures.
+
 ---
 
 ## 8. Non-goals / follow-ups
