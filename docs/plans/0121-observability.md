@@ -483,3 +483,47 @@ ACCEPTED:**
   sites in `events/service.ts`; "three" was conceptual close groups. The
   chokepoint design makes the count irrelevant to correctness, but the
   implementation must audit sites with `rg`, not trust plan prose.
+
+**C1 implementation review (post-fb990c8, 2026-07-06; Codex + Codex-adv +
+Opus + Sonnet). One regression, several backstop gaps; all accepted and
+fixed in the follow-up commit:**
+
+- **admin_audit silently dropped at `OMA_LOG_LEVEL=warn/error` (Codex-adv
+  HIGH) — ACCEPTED, real regression.** The old `console.info` was
+  unconditional; routing it through `log.info` subjected the audit trail to
+  the diagnostic threshold. Fixed with a dedicated `audit` level (rank
+  above every configurable threshold, redaction unchanged, rides
+  console.info/stdout); regression test asserts audit emits at
+  `level: "error"`.
+- **`Authorization: Bearer <token>` scheme forms leaked the credential;
+  `Proxy-Authorization` missing (Codex P2 + Opus M1, independent) —
+  ACCEPTED.** Sonnet's 27-combination probe showed 0 leaks for OMA-minted
+  shapes (caught by their own patterns) — the gap was foreign token shapes.
+  Header pattern now consumes scheme word + credential and covers
+  proxy-authorization.
+- **Compound content keys bypassed the denylist (`tool_output`,
+  `errorMessage`, `system_prompt`…; Opus M2) — ACCEPTED.** Denylist now
+  matches per name segment (snake/kebab/camel); `context` (substring
+  "text") stays allowed, guarded by test.
+- **Foreign provider key shapes unscrubbed (Opus M3 + Codex-adv M) —
+  ACCEPTED as a floor:** `sk-…`, GitHub `gh?_…`, JWTs, `AKIA…`, plus
+  credential-bearing URL query params (SRT_DEBUG egress paths log raw
+  URLs). Documented as floor, not enumeration.
+- **Never-throw and scrub-before-cap untested (Opus M4) — ACCEPTED.** Both
+  now mutation-verified: rethrow-in-catch mutant killed by the
+  throwing-getter test; cap-before-scrub mutant killed by a
+  secret-past-1KB test (deliberately base64-shaped — a truncated `oma_`
+  fragment still matches its prefix pattern and would mask the mutant).
+- **Digest exception too broad (Opus L) — ACCEPTED**: suffix-anchored,
+  generic `hash` dropped; `password_hash` now denied, `key_sha256` passes.
+- **`error.cause` dropped (Opus L) — ACCEPTED**: one level serialized,
+  scrubbed.
+- **Operational deltas undocumented (Opus L) — ACCEPTED**: dev-deployment
+  notes debug-gating of ownership-lost lines + no-stacks default + the
+  audit level.
+- **`bin/open-managed-agents.mjs:14` pre-boot `console.error` (Sonnet L) —
+  DOC-ONLY**: separate pre-boot process, structurally cannot import the
+  logger; noted in threat-model §5.
+- **`monkey` over-redaction / bare-base64url residual (Sonnet L / Opus L) —
+  NO CHANGE**: fail-safe by design / consciously accepted, documented in
+  code.

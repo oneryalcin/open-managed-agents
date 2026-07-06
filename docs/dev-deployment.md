@@ -276,6 +276,14 @@ header/env assignments before the line is written — see threat-model §5.
 | `OMA_LOG_LEVEL` | `debug`, `info` (default), `warn`, or `error`; anything else refuses startup. |
 | `OMA_LOG_STACKS=1` | Include (scrubbed) stack traces in serialized errors; off by default. |
 
+Two deltas from the pre-0121 ad-hoc logging, so upgrades aren't surprised:
+runtime ownership-lost lines (`runtime_turn_ownership_lost`,
+`runtime_lease_renewal_ownership_lost`) are now `debug`-level and hidden at
+the default `info`; and errors no longer print stack traces unless
+`OMA_LOG_STACKS=1`. `admin_audit` lines are emitted at a dedicated `audit`
+level that **ignores** `OMA_LOG_LEVEL` — turning down diagnostic noise can
+never silence the admin audit trail.
+
 ## Deployment target shape
 
 The current MVP is suitable for local development and single-node demos.

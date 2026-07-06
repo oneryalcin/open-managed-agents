@@ -12,7 +12,10 @@ import {
 } from "../logging.ts";
 import { createDeploymentControlPlane } from "../app.ts";
 
-function captureLogger(config?: { level?: LogLevel; stacks?: boolean }) {
+function captureLogger(config?: {
+  level?: Exclude<LogLevel, "audit">;
+  stacks?: boolean;
+}) {
   const lines: Array<{ level: LogLevel; line: string }> = [];
   const logger = createLogger(
     { level: config?.level ?? "info", stacks: config?.stacks ?? false },
@@ -73,6 +76,35 @@ describe("logger output shape", () => {
     logger.info("looped", { loop });
     expect(lines[0].line).toContain("[circular]");
   });
+
+  it("emits a fallback line when field serialization itself throws", () => {
+    const { logger, lines } = captureLogger();
+    const hostile = {};
+    Object.defineProperty(hostile, "boom", {
+      enumerable: true,
+      get() {
+        throw new Error("getter exploded");
+      },
+    });
+    logger.error("hostile_fields", { hostile });
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0].line)).toMatchObject({
+      event: "hostile_fields",
+      logger_error: "emit_failed",
+    });
+  });
+
+  it("audit level bypasses the configured threshold", () => {
+    const { logger, lines } = captureLogger({ level: "error" });
+    logger.info("diagnostic_noise");
+    logger.audit("admin_audit", { action: "mint_key" });
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0].line)).toMatchObject({
+      level: "audit",
+      event: "admin_audit",
+      action: "mint_key",
+    });
+  });
 });
 
 describe("secret scrubbing (absence-based)", () => {
@@ -100,6 +132,51 @@ describe("secret scrubbing (absence-based)", () => {
     });
     expect(lines[0].line).not.toContain(ADMIN_SHAPED_KEY);
     expect(lines[0].line).toContain("x-admin-key");
+  });
+
+  it("masks the credential after an Authorization scheme word", () => {
+    // A foreign token shape no other pattern matches — only whole-value
+    // header masking can catch it (a bare \S+ stops at "Bearer").
+    expect(scrubSecrets("Authorization: Bearer hunter2foreigntoken")).not.toContain(
+      "hunter2foreigntoken",
+    );
+    expect(scrubSecrets("proxy-authorization: Basic YWRtaW46cGFzcw")).not.toContain(
+      "YWRtaW46cGFzcw",
+    );
+  });
+
+  it("scrubs foreign provider key shapes", () => {
+    const jwt =
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk";
+    for (const secret of [
+      "sk-ant-api03-abc123def456ghi",
+      "ghp_abcdefghij1234567890KLMNOP",
+      jwt,
+      "AKIAIOSFODNN7EXAMPLE",
+    ]) {
+      expect(scrubSecrets(`provider rejected ${secret} here`)).not.toContain(secret);
+    }
+  });
+
+  it("masks credential-bearing query params but keeps the URL readable", () => {
+    const out = scrubSecrets(
+      "GET https://files.example/download?page=2&token=supersecret9&sig=abc123def 404",
+    );
+    expect(out).not.toContain("supersecret9");
+    expect(out).not.toContain("abc123def");
+    expect(out).toContain("https://files.example/download?page=2");
+  });
+
+  it("scrubs secrets located beyond the 1 KB cap boundary", () => {
+    // Kills the cap-before-scrub mutant: if capping ran first, the secret
+    // straddling the boundary would be cut to a fragment that no longer
+    // matches the 43-char base64 pattern and would survive. (Deliberately
+    // a base64-shaped key, not oma_-prefixed — a truncated oma_ fragment
+    // still matches the prefix pattern, which would mask the mutant.)
+    const message = "x".repeat(1010) + ` ${ADMIN_SHAPED_KEY}`;
+    const { logger, lines } = captureLogger();
+    logger.error("late_secret", { error: new Error(message) });
+    expect(lines[0].line).not.toContain(ADMIN_SHAPED_KEY.slice(0, 10));
   });
 
   it("scrubs plain string field values, not just error messages", () => {
@@ -166,6 +243,39 @@ describe("field denylist", () => {
     logger.warn("nested", { context: { output: "verbatim tool output" } });
     expect(lines[0].line).not.toContain("verbatim tool output");
   });
+
+  it("redacts compound content keys across naming styles", () => {
+    const { logger, lines } = captureLogger();
+    logger.warn("compound", {
+      tool_output: "verbatim output A",
+      errorMessage: "verbatim message B",
+      systemPrompt: "verbatim prompt C",
+      request_body: "verbatim body D",
+    });
+    for (const planted of ["verbatim output A", "verbatim message B", "verbatim prompt C", "verbatim body D"]) {
+      expect(lines[0].line).not.toContain(planted);
+    }
+  });
+
+  it("does not redact keys that merely contain a denied word as a substring", () => {
+    const { logger, lines } = captureLogger();
+    // "context" contains "text"; segment matching must not deny it.
+    logger.info("segments", { context: "run 42", latexMode: true });
+    const record = JSON.parse(lines[0].line);
+    expect(record.context).toBe("run 42");
+    expect(record.latexMode).toBe(true);
+  });
+
+  it("digest exception is suffix-anchored", () => {
+    const { logger, lines } = captureLogger();
+    logger.info("digests", {
+      key_sha256: "abc123",
+      password_hash: "not-actually-safe",
+    });
+    const record = JSON.parse(lines[0].line);
+    expect(record.key_sha256).toBe("abc123");
+    expect(record.password_hash).toBe("[redacted]");
+  });
 });
 
 describe("error serialization", () => {
@@ -188,6 +298,19 @@ describe("error serialization", () => {
     logger.error("failed", { error: new Error(`boom ${WORKSPACE_KEY}`) });
     const record = JSON.parse(lines[0].line);
     expect(record.error.stack).toContain("Error");
+    expect(lines[0].line).not.toContain(WORKSPACE_KEY);
+  });
+
+  it("serializes one level of scrubbed error cause", () => {
+    const { logger, lines } = captureLogger();
+    logger.error("wrapped", {
+      error: new Error("outer failed", {
+        cause: new Error(`inner rejected ${WORKSPACE_KEY}`),
+      }),
+    });
+    const record = JSON.parse(lines[0].line);
+    expect(record.error.cause.name).toBe("Error");
+    expect(record.error.cause.message).toContain("inner rejected");
     expect(lines[0].line).not.toContain(WORKSPACE_KEY);
   });
 });

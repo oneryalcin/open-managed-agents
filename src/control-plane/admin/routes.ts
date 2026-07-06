@@ -65,8 +65,10 @@ function emitAdminAudit(
   },
 ): void {
   // Wire shape predates the structured logger; `type: "admin_audit"` is the
-  // grep contract and stays (0121 C1 — the logger adds ts/level/event around it).
-  log.info("admin_audit", {
+  // grep contract and stays (0121 C1 — the logger adds ts/level/event around
+  // it). Emitted at the audit level: OMA_LOG_LEVEL must never be able to
+  // silence the admin audit trail.
+  log.audit("admin_audit", {
     type: "admin_audit",
     request_id: requestId,
     ...event,
