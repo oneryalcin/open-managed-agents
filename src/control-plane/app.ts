@@ -4,7 +4,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAdminAuth, loadAdminKey, type AdminAuth } from "./admin/auth.ts";
+import { log, parseBooleanFlag } from "./logging.ts";
 import {
+  CONSOLE_MOUNT,
   registerConsoleRoutes,
   type ConsoleStaticConfig,
 } from "./console/static.ts";
@@ -152,7 +154,7 @@ export function parseDeploymentAuthMode(
 ): DeploymentAuthMode {
   const raw = env.OMA_AUTH_MODE;
   if (raw === undefined) {
-    (opts.warn ?? console.warn)(
+    (opts.warn ?? ((message: string) => log.warn("auth_mode_disabled", { detail: message })))(
       "OMA_AUTH_MODE is unset; workspace authentication is DISABLED and all requests resolve to wrk_default. Set OMA_AUTH_MODE=api-key for any deployment beyond trusted single-node.",
     );
     return "disabled";
@@ -284,6 +286,15 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
 
   app.onError((error, c) => {
     const err = ensureApiError(error);
+    if (err.status >= 500) {
+      // 0121 C1: 5xx responses were invisible in logs before this line.
+      log.error("request_failed", {
+        requestId: c.get("requestId"),
+        routeClass: routeClassForPath(c.req.path),
+        status: err.status,
+        error,
+      });
+    }
     return withAdminNoStore(
       c.req.path,
       jsonError(
@@ -488,15 +499,6 @@ export function isLoopbackHost(host: string | undefined): boolean {
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
 }
 
-// House rule: unknown config values refuse to start, never silently coerce.
-function parseBooleanFlag(raw: string | undefined, name: string): boolean {
-  if (raw === undefined || raw === "0") return false;
-  if (raw === "1") return true;
-  throw new Error(
-    `Unsupported ${name}: ${JSON.stringify(raw)} (expected "1" or "0")`,
-  );
-}
-
 // App-root-relative so the same derivation works from a checkout
 // (<repo>/ui/…) and inside the Docker image (/app/ui/…, COPY ui ./ui).
 function bundledConsoleRoot(): string | undefined {
@@ -673,6 +675,19 @@ function isManagedAgentsRoute(path: string): boolean {
 
 function isAdminRoute(path: string): boolean {
   return path === "/admin" || path.startsWith("/admin/");
+}
+
+// Closed enum shared by the request_failed log line and (C2) the HTTP
+// metrics middleware — dynamic paths must never reach a metric label.
+export type RouteClass = "v1" | "admin" | "console" | "health" | "metrics" | "other";
+
+export function routeClassForPath(path: string): RouteClass {
+  if (isManagedAgentsRoute(path)) return "v1";
+  if (isAdminRoute(path)) return "admin";
+  if (path === CONSOLE_MOUNT || path.startsWith(`${CONSOLE_MOUNT}/`)) return "console";
+  if (path === "/health") return "health";
+  if (path === "/metrics") return "metrics";
+  return "other";
 }
 
 function withAdminNoStore(path: string, response: Response): Response {

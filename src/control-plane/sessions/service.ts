@@ -8,6 +8,7 @@ import type {
   ManagedAgentsSessionFileResource,
 } from "../../types/sessions.ts";
 import { isJsonObject } from "../../types/json.ts";
+import { log } from "../logging.ts";
 import type { AgentStore } from "../agents/types.ts";
 import {
   EgressPolicyError,
@@ -178,17 +179,14 @@ export class DefaultSessionService implements SessionService {
     }
     this.startupSnapshotDeleteSweep = this.sweepPendingInternalSnapshotDeletes().catch(
       (error) => {
-        console.warn("Pending internal snapshot delete startup sweep failed", error);
+        log.warn("snapshot_delete_startup_sweep_failed", { error });
       },
     );
     this.startupSnapshotCreateRollbackSweep =
       this.sweepPendingInternalSnapshotCreateRollbacks({
         createdBefore: this.startedAt,
       }).catch((error) => {
-        console.warn(
-          "Pending internal snapshot create rollback startup sweep failed",
-          error,
-        );
+        log.warn("snapshot_create_rollback_startup_sweep_failed", { error });
       });
   }
 
@@ -433,10 +431,7 @@ export class DefaultSessionService implements SessionService {
         workspaceId,
         row.id,
       ).catch((cleanupError) => {
-        console.warn(
-          "Pending internal snapshot create rollback sweep failed",
-          cleanupError,
-        );
+        log.warn("snapshot_create_rollback_sweep_failed", { error: cleanupError });
       });
       if (isUnsupportedFileResourceRuntime(error)) {
         const unsupported = invalidRequest(
@@ -477,7 +472,7 @@ export class DefaultSessionService implements SessionService {
     }
     await this.sweepPendingInternalSnapshotDeletes(workspaceId, sessionId).catch(
       (error) => {
-        console.warn("Pending internal snapshot delete sweep failed", error);
+        log.warn("snapshot_delete_sweep_failed", { error });
       },
     );
     await this.cleanupDeletedSessionOutputs(
@@ -508,7 +503,7 @@ export class DefaultSessionService implements SessionService {
       }
       await this.files?.deleteSessionOutputs(workspaceId, sessionId);
     } catch (error) {
-      console.warn("Session output cleanup failed", {
+      log.warn("session_output_cleanup_failed", {
         workspaceId,
         sessionId,
         error,
@@ -706,10 +701,10 @@ export class DefaultSessionService implements SessionService {
     const timer = setTimeout(() => {
       opts.timers.delete(key);
       void opts.sweep().catch((error) => {
-        console.warn(
-          `Pending internal snapshot ${opts.retryLabel} retry failed`,
+        log.warn("snapshot_cleanup_retry_failed", {
+          retryLabel: opts.retryLabel,
           error,
-        );
+        });
         this.schedulePendingSnapshotCleanupRetry(opts);
       });
     }, this.pendingSnapshotCleanupRetryDelayMs);
@@ -720,18 +715,16 @@ export class DefaultSessionService implements SessionService {
   private warnPendingSnapshotCleanupRetryCap(
     context: PendingSnapshotCleanupRetryContext,
   ): void {
-    console.warn(
-      `Pending internal snapshot ${context.retryLabel} reached retry cap`,
-      {
-        workspaceId: context.workspaceId,
-        sessionId: context.sessionId,
-        resourceId: context.resourceId,
-        snapshotFileId: context.snapshotFileId,
-        attemptCount: context.attemptCount,
-        maxAttempts: this.pendingSnapshotCleanupMaxAttempts,
-        error: context.error,
-      },
-    );
+    log.warn("snapshot_cleanup_retry_cap_reached", {
+      retryLabel: context.retryLabel,
+      workspaceId: context.workspaceId,
+      sessionId: context.sessionId,
+      resourceId: context.resourceId,
+      snapshotFileId: context.snapshotFileId,
+      attemptCount: context.attemptCount,
+      maxAttempts: this.pendingSnapshotCleanupMaxAttempts,
+      error: context.error,
+    });
   }
 
   list(
@@ -879,10 +872,7 @@ export class DefaultSessionService implements SessionService {
         workspaceId,
         sessionId,
       ).catch((cleanupError) => {
-        console.warn(
-          "Pending internal snapshot create rollback sweep failed",
-          cleanupError,
-        );
+        log.warn("snapshot_create_rollback_sweep_failed", { error: cleanupError });
       });
       throw error;
     }

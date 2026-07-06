@@ -36,6 +36,7 @@ import {
   buildHooksFromBundle,
   type SessionEgressBundle,
 } from "./control-plane/egress/policy.ts";
+import { log } from "./control-plane/logging.ts";
 
 export interface EgressProxySidecarEnv {
   OMA_EGRESS_BUNDLE_PATH?: string;
@@ -130,7 +131,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       process.on("SIGINT", shutdown);
     })
     .catch((error: unknown) => {
-      console.error(`egress proxy sidecar failed: ${String(error)}`);
+      log.error("egress_proxy_sidecar_failed", { error });
       process.exit(1);
     });
 }

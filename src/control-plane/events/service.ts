@@ -15,6 +15,7 @@ import {
   type JsonValue,
 } from "../../types/json.ts";
 import { ApiError, invalidRequest, notFound, rateLimited, toApiErrorBody } from "../errors.ts";
+import { log } from "../logging.ts";
 import {
   idempotencyCompletion,
   idempotencyConflictResponse,
@@ -424,7 +425,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         try {
           commit();
         } catch (error) {
-          console.error("custom tool result callback failed after commit", {
+          log.error("custom_tool_result_callback_failed", {
             sessionId,
             customToolUseId,
             error,
@@ -439,7 +440,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         try {
           claim.commit();
         } catch (error) {
-          console.error("tool confirmation callback failed after commit", {
+          log.error("tool_confirmation_callback_failed", {
             sessionId,
             toolUseId: claim.toolUseId,
             error,
@@ -502,7 +503,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     void Promise.resolve(
       this.runtimeRunner?.interruptSession?.(workspaceId, sessionId),
     ).catch((error) => {
-      console.error("runtime session interrupt failed", { sessionId, error });
+      log.error("runtime_interrupt_failed", { sessionId, error });
     });
   }
 
@@ -1080,7 +1081,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     try {
       await this.runtimeRunner?.closeSession?.(workspaceId, sessionId);
     } catch (error) {
-      console.error("runtime session cleanup failed", { sessionId, error });
+      log.error("runtime_cleanup_failed", { sessionId, error });
     }
   }
 
@@ -1441,7 +1442,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       }
     } catch (error) {
       if (error instanceof RuntimeTurnOwnershipLostError) {
-        console.debug("runtime turn ownership lost; interrupting local runner", {
+        log.debug("runtime_turn_ownership_lost", {
           workspaceId,
           sessionId,
           turnId: error.turnId,
@@ -1449,14 +1450,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
         void Promise.resolve(
           this.runtimeRunner?.interruptSession?.(workspaceId, sessionId),
         ).catch((interruptError) => {
-          console.error("runtime ownership-loss interrupt failed", {
+          log.error("runtime_ownership_loss_interrupt_failed", {
             sessionId,
             error: interruptError,
           });
         });
         return;
       }
-      console.error("runtime ingestion failed", { sessionId, error });
+      log.error("runtime_ingestion_failed", { sessionId, error });
       if (activePrompt) {
         const now = new Date().toISOString();
         const runtimeChanges: EventStoreRuntimeChanges = {
@@ -1578,7 +1579,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         files,
       });
     } catch (error) {
-      console.warn("session output indexing failed", {
+      log.warn("session_output_indexing_failed", {
         workspaceId,
         sessionId,
         error,
@@ -1631,13 +1632,13 @@ export class DefaultSessionEventsService implements SessionEventsService {
         });
       } catch (error) {
         if (error instanceof RuntimeTurnOwnershipLostError) {
-          console.debug("runtime lease renewal ownership lost", {
+          log.debug("runtime_lease_renewal_ownership_lost", {
             workspaceId,
             sessionId,
             turnId: error.turnId,
           });
         } else {
-          console.error("runtime lease renewal failed", { sessionId, error });
+          log.error("runtime_lease_renewal_failed", { sessionId, error });
         }
         clearInterval(timer);
       }

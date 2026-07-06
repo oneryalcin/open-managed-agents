@@ -251,6 +251,31 @@ Notes:
   dedicated sandbox cap is deliberately absent in v1: sandboxes are one per
   live session handle, so the session cap bounds them.
 
+## Structured logs
+
+Design: [0121 §3.3](plans/0121-observability.md) (Arc C slice 1; `/health`
+and `/metrics` follow in slice 2). Every control-plane log line is one JSON
+object on stdout (info/debug) or stderr (warn/error):
+
+```json
+{"ts":"2026-07-06T13:47:03.074Z","level":"info","event":"admin_audit","type":"admin_audit","request_id":"req_…","action":"create_workspace","workspace_id":"wrk_…"}
+```
+
+`event` is a snake_case grep handle. Every 5xx response logs a
+`request_failed` event whose `requestId` matches the response's `request-id`
+header. First-boot output (including the initially minted key) is product
+UX on stdout and deliberately bypasses the logger.
+
+Redaction is enforced by the logger itself, not by convention: content-
+bearing field names are replaced with `[redacted]`, and every string value
+is scrubbed for `oma_…` keys, 32-byte-base64 key shapes, and credential
+header/env assignments before the line is written — see threat-model §5.
+
+| Env var | Meaning |
+| --- | --- |
+| `OMA_LOG_LEVEL` | `debug`, `info` (default), `warn`, or `error`; anything else refuses startup. |
+| `OMA_LOG_STACKS=1` | Include (scrubbed) stack traces in serialized errors; off by default. |
+
 ## Deployment target shape
 
 The current MVP is suitable for local development and single-node demos.
