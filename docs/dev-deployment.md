@@ -41,9 +41,19 @@ The first boot initializes storage under `OMA_HOME` (default `~/.oma`, `/data`
 in the container) and prints the initial workspace API key **once** — it is
 stored only as a hash. Auth defaults to `api-key`; port defaults to `4180`.
 Point any Anthropic SDK client at `http://127.0.0.1:4180` with that
-`x-api-key`. Mint more keys or workspaces with the
-[provisioning CLI](#provisioning-workspaces-and-keys). Builtin-tool execution
-stays off until a sandbox provider is configured (see
+`x-api-key`.
+
+The same process serves the **operator console** at
+`http://127.0.0.1:4180/console` (plan 0120). Log in there with a workspace
+key to browse agents, sessions, events, and files — or with the admin key
+(below) to create workspaces and mint/revoke keys from the browser. The
+console is fully self-contained (vendored assets, no CDN), so it works on
+air-gapped hosts. Keys entered in the browser live in page memory only:
+a reload asks again, and nothing is written to browser storage.
+
+Mint more keys or workspaces via the [admin API + console](#the-admin-api-and-console-admin-mode)
+or the [provisioning CLI](#provisioning-workspaces-and-keys). Builtin-tool
+execution stays off until a sandbox provider is configured (see
 [Pi runtime rollout policy](#pi-runtime-rollout-policy)).
 
 ## Local development
@@ -61,7 +71,7 @@ The useful targets are:
 | Target | Purpose |
 | --- | --- |
 | `make check` | `typecheck` followed by the Vitest suite. |
-| `make ui` | Serve the read-only Managed Agents Console. |
+| `make ui` | Serve the console via the dev static server + `/v1` proxy (dev convenience — the appliance itself serves it at `/console`). |
 | `make server` | Run the CWC example OMA server on `OMA_PROBE_PORT` (default `40178`). |
 | `make docker-smoke` | Run the existing deterministic Docker-local deployment smoke. |
 | `make parallel-docker-smoke` | Start multiple Docker-local sandboxes concurrently without calling a model. |
@@ -146,9 +156,44 @@ Design: [0113 - Workspace Authentication and Admission Control](plans/0113-works
 `OMA_FILE_STORAGE_ROOT`); the server refuses to start without it, because
 in-memory stores could never hold a provisioned key.
 
+### The admin API and console admin mode
+
+Design: [0119 — Admin API](plans/0119-admin-api.md) and
+[0120 — Dashboard](plans/0120-dashboard.md).
+
+Setting `OMA_ADMIN_KEY` (or `OMA_ADMIN_KEY_FILE`) enables authenticated
+`/admin` HTTP routes — create/list workspaces, mint/list/revoke keys — and
+with them the console's admin mode. The key must be 32 random bytes,
+base64-encoded (same format as `OMA_MASTER_KEY`):
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+```
+
+Requires `OMA_AUTH_MODE=api-key` and durable storage; the server refuses any
+other combination. The admin key and workspace keys are strictly separate
+tiers: neither authenticates the other's routes. Minted plaintext is returned
+exactly once (API response / console modal) and stored only as a SHA-256
+digest. Every admin action is audit-logged (`type: "admin_audit"`), never
+including the plaintext.
+
+**Credential transport is gated at boot.** With `OMA_AUTH_MODE=api-key` on a
+non-loopback bind (`OMA_HOST` not 127.x/localhost/::1), every `x-api-key` —
+and the admin key, if set — would travel in cleartext, so the server refuses
+to start unless one of:
+
+| Variable | Meaning |
+| --- | --- |
+| `OMA_TLS_TERMINATED=1` | You terminate TLS in front of the appliance (reverse proxy, ingress). Your assertion; `X-Forwarded-Proto` is not trusted. |
+| `OMA_ALLOW_INSECURE_TRANSPORT=1` | Plaintext transport is intentional — e.g. a container that binds `0.0.0.0` internally but whose port is published only on the host's loopback. The shipped `docker-compose.yml` sets this and maps `127.0.0.1:4180:4180` accordingly. |
+
+Loopback binds (the non-Docker default) are never gated; `OMA_AUTH_MODE=disabled`
+carries no credentials and is never gated.
+
 ### Provisioning workspaces and keys
 
-Provisioning is an operator CLI, not an HTTP API. It opens a second,
+The provisioning CLI is the no-HTTP alternative to the admin API (useful
+before an admin key exists, or for scripting on the host). It opens a second,
 pragma-configured connection to the live server's SQLite file — no restart
 or downtime; minted and revoked keys take effect on the next request. It
 refuses to touch any SQLite file the server has never initialized, so a

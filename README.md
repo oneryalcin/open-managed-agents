@@ -23,8 +23,11 @@ docker compose logs oma | grep x-api-key
 ```
 
 First boot initializes durable storage (default `~/.oma`, `/data` in the
-container) and prints your workspace API key **once**. Then point the ordinary
-Anthropic SDK at it — no OMA-specific client:
+container) and prints your workspace API key **once**. Open the bundled
+console at `http://127.0.0.1:4180/console` and log in with that key to browse
+your workspace — or set `OMA_ADMIN_KEY` to manage workspaces and mint keys
+from the browser ([setup](docs/dev-deployment.md#the-admin-api-and-console-admin-mode)).
+Then point the ordinary Anthropic SDK at it — no OMA-specific client:
 
 ```python
 import anthropic
@@ -101,18 +104,25 @@ What works today, at outcome level:
   ([plan 0113](docs/plans/0113-workspace-authentication-admission.md)).
 - **Real isolation for builtin tools**: Docker-local and microsandbox-local
   providers behind a fail-closed selection boundary.
-- **A read-only browser console** for inspecting agents, sessions, events,
-  spans, and output files.
+- **Credentialed sandbox egress + secrets at rest**: default-deny network
+  policy per environment, an envelope-encrypted secrets store, and boundary
+  credential injection — sandboxed agents reach allowlisted hosts with
+  secrets they can never read
+  ([ADR 0016](docs/adrs/0016-egress-proxy-and-secret-injection.md)).
+- **An admin API and a bundled operator console**, served by the appliance at
+  `/console`: browse agents, sessions, events, spans, and files with a
+  workspace key; create workspaces and mint/revoke API keys with the admin
+  key ([plan 0119](docs/plans/0119-admin-api.md),
+  [plan 0120](docs/plans/0120-dashboard.md)). Fully self-contained — no CDN
+  at first paint; browser keys live in page memory only.
 
 What's still missing — the
 [appliance product roadmap](docs/plans/0114-appliance-product-roadmap.md) is
 the authoritative sequencing:
 
-- admin HTTP API and a read-write console;
 - health/metrics observability and session usage metering (`usage` is `null`);
-- sandbox network egress, and with it skills and MCP execution (both are
-  wire-accepted today but runtime-inert) and boundary secret injection
-  ([design survey](docs/references/egress-secrets-buy-vs-build.md));
+- skills and MCP execution (both wire-accepted today but runtime-inert; now
+  unblocked by the egress + secrets boundary);
 - agent versioning, broader event-topology parity, file-upload idempotency,
   remote sandbox providers, RBAC within a workspace, and CI.
 

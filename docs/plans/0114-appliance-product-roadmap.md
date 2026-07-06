@@ -76,10 +76,13 @@ Greenfield or stub — the visible product parts:
 - **First boot: key minting done (#135).** First boot initializes durable
   storage and prints the initial API key; the separate provisioning CLI path
   still exists for later keys.
-- **Dashboard: read-only stub.** `ui/managed-agents-console` is a static
-  console with a dev proxy and demo-data fallback; all mutations disabled; no
-  admin capability, and no admin HTTP API for it to call. Not served by the
-  appliance process yet.
+- **Dashboard: DONE (2026-07-06, Arc B / plans 0119+0120).** The appliance
+  serves the console at `/console` (self-contained, vendored assets, no CDN);
+  admin-key login drives live workspace/key CRUD via `/admin` (#151), a
+  workspace key drives read-only `/v1` browsing incl. authenticated
+  downloads. `/v1` mutations from the UI remain deliberately disabled.
+  Credential transport is fail-closed at boot (`OMA_TLS_TERMINATED` /
+  `OMA_ALLOW_INSECURE_TRANSPORT`).
 - **Observability: logs only.** No metrics, health endpoint, alerts, or SLOs
   (0112 gate: blocks production).
 - **Usage metering: `usage: null`** on sessions; operator's Anthropic key does
@@ -125,17 +128,21 @@ hold this" question to be answered. Ship first.
 
 **Done (slice 1, #135):** `bin/open-managed-agents` + `src/main.ts` +
 Dockerfile + compose boot the durable authenticated server and mint/print the
-first-boot key. **Remaining:** serve the static console from the same process
-so an operator reaches a dashboard without a dev proxy; compose/docs for
-docker-local egress (docker.sock mount + `OMA_EGRESS_SIDECAR_IMAGE` +
-`OMA_MASTER_KEY`).
+first-boot key. **Done (2026-07-06, via plan 0120):** the console is served
+from the same process at `/console` — no dev proxy. **Remaining:**
+compose/docs for docker-local egress (docker.sock mount +
+`OMA_EGRESS_SIDECAR_IMAGE` + `OMA_MASTER_KEY`).
 
-### Arc B — Admin API + real dashboard
+### Arc B — Admin API + real dashboard — ✅ DONE (2026-07-06)
 
-Workspace/key CRUD over authenticated `/admin` routes (the CLI logic already
-exists against the store; this exposes it over HTTP behind a distinct admin
-credential — the first real RBAC decision). Console gains admin mode and live
-mutations, replacing its read-only stub posture.
+Slice 1 (#151, plan 0119): workspace/key CRUD over authenticated `/admin`
+routes behind a distinct admin credential — the first operator-vs-tenant
+boundary. Slice 2 (plan 0120): the console, served by the appliance at
+`/console`, gained admin mode (live workspace/key CRUD, plaintext-shown-once
+minting) and read-only `/v1` browsing with a workspace key — self-contained
+assets, in-memory-only browser keys, fail-closed credential transport.
+Follow-ups: #152 (mint idempotency guard), #155 (vendored-asset checksums),
+#156 (5xx demo-fallback UX).
 
 ### Arc C — Observability
 
