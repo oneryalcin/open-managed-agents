@@ -102,7 +102,7 @@ export interface ManagedAgentsUserInterruptEventInput {
  * `agent.mcp_tool_use` event's `sevt_*` id; there is no payload-level
  * `tool_use_id` (unlike `agent.tool_use`).
  */
-export interface ManagedAgentsMcpToolUsePayload extends JsonObject {
+export interface ManagedAgentsMcpToolUsePayload {
   mcp_server_name: string;
   name: string;
   input: JsonObject;

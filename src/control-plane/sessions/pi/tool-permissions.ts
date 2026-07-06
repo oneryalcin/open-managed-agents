@@ -6,6 +6,8 @@ import type { JsonObject } from "../../../types/json.ts";
 import type { AgentStore } from "../../agents/types.ts";
 import type {
   RuntimeActionCloseReason,
+  RuntimeMcpToolResultEvent,
+  RuntimeMcpToolUseEvent,
   RuntimeToolPermissionUseEvent,
 } from "../../events/types.ts";
 import type { SessionStore } from "../types.ts";
@@ -176,6 +178,128 @@ export class PiToolPermissionBridge {
     );
   }
 
+  /**
+   * MCP variant of `publishToolUse` (plan 0122 §4.4): same id-bind-before-
+   * execute contract and the SAME pending-confirmation store — inbound
+   * `user.tool_confirmation` claims (`claimConfirmation`) work identically
+   * for MCP and builtin tools; the events service dispatch is unchanged.
+   *
+   * Extra guarantee (terminal-result rule): if the Pi signal aborts between
+   * emit and bind, the bind callback immediately emits a synthetic
+   * `oma.mcp_tool_result` so the persisted `agent.mcp_tool_use` can never be
+   * orphaned by that race.
+   */
+  async publishMcpToolUse(opts: {
+    workspaceId: WorkspaceId;
+    sessionId: string;
+    mcpServerName: string;
+    toolName: string;
+    piToolCallId: string;
+    input: JsonObject;
+    permission: BuiltinToolPermission;
+    signal: AbortSignal | undefined;
+    getEmitter: () =>
+      | ((event: RuntimeMcpToolUseEvent | RuntimeMcpToolResultEvent) => void)
+      | undefined;
+  }): Promise<{ toolUseId: string; confirmation?: Promise<ToolConfirmationResult> }> {
+    const emit = opts.getEmitter();
+    if (!emit) {
+      throw new Error(`No active runtime consumer for MCP tool ${opts.toolName}`);
+    }
+
+    return new Promise<{
+      toolUseId: string;
+      confirmation?: Promise<ToolConfirmationResult>;
+    }>((resolve, reject) => {
+      let released = false;
+      let aborted = false;
+      let toolUseId: string | undefined;
+      let releaseToolUseId:
+        | ((reason?: RuntimeActionCloseReason) => void)
+        | undefined;
+      let confirmation: RegisteredConfirmation | undefined;
+      const cleanup = () => {
+        if (released) return;
+        released = true;
+        opts.signal?.removeEventListener("abort", onAbort);
+      };
+      const onAbort = () => {
+        aborted = true;
+        cleanup();
+        reject(new Error(`MCP tool ${opts.toolName} aborted`));
+      };
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
+
+      try {
+        emit({
+          type: "oma.mcp_tool_use",
+          piToolCallId: opts.piToolCallId,
+          mcpServerName: opts.mcpServerName,
+          name: opts.toolName,
+          input: opts.input,
+          evaluatedPermission: opts.permission,
+          bindToolUseId: (boundToolUseId, release) => {
+            if (aborted) {
+              // The use event was persisted after the caller already saw the
+              // abort; close the loop with a terminal result and release.
+              opts.getEmitter()?.({
+                type: "oma.mcp_tool_result",
+                mcpToolUseId: boundToolUseId,
+                content: [
+                  { type: "text", text: `MCP tool ${opts.toolName} aborted` },
+                ],
+                isError: true,
+              });
+              release("interrupted");
+              return;
+            }
+            toolUseId = boundToolUseId;
+            releaseToolUseId = release;
+            this.bindPublicToolUseId(
+              opts.sessionId,
+              opts.piToolCallId,
+              boundToolUseId,
+            );
+            cleanup();
+            confirmation =
+              opts.permission === "ask"
+                ? this.registerPendingConfirmation({
+                    workspaceId: opts.workspaceId,
+                    sessionId: opts.sessionId,
+                    toolName: opts.toolName,
+                    toolLabel: `MCP tool ${opts.toolName}`,
+                    piToolCallId: opts.piToolCallId,
+                    toolUseId: boundToolUseId,
+                    signal: opts.signal,
+                    releaseToolUseId: release,
+                  })
+                : undefined;
+            resolve({
+              toolUseId: boundToolUseId,
+              confirmation: confirmation?.promise,
+            });
+          },
+          rejectToolUse: (error) => {
+            if (toolUseId) {
+              this.forgetPublicToolUseId(opts.sessionId, opts.piToolCallId);
+              this.pending.delete(toolUseId);
+            }
+            if (confirmation) {
+              confirmation.reject(error);
+            } else {
+              releaseToolUseId?.();
+            }
+            cleanup();
+            reject(error);
+          },
+        });
+      } catch (error) {
+        cleanup();
+        reject(toError(error));
+      }
+    });
+  }
+
   private async publishToolUse(opts: {
     workspaceId: WorkspaceId;
     sessionId: string;
@@ -266,12 +390,15 @@ export class PiToolPermissionBridge {
   private registerPendingConfirmation(opts: {
     workspaceId: WorkspaceId;
     sessionId: string;
-    toolName: SandboxedBuiltinToolName;
+    // Widened for MCP (plan 0122): the name only labels timeout/abort errors.
+    toolName: string;
+    toolLabel?: string;
     piToolCallId: string;
     toolUseId: string;
     signal: AbortSignal | undefined;
     releaseToolUseId: (reason?: RuntimeActionCloseReason) => void;
   }): RegisteredConfirmation {
+    const label = opts.toolLabel ?? `Builtin tool ${opts.toolName}`;
     let rejectPending!: (error: Error) => void;
     const promise = new Promise<ToolConfirmationResult>((resolve, reject) => {
       let released = false;
@@ -286,7 +413,7 @@ export class PiToolPermissionBridge {
       const onAbort = () => {
         this.pending.delete(opts.toolUseId);
         cleanup("interrupted");
-        reject(new Error(`Builtin tool ${opts.toolName} aborted`));
+        reject(new Error(`${label} aborted`));
       };
       opts.signal?.addEventListener("abort", onAbort, { once: true });
       const timeoutMs =
@@ -296,7 +423,11 @@ export class PiToolPermissionBridge {
           this.pending.delete(opts.toolUseId);
           this.markPermissionDenied(opts.sessionId, opts.piToolCallId);
           cleanup("timeout");
-          reject(new Error(`Builtin tool ${opts.toolName} confirmation timed out`));
+          reject(
+            Object.assign(new Error(`${label} confirmation timed out`), {
+              omaConfirmationTimeout: true,
+            }),
+          );
         }, timeoutMs);
       }
       rejectPending = (error) => {
