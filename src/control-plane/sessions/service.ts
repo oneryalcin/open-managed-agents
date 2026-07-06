@@ -298,7 +298,10 @@ export class DefaultSessionService implements SessionService {
   // with credentials it cannot inject) hides a broken boundary from the
   // operator. Hosted-shape networking (`{type:"unrestricted"}`) stays what it
   // has always been in OMA: ignored, --network none.
-  private assertEgressHonorable(environment: EnvironmentRow): void {
+  private assertEgressHonorable(
+    environment: EnvironmentRow,
+    hasFileResources: boolean,
+  ): void {
     if (!hasEgressNetworkingConfig(environment.config)) return;
     let policy;
     try {
@@ -322,6 +325,22 @@ export class DefaultSessionService implements SessionService {
       throw invalidRequest(
         `Environment ${environment.id} grants credentials, but this deployment has no secrets store ` +
           "(set OMA_MASTER_KEY or OMA_MASTER_KEY_FILE)",
+      );
+    }
+    // Fail-closed on a KNOWN LIMITATION (Codex review): a session with file
+    // resources builds its sandbox eagerly in `runtime.prepareSession` — which
+    // runs BEFORE `store.create` inserts the session row (see below). The egress
+    // resolver (app.ts createSessionEgressBundleResolver) reads that row to find
+    // the environment, so during prepare it finds nothing and the sandbox comes
+    // up at --network none — the granted boundary would silently vanish for the
+    // session's whole life. Rather than run a credential-granting session
+    // without its boundary, reject the combination until the prepare path
+    // carries egress. Tracked: file-resource + egress support.
+    if (hasFileResources) {
+      throw invalidRequest(
+        `Environment ${environment.id} grants network egress, which is not yet supported together ` +
+          "with session file resources; create the session without resources, or use an environment " +
+          "that grants no egress.",
       );
     }
   }
@@ -351,7 +370,7 @@ export class DefaultSessionService implements SessionService {
     if (!environment) {
       throw invalidRequest(`Environment ${req.environment_id} not found`);
     }
-    this.assertEgressHonorable(environment);
+    this.assertEgressHonorable(environment, (req.resources?.length ?? 0) > 0);
 
     const now = new Date().toISOString();
     const sessionId = newSessionId();

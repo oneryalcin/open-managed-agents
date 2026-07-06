@@ -154,6 +154,16 @@ describe("deployment runtime config", () => {
     ).toThrow("OMA_EGRESS_SIDECAR_IMAGE is ignored without OMA_ENABLE_EGRESS=true");
   });
 
+  it("rejects a sidecar repo mount without the enable flag", () => {
+    expect(() =>
+      parseDeploymentRuntimeConfigFromEnv({
+        OMA_SANDBOX_PROVIDER: "docker-local",
+        OMA_ALLOW_DOCKER_LOCAL: "true",
+        OMA_EGRESS_SIDECAR_REPO_MOUNT: "/repo",
+      }),
+    ).toThrow("OMA_EGRESS_SIDECAR_REPO_MOUNT is ignored without OMA_ENABLE_EGRESS=true");
+  });
+
   it("rejects egress env on non-docker providers", () => {
     expect(() =>
       parseDeploymentRuntimeConfigFromEnv({

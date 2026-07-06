@@ -264,6 +264,21 @@ export function createDeploymentControlPlane(
         "In-memory stores are per-process, so no API key could ever be provisioned and every request would fail with 401.",
     );
   }
+  // A configured master key means this deployment handles real credentials
+  // (secret values + credentialed egress). Without api-key auth every route —
+  // including POST/DELETE /v1/secrets — resolves to wrk_default unauthenticated,
+  // so anyone who can reach the port could overwrite the credentials the egress
+  // proxy injects. Refuse to boot that combination rather than warn (mirrors
+  // the api-key-requires-durable guard above); an operator who genuinely wants
+  // keyless secrets must not get there by forgetting OMA_AUTH_MODE.
+  if (stores.secrets !== undefined && authMode !== "api-key") {
+    stores.close();
+    throw new Error(
+      "A secrets master key (OMA_MASTER_KEY/OMA_MASTER_KEY_FILE) requires OMA_AUTH_MODE=api-key: " +
+        "without it the /v1/secrets API is unauthenticated and resolves to wrk_default, so anyone " +
+        "reaching the server could read metadata and overwrite the credentials used for egress injection.",
+    );
+  }
   const broadcaster = new SessionEventBroadcaster(stores.events);
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
@@ -400,6 +415,11 @@ export function createSessionEgressBundleResolver(stores: {
   secrets?: Pick<SecretsStore, "reveal">;
 }): EgressBundleResolver {
   return async (workspaceId, sessionId) => {
+    // Reads the PERSISTED session row to reach environment_id. This is why
+    // DefaultSessionService.assertEgressHonorable rejects egress + file
+    // resources: that path runs prepareSession (which lands here via the
+    // docker factory) BEFORE store.create inserts the row, so a lookup here
+    // would miss and the boundary would silently vanish. Keep the two in sync.
     const session = stores.sessions.retrieveAny(workspaceId, sessionId);
     if (!session) return undefined;
     const environment = stores.environments.retrieve(

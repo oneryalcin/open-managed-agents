@@ -655,6 +655,36 @@ describe("Docker sandbox egress cleanup on failure (plan 0117d)", () => {
     // secret bundle on disk.
     expect(disposed).toBe(true);
   });
+
+  // Factory-level double-dispose (Sonnet review): a real sidecar comes up, then
+  // the SANDBOX `docker run` fails (bad image) — createDockerSandboxProvider's
+  // own catch AND the factory closure's catch both call dispose(). Proves the
+  // overlap is harmless (idempotent) and no --internal network is orphaned.
+  dockerIt("factory disposes the sidecar exactly once-effectively when the sandbox image is bad", async () => {
+    const bundle = resolveSessionEgressBundle({
+      environmentConfig: { networking: { allow: [{ host: "example.com", port: 443 }] } },
+      revealSecret: () => undefined,
+      listenPort: 8080,
+      proxyAuthToken: "factory-dispose-tok",
+    })!.bundle;
+    const sessionId = `sesn_factdispose_${Math.random().toString(36).slice(2, 8)}`;
+    const factory = createDockerSandboxProviderFactory({
+      image: "oma-nonexistent-image:doesnotexist-0117e",
+      operationTimeoutMs: 30_000,
+      egress: {
+        sidecarImage: "node:24-slim",
+        sidecarRepoMount: process.cwd(),
+        resolveEgressBundle: async () => ({ bundle, sandboxEnv: {} }),
+      },
+    });
+    await expect(factory("wrk_fd", sessionId)).rejects.toThrow();
+
+    // The sidecar's --internal network is named oma-egress-<sanitized session>-*
+    const networks = spawnSync("docker", ["network", "ls", "--format", "{{.Name}}"], {
+      encoding: "utf8",
+    }).stdout;
+    expect(networks).not.toContain(`oma-egress-${sessionId}`);
+  }, 120_000);
 });
 
 describe("Docker sandbox egress confinement (plan 0117d, ADR 0016 §2/§3)", () => {

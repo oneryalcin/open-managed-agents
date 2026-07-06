@@ -3,7 +3,7 @@
 // a sidecar bundle (or undefined — default deny), and (2) the fail-closed
 // session-create gate rejects egress-granting environments the deployment
 // cannot honor, while hosted-shape networking keeps today's behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer as createHttpsServer } from "node:https";
@@ -13,6 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   createDeploymentControlPlane,
   createSessionEgressBundleResolver,
+  type DeploymentControlPlane,
 } from "../app.ts";
 import { buildHooksFromBundle } from "../egress/policy.ts";
 import {
@@ -45,6 +46,32 @@ const GRANTING_NETWORKING = {
     },
   ],
 };
+
+const tempRoots: string[] = [];
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+// A real deployment control plane in durable + api-key mode with an egress
+// sidecar image and a master key — the ONLY configuration in which a secrets
+// store is allowed to exist (app.ts guards secrets ⇒ api-key ⇒ durable).
+// Returns a minted workspace key to authenticate requests.
+function makeDurableEgressPlane(): DeploymentControlPlane & { key: string } {
+  const root = mkdtempSync(join(tmpdir(), "oma-egress-plane-"));
+  tempRoots.push(root);
+  const plane = createDeploymentControlPlane({
+    OMA_SQLITE_PATH: join(root, "oma.sqlite"),
+    OMA_FILE_STORAGE_ROOT: join(root, "objects"),
+    OMA_AUTH_MODE: "api-key",
+    OMA_SANDBOX_PROVIDER: "docker-local",
+    OMA_ALLOW_DOCKER_LOCAL: "true",
+    OMA_ENABLE_EGRESS: "true",
+    OMA_EGRESS_SIDECAR_IMAGE: "oma-appliance:test",
+    OMA_MASTER_KEY: generateMasterKey(),
+  });
+  const key = plane.stores.workspaces.mintKey("wrk_default", "test").plaintextKey;
+  return { ...plane, key };
+}
 
 describe("createSessionEgressBundleResolver", () => {
   it("returns undefined for absent and hosted-shape networking", async () => {
@@ -143,18 +170,35 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("admits a credential-granting environment when egress and secrets are wired", async () => {
-    const plane = createDeploymentControlPlane({
-      OMA_SANDBOX_PROVIDER: "docker-local",
-      OMA_ALLOW_DOCKER_LOCAL: "true",
-      OMA_ENABLE_EGRESS: "true",
-      OMA_EGRESS_SIDECAR_IMAGE: "oma-appliance:test",
-      OMA_MASTER_KEY: generateMasterKey(),
-    });
-    const env = await createEnvironment(plane.app, {
-      networking: GRANTING_NETWORKING,
-    });
-    const res = await createSession(plane.app, env.id);
+    const plane = makeDurableEgressPlane();
+    const env = await createEnvironment(
+      plane.app,
+      { networking: GRANTING_NETWORKING },
+      plane.key,
+    );
+    const res = await createSession(plane.app, env.id, { key: plane.key });
     expect(res.status).toBe(200);
+    plane.stores.close();
+  });
+
+  it("rejects an egress-granting environment combined with file resources", async () => {
+    // Fail-closed on the prepare-before-row-insert limitation (Codex review):
+    // a file-resource session builds its sandbox before its row is persisted,
+    // so the egress resolver can't find the environment and the boundary would
+    // silently vanish. Reject rather than run credentialed egress unprotected.
+    const plane = makeDurableEgressPlane();
+    const env = await createEnvironment(
+      plane.app,
+      { networking: GRANTING_NETWORKING },
+      plane.key,
+    );
+    const res = await createSession(plane.app, env.id, {
+      key: plane.key,
+      resources: [{ type: "file", file_id: "file_x", mount_path: "/mnt/x" }],
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error.message).toContain("not yet supported together");
     plane.stores.close();
   });
 
@@ -167,6 +211,55 @@ describe("fail-closed session-create gate", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as ApiErrorBody;
     expect(body.error.message).toContain("invalid networking config");
+    plane.stores.close();
+  });
+});
+
+describe("secrets-store auth guard (Codex adversarial review)", () => {
+  // A master key means the deployment handles real credentials; without
+  // api-key auth the /v1/secrets API would be unauthenticated on wrk_default.
+  // Refuse to boot the dangerous combination rather than warn.
+  it("refuses to boot with a master key when auth mode is unset (defaults disabled)", () => {
+    const root = mkdtempSync(join(tmpdir(), "oma-guard-"));
+    tempRoots.push(root);
+    expect(() =>
+      createDeploymentControlPlane({
+        OMA_SQLITE_PATH: join(root, "oma.sqlite"),
+        OMA_FILE_STORAGE_ROOT: join(root, "objects"),
+        OMA_MASTER_KEY: generateMasterKey(),
+        // OMA_AUTH_MODE deliberately unset -> disabled.
+      }),
+    ).toThrow("requires OMA_AUTH_MODE=api-key");
+  });
+
+  it("refuses to boot with a master key when auth is explicitly disabled", () => {
+    const root = mkdtempSync(join(tmpdir(), "oma-guard-"));
+    tempRoots.push(root);
+    expect(() =>
+      createDeploymentControlPlane({
+        OMA_SQLITE_PATH: join(root, "oma.sqlite"),
+        OMA_FILE_STORAGE_ROOT: join(root, "objects"),
+        OMA_AUTH_MODE: "disabled",
+        OMA_MASTER_KEY: generateMasterKey(),
+      }),
+    ).toThrow("requires OMA_AUTH_MODE=api-key");
+  });
+
+  it("boots with a master key under api-key auth, and the secrets API demands a key", async () => {
+    const plane = makeDurableEgressPlane();
+    // No x-api-key -> 401, not an unauthenticated wrk_default write.
+    const noKey = await request(plane.app, "/v1/secrets", {
+      method: "POST",
+      body: { name: "github", value: "REAL" },
+    });
+    expect(noKey.status).toBe(401);
+    // With the workspace key -> 201.
+    const withKey = await request(plane.app, "/v1/secrets", {
+      method: "POST",
+      body: { name: "github", value: "REAL" },
+      key: plane.key,
+    });
+    expect(withKey.status).toBe(201);
     plane.stores.close();
   });
 });
@@ -331,21 +424,28 @@ function makeResolverFixture() {
 
 // --- API helpers ------------------------------------------------------------
 
+type TestApp = {
+  request: (path: string, init?: RequestInit) => Promise<Response> | Response;
+};
+
 async function createEnvironment(
-  app: { request: (path: string, init?: RequestInit) => Promise<Response> | Response },
+  app: TestApp,
   config: JsonObject,
+  key?: string,
 ): Promise<ManagedAgentsEnvironment> {
   const res = await request(app, "/v1/environments", {
     method: "POST",
     body: { name: "egress wiring env", config: { type: "cloud", ...config } },
+    key,
   });
   expect(res.status).toBe(200);
   return (await res.json()) as ManagedAgentsEnvironment;
 }
 
 async function createSession(
-  app: { request: (path: string, init?: RequestInit) => Promise<Response> | Response },
+  app: TestApp,
   environmentId: string,
+  opts: { key?: string; resources?: unknown[] } = {},
 ): Promise<Response> {
   const agentRes = await request(app, "/v1/agents", {
     method: "POST",
@@ -354,25 +454,32 @@ async function createSession(
       model: "claude-opus-4-7",
       tools: [{ type: "agent_toolset_20260401" }],
     },
+    key: opts.key,
   });
   expect(agentRes.status).toBe(200);
   const agent = (await agentRes.json()) as ManagedAgentsAgent;
   return request(app, "/v1/sessions", {
     method: "POST",
-    body: { agent: agent.id, environment_id: environmentId },
+    body: {
+      agent: agent.id,
+      environment_id: environmentId,
+      ...(opts.resources === undefined ? {} : { resources: opts.resources }),
+    },
+    key: opts.key,
   });
 }
 
 function request(
-  app: { request: (path: string, init?: RequestInit) => Promise<Response> | Response },
+  app: TestApp,
   path: string,
-  opts: { method?: string; body?: unknown } = {},
+  opts: { method?: string; body?: unknown; key?: string } = {},
 ): Promise<Response> {
   return Promise.resolve(
     app.request(path, {
       method: opts.method ?? "GET",
       headers: {
         "anthropic-beta": MANAGED_AGENTS_BETA,
+        ...(opts.key === undefined ? {} : { "x-api-key": opts.key }),
         ...(opts.body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(opts.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
