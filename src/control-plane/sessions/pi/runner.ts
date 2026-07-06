@@ -32,6 +32,7 @@ import type {
   SandboxedBuiltinToolName,
   SandboxProvider,
   SandboxProviderFactory,
+  SandboxProviderSessionContext,
 } from "./sandbox/provider.ts";
 import {
   resolveSandboxProviderFactory,
@@ -162,10 +163,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
       });
     }
     try {
+      const sandboxContext =
+        opts.environmentId === undefined
+          ? undefined
+          : { environmentId: opts.environmentId };
       const handle = await this.getOrCreateHandle(
         workspaceId,
         sessionId,
         opts.fileMounts,
+        sandboxContext,
       );
       this.touch(sessionId, handle);
     } finally {
@@ -525,6 +531,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
     fileMounts?: readonly PiSessionFileMount[],
+    context?: SandboxProviderSessionContext,
   ): Promise<RuntimeHandle> {
     if (this.closed) throw new Error("PiSessionRunner is closed");
     if (this.closedSessionIds.has(sessionId)) {
@@ -537,9 +544,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
     if (pending) return pending;
 
     const created = (async () => {
-        const context = this.preparingSessionAgentContext(workspaceId, sessionId);
+        const customToolContext = this.preparingSessionAgentContext(workspaceId, sessionId);
         const customToolNames = new Set(
-          (this.opts.customTools?.(workspaceId, sessionId, context) ?? []).map(
+          (this.opts.customTools?.(workspaceId, sessionId, customToolContext) ?? []).map(
             (tool) => tool.name,
           ),
         );
@@ -550,6 +557,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           sandbox = await sandboxProviderFactory?.(
             workspaceId,
             sessionId,
+            context,
           );
           const mounts =
             fileMounts ??
@@ -564,7 +572,12 @@ export class PiSessionRunner implements RuntimeEventRunner {
           assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
           session =
             this.sessionFactory === undefined
-              ? await this.createPiSession(workspaceId, sessionId, sandbox, context)
+              ? await this.createPiSession(
+                  workspaceId,
+                  sessionId,
+                  sandbox,
+                  customToolContext,
+                )
               : await this.sessionFactory(workspaceId, sessionId);
           assertActiveToolSurface(
             session,

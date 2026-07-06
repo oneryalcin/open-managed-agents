@@ -77,9 +77,19 @@ export interface SandboxOutputFile {
   bytes: AsyncIterable<Uint8Array> | Uint8Array;
 }
 
+export interface SandboxProviderSessionContext {
+  /**
+   * Creation-time hint for sessions whose sandbox is prepared before the row is
+   * committed. Providers that need environment-scoped resources can use this
+   * instead of looking the session row up by id.
+   */
+  environmentId?: string;
+}
+
 export type SandboxProviderFactory = (
   workspaceId: string,
   sessionId: string,
+  context?: SandboxProviderSessionContext,
 ) => Promise<SandboxProvider>;
 
 export interface HostPassthroughSandboxOptions {
