@@ -122,6 +122,7 @@ type CustomToolResultClaim =
 
 export class DefaultSessionEventsService implements SessionEventsService {
   private readonly maxPendingRuntimeTurnsPerWorkspace: number | undefined;
+  private readonly onAdmissionRejected: (() => void) | undefined;
   private readonly ownerId: string;
   private readonly ownerGeneration = 1;
   private readonly leaseTtlMs: number;
@@ -185,10 +186,15 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ownerId?: string;
       leaseTtlMs?: number;
     },
-    opts: { maxPendingRuntimeTurnsPerWorkspace?: number } = {},
+    opts: {
+      maxPendingRuntimeTurnsPerWorkspace?: number;
+      /** 0121 C2: telemetry-only, fired when the pending-turns cap rejects. */
+      onAdmissionRejected?: () => void;
+    } = {},
   ) {
     this.maxPendingRuntimeTurnsPerWorkspace =
       opts.maxPendingRuntimeTurnsPerWorkspace;
+    this.onAdmissionRejected = opts.onAdmissionRejected;
     this.runtimeRunner = runtime?.runner;
     this.runtimeTranslator = runtime?.translate;
     this.sessionOutputCoordinator = runtime?.sessionOutputCoordinator;
@@ -864,6 +870,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     ).length;
     if (newTurns === 0) return;
     if (this.events.countPendingRuntimeTurns(workspaceId) + newTurns > cap) {
+      this.onAdmissionRejected?.();
       throw rateLimited(
         "Concurrent pending runtime turn limit reached for this workspace; retry later",
       );

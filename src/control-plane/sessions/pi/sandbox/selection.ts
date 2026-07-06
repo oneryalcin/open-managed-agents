@@ -39,6 +39,8 @@ export interface SandboxProviderSelectionResolverOptions {
    * a silent ignore.
    */
   egress?: DockerSandboxEgressFactoryOptions;
+  /** 0121 C2 telemetry: startup sweeps reaped N stale sandboxes/containers. */
+  onReaped?: (count: number) => void;
 }
 
 export function parseSandboxProviderSelection(
@@ -151,6 +153,7 @@ export function resolveSandboxProviderFactory(
       reapStaleContainersOlderThanMs:
         selection.reapStaleContainersOlderThanMs,
       ...(opts.egress === undefined ? {} : { egress: opts.egress }),
+      ...(opts.onReaped === undefined ? {} : { onReaped: opts.onReaped }),
     });
   }
   if (selection.type === "microsandbox-local") {
@@ -164,6 +167,7 @@ export function resolveSandboxProviderFactory(
       operationTimeoutMs: selection.operationTimeoutMs,
       reapStaleSandboxesOlderThanMs:
         selection.reapStaleSandboxesOlderThanMs,
+      ...(opts.onReaped === undefined ? {} : { onReaped: opts.onReaped }),
     });
   }
   const _exhaustive: never = selection;

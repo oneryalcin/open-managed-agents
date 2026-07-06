@@ -21,6 +21,16 @@ services:
       # key generated with:
       #   node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
       # OMA_ADMIN_KEY: "<paste generated key>"
+      # The container binds non-loopback, so /metrics is fail-closed (404)
+      # unless you set a scrape token (any strong random string):
+      # OMA_METRICS_TOKEN: "<paste generated token>"
+    healthcheck:
+      # node-based: the image has no curl/wget.
+      test: ["CMD", "node", "-e",
+        "fetch('http://127.0.0.1:4180/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
 volumes:
   oma-data:

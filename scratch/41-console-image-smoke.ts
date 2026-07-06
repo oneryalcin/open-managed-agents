@@ -13,6 +13,11 @@
  *   - GET /console/..%2f..%2fpackage.json         -> 404 (traversal guard)
  *   - GET /v1/agents      -> 401 (API routed, auth on)
  *
+ * Extended for plan 0121 C2:
+ *   - GET /health         -> 200 status ok (unauth; version from package.json)
+ *   - the compose healthcheck node one-liner exits 0 against the container
+ *   - GET /metrics        -> 404 (container binds 0.0.0.0, no token: fail-closed)
+ *
  * Deterministic, no model calls. Needs Docker. Run:
  *   make console-image-smoke
  */
@@ -64,6 +69,12 @@ async function main(): Promise<void> {
         r.status === 200 && (r.headers.get("content-type") ?? "").startsWith("text/babel")],
       ["/console/..%2f..%2fpackage.json", (r) => r.status === 404],
       ["/v1/agents", (r) => r.status === 401],
+      ["/health", async (r) =>
+        r.status === 200 &&
+        r.headers.get("cache-control") === "no-store" &&
+        ((await r.json()) as { status: string }).status === "ok"],
+      // Container binds 0.0.0.0 with no OMA_METRICS_TOKEN: fail-closed.
+      ["/metrics", (r) => r.status === 404],
     ];
     for (const [path, check] of checks) {
       const res = await fetch(`${base}${path}`, { redirect: "manual" });
@@ -72,6 +83,17 @@ async function main(): Promise<void> {
       }
       console.log(`  ok ${path}`);
     }
+
+    // The exact compose healthcheck command must succeed INSIDE the container
+    // (no curl/wget in node:24-slim — this locks the node-based stanza).
+    const health = spawnSync("docker", [
+      "exec", NAME, "node", "-e",
+      "fetch('http://127.0.0.1:4180/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+    ]);
+    if (health.status !== 0) {
+      throw new Error(`FAIL compose healthcheck command: exit ${health.status}`);
+    }
+    console.log("  ok compose healthcheck command (in-container)");
     console.log("console-image-smoke: PASS");
   } finally {
     spawnSync("docker", ["rm", "-f", NAME], { stdio: "ignore" });

@@ -87,16 +87,19 @@ export class InFlightGauge {
     private readonly resource: string,
     private readonly maxPerWorkspace?: number,
     private readonly maxTotal?: number,
+    private readonly onReject?: (status: "429" | "529") => void,
   ) {}
 
   acquire(workspaceId: WorkspaceId): () => void {
     const current = this.perWorkspaceCounts.get(workspaceId) ?? 0;
     if (this.maxPerWorkspace !== undefined && current >= this.maxPerWorkspace) {
+      this.onReject?.("429");
       throw rateLimited(
         `Concurrent ${this.resource} limit reached for this workspace; retry later`,
       );
     }
     if (this.maxTotal !== undefined && this.total >= this.maxTotal) {
+      this.onReject?.("529");
       throw overloaded();
     }
     this.perWorkspaceCounts.set(workspaceId, current + 1);
@@ -115,6 +118,11 @@ export class InFlightGauge {
   inFlight(workspaceId: WorkspaceId): number {
     return this.perWorkspaceCounts.get(workspaceId) ?? 0;
   }
+
+  // For the /metrics SSE-streams gauge (0121 C2).
+  get totalInFlight(): number {
+    return this.total;
+  }
 }
 
 export interface AdmissionLimits {
@@ -126,6 +134,8 @@ export interface AdmissionLimits {
 
 export function createAdmissionLimits(
   config: AdmissionLimitsConfig,
+  // 0121 C2: telemetry-only; absent hooks change nothing.
+  onRejection?: (limit: "uploads" | "streams", status: "429" | "529") => void,
 ): AdmissionLimits {
   return {
     ...(config.maxActiveSessionsPerWorkspace === undefined
@@ -141,11 +151,17 @@ export function createAdmissionLimits(
       "file upload",
       config.maxConcurrentUploadsPerWorkspace,
       config.maxConcurrentUploads,
+      onRejection === undefined
+        ? undefined
+        : (status) => onRejection("uploads", status),
     ),
     sseStreams: new InFlightGauge(
       "SSE stream",
       config.maxConcurrentSseStreamsPerWorkspace,
       config.maxConcurrentSseStreams,
+      onRejection === undefined
+        ? undefined
+        : (status) => onRejection("streams", status),
     ),
   };
 }

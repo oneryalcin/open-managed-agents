@@ -67,6 +67,8 @@ export type DeploymentPiSessionRunnerOptions = Omit<
    * wired — when egress is off.
    */
   resolveEgressBundle?: EgressBundleResolver;
+  /** 0121 C2 telemetry: startup sweeps reaped N stale sandboxes/containers. */
+  onSandboxesReaped?: (count: number) => void;
 };
 
 export function parseDeploymentRuntimeConfigFromEnv(
@@ -196,19 +198,21 @@ export function createDeploymentPiSessionRunner(
       "Deployment runner options cannot override sandbox provider config",
     );
   }
-  const { resolveEgressBundle, ...runnerOpts } = opts;
+  const { resolveEgressBundle, onSandboxesReaped, ...runnerOpts } = opts;
   if (config.egress !== undefined && resolveEgressBundle === undefined) {
     throw new Error(
       "egress is enabled but no egress bundle resolver was provided",
     );
   }
-  const selectionOptions =
-    config.egress === undefined || resolveEgressBundle === undefined
+  const selectionOptions = {
+    ...(config.egress === undefined || resolveEgressBundle === undefined
       ? config.sandboxProviderSelectionOptions
       : {
           ...config.sandboxProviderSelectionOptions,
           egress: { ...config.egress, resolveEgressBundle },
-        };
+        }),
+    ...(onSandboxesReaped === undefined ? {} : { onReaped: onSandboxesReaped }),
+  };
   return new PiSessionRunner({
     ...runnerOpts,
     sandboxProviderSelection: config.sandboxProviderSelection,

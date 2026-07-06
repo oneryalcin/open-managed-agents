@@ -110,6 +110,8 @@ export interface DefaultSessionServiceOptions {
   ) => SessionRow;
   pendingSnapshotCleanupRetryDelayMs?: number;
   pendingSnapshotCleanupMaxAttempts?: number;
+  /** 0121 C2: telemetry-only, fired when the active-sessions cap rejects. */
+  onAdmissionRejected?: () => void;
 }
 
 export class DefaultSessionService implements SessionService {
@@ -138,6 +140,7 @@ export class DefaultSessionService implements SessionService {
     | undefined;
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
+  private readonly onAdmissionRejected: (() => void) | undefined;
   private readonly pendingSessionCreates = new Map<WorkspaceId, number>();
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
     string,
@@ -156,6 +159,7 @@ export class DefaultSessionService implements SessionService {
     opts: DefaultSessionServiceOptions = {},
   ) {
     this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
+    this.onAdmissionRejected = opts.onAdmissionRejected;
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.egressCapability = opts.egressCapability;
@@ -274,6 +278,7 @@ export class DefaultSessionService implements SessionService {
     if (cap === undefined) return () => {};
     const pending = this.pendingSessionCreates.get(workspaceId) ?? 0;
     if (this.store.countActive(workspaceId) + pending >= cap) {
+      this.onAdmissionRejected?.();
       throw rateLimited(
         "Concurrent active session limit reached for this workspace; archive or delete sessions, or retry later",
       );

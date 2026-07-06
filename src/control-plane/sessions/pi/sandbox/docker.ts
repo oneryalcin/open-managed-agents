@@ -121,6 +121,8 @@ export interface DockerSandboxFactoryOptions
    * and hands `createDockerSandboxProvider` the per-session wiring.
    */
   egress?: DockerSandboxEgressFactoryOptions;
+  /** 0121 C2 telemetry: startup sweep reported reaping N stale containers. */
+  onReaped?: (count: number) => void;
 }
 
 export interface DockerSandboxReaperOptions {
@@ -192,7 +194,8 @@ export function createDockerSandboxProviderFactory(
         dockerCommand: opts.dockerCommand,
         olderThanMs,
       }).then(
-        () => {
+        (count) => {
+          if (count > 0) opts.onReaped?.(count);
           // Same startup sweep reaps egress sidecars a crash orphaned:
           // containers, their --internal networks, and stale temp roots.
           reapEgressSidecars({ dockerCommand: opts.dockerCommand, olderThanMs });
