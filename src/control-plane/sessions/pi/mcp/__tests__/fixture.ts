@@ -65,9 +65,25 @@ export async function startMcpFixture(
     }
     await transport.handleRequest(req, res, body);
   });
-  await new Promise<void>((resolve) =>
-    http.listen(opts.port ?? 0, "127.0.0.1", resolve),
-  );
+  // Fixed-port binds (the recovery test) can race a lingering socket from
+  // the fixture that reserved the port; retry briefly on EADDRINUSE.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        http.once("error", reject);
+        http.listen(opts.port ?? 0, "127.0.0.1", () => {
+          http.removeAllListeners("error");
+          resolve();
+        });
+      });
+      break;
+    } catch (error) {
+      if (attempt >= 20 || (error as { code?: string }).code !== "EADDRINUSE") {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
   const address = http.address();
   if (address === null || typeof address !== "object") {
     throw new Error("fixture failed to bind");
@@ -78,6 +94,9 @@ export async function startMcpFixture(
     toolCalls,
     httpRequests,
     close: async () => {
+      // Keep-alive sockets from SDK clients (or fire-and-forget disposals)
+      // must not wedge teardown.
+      http.closeAllConnections?.();
       await new Promise<void>((resolve) => http.close(() => resolve()));
     },
   };

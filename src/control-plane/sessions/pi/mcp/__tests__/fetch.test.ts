@@ -92,3 +92,47 @@ describe("createGuardedMcpFetch (plan 0122 §4.3)", () => {
     expect(requests).toEqual([]);
   });
 });
+
+describe("hostname path through the undici pinned-lookup dispatcher (review 0122-M1)", () => {
+  // IP-literal targets short-circuit at assertLiteralHostAllowed; `localhost`
+  // is a HOSTNAME, so these cases force Node through the dispatcher's
+  // connect.lookup — the actual anti-rebinding mechanism for real MCP URLs.
+  function localhostUrl(): string {
+    return baseUrl.replace("127.0.0.1", "localhost");
+  }
+
+  it("blocks a hostname resolving to loopback via the dispatcher lookup", async () => {
+    const guarded = createGuardedMcpFetch();
+    expect(await fetchCauseCode(guarded(`${localhostUrl()}/`))).toBe(
+      "EGRESS_SSRF_BLOCKED",
+    );
+    expect(requests).toEqual([]);
+  });
+
+  it("reaches the fixture by hostname through the seam (lookup ran, SNI host preserved)", async () => {
+    const guarded = createGuardedMcpFetch({ allowAddress: () => true });
+    const response = await guarded(`${localhostUrl()}/`, {
+      headers: { connection: "close" },
+    });
+    expect(response.status).toBe(200);
+    await response.text(); // release the socket so afterEach can close the server
+  });
+
+  it("re-consults the guard per hostname resolution (rebinding, dispatcher path)", async () => {
+    let resolutions = 0;
+    const guarded = createGuardedMcpFetch({
+      allowAddress: () => {
+        resolutions += 1;
+        return resolutions <= 2; // lookup sees v4+v6 candidates on call 1
+      },
+    });
+    const first = await guarded(`${localhostUrl()}/`, {
+      headers: { connection: "close" },
+    });
+    expect(first.status).toBe(200);
+    await first.text(); // release the socket so afterEach can close the server
+    expect(await fetchCauseCode(guarded(`${localhostUrl()}/`))).toBe(
+      "EGRESS_SSRF_BLOCKED",
+    );
+  });
+});

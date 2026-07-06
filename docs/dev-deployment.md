@@ -394,7 +394,9 @@ call pauses the session with `requires_action` until a
 arrives. Configure per-tool or per-toolset via `default_config`/`configs`
 `permission_policy` on the `mcp_toolset`.
 
-**Failure and retry.** Session creation never blocks on MCP connectivity:
+**Failure and retry.** Session creation never blocks on MCP connectivity
+(the `mcp_connection_failed_error` wire shape follows the Anthropic SDK
+types; probe 47 did not capture a live failure frame):
 failures surface as `session.error` events with `retry_status`
 (`retrying` → will retry on the next idle→running transition; `exhausted` →
 retry budget spent, no more dials this session). Retry uses fresh-handle

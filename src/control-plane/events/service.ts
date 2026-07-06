@@ -2292,6 +2292,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
             name: event.name,
             input: event.input,
             evaluated_permission: event.evaluatedPermission,
+            // Probe 47 wire parity: hosted emits null outside subagent threads.
+            session_thread_id: null,
           },
         },
       ],

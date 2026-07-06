@@ -183,6 +183,7 @@ describe("MCP events e2e (plan 0122 §5)", () => {
       name: "echo", // bare name on the wire, not mcp__srv__echo
       input: { text: "hi" },
       evaluated_permission: "allow",
+      session_thread_id: null, // probe 47: hosted emits this field
     });
     expect(use?.id).toEqual(expect.stringMatching(/^sevt_/));
 

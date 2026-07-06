@@ -10,6 +10,17 @@ import type { McpFetch } from "./fetch.ts";
 
 const DEFAULT_OPERATION_TIMEOUT_MS = 60_000;
 
+// Discovery bounds (review 0122-M1, Codex-adv HIGH): the tool list is
+// attacker-influenced input parsed in the shared control plane, so a hostile
+// or broken server must not be able to dictate unbounded work. Exceeding any
+// bound fails the whole connection deterministically (surfaces as the
+// structured mcp_connection_failed_error), never a silent partial register.
+const MAX_DISCOVERED_TOOLS = 256;
+const MAX_TOOL_NAME_LENGTH = 256;
+const MAX_TOOL_DESCRIPTION_LENGTH = 4_096;
+const MAX_TOOL_SCHEMA_BYTES = 64 * 1024;
+const MAX_TOOL_LIST_PAGES = 16;
+
 export interface McpServerDeclaration {
   name: string;
   url: string;
@@ -60,16 +71,7 @@ export class McpConnection {
     );
     try {
       await client.connect(transport, { timeout: timeoutMs });
-      const listed = await client.listTools(undefined, { timeout: timeoutMs });
-      const tools: McpDiscoveredTool[] = listed.tools.map((tool) => ({
-        name: tool.name,
-        ...(tool.description === undefined
-          ? {}
-          : { description: tool.description }),
-        inputSchema: isJsonObject(tool.inputSchema)
-          ? tool.inputSchema
-          : { type: "object" },
-      }));
+      const tools = await discoverTools(client, declaration.name, timeoutMs);
       return new McpConnection(declaration.name, tools, client, timeoutMs);
     } catch (error) {
       await client.close().catch(() => undefined);
@@ -99,4 +101,70 @@ export class McpConnection {
   async close(): Promise<void> {
     await this.client.close().catch(() => undefined);
   }
+}
+
+/** Paginated discovery (review: nextCursor was silently dropped) + bounds. */
+async function discoverTools(
+  client: Client,
+  serverName: string,
+  timeoutMs: number,
+): Promise<McpDiscoveredTool[]> {
+  const tools: McpDiscoveredTool[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
+    const listed = await client.listTools(
+      cursor === undefined ? undefined : { cursor },
+      { timeout: timeoutMs },
+    );
+    for (const tool of listed.tools) {
+      if (tools.length >= MAX_DISCOVERED_TOOLS) {
+        throw discoveryBoundError(
+          serverName,
+          `more than ${MAX_DISCOVERED_TOOLS} tools`,
+        );
+      }
+      if (tool.name.length > MAX_TOOL_NAME_LENGTH) {
+        throw discoveryBoundError(
+          serverName,
+          `tool name over ${MAX_TOOL_NAME_LENGTH} chars`,
+        );
+      }
+      const description = tool.description;
+      if (
+        description !== undefined &&
+        description.length > MAX_TOOL_DESCRIPTION_LENGTH
+      ) {
+        throw discoveryBoundError(
+          serverName,
+          `tool ${tool.name} description over ${MAX_TOOL_DESCRIPTION_LENGTH} chars`,
+        );
+      }
+      const inputSchema = isJsonObject(tool.inputSchema)
+        ? tool.inputSchema
+        : { type: "object" };
+      if (JSON.stringify(inputSchema).length > MAX_TOOL_SCHEMA_BYTES) {
+        throw discoveryBoundError(
+          serverName,
+          `tool ${tool.name} schema over ${MAX_TOOL_SCHEMA_BYTES} bytes`,
+        );
+      }
+      tools.push({
+        name: tool.name,
+        ...(description === undefined ? {} : { description }),
+        inputSchema,
+      });
+    }
+    cursor = listed.nextCursor ?? undefined;
+    if (cursor === undefined) return tools;
+  }
+  throw discoveryBoundError(
+    serverName,
+    `more than ${MAX_TOOL_LIST_PAGES} tools/list pages`,
+  );
+}
+
+function discoveryBoundError(serverName: string, detail: string): Error {
+  return new Error(
+    `MCP server ${serverName} exceeded discovery bounds: ${detail}`,
+  );
 }

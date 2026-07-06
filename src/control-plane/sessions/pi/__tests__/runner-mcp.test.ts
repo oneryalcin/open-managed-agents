@@ -179,3 +179,119 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     expect(names?.has("mcp__srv__echo")).toBe(true);
   });
 });
+
+describe("real-runner integration gaps (review 0122-M1, Sonnet)", () => {
+  it("flushes queued connection failures through the REAL runOnSession at turn start", async () => {
+    // Drives runUserMessage on the real runner: the queued failure must be
+    // yielded (production flush path) before the turn fails at the model
+    // call (no credentials in tests — the flush must not depend on a
+    // successful prompt).
+    runner = mcpRunner({
+      url: "http://127.0.0.1:1/mcp",
+      onConnection: () => undefined,
+    });
+    // Abort the turn as soon as the flushed failure is observed: the flush
+    // happens before the model prompt, so the test never depends on (or
+    // performs) a real model call regardless of ambient credentials.
+    const controller = new AbortController();
+    let failure: unknown;
+    try {
+      for await (const event of runner!.runUserMessage(
+        "wrk_default",
+        "sesn_flush",
+        "hello",
+        { signal: controller.signal },
+      )) {
+        if ((event as { type?: unknown }).type === "oma.mcp_connection_failed") {
+          failure = event;
+          controller.abort();
+          break;
+        }
+      }
+    } catch {
+      // aborted/failed prompt — irrelevant to the flush contract
+    }
+    expect(failure).toMatchObject({
+      mcpServerName: "srv",
+      retryStatus: "retrying",
+    });
+  });
+
+  it("rejects the ambiguous cross-server pi-name pair (a+b__c vs a__b+c)", async () => {
+    const toolNamed = (name: string) => ({
+      name,
+      inputSchema: {},
+      handler: async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }),
+    });
+    fixture = await startMcpFixture([toolNamed("b__c")]);
+    const second = await startMcpFixture([toolNamed("c")]);
+    try {
+      runner = new PiSessionRunner({
+        mcp: {
+          enabled: true,
+          servers: () => [
+            { name: "a", url: fixture!.url },
+            { name: "a__b", url: second.url },
+          ],
+          access: () => ({ enabled: true, permission: "allow" }),
+          fetch: seamFetch,
+        },
+      });
+      await expect(
+        runner.prepareSession("wrk_default", "sesn_ambiguous"),
+      ).rejects.toThrow("MCP tool name collision across servers: mcp__a__b__c");
+    } finally {
+      await second.close();
+    }
+  });
+});
+
+describe("MCP message-end coalescing matcher (review 0122-M1, Sonnet)", () => {
+  const names = new Set(["mcp__srv__echo"]);
+  const messageEnd = (calls: Array<{ id: string; name: string }>) => ({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "calling" },
+        ...calls.map((call) => ({
+          type: "toolCall",
+          id: call.id,
+          name: call.name,
+          arguments: {},
+        })),
+      ],
+    },
+  });
+
+  it("splices the matching message_end out of the queue and lists MCP call ids", async () => {
+    const { takeMessageEndForMcpToolCall } = await import("../runner.ts");
+    const queue: unknown[] = [
+      { type: "agent_start" },
+      messageEnd([
+        { id: "toolu_1", name: "mcp__srv__echo" },
+        { id: "toolu_2", name: "bash" }, // non-MCP call in the same message
+      ]),
+    ];
+    const match = takeMessageEndForMcpToolCall(names, [queue], "toolu_1");
+    expect(match).toBeDefined();
+    expect(match?.suppressedPiToolCallIds).toEqual(["toolu_1"]);
+    expect(queue).toEqual([{ type: "agent_start" }]); // spliced out
+  });
+
+  it("returns undefined when the message_end was already consumed (standalone fallback)", async () => {
+    const { takeMessageEndForMcpToolCall } = await import("../runner.ts");
+    expect(
+      takeMessageEndForMcpToolCall(names, [[{ type: "agent_start" }]], "toolu_1"),
+    ).toBeUndefined();
+  });
+
+  it("does not match toolCalls whose name is not an MCP pi-name (set membership)", async () => {
+    const { takeMessageEndForMcpToolCall } = await import("../runner.ts");
+    const queue: unknown[] = [messageEnd([{ id: "toolu_1", name: "mcp__like__this" }])];
+    expect(takeMessageEndForMcpToolCall(names, [queue], "toolu_1")).toBeUndefined();
+    expect(queue).toHaveLength(1); // untouched
+  });
+});

@@ -91,6 +91,8 @@ interface RuntimeHandle {
   mcpConnections: readonly McpConnection[];
   /** Connect failures queued at build time; flushed at turn start (§4.2). */
   pendingMcpFailures: RuntimeMcpConnectionFailedEvent[];
+  /** Servers whose mid-call failure event already went out on this handle. */
+  mcpFailureEmittedServers: Set<string>;
   emitInternal: ((event: RuntimeInternalEvent) => void) | undefined;
 }
 
@@ -693,6 +695,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           mcpToolNames: mcp.toolNames,
           mcpConnections: mcp.connections,
           pendingMcpFailures: [...mcp.pendingFailures],
+          mcpFailureEmittedServers: new Set(),
           emitInternal: undefined,
         };
         if (this.closed || this.closedSessionIds.has(sessionId)) {
@@ -749,6 +752,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     const toolNames = new Set<string>();
     const pendingFailures: RuntimeMcpConnectionFailedEvent[] = [];
 
+    // Dial concurrently (review 0122-M1: a serial loop let N slow servers
+    // stall the turn for N×timeout while pinning the sandbox); outcomes are
+    // processed in declaration order so failure events stay deterministic.
+    const dialable: Array<{ server: { name: string; url: string }; count: number }> = [];
     for (const server of servers) {
       const count = counts.get(server.name) ?? 0;
       if (count >= maxFailures) continue; // exhausted: no dial, no re-emit
@@ -762,26 +769,42 @@ export class PiSessionRunner implements RuntimeEventRunner {
         });
         continue;
       }
-      let connection: McpConnection;
-      try {
-        connection = await McpConnection.connect(server, {
-          fetch: this.mcpFetch,
-          ...(mcpOpts.operationTimeoutMs === undefined
-            ? {}
-            : { operationTimeoutMs: mcpOpts.operationTimeoutMs }),
-        });
-      } catch (error) {
+      dialable.push({ server, count });
+    }
+    const dialed = await Promise.all(
+      dialable.map(async ({ server, count }) => {
+        try {
+          const connection = await McpConnection.connect(server, {
+            fetch: this.mcpFetch,
+            ...(mcpOpts.operationTimeoutMs === undefined
+              ? {}
+              : { operationTimeoutMs: mcpOpts.operationTimeoutMs }),
+          });
+          return { server, count, connection };
+        } catch (error) {
+          return {
+            server,
+            count,
+            failure: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }),
+    );
+    for (const outcome of dialed) {
+      const { server, count } = outcome;
+      if (!("connection" in outcome) || outcome.connection === undefined) {
         const failures = count + 1;
         counts.set(server.name, failures);
         mcpOpts.onConnection?.("connect_failed");
         pendingFailures.push({
           type: "oma.mcp_connection_failed",
           mcpServerName: server.name,
-          message: error instanceof Error ? error.message : String(error),
+          message: "failure" in outcome ? outcome.failure ?? "connect failed" : "connect failed",
           retryStatus: failures >= maxFailures ? "exhausted" : "retrying",
         });
         continue;
       }
+      const connection = outcome.connection;
       counts.set(server.name, 0);
       mcpOpts.onConnection?.("connected");
       connections.push(connection);
@@ -799,12 +822,24 @@ export class PiSessionRunner implements RuntimeEventRunner {
         ...(mcpOpts.onToolCall === undefined
           ? {}
           : { onToolCall: mcpOpts.onToolCall }),
-        // Mid-call transport failure: reconnect on the next turn via
-        // fresh-handle mechanics. Connect-failure counting stays at dial
-        // time only (plan 0122 §4.6).
-        onTransportFailure: () => {
+        // Mid-call transport failure is connection-class (review 0122-M1,
+        // Codex-adv): count it against the retry budget, surface the
+        // structured mcp_connection_failed_error (once per server per
+        // handle), and reconnect next turn via fresh-handle mechanics.
+        onTransportFailure: (failedServerName, error) => {
+          const failures = (counts.get(failedServerName) ?? 0) + 1;
+          counts.set(failedServerName, failures);
           const handle = this.sessions.get(sessionId);
-          if (handle) handle.closeWhenIdle = true;
+          if (!handle) return;
+          handle.closeWhenIdle = true;
+          if (handle.mcpFailureEmittedServers.has(failedServerName)) return;
+          handle.mcpFailureEmittedServers.add(failedServerName);
+          handle.emitInternal?.({
+            type: "oma.mcp_connection_failed",
+            mcpServerName: failedServerName,
+            message: `MCP call failed mid-turn: ${error.message}`,
+            retryStatus: failures >= maxFailures ? "exhausted" : "retrying",
+          });
         },
       });
       for (const definition of definitions) {
@@ -1101,8 +1136,8 @@ const EMPTY_MCP: PreparedMcp = {
   pendingFailures: [],
 };
 
-/** message_end toolCall blocks whose pi-name is an MCP tool of this handle. */
-function mcpToolCallsInMessage(
+/** message_end toolCall blocks whose pi-name is an MCP tool of this handle. Exported for direct contract tests (review 0122-M1, Sonnet 1). */
+export function mcpToolCallsInMessage(
   mcpToolNames: ReadonlySet<string>,
   event: unknown,
 ): Array<{ toolCallId: string }> {
@@ -1127,8 +1162,8 @@ function mcpToolCallsInMessage(
   return out;
 }
 
-/** MCP-aware variant of takeMessageEndForToolCall (plan 0122 §4.4 step 2). */
-function takeMessageEndForMcpToolCall(
+/** MCP-aware variant of takeMessageEndForToolCall (plan 0122 §4.4 step 2). Exported for direct contract tests. */
+export function takeMessageEndForMcpToolCall(
   mcpToolNames: ReadonlySet<string>,
   eventQueues: unknown[][],
   piToolCallId: string,

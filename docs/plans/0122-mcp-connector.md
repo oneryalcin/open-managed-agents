@@ -306,7 +306,8 @@ Extend `mcpServerArrayField` + a new post-parse cross-check in
   dial time (§4.3).
 
 Existing stored agents predate the cross-check; validation applies at
-create/update only (same posture as every prior validation tightening).
+create time (agents are create-only today — no update endpoint), the same
+posture as every prior validation tightening.
 
 ### 4.2 MCP client manager (`sessions/pi/mcp/client.ts`, new)
 
@@ -688,6 +689,26 @@ clusters, all folded:
 | H — concurrency/abort/disposal/error classes | Opus 6+7, Sonnet 5+6 | §4.2/§4.4/§5: JSON-RPC multiplexing verified before reliance, `executionMode: "parallel"`, parallel-ask test; Pi signal threaded to `callTool`; close-rejection = tool error + terminal result; disposal spy-tests on all five cleanup paths; in-band `isError` vs transport-rejection split (probe 46 committed as evidence) with distinct fixtures. |
 | I — parity-ledger hygiene | Sonnet 2+3+10, Opus 5 | §3.1: spill-to-file and per-environment `allow_mcp_servers` added to the ledger as named deviations/gaps (§8); duplicate-toolset rule relabeled OMA tightening pending probe; probe committed as `scratch/46-mcp-sdk-client-probe.{mjs,md}` with pinned versions. |
 | J — test-rigor smalls | Sonnet 7+8+11, Opus 3 | §4.1/§5: retry tests drive real idle→running transitions; false-positive suppression test; case-sensitivity locks; embedded-userinfo URLs rejected; absent-`tools`-field case explicit; `configs[].name` typo = silently-ignored, locked by test; e2e must use real `createPiSession` (sessionFactory bypass warning). |
+
+**M1 implementation review, 2026-07-07** — Codex (review + adversarial),
+Opus, Sonnet against the full branch diff. 19 findings → 8 clusters, all
+applied; none refuted:
+
+| Cluster | Findings | Disposition |
+|---|---|---|
+| A — discovery hardening | Codex 1, Codex-adv HIGH | client.ts: tools/list pagination cursors followed (page-capped); bounds on tool count (256), name (256), description (4KB), schema bytes (64KB) — exceed → structured connection failure. Bounds tests added; note: the in-process fixture serves one page, so the cursor loop is bounded-by-review + MAX_TOOL_LIST_PAGES, not multi-page-fixture-tested. |
+| B — parallel dials | Codex 2, Opus HIGH | prepareMcp dials via Promise.all with declaration-order outcome processing; N slow servers no longer serialize to N×timeout while pinning the sandbox. |
+| C — mid-call transport semantics | Opus MED, Codex-adv MED, Sonnet 6 | Abort (user interrupt) no longer classified as transport failure (no handle teardown, outcome label `aborted`, asserted); real transport failures now count against the retry budget and emit `mcp_connection_failed_error` once per server per handle. Mid-call-failure e2e through a real model turn remains live-probe territory (closure covered at the bridge boundary). |
+| D — real-runner gaps | Sonnet HIGH 1-3 | Flush-at-turn-start now driven through the REAL runOnSession (abort-after-observation keeps it hermetic vs ambient credentials); coalescing matcher exported + contract-tested (splice, consumed-fallback, set-membership); ambiguous cross-server pair (`a`+`b__c` vs `a__b`+`c`) rejection tested. |
+| E — SSRF hostname path | Opus LOW, Sonnet MED | `localhost` (hostname, not literal) cases force the undici pinned-lookup dispatcher: blocked, seam-reachable, per-resolution re-consult. |
+| F — session_thread_id | Sonnet MED | Emitted (`null`) on agent.mcp_tool_use per probe 47; asserted in e2e. |
+| G — test flakiness | Sonnet MED | Fixture bind-retry on EADDRINUSE for fixed-port recovery test; `closeAllConnections` in fixture teardown (also removed a latent 47s hang from kept-alive sockets). |
+| H — smalls | Sonnet 8-11, Opus LOW-4 | configs-typo resolver test; probe-doc + dev-deployment note that `mcp_connection_failed_error` is SDK-types-verified only (no live failure frame captured); teardown-orphan caveat comment at emitResult; plan create-only wording fixed. |
+
+Accepted as-is: Opus LOW-5 (cap approximations — commented), LOW-6
+(redundant early turn-state). Opus endorsed keeping the deliberate
+publish/persist duplication until after M2 and confirmed M2 readiness
+(byte-exact URLs at the store layer, clean requestInit seam).
 
 **Open questions (for the live hosted probe / implementation):**
 

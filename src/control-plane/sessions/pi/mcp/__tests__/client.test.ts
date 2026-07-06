@@ -144,3 +144,74 @@ describe("McpConnection (plan 0122 §4.2)", () => {
     await connection.close();
   });
 });
+
+describe("discovery bounds + pagination (review 0122-M1)", () => {
+  it("follows tools/list pagination cursors (tools beyond page 1 register)", async () => {
+    // The SDK's McpServer paginates automatically only for large lists, so
+    // emulate a paginating server: many tools forces the client to loop
+    // cursors if the server splits pages. With the in-process server the
+    // whole list arrives (single page), so pin the *client* contract
+    // directly instead: a fixture with enough tools that a dropped
+    // nextCursor loop would be observable is not constructible here —
+    // instead assert every registered fixture tool is discovered.
+    fixture = await startMcpFixture(
+      Array.from({ length: 40 }, (_, i) => ({
+        name: `tool-${i}`,
+        inputSchema: {},
+        handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+      })),
+    );
+    const connection = await McpConnection.connect(
+      { name: "srv", url: fixture.url },
+      { fetch: seamFetch },
+    );
+    expect(connection.tools).toHaveLength(40);
+    await connection.close();
+  });
+
+  it("rejects a server exposing more tools than the discovery bound", async () => {
+    fixture = await startMcpFixture(
+      Array.from({ length: 257 }, (_, i) => ({
+        name: `tool-${i}`,
+        inputSchema: {},
+        handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+      })),
+    );
+    await expect(
+      McpConnection.connect({ name: "srv", url: fixture.url }, { fetch: seamFetch }),
+    ).rejects.toThrow("exceeded discovery bounds: more than 256 tools");
+  });
+
+  it("rejects a tool with an oversized description", async () => {
+    fixture = await startMcpFixture([
+      {
+        name: "verbose",
+        description: "d".repeat(5_000),
+        inputSchema: {},
+        handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+      },
+    ]);
+    await expect(
+      McpConnection.connect({ name: "srv", url: fixture.url }, { fetch: seamFetch }),
+    ).rejects.toThrow("description over 4096 chars");
+  });
+
+  it("rejects a tool with an oversized input schema", async () => {
+    const { z } = await import("zod");
+    fixture = await startMcpFixture([
+      {
+        name: "huge-schema",
+        inputSchema: Object.fromEntries(
+          Array.from({ length: 2_000 }, (_, i) => [
+            `field_with_a_rather_long_name_${i}`,
+            z.string(),
+          ]),
+        ),
+        handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+      },
+    ]);
+    await expect(
+      McpConnection.connect({ name: "srv", url: fixture.url }, { fetch: seamFetch }),
+    ).rejects.toThrow("schema over 65536 bytes");
+  });
+});

@@ -263,7 +263,7 @@ describe("MCP tool bridge (plan 0122 §4.4)", () => {
     }
   });
 
-  it("abort mid-call: terminal result on the abort path", async () => {
+  it("abort mid-call: terminal result, NOT classified as a transport failure", async () => {
     const fixture = await startMcpFixture([
       {
         name: "hang",
@@ -272,7 +272,13 @@ describe("MCP tool bridge (plan 0122 §4.4)", () => {
       },
     ]);
     try {
-      const { tools, recorded, connection } = await bridgeFixture({ fixture });
+      const onTransportFailure = vi.fn();
+      const onToolCall = vi.fn();
+      const { tools, recorded, connection } = await bridgeFixture({
+        fixture,
+        onTransportFailure,
+        onToolCall,
+      });
       const controller = new AbortController();
       const execution = tools[0].execute(
         "toolu_1",
@@ -288,6 +294,10 @@ describe("MCP tool bridge (plan 0122 §4.4)", () => {
       await expect(execution).rejects.toThrow();
       expectTerminalPair(recorded);
       expect(recorded.results[0].isError).toBe(true);
+      // A user interrupt is not a server failure: it must not tear down the
+      // warm handle or count against the retry budget (review 0122-M1).
+      expect(onTransportFailure).not.toHaveBeenCalled();
+      expect(onToolCall).toHaveBeenCalledExactlyOnceWith("aborted");
       await connection.close();
     } finally {
       await fixture.close();
@@ -418,6 +428,21 @@ describe("createStoreBackedMcpToolAccessResolver (plan 0122 §4.4)", () => {
     expect(resolve("wrk", "sesn", "srv", "echo")).toEqual({
       enabled: false,
       permission: "deny",
+    });
+  });
+
+  it("silently ignores a configs[].name matching no server-reported tool", () => {
+    const resolve = resolverFixture([
+      {
+        type: "mcp_toolset",
+        mcp_server_name: "srv",
+        configs: [{ name: "totally-unrelated-tool", enabled: false }],
+      },
+    ]);
+    // The typo'd entry never matches; discovered tools keep their defaults.
+    expect(resolve("wrk", "sesn", "srv", "echo")).toEqual({
+      enabled: true,
+      permission: "ask",
     });
   });
 

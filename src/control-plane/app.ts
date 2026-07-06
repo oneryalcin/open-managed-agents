@@ -585,8 +585,9 @@ export function createDeploymentControlPlane(
       ...(metrics === undefined
         ? {}
         : {
-            onToolCall: (outcome: "ok" | "error" | "denied" | "timeout") =>
-              metrics.mcpToolCalls.inc({ outcome }),
+            onToolCall: (
+              outcome: "ok" | "error" | "denied" | "timeout" | "aborted",
+            ) => metrics.mcpToolCalls.inc({ outcome }),
             onConnection: (event: "connected" | "connect_failed") =>
               metrics.mcpConnections.inc({ event }),
           }),

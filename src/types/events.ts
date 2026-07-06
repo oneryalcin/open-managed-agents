@@ -107,6 +107,8 @@ export interface ManagedAgentsMcpToolUsePayload {
   name: string;
   input: JsonObject;
   evaluated_permission?: "allow" | "ask" | "deny";
+  /** Probe 47: hosted emits this (null outside subagent threads). */
+  session_thread_id: string | null;
 }
 
 export interface ManagedAgentsMcpToolResultPayload {

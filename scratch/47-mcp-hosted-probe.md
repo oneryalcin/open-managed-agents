@@ -57,3 +57,7 @@ text-passthrough mapping.
 
 Two plan dispositions: duplicate-toolset rejection relabeled parity;
 userinfo-URL rejection relabeled deliberate OMA deviation.
+
+**Not captured:** a live `mcp_connection_failed_error` frame — the
+`session.error` shape for connection failures remains verified against SDK
+types only, not a hosted capture.

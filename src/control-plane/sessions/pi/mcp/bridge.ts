@@ -47,7 +47,12 @@ export type McpToolAccessResolver = (
 // unlike the builtin toolset's always_allow.
 const DEFAULT_MCP_ACCESS: McpToolAccess = { enabled: true, permission: "ask" };
 
-export type McpToolCallOutcomeLabel = "ok" | "error" | "denied" | "timeout";
+export type McpToolCallOutcomeLabel =
+  | "ok"
+  | "error"
+  | "denied"
+  | "timeout"
+  | "aborted";
 
 export type McpEmitter = (
   event: RuntimeMcpToolUseEvent | RuntimeMcpToolResultEvent,
@@ -150,6 +155,10 @@ async function executeMcpTool(args: {
     getEmitter: opts.getEmitter,
   });
 
+  // Terminal-result rule caveat: if the handle was already evicted (runtime
+  // loss mid-flight), getEmitter() is undefined and the result cannot be
+  // persisted — same recovery contract as builtin tools (the lost-runtime
+  // terminalization path synthesizes agent.mcp_tool_result later).
   const emitResult = (content: ManagedAgentsContentBlock[], isError: boolean) => {
     opts.getEmitter()?.({
       type: "oma.mcp_tool_result",
@@ -194,17 +203,23 @@ async function executeMcpTool(args: {
   }
 
   // 4: the call. In-band failures resolve with isError (probe 46); a
-  // rejection here is transport-class and also marks the connection failed.
+  // rejection here is transport-class and also marks the connection failed —
+  // UNLESS the Pi signal aborted (user interrupt): that is not a server
+  // failure and must not tear down the warm handle or hit the retry budget
+  // (review 0122-M1, Opus finding 2).
   let outcome;
   try {
     outcome = await opts.connection.callTool(bareName, input, signal);
   } catch (error) {
     const err = toError(error);
-    opts.onTransportFailure?.(opts.connection.serverName, err);
+    const aborted = signal?.aborted === true || err.name === "AbortError";
+    if (!aborted) {
+      opts.onTransportFailure?.(opts.connection.serverName, err);
+    }
     const timedOut = (error as { code?: unknown }).code === -32001; // McpError RequestTimeout
     failWith(
       `MCP tool ${bareName} failed: ${err.message}`,
-      timedOut ? "timeout" : "error",
+      aborted ? "aborted" : timedOut ? "timeout" : "error",
     );
     throw err; // unreachable
   }
