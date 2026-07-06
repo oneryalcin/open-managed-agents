@@ -66,7 +66,11 @@ console is static and secret-free; all privileged actions require the admin key.
 Add static serving to the app assembly. **Mount at `/console`** (not `/`) so it
 never shadows the API routes and the root stays free for a future landing/redirect.
 
-- Serve `ui/managed-agents-console/**` as static files: `GET /console` →
+- Serve `ui/managed-agents-console/**` as static files: `GET /console` must
+  redirect to `/console/` (or the HTML must inject `<base href="/console/">`);
+  do **not** just return `index.html` at `/console`, because the existing
+  relative asset URLs (`src/api.js`, `src/app.jsx`, `src/console.css`) would
+  resolve as `/src/...` instead of `/console/src/...`. `GET /console/` →
   `index.html`; `GET /console/src/*.jsx|.js|.css` → the asset with the right
   content-type (`.jsx` → `text/babel`, matching `serve.mjs`).
 - **Reuse serve.mjs's exact safety posture:** normalize + decode the path, resolve
@@ -169,7 +173,9 @@ Rules:
 ## 6. Tests
 
 Backend-testable (vitest, our wheelhouse):
-- **Static serving:** `GET /console` → 200 `text/html`; `/console/src/api.js` →
+- **Static serving:** `GET /console` → redirect to `/console/` (or returns
+  HTML with an explicit base href); `/console/` → 200 `text/html`;
+  `/console/src/api.js` →
   200 `text/javascript`; `.jsx` → `text/babel`; unknown → 404; **`../` traversal
   → 404/blocked** (mutation-check the guard); `cache-control: no-store` present.
 - **Console-serving does not shadow the API:** `/v1/*` and `/admin/*` still route
