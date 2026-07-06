@@ -1,5 +1,8 @@
 import { PiSessionRunner } from "./sessions/pi/runner.ts";
-import type { EgressBundleResolver } from "./sessions/pi/sandbox/docker.ts";
+import type {
+  EgressBundleResolver,
+  EgressSidecarImageConfig,
+} from "./sessions/pi/sandbox/docker.ts";
 import {
   parseSandboxProviderSelection,
   resolveSandboxProviderFactory,
@@ -45,7 +48,7 @@ export interface DeploymentRuntimeConfig {
    * `resolveEgressBundle` closure is bound later, at runner construction —
    * it needs the stores, which env parsing does not have.
    */
-  egress?: { sidecarImage: string; sidecarRepoMount?: string };
+  egress?: EgressSidecarImageConfig;
 }
 
 type PiSessionRunnerOptions = NonNullable<
@@ -258,7 +261,7 @@ function operationTimeoutMs(
 // file's idiom) partially-applied env is a loud startup error, not a warning.
 function egressConfig(
   env: DeploymentRuntimeEnv,
-): { sidecarImage: string; sidecarRepoMount?: string } | undefined {
+): EgressSidecarImageConfig | undefined {
   const enabled = parseBoolean(env.OMA_ENABLE_EGRESS, {
     defaultValue: false,
     name: "OMA_ENABLE_EGRESS",
