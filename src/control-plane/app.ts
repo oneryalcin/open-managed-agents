@@ -1,5 +1,8 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { createAdminAuth, loadAdminKey, type AdminAuth } from "./admin/auth.ts";
+import { adminRoutes } from "./admin/routes.ts";
+import { DefaultAdminService, type AdminService } from "./admin/service.ts";
 import { agentsRoutes } from "./agents/routes.ts";
 import { DefaultAgentService } from "./agents/service.ts";
 import { SqliteAgentStore } from "./agents/store.ts";
@@ -84,6 +87,10 @@ export interface ControlPlaneAuth {
 }
 
 export interface ControlPlaneServices {
+  admin?: {
+    service: AdminService;
+    auth: AdminAuth;
+  };
   agents: AgentService;
   environments: EnvironmentService;
   files?: FileService;
@@ -111,6 +118,8 @@ export type DeploymentAuthMode = "api-key" | "disabled";
 
 export interface DeploymentAuthEnv {
   OMA_AUTH_MODE?: string;
+  OMA_ADMIN_KEY?: string;
+  OMA_ADMIN_KEY_FILE?: string;
 }
 
 export type DeploymentControlPlaneEnv =
@@ -142,12 +151,18 @@ export function parseDeploymentAuthMode(
 }
 
 export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppEnv> {
+  if (services.admin && !services.auth) {
+    throw new Error("Admin API requires workspace authentication to be enabled");
+  }
   const app = new Hono<AppEnv>();
   const defaultBodyLimit = bodyLimit({
     maxSize: MAX_REQUEST_BODY_BYTES,
     onError: (c) => {
       const err = requestTooLarge();
-      return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+      return withAdminNoStore(
+        c.req.path,
+        jsonError(toApiErrorBody(err, c.get("requestId")), err.status),
+      );
     },
   });
 
@@ -175,6 +190,28 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
         return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
       }
       c.set("workspaceId", workspaceId);
+      await next();
+    });
+  }
+
+  if (services.admin) {
+    const adminAuth = services.admin.auth;
+    app.use("*", async (c, next) => {
+      if (!isAdminRoute(c.req.path)) {
+        await next();
+        return;
+      }
+      c.header("cache-control", "no-store");
+      const key = c.req.header("x-admin-key");
+      if (key === undefined || !adminAuth.verify(key)) {
+        const err = authenticationFailed();
+        const response = jsonError(
+          toApiErrorBody(err, c.get("requestId")),
+          err.status,
+        );
+        response.headers.set("cache-control", "no-store");
+        return response;
+      }
       await next();
     });
   }
@@ -214,18 +251,27 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     "/v1/sessions/:sessionId/events",
     sessionEventsRoutes(services.sessionEvents, services.admission),
   );
+  if (services.admin) {
+    app.route("/admin", adminRoutes(services.admin.service));
+  }
 
   app.notFound((c) => {
     const err = new ApiError(404, "not_found_error", "Route not found");
-    return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+    return withAdminNoStore(
+      c.req.path,
+      jsonError(toApiErrorBody(err, c.get("requestId")), err.status),
+    );
   });
 
   app.onError((error, c) => {
     const err = ensureApiError(error);
-    return jsonError(
-      toApiErrorBody(err, c.get("requestId")),
-      err.status,
-      err.retryAfterSeconds,
+    return withAdminNoStore(
+      c.req.path,
+      jsonError(
+        toApiErrorBody(err, c.get("requestId")),
+        err.status,
+        err.retryAfterSeconds,
+      ),
     );
   });
 
@@ -256,6 +302,7 @@ export function createDeploymentControlPlane(
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
   const admission = createAdmissionLimits(parseAdmissionLimitsFromEnv(env));
+  const adminKey = loadAdminKey(env);
   const stores = createDeploymentStoresFromEnv(env);
   if (authMode === "api-key" && stores.mode !== "durable") {
     stores.close();
@@ -277,6 +324,20 @@ export function createDeploymentControlPlane(
       "A secrets master key (OMA_MASTER_KEY/OMA_MASTER_KEY_FILE) requires OMA_AUTH_MODE=api-key: " +
         "without it the /v1/secrets API is unauthenticated and resolves to wrk_default, so anyone " +
         "reaching the server could read metadata and overwrite the credentials used for egress injection.",
+    );
+  }
+  if (adminKey !== undefined && stores.mode !== "durable") {
+    stores.close();
+    throw new Error(
+      "OMA_ADMIN_KEY/OMA_ADMIN_KEY_FILE requires durable deployment storage: set OMA_SQLITE_PATH and OMA_FILE_STORAGE_ROOT. " +
+        "In-memory admin management would not survive restart.",
+    );
+  }
+  if (adminKey !== undefined && authMode !== "api-key") {
+    stores.close();
+    throw new Error(
+      "OMA_ADMIN_KEY/OMA_ADMIN_KEY_FILE requires OMA_AUTH_MODE=api-key: " +
+        "the admin API mints workspace keys for /v1 routes, so workspace authentication must be enabled.",
     );
   }
   const broadcaster = new SessionEventBroadcaster(stores.events);
@@ -320,6 +381,14 @@ export function createDeploymentControlPlane(
   );
   sessionEvents.recoverAllAbandonedRuntimeTurns();
   const app = createControlPlaneApp({
+    ...(adminKey === undefined
+      ? {}
+      : {
+          admin: {
+            service: new DefaultAdminService(stores.workspaces),
+            auth: createAdminAuth(adminKey),
+          },
+        }),
     ...(authMode === "api-key"
       ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
       : {}),
@@ -521,6 +590,17 @@ function isManagedAgentsRoute(path: string): boolean {
     "/v1/secrets",
     "/v1/sessions",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function isAdminRoute(path: string): boolean {
+  return path === "/admin" || path.startsWith("/admin/");
+}
+
+function withAdminNoStore(path: string, response: Response): Response {
+  if (isAdminRoute(path)) {
+    response.headers.set("cache-control", "no-store");
+  }
+  return response;
 }
 
 function hasRequiredBeta(path: string, betaFeatures: Set<string>): boolean {
