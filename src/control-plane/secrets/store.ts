@@ -285,8 +285,15 @@ export class SqliteSecretsStore implements SecretsStore {
     return kekIdFor(this.masterKey);
   }
 
-  close(): void {
+  // Zero the in-process master key without closing the db — for durable
+  // deployments where the db is shared and closed once elsewhere, so close()
+  // is skipped but the key must still be scrubbed on shutdown.
+  scrubMasterKey(): void {
     this.masterKey.fill(0);
+  }
+
+  close(): void {
+    this.scrubMasterKey();
     this.db.close();
   }
 }
