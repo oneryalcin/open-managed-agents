@@ -81,12 +81,19 @@ content redaction (deferred with rationale, §3.4 R3).
   (`admission.ts:82-119`) keeps its total **private**; a `get total()`
   accessor is needed for the SSE gauge. The gauge instance is reachable from
   the deployment assembly (`app.ts:113,323`).
-- **Turn lifecycle** (for outcome/duration metrics): closure happens at
-  **three sites** in `events/service.ts` — `closeRuntimeTurn*` (~1674/1699,
-  reason `completed`), `closePendingRuntimeTurnsForSession` (~807, reasons
-  `archived`/`deleted`), `terminalizeAbandonedRuntimeTurn` (~1040, reason
-  `terminalized`) — plus `interrupted`. No timestamp exists on
-  `RuntimePrompt` (~93-99), so durations need new (small) state.
+- **Turn lifecycle** (for outcome/duration metrics): `closedTurns` is
+  constructed at **nine** sites in `events/service.ts` (rg: 551, 626, 676,
+  834, 1061, 1463, 1478, 1684, 1732 — the earlier "three sites" count was
+  three conceptual close *groups*, not call sites), all flowing into
+  `EventStoreRuntimeChanges.closedTurns`, which the store applies **inside
+  a transaction** (`store.ts:869` via `applyRuntimeChanges`). Instrument at
+  a **single post-commit chokepoint**: record from `changes.closedTurns`
+  after the service's `appendBatchWithRuntimeChanges*` call returns
+  successfully (funnel through one service helper) — never per construction
+  site, and never inside the store transaction (metrics must not be able to
+  alter commit semantics). Implementation must re-audit sites with `rg`,
+  not trust this prose. No timestamp exists on `RuntimePrompt` (~93-99), so
+  durations need new (small) state.
 - **HTTP middleware ordering is safe for metrics** (verified against Hono's
   `compose()`): a first-registered middleware that awaits `next()` and reads
   `c.res.status` sees the final status for onError-handled, notFound, and
@@ -193,7 +200,7 @@ label with tenant cardinality requires a plan amendment):**
 | `oma_http_request_duration_seconds` | histogram | `route_class` | HTTP middleware |
 | `oma_sessions_active` | gauge (scrape-time) | — | **new** unscoped count + partial index (below) |
 | `oma_runtime_turns_pending` | gauge (scrape-time) | — | **new** unscoped count (`pending_runtime_turns` is bounded by in-flight work; no index needed) |
-| `oma_runtime_turns_total` | counter | `outcome` — mapped from close reasons: `completed`→completed, `interrupted`→interrupted, `terminalized`→abandoned, `archived`/`deleted`→**not counted** (session lifecycle, not turn outcome) | the three close sites (§2) |
+| `oma_runtime_turns_total` | counter | `outcome` — mapped from close reasons: `completed`→completed, `interrupted`→interrupted, `terminalized`→abandoned, `archived`/`deleted`→**not counted** (session lifecycle, not turn outcome) | post-commit chokepoint (§2) |
 | `oma_runtime_turn_duration_seconds` | histogram | — | accept-time map (below), observed on `completed` only |
 | `oma_admission_rejections_total` | counter | `limit` (sessions/turns/uploads/streams), `status` (429/529) | admission checks |
 | `oma_sse_streams_active` | gauge | — | `InFlightGauge` + new `get total()` |
@@ -209,7 +216,8 @@ label with tenant cardinality requires a plan amendment):**
   over an in-memory gauge because counters drift across crash/recovery
   paths; the DB is the truth.
 - **Turn durations**: a `Map<turnId, acceptedAtMs>` populated where the
-  prompt is accepted, read+deleted at the close sites — small new state,
+  prompt is accepted, read+deleted at the post-commit chokepoint (§2) —
+  small new state,
   honestly labeled as such (the earlier "no new plumbing" claim was wrong,
   §9 Sonnet M4). Entries for turns closed by session archive/delete are
   dropped without observation; the map cannot grow unbounded because every
@@ -298,9 +306,15 @@ deliberately verbatim under R3 with the above recorded.
   (sees final statuses — verified, §2); endpoints register before
   `notFound`. Deployment assembly wires checks, token, and scrape-time
   collectors; in-memory test assemblies pass nothing and see no change.
+- **Exposure mode is resolved at deployment assembly** from
+  `isLoopbackHost(env.OMA_HOST)` — the same source of truth the transport
+  gate uses (`app.ts:379`) and the same default `main.ts:78` binds with —
+  and passed in as resolved config. Never inferred per-request from headers
+  or socket data (spoofable; wrong behind proxies).
 - Instrumentation: admission rejections at the existing check sites; turn
-  outcomes at the three close sites + accept-time map; sandbox counters at
-  the verified provider chokepoints; SSE gauge via `get total()`.
+  outcomes at the post-commit chokepoint (§2) + accept-time map; sandbox
+  counters at the verified provider chokepoints; SSE gauge via
+  `get total()`.
 - compose healthcheck stanza (§3.1). Store changes: two unscoped COUNT
   statements + the partial index (schema migration follows the existing
   store-init pattern).
@@ -452,3 +466,20 @@ places; one dissent is recorded.
   `version` disclosure accepted and documented.
 - **Buckets (Opus §7-Q2) — ACCEPTED**: turns extended `…900, 1800, 3600` +
   sub-second `0.25`.
+
+**Post-revision second opinion (pre-C1 go, 2026-07-06) — three points, all
+ACCEPTED:**
+
+- **Exposure plumbing must be explicit**: metrics exposure mode resolved at
+  deployment assembly from `env.OMA_HOST` (matching the existing transport
+  gate + `main.ts` default) and passed in as config — never inferred from
+  request headers or socket data. Folded into §3.5.
+- **No metric side effects inside the store transaction**:
+  `applyRuntimeChanges` runs inside `withTransaction`; turn metrics observe
+  `changes.closedTurns` at a single service-level chokepoint **after** the
+  append succeeds. Folded into §2/§3.2/§3.5.
+- **"Three close sites" was wrong** — supersedes the count in the factual-
+  corrections bullet above. `rg` shows **nine** `closedTurns` construction
+  sites in `events/service.ts`; "three" was conceptual close groups. The
+  chokepoint design makes the count irrelevant to correctness, but the
+  implementation must audit sites with `rg`, not trust plan prose.
