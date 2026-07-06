@@ -391,3 +391,51 @@ Skills, MCP, repo mounts (later capability slices). A full operator secrets
 management UI. Response redaction (ADR 0016 §6, deferred). Multi-provider egress
 beyond docker-local (microsandbox keeps its no-secret posture, #130). Rotating a
 live session's secrets mid-session (bundle is resolved once at launch, 0117d).
+
+## 9. Review round (four reviewers, 2026-07-06)
+
+Ran Codex review, Codex adversarial-review, an Opus adversarial-security pass,
+and a Sonnet thoroughness pass against the branch. Opus and Sonnet both
+verdicted **ship**; the two Codex lanes surfaced two real issues, both fixed in
+`e34974e`:
+
+- **HIGH (Codex adversarial) — unauthenticated secrets API.** A configured
+  master key with `OMA_AUTH_MODE` unset (defaults `disabled`) left `/v1/secrets`
+  open on `wrk_default`. Fixed: `createDeploymentControlPlane` refuses to boot
+  when a secrets store exists unless auth mode is `api-key` (secrets ⇒ durable +
+  api-key, the correct production invariant). Regression tests added.
+- **P2 (Codex review; Sonnet #1 same class) — egress silently dropped for
+  file-resource sessions.** `prepareSession` builds the sandbox before
+  `store.create` inserts the row, so the resolver misses the environment and the
+  boundary vanishes (fail-closed — no leak — but silent). Interim fix:
+  fail-closed rejection of egress + file resources at session create, with
+  cross-referencing comments. **The proper fix is deferred below.**
+
+### Deferred follow-ups (no Linear access from the authoring session — track these)
+
+1. **Proper egress + file-resources support.** Reorder so the session row is
+   persisted before `prepareSession` (or thread the resolved bundle through the
+   prepare path) without breaking the idempotency-transactional
+   `createAndCompleteIdempotency` create. Then lift the interim rejection in
+   `DefaultSessionService.assertEgressHonorable`.
+2. **Crash-orphaned secret bundle at-rest window (Opus low, 0117d scope).** The
+   0600 resolved-secret bundle is unlinked at sidecar readiness, but a crash
+   between write and readiness leaves it until the startup sweep — which reuses
+   `reapStaleContainersOlderThanMs` (default 24h). Decouple the egress temp-root
+   sweep to a short/zero threshold, independent of container reaping.
+3. **Master key not scrubbed on durable shutdown (Sonnet low).** Durable
+   `close()` skips `secrets.close()` (to avoid double-closing the shared db),
+   which also skips the `masterKey.fill(0)` scrub. Add a key-scrub that does not
+   close the shared connection. Low impact (`process.exit` follows immediately).
+4. **Three same-named `egress` option types (Sonnet low).**
+   `DeploymentRuntimeConfig.egress`, `SandboxProviderSelectionResolverOptions.egress`,
+   and `DockerSandboxEgressFactoryOptions` — consider a shared named base for
+   grep-ability.
+
+### Deliberate, not changed
+
+- **`/v1/secrets` returns 201/204** (not the codebase's uniform 200). Sonnet #2
+  flagged the divergence; kept because the plan scopes secrets as OMA-minimal
+  (not hosted-wire-compat) and 201/204 are the correct REST codes.
+- **`OMA_MASTER_KEY=""` fails startup** (Opus low). Intentional fail-fast — an
+  empty key is malformed, not "unset". Worth a deployment-doc note only.
