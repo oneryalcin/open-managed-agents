@@ -56,6 +56,13 @@ CREATE TABLE IF NOT EXISTS pending_runtime_turns (
   terminalized_at TEXT,
   PRIMARY KEY (workspace_id, session_id, turn_id)
 );
+-- Closed turns are retained as history (UPDATE, not DELETE), so live-turn
+-- counts need a partial index or every /metrics scrape and /health check
+-- scans all history (0121 C2 review, Codex-adv HIGH). Serves both the
+-- workspace-scoped and unscoped counts.
+CREATE INDEX IF NOT EXISTS idx_runtime_turns_live
+ON pending_runtime_turns (workspace_id)
+WHERE state NOT IN ('completed', 'terminalized');
 CREATE TABLE IF NOT EXISTS pending_runtime_actions (
   workspace_id TEXT NOT NULL,
   session_id TEXT NOT NULL,

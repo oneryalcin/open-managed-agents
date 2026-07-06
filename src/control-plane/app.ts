@@ -412,7 +412,10 @@ export function createDeploymentControlPlane(
   // as data. Never inferred per-request from headers or socket info. The
   // `?? "1"` is load-bearing: a bare parse would default the flag OFF.
   const metricsEnabled = parseBooleanFlag(env.OMA_METRICS ?? "1", "OMA_METRICS");
-  const metricsToken = loadMetricsToken(env);
+  // Token is loaded only when the kill switch is on: OMA_METRICS=0 must be
+  // able to recover a deployment whose metrics-secret config is broken
+  // (missing token file, both variants set) — C2 review, Codex P2.
+  const metricsToken = metricsEnabled ? loadMetricsToken(env) : undefined;
   const metricsServed =
     metricsEnabled && (metricsToken !== undefined || isLoopbackHost(env.OMA_HOST));
   const metrics = metricsServed ? createControlPlaneMetrics() : undefined;
@@ -648,10 +651,16 @@ export function createDeploymentControlPlane(
           stores.mode === "durable"
             ? () => {
                 stores.sessions.countAllActive();
+                // A configured object root that cannot be statfs'd (deleted,
+                // unmounted, permission-broken) is a FAILED check, not a
+                // silently-omitted field — C2 review, Codex-adv MEDIUM.
                 const free =
                   env.OMA_FILE_STORAGE_ROOT === undefined
                     ? undefined
                     : storageFreeBytes(env.OMA_FILE_STORAGE_ROOT);
+                if (env.OMA_FILE_STORAGE_ROOT !== undefined && free === undefined) {
+                  return { status: "failed" as const };
+                }
                 return {
                   status: "ok" as const,
                   ...(free === undefined ? {} : { free_bytes: free }),

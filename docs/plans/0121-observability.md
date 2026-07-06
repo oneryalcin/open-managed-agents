@@ -199,7 +199,7 @@ label with tenant cardinality requires a plan amendment):**
 | `oma_http_requests_total` | counter | `route_class` (v1/admin/console/health/metrics/other), `method` (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS/**other**), `status` | HTTP middleware |
 | `oma_http_request_duration_seconds` | histogram | `route_class` | HTTP middleware |
 | `oma_sessions_active` | gauge (scrape-time) | — | **new** unscoped count + partial index (below) |
-| `oma_runtime_turns_pending` | gauge (scrape-time) | — | **new** unscoped count (`pending_runtime_turns` is bounded by in-flight work; no index needed) |
+| `oma_runtime_turns_pending` | gauge (scrape-time) | — | **new** unscoped count + partial index (the "bounded by in-flight work; no index needed" claim was WRONG — closed turns are retained as history via UPDATE, so the count was O(history); §9 C2 review, Codex-adv HIGH) |
 | `oma_runtime_turns_total` | counter | `outcome` — mapped from close reasons: `completed`→completed, `interrupted`→interrupted, `terminalized`→abandoned, `archived`/`deleted`→**not counted** (session lifecycle, not turn outcome) | post-commit chokepoint (§2) |
 | `oma_runtime_turn_duration_seconds` | histogram | — | accept-time map (below), observed on `completed` only |
 | `oma_admission_rejections_total` | counter | `limit` (sessions/turns/uploads/streams), `status` (429/529) | admission checks |
@@ -527,3 +527,49 @@ fixed in the follow-up commit:**
 - **`monkey` over-redaction / bare-base64url residual (Sonnet L / Opus L) —
   NO CHANGE**: fail-safe by design / consciously accepted, documented in
   code.
+
+**C2 implementation review (post-6a77883, 2026-07-06; Codex + Codex-adv +
+Opus + Sonnet). No shipping blocker in the endpoints/registry; one factual
+claim from THIS PLAN invalidated; all accepted and fixed in the follow-up
+commit:**
+
+- **O(history) live-turn count (Codex-adv HIGH) — ACCEPTED; plan corrected.**
+  §3.2's "bounded by in-flight work; no index needed" was wrong — turns are
+  closed by UPDATE and retained as history, so every scrape and health
+  check scanned the full turn table (EXPLAIN-verified SCAN). Fixed with
+  partial index `idx_runtime_turns_live (workspace_id) WHERE state NOT IN
+  ('completed','terminalized')` — serves both the unscoped gauge count and
+  the workspace-scoped admission count — plus an EXPLAIN regression test
+  for both query plans.
+- **statfs failure kept /health green (Codex-adv M) — ACCEPTED**: a
+  configured object root that cannot be statfs'd now fails the storage
+  check (503); low free space still never gates. Docs updated.
+- **Kill switch validated token config (Codex P2) — ACCEPTED**:
+  `OMA_METRICS=0` now short-circuits token loading so it can recover a
+  deployment with broken metrics-secret config; test pins boot + 404 with
+  a nonexistent token file.
+- **Literal NUL byte in metrics.ts (Codex P3) — ACCEPTED**: `join(" ")`
+  spelled as an escape; the file was genuinely classified binary by
+  git/file/grep. (Sonnet attributed the misdetection to em-dashes —
+  incorrect; the NUL was the trigger, `file` reports text after the fix.)
+- **Turn-outcome/duration metrics untested end-to-end (Opus M + Sonnet M,
+  independent) — ACCEPTED**: committed test drives all five close reasons
+  through a real plane and asserts completed/interrupted/abandoned counts,
+  archived/deleted not counted, duration observed for completed only, and
+  the pending gauge at 5 mid-flight (kills the constant-collector mutant).
+  Outcome-map mutation-checked (terminalized→interrupted mutant killed).
+- **Sandbox counters untested (Opus L) — ACCEPTED**: runner-level tests for
+  created→disposed balance and factory-throw→error (never created).
+- **Zero-only gauge assertions / OMA_METRICS=0+token untested (Opus L/INFO)
+  — ACCEPTED**: InFlightGauge total acquire/release test; kill-switch
+  recovery test covers the 0+token cell.
+- **Coordinator foreign-savepoint caveat (Opus L) — VERIFIED CLEAN**: the
+  durable session coordinator's cross-store delete uses
+  `EventStore.withTransaction` itself as the outer frame, so txDepth covers
+  it; no code path today nests EventStore under a foreign savepoint. The
+  documented overcount remains theoretical.
+- **Rollback-drops-all-pending sibling undercount (Opus L) — ACCEPTED AS
+  DOCUMENTED**: undercount is the safe direction; on record here.
+- **Event-loop-delay collector reset side effect / three-not-two gauges
+  (Opus INFO / Sonnet L) — NO CHANGE**: single-scraper single-node scope;
+  wording nuance.

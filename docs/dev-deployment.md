@@ -268,9 +268,12 @@ otherwise:
 ```
 
 What readiness does **not** prove: the storage check shows the DB is
-*readable*, not writable; `free_bytes` (statfs on the file-storage root) is
-reported but never gates a 503 — a disk threshold would flap the single
+*readable*, not writable. `free_bytes` (statfs on the file-storage root)
+never gates a 503 on *low space* — a disk threshold would flap the single
 node and drive compose restart loops, so alert on it instead (table below).
+A root that cannot be statfs'd at all (deleted, unmounted,
+permission-broken) **does** fail the check: that's an absent store, not a
+threshold.
 In-memory deployments report `"mode": "in-memory"` rather than lying about
 durability. The shipped `docker-compose.yml` healthcheck probes `/health`
 with a node one-liner (the image has no curl/wget).

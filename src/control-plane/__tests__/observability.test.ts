@@ -10,6 +10,7 @@ import {
   type DeploymentControlPlane,
   type DeploymentControlPlaneEnv,
 } from "../app.ts";
+import { InFlightGauge } from "../admission.ts";
 import { EventStore } from "../events/store.ts";
 import type { EventStoreRuntimeChanges } from "../events/types.ts";
 import { MANAGED_AGENTS_BETA } from "./helpers.ts";
@@ -410,6 +411,121 @@ describe("gauges and admission counters", () => {
   });
 });
 
+describe("turn outcome metrics (post-commit chokepoint, end-to-end)", () => {
+  const now = new Date().toISOString();
+  const acceptTurn = (turnId: string): EventStoreRuntimeChanges => ({
+    acceptedTurns: [
+      {
+        workspaceId: WORKSPACE_ID,
+        sessionId: "sesn_outcomes",
+        turnId,
+        ownerId: "owner_outcomes",
+        ownerGeneration: 1,
+        leaseExpiresAt: now,
+        triggerEventIds: ["sevt_trigger"],
+        now,
+      },
+    ],
+  });
+  const closeTurn = (
+    turnId: string,
+    reason: "completed" | "interrupted" | "terminalized" | "archived" | "deleted",
+  ): EventStoreRuntimeChanges => ({
+    closedTurns: [
+      {
+        workspaceId: WORKSPACE_ID,
+        sessionId: "sesn_outcomes",
+        turnId,
+        reason,
+        state: reason === "completed" ? "completed" : "terminalized",
+        now,
+      },
+    ],
+  });
+
+  it("maps close reasons to outcomes; archived/deleted are not counted", async () => {
+    const plane = makePlane();
+    const reasons = [
+      "completed",
+      "interrupted",
+      "terminalized",
+      "archived",
+      "deleted",
+    ] as const;
+    for (const [index] of reasons.entries()) {
+      plane.stores.events.appendBatchWithRuntimeChanges([], acceptTurn(`rtun_o_${index}`));
+    }
+
+    // All five accepted and none closed: the pending gauge shows real state
+    // (kills a constant-returning-collector mutant).
+    const pending = await (await plane.app.request("/metrics")).text();
+    expect(sampleValue(pending, "oma_runtime_turns_pending")).toBe(5);
+
+    for (const [index, reason] of reasons.entries()) {
+      plane.stores.events.appendBatchWithRuntimeChanges(
+        [],
+        closeTurn(`rtun_o_${index}`, reason),
+      );
+    }
+    const exposition = await (await plane.app.request("/metrics")).text();
+    expect(
+      sampleValue(exposition, "oma_runtime_turns_total", { outcome: "completed" }),
+    ).toBe(1);
+    expect(
+      sampleValue(exposition, "oma_runtime_turns_total", { outcome: "interrupted" }),
+    ).toBe(1);
+    expect(
+      sampleValue(exposition, "oma_runtime_turns_total", { outcome: "abandoned" }),
+    ).toBe(1);
+    // archived/deleted must not count as any outcome — 3 closures total.
+    expect(
+      sampleValue(exposition, "oma_runtime_turns_total", { outcome: "other" }),
+    ).toBeUndefined();
+    // Duration observed for the completed turn only.
+    expect(
+      sampleValue(exposition, "oma_runtime_turn_duration_seconds_count"),
+    ).toBe(1);
+    expect(sampleValue(exposition, "oma_runtime_turns_pending")).toBe(0);
+    plane.stores.close();
+  });
+});
+
+describe("in-flight gauge total", () => {
+  it("tracks acquire/release (feeds oma_sse_streams_active)", () => {
+    const gauge = new InFlightGauge("SSE stream");
+    const releaseA = gauge.acquire(WORKSPACE_ID);
+    const releaseB = gauge.acquire("wrk_other");
+    expect(gauge.totalInFlight).toBe(2);
+    releaseA();
+    releaseA(); // idempotent
+    expect(gauge.totalInFlight).toBe(1);
+    releaseB();
+    expect(gauge.totalInFlight).toBe(0);
+  });
+});
+
+describe("health degradation and kill-switch recovery", () => {
+  it("fails the storage check when the object root cannot be statfs'd", async () => {
+    const plane = makeDurablePlane();
+    rmSync(join(plane.root, "objects"), { recursive: true, force: true });
+    const res = await plane.app.request("/health");
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { checks: { storage: { status: string } } };
+    expect(body.checks.storage.status).toBe("failed");
+    plane.stores.close();
+  });
+
+  it("OMA_METRICS=0 boots despite broken token config (kill-switch recovery)", async () => {
+    const plane = makePlane({
+      OMA_METRICS: "0",
+      OMA_METRICS_TOKEN_FILE: "/nonexistent/metrics-token",
+    });
+    expect((await plane.app.request("/metrics")).status).toBe(404);
+    expect((await plane.app.request("/health")).status).toBe(200);
+    plane.stores.close();
+  });
+});
+
 describe("schema", () => {
   it("creates the partial live-sessions index", () => {
     const plane = makeDurablePlane();
@@ -422,5 +538,27 @@ describe("schema", () => {
       .get() as { sql: string } | undefined;
     db.close();
     expect(row?.sql).toContain("WHERE archived_at IS NULL");
+  });
+
+  it("serves both live-turn counts from the partial index, not a table scan", () => {
+    // Turns are closed by UPDATE and retained as history; without the
+    // partial index every /metrics scrape and /health check is O(history)
+    // (C2 review, Codex-adv HIGH — EXPLAIN-verified SCAN before the fix).
+    const plane = makeDurablePlane();
+    plane.stores.close();
+    const db = new DatabaseSync(join(plane.root, "oma.sqlite"));
+    const plan = (sql: string): string =>
+      (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>)
+        .map((row) => row.detail)
+        .join(" | ");
+    const unscoped = plan(
+      `SELECT COUNT(*) FROM pending_runtime_turns WHERE state NOT IN ('completed', 'terminalized')`,
+    );
+    const scoped = plan(
+      `SELECT COUNT(*) FROM pending_runtime_turns WHERE workspace_id = 'wrk_x' AND state NOT IN ('completed', 'terminalized')`,
+    );
+    db.close();
+    expect(unscoped).toContain("idx_runtime_turns_live");
+    expect(scoped).toContain("idx_runtime_turns_live");
   });
 });

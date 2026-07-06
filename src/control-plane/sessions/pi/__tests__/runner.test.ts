@@ -1309,3 +1309,37 @@ class FakeSandboxProvider implements SandboxProvider {
     this.disposed = true;
   }
 }
+
+describe("sandbox lifecycle telemetry (0121 C2)", () => {
+  it("fires created then disposed through onSandboxEvent", async () => {
+    const factory = new FakeSessionFactory();
+    const events: string[] = [];
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => new FakeSandboxProvider([]),
+      onSandboxEvent: (event) => events.push(event),
+      idleTtlMs: 0,
+    });
+    await runner.prepareSession("wrk", "sesn_sbx_1", {});
+    expect(events).toEqual(["created"]);
+    await runner.closeSession("wrk", "sesn_sbx_1");
+    expect(events).toEqual(["created", "disposed"]);
+  });
+
+  it("fires error (and never created) when the provider factory throws", async () => {
+    const factory = new FakeSessionFactory();
+    const events: string[] = [];
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => {
+        throw new Error("provider down");
+      },
+      onSandboxEvent: (event) => events.push(event),
+      idleTtlMs: 0,
+    });
+    await expect(runner.prepareSession("wrk", "sesn_sbx_2", {})).rejects.toThrow(
+      "provider down",
+    );
+    expect(events).toEqual(["error"]);
+  });
+});
