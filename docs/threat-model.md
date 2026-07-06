@@ -77,6 +77,18 @@ Deployment-mode terminology and sequencing are defined in
 - Threat: prompt injection that exfiltrates context to attacker-controlled domain via `web_fetch` or `bash` curl. Mitigation: egress allowlist + secret-free sandbox (see §4).
 - **Design decided ([ADR 0016](adrs/0016-egress-proxy-and-secret-injection.md), accepted 2026-07): OMA-owned egress proxy (vendored srt stack) with default-deny allowlist, per-request path policy, and redirect re-evaluation — the proxy mechanism (incl. the `filterRequest` path-deny branch and verify-before-inject) validated for proxy-honoring clients in probe 44. Caveats the probe made explicit: path policy/injection apply only to terminated TLS (opaque tunnels bypass them); the private-IP/SSRF deny is OMA's to add and must connect-to-pinned-IP to resist DNS rebinding (probe 44 confirmed srt has none); and route-level confinement (proxy-only egress, so a non-compliant client can't bypass) is implementation work, not yet proven. Not yet built.**
 
+- **Control-plane MCP dials (0122 M1, shipped 2026-07-07): a second egress
+  class, distinct from sandbox egress.** Agent configs carry
+  attacker-influenceable `mcp_servers[].url` values and the control plane
+  dials them directly (streamable HTTP). Mitigations, all tested: pinned-DNS
+  deny of private/loopback/link-local/reserved ranges re-checked on every
+  resolution (rebinding-safe, `egress/ssrf.ts` reused), explicit IP-literal
+  pre-check (Node skips the lookup seam for literals), forced
+  `redirect: "error"`, embedded-userinfo URLs rejected at agent validation,
+  and the deployment gate `OMA_ENABLE_MCP` (default off). Credentials do not
+  exist in this path until M2; when they arrive they are injected
+  control-plane-side and never enter the sandbox or the event stream.
+
 ### 4. Secret injection paths
 
 **Question to answer:** What credentials/secrets can a sandbox observe?
@@ -214,5 +226,5 @@ The former open bullets split across two channels with different answers:
 
 - Before *any* multi-tenant deployment.
 - Before exposing the control plane to untrusted users (including "trusted-but-curious" users).
-- Before integrating MCP / vaults / GitHub repo mounts (each adds a new secret category).
+- Before integrating vaults (0122 M2) / GitHub repo mounts (each adds a new secret category). MCP *execution* integrated 2026-07-07 (0122 M1, §3) — credential-free by scope.
 - After any incident — even one that didn't actually exploit anything.

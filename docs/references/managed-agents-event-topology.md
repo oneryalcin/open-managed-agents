@@ -30,8 +30,8 @@ until the corresponding behavior exists.
 | open-ma-only spec event | OMA tracker status |
 |---|---|
 | `user.define_outcome` | Deferred: outcomes/rubric loop |
-| `agent.mcp_tool_use` | Deferred: MCP server support |
-| `agent.mcp_tool_result` | Deferred: MCP server support |
+| `agent.mcp_tool_use` | Implemented (0122 M1) |
+| `agent.mcp_tool_result` | Implemented (0122 M1) |
 | `agent.thread_message_received` | Deferred: multiagent sessions |
 | `agent.thread_message_sent` | Deferred: multiagent sessions |
 | `agent.thread_context_compacted` | Deferred: compaction/thread-context exposure |
@@ -82,8 +82,8 @@ wire-compatible spec events to add by default.
 | `agent.tool_use` | Implemented | Emitted for builtin/sandbox tool calls that are not custom tools and are not suppressed by the permission bridge. |
 | `agent.tool_result` | Implemented | Emitted for builtin/sandbox tool results and terminalized permission waits. |
 | `agent.custom_tool_use` | Implemented | Emitted for OMA custom tools; top-level `sevt_*` ID is the public correlation ID for `user.custom_tool_result`. |
-| `agent.mcp_tool_use` | Deferred | MCP server support is post-MVP. |
-| `agent.mcp_tool_result` | Deferred | MCP server support is post-MVP. |
+| `agent.mcp_tool_use` | Implemented | 0122 M1: emitted by the control-plane MCP bridge with `evaluated_permission`; top-level `sevt_*` id is the confirmation/correlation id. |
+| `agent.mcp_tool_result` | Implemented | 0122 M1: terminal result on every path; `mcp_tool_use_id` = the use event's id. |
 | `agent.thread_context_compacted` | Deferred | Depends on exposing Pi compaction/thread-context events with a confirmed public shape. |
 | `agent.thread_message_sent` | Deferred | Multiagent sessions are post-MVP. |
 | `agent.thread_message_received` | Deferred | Multiagent sessions are post-MVP. |
