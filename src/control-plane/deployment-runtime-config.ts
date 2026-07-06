@@ -24,6 +24,8 @@ export const DEPLOYMENT_RUNTIME_ENV_KEYS = [
   "OMA_ENABLE_EGRESS",
   "OMA_EGRESS_SIDECAR_IMAGE",
   "OMA_EGRESS_SIDECAR_REPO_MOUNT",
+  "OMA_ENABLE_MCP",
+  "OMA_MCP_OPERATION_TIMEOUT_MS",
 ] as const;
 
 export const DEFAULT_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS =
@@ -49,6 +51,13 @@ export interface DeploymentRuntimeConfig {
    * it needs the stores, which env parsing does not have.
    */
   egress?: EgressSidecarImageConfig;
+  /**
+   * MCP connector gate (plan 0122 §4.6): present only when
+   * OMA_ENABLE_MCP=true. Orthogonal to the sandbox provider — MCP dials
+   * happen control-plane-side. Store-backed providers are bound at app
+   * assembly, same split as egress.
+   */
+  mcp?: { operationTimeoutMs?: number };
 }
 
 type PiSessionRunnerOptions = NonNullable<
@@ -72,6 +81,16 @@ export type DeploymentPiSessionRunnerOptions = Omit<
 };
 
 export function parseDeploymentRuntimeConfigFromEnv(
+  env: DeploymentRuntimeEnv,
+): DeploymentRuntimeConfig {
+  // Provider-orthogonal: MCP is a control-plane capability, parsed once and
+  // merged whatever the sandbox branch below returns.
+  const mcp = mcpConfig(env);
+  const config = parseSandboxRuntimeConfigFromEnv(env);
+  return mcp === undefined ? config : { ...config, mcp };
+}
+
+function parseSandboxRuntimeConfigFromEnv(
   env: DeploymentRuntimeEnv,
 ): DeploymentRuntimeConfig {
   const provider = optionalString(env.OMA_SANDBOX_PROVIDER);
@@ -293,6 +312,32 @@ function egressConfig(
   return {
     sidecarImage,
     ...(sidecarRepoMount === undefined ? {} : { sidecarRepoMount }),
+  };
+}
+
+// Same partially-applied-env-is-a-loud-error idiom as egressConfig.
+function mcpConfig(
+  env: DeploymentRuntimeEnv,
+): { operationTimeoutMs?: number } | undefined {
+  const enabled = parseBoolean(env.OMA_ENABLE_MCP, {
+    defaultValue: false,
+    name: "OMA_ENABLE_MCP",
+  });
+  const timeoutRaw = optionalString(env.OMA_MCP_OPERATION_TIMEOUT_MS);
+  if (!enabled) {
+    if (timeoutRaw !== undefined) {
+      throw new Error(
+        "OMA_MCP_OPERATION_TIMEOUT_MS is ignored without OMA_ENABLE_MCP=true",
+      );
+    }
+    return undefined;
+  }
+  if (timeoutRaw === undefined) return {};
+  return {
+    operationTimeoutMs: parsePositiveInteger(
+      timeoutRaw,
+      "OMA_MCP_OPERATION_TIMEOUT_MS",
+    ),
   };
 }
 

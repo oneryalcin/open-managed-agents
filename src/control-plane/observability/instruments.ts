@@ -37,6 +37,8 @@ export interface ControlPlaneMetrics {
   sandboxes: Counter;
   sandboxProviderErrors: Counter;
   logEvents: Counter;
+  mcpToolCalls: Counter;
+  mcpConnections: Counter;
 }
 
 export function createControlPlaneMetrics(): ControlPlaneMetrics {
@@ -84,8 +86,21 @@ export function createControlPlaneMetrics(): ControlPlaneMetrics {
       "Structured log lines emitted, by level.",
       { level: LOG_LEVELS },
     ),
+    mcpToolCalls: registry.counter(
+      "oma_mcp_tool_calls_total",
+      "MCP tool calls, by outcome (plan 0122).",
+      { outcome: MCP_TOOL_CALL_OUTCOMES },
+    ),
+    mcpConnections: registry.counter(
+      "oma_mcp_connections_total",
+      "MCP server connection attempts, by outcome (plan 0122).",
+      { event: MCP_CONNECTION_EVENTS },
+    ),
   };
 }
+
+const MCP_TOOL_CALL_OUTCOMES = ["ok", "error", "denied", "timeout"];
+const MCP_CONNECTION_EVENTS = ["connected", "connect_failed"];
 
 export function registerProcessGauges(registry: MetricsRegistry): void {
   const loopDelay = monitorEventLoopDelay({ resolution: 20 });

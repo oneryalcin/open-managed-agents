@@ -51,6 +51,10 @@ import type {
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
   RuntimeEventTranslator,
+  RuntimeMcpConnectionFailedEvent,
+  RuntimeMcpToolResultEvent,
+  RuntimeMcpToolUseEvent,
+  RuntimeMcpToolWithModelEndEvent,
   RuntimeToolPermissionUseEvent,
   RuntimeToolPermissionWithModelEndEvent,
   PersistedSessionEvent,
@@ -694,10 +698,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
         ...syntheticSpanModelRequestEndDrafts(
           turn.open_model_request_start_ids,
         ),
-        {
-          type: "agent.tool_result",
-          payload: lostToolConfirmationPayload(claim.toolUseId),
-        },
+        this.lostToolConfirmationResultDraft(
+          workspaceId,
+          sessionId,
+          claim.toolUseId,
+        ),
         {
           type: "session.status_idle",
           payload: { stop_reason: { type: "end_turn" } },
@@ -1313,6 +1318,59 @@ export class DefaultSessionEventsService implements SessionEventsService {
               }
               continue;
             }
+            if (isRuntimeMcpToolUseEvent(piEvent)) {
+              this.persistMcpToolUse(
+                workspaceId,
+                sessionId,
+                prompt.turnId,
+                prompt.ownerId,
+                prompt.ownerGeneration,
+                piEvent,
+              );
+              continue;
+            }
+            if (isRuntimeMcpToolWithModelEndEvent(piEvent)) {
+              const closingModelRequestStartId =
+                activeOpenModelRequestStartIds[
+                  activeOpenModelRequestStartIds.length - 1
+                ];
+              const closedModelRequestStartId =
+                this.persistMcpToolUseWithModelEnd(
+                  workspaceId,
+                  sessionId,
+                  prompt.turnId,
+                  prompt.ownerId,
+                  prompt.ownerGeneration,
+                  piEvent,
+                  closingModelRequestStartId,
+                );
+              if (closedModelRequestStartId !== undefined) {
+                activeOpenModelRequestStartIds.pop();
+              }
+              continue;
+            }
+            if (isRuntimeMcpToolResultEvent(piEvent)) {
+              this.persistMcpToolResult(
+                workspaceId,
+                sessionId,
+                prompt.turnId,
+                prompt.ownerId,
+                prompt.ownerGeneration,
+                piEvent,
+              );
+              continue;
+            }
+            if (isRuntimeMcpConnectionFailedEvent(piEvent)) {
+              this.persistMcpConnectionFailed(
+                workspaceId,
+                sessionId,
+                prompt.turnId,
+                prompt.ownerId,
+                prompt.ownerGeneration,
+                piEvent,
+              );
+              continue;
+            }
             const spanStartDrafts = spanModelRequestStartDraft(piEvent);
             const transcriptDrafts = this.runtimeTranslator(piEvent, {
               customToolNames: this.runtimeRunner.customToolNames?.(
@@ -1875,7 +1933,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           turnId,
           ownerId,
           ownerGeneration,
-          event,
+          event.evaluatedPermission,
           useRows[0].id,
           now,
         ),
@@ -1957,7 +2015,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             turnId,
             ownerId,
             ownerGeneration,
-            permission,
+            permission.evaluatedPermission,
             useRows[0].id,
             now,
           ),
@@ -2029,13 +2087,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
     turnId: string,
     ownerId: string,
     ownerGeneration: number,
-    event: RuntimeToolPermissionUseEvent,
+    // Shared with the MCP path (plan 0122): only the permission matters here.
+    evaluatedPermission: "allow" | "ask" | "deny",
     toolUseId: string,
     now: string,
   ): Pick<EventStoreRuntimeChanges, "openedActions" | "turnStates"> {
     return {
       openedActions:
-        event.evaluatedPermission === "ask"
+        evaluatedPermission === "ask"
           ? [
               {
                 workspaceId,
@@ -2048,7 +2107,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             ]
           : [],
       turnStates:
-        event.evaluatedPermission === "ask"
+        evaluatedPermission === "ask"
           ? [
               {
                 workspaceId,
@@ -2072,6 +2131,270 @@ export class DefaultSessionEventsService implements SessionEventsService {
               },
             ],
     };
+  }
+
+  // ── MCP persistence (plan 0122 §4.4/§4.5) — mirrors the tool-permission
+  // pair: sevt_* id bound on persist (before the tool executes), ask-path
+  // opens a tool_confirmation action, allow-path continues running.
+
+  private persistMcpToolUse(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    turnId: string,
+    ownerId: string,
+    ownerGeneration: number,
+    event: RuntimeMcpToolUseEvent,
+  ): void {
+    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    try {
+      const now = new Date().toISOString();
+      const useRows = this.materializeMcpToolUseRows(
+        workspaceId,
+        sessionId,
+        event,
+        now,
+      );
+      persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
+        ...this.toolPermissionRuntimeChanges(
+          workspaceId,
+          sessionId,
+          turnId,
+          ownerId,
+          ownerGeneration,
+          event.evaluatedPermission,
+          useRows[0].id,
+          now,
+        ),
+      });
+      if (event.evaluatedPermission === "ask") {
+        this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+      }
+    } catch (error) {
+      event.rejectToolUse(toError(error));
+      throw error;
+    }
+  }
+
+  private persistMcpToolUseWithModelEnd(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    turnId: string,
+    ownerId: string,
+    ownerGeneration: number,
+    event: RuntimeMcpToolWithModelEndEvent,
+    closingModelRequestStartId: string | undefined,
+  ): string | undefined {
+    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) {
+      return undefined;
+    }
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) {
+      return undefined;
+    }
+    const mcpToolUse = event.mcpToolUse;
+    try {
+      const now = new Date().toISOString();
+      const useRows = this.materializeMcpToolUseRows(
+        workspaceId,
+        sessionId,
+        mcpToolUse,
+        now,
+      );
+      const suppressedPiToolCallIds = new Set([
+        mcpToolUse.piToolCallId,
+        ...event.suppressedPiToolCallIds,
+      ]);
+      const transcriptDrafts = this.runtimeTranslator?.(event.messageEnd, {
+        customToolNames: this.runtimeRunner?.customToolNames?.(
+          workspaceId,
+          sessionId,
+        ),
+        publicToolUseIdForPiToolCallId: (piToolCallId) =>
+          this.runtimeRunner?.publicToolUseIdForPiToolCallId?.(
+            workspaceId,
+            sessionId,
+            piToolCallId,
+          ),
+        suppressPiToolUse: (piToolCallId) =>
+          suppressedPiToolCallIds.has(piToolCallId) ||
+          this.runtimeRunner?.suppressPiToolUse?.(
+            workspaceId,
+            sessionId,
+            piToolCallId,
+          ) === true,
+      }) ?? [];
+      const spanEndDrafts = spanModelRequestEndDraft(
+        event.messageEnd,
+        closingModelRequestStartId,
+      );
+      const remainingRows = materializePersistedEvents(
+        workspaceId,
+        sessionId,
+        [...transcriptDrafts, ...spanEndDrafts],
+        now,
+      );
+      persistRuntimeChangesAndPublish(
+        this.events,
+        this.broadcaster,
+        [...useRows, ...remainingRows],
+        {
+          ...this.toolPermissionRuntimeChanges(
+            workspaceId,
+            sessionId,
+            turnId,
+            ownerId,
+            ownerGeneration,
+            mcpToolUse.evaluatedPermission,
+            useRows[0].id,
+            now,
+          ),
+          closedModelRequestStarts:
+            spanEndDrafts.length === 0 ||
+            closingModelRequestStartId === undefined
+              ? []
+              : [
+                  {
+                    workspaceId,
+                    sessionId,
+                    turnId,
+                    ownerId,
+                    ownerGeneration,
+                    startEventId: closingModelRequestStartId,
+                    now,
+                  },
+                ],
+        },
+      );
+      if (mcpToolUse.evaluatedPermission === "ask") {
+        this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+      }
+      return spanEndDrafts.length > 0 ? closingModelRequestStartId : undefined;
+    } catch (error) {
+      mcpToolUse.rejectToolUse(toError(error));
+      throw error;
+    }
+  }
+
+  private materializeMcpToolUseRows(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    event: RuntimeMcpToolUseEvent,
+    now: string,
+  ): PersistedSessionEvent[] {
+    const useRows = materializePersistedEvents(
+      workspaceId,
+      sessionId,
+      [
+        {
+          type: "agent.mcp_tool_use",
+          payload: {
+            mcp_server_name: event.mcpServerName,
+            name: event.name,
+            input: event.input,
+            evaluated_permission: event.evaluatedPermission,
+          },
+        },
+      ],
+      now,
+    );
+    event.bindToolUseId(useRows[0].id, (reason) => {
+      if (reason !== undefined) {
+        this.closeReleasedRuntimeAction(
+          workspaceId,
+          sessionId,
+          useRows[0].id,
+          reason,
+        );
+      }
+      this.removePendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+    });
+    return useRows;
+  }
+
+  /** Terminal result for a persisted agent.mcp_tool_use — no action state. */
+  private persistMcpToolResult(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    turnId: string,
+    ownerId: string,
+    ownerGeneration: number,
+    event: RuntimeMcpToolResultEvent,
+  ): void {
+    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    const now = new Date().toISOString();
+    const rows = materializePersistedEvents(
+      workspaceId,
+      sessionId,
+      [
+        {
+          type: "agent.mcp_tool_result",
+          payload: {
+            mcp_tool_use_id: event.mcpToolUseId,
+            content: event.content as unknown as JsonValue,
+            is_error: event.isError,
+          },
+        },
+      ],
+      now,
+    );
+    persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
+      turnStates: [
+        {
+          workspaceId,
+          sessionId,
+          turnId,
+          ownerId,
+          ownerGeneration,
+          state: "running",
+          now,
+        },
+      ],
+    });
+  }
+
+  private persistMcpConnectionFailed(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    turnId: string,
+    ownerId: string,
+    ownerGeneration: number,
+    event: RuntimeMcpConnectionFailedEvent,
+  ): void {
+    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+    const now = new Date().toISOString();
+    const rows = materializePersistedEvents(
+      workspaceId,
+      sessionId,
+      [
+        {
+          type: "session.error",
+          payload: {
+            error: {
+              type: "mcp_connection_failed_error",
+              mcp_server_name: event.mcpServerName,
+              message: event.message,
+              retry_status: { type: event.retryStatus },
+            },
+          },
+        },
+      ],
+      now,
+    );
+    persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
+      turnStates: [
+        {
+          workspaceId,
+          sessionId,
+          turnId,
+          ownerId,
+          ownerGeneration,
+          state: "running",
+          now,
+        },
+      ],
+    });
   }
 
   private claimCustomToolResults(
@@ -2452,15 +2775,54 @@ export class DefaultSessionEventsService implements SessionEventsService {
     toolUseId: string,
   ): void {
     this.persistRuntimeDrafts(workspaceId, sessionId, [
-      {
-        type: "agent.tool_result",
-        payload: lostToolConfirmationPayload(toolUseId),
-      },
+      this.lostToolConfirmationResultDraft(workspaceId, sessionId, toolUseId),
       {
         type: "session.status_idle",
         payload: { stop_reason: { type: "end_turn" } },
       },
     ]);
+  }
+
+  /**
+   * The lost-runtime terminal result must match the use event's family:
+   * agent.mcp_tool_use gets agent.mcp_tool_result (terminal-result rule,
+   * plan 0122 §4.4), builtin gets agent.tool_result. Rare recovery path —
+   * the paged scan is acceptable.
+   */
+  private lostToolConfirmationResultDraft(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    toolUseId: string,
+  ): EventDraft {
+    if (this.isMcpToolUseEventId(workspaceId, sessionId, toolUseId)) {
+      return {
+        type: "agent.mcp_tool_result",
+        payload: lostMcpToolConfirmationPayload(toolUseId),
+      };
+    }
+    return {
+      type: "agent.tool_result",
+      payload: lostToolConfirmationPayload(toolUseId),
+    };
+  }
+
+  private isMcpToolUseEventId(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    toolUseId: string,
+  ): boolean {
+    let page: string | undefined;
+    do {
+      const result = this.events.listPage(workspaceId, sessionId, {
+        order: "asc",
+        limit: 1000,
+        page,
+        types: ["agent.mcp_tool_use"],
+      });
+      if (result.data.some((row) => row.id === toolUseId)) return true;
+      page = result.next_page ?? undefined;
+    } while (page !== undefined);
+    return false;
   }
 
   private listToolConfirmationHistory(
@@ -2474,7 +2836,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
         order: "asc",
         limit: 1000,
         page,
-        types: ["user.tool_confirmation", "agent.tool_result"],
+        types: [
+          "user.tool_confirmation",
+          "agent.tool_result",
+          "agent.mcp_tool_result",
+        ],
       });
       rows.push(...result.data);
       page = result.next_page ?? undefined;
@@ -2934,8 +3300,10 @@ function hasToolResultForToolUseId(
 ): boolean {
   return rows.some(
     (row) =>
-      row.type === "agent.tool_result" &&
-      row.payload.tool_use_id === toolUseId,
+      (row.type === "agent.tool_result" &&
+        row.payload.tool_use_id === toolUseId) ||
+      (row.type === "agent.mcp_tool_result" &&
+        row.payload.mcp_tool_use_id === toolUseId),
   );
 }
 
@@ -2946,6 +3314,19 @@ function lostToolConfirmationPayload(toolUseId: string): JsonObject {
       {
         type: "text",
         text: `Tool confirmation ${toolUseId} was accepted, but runtime state is no longer available and the builtin tool execution outcome is unknown.`,
+      },
+    ],
+    is_error: true,
+  };
+}
+
+function lostMcpToolConfirmationPayload(toolUseId: string): JsonObject {
+  return {
+    mcp_tool_use_id: toolUseId,
+    content: [
+      {
+        type: "text",
+        text: `Tool confirmation ${toolUseId} was accepted, but runtime state is no longer available and the MCP tool execution outcome is unknown.`,
       },
     ],
     is_error: true,
@@ -3067,6 +3448,63 @@ function isRuntimeToolPermissionWithModelEndEvent(
     isRuntimeToolPermissionUseEvent(event.permissionUse) &&
     Array.isArray(event.suppressedPiToolCallIds) &&
     event.suppressedPiToolCallIds.every((id) => typeof id === "string")
+  );
+}
+
+function isRuntimeMcpToolUseEvent(
+  event: unknown,
+): event is RuntimeMcpToolUseEvent {
+  if (!isObjectRecord(event)) return false;
+  return (
+    event.type === "oma.mcp_tool_use" &&
+    typeof event.piToolCallId === "string" &&
+    typeof event.mcpServerName === "string" &&
+    typeof event.name === "string" &&
+    isJsonObject(event.input) &&
+    (event.evaluatedPermission === "allow" ||
+      event.evaluatedPermission === "ask" ||
+      event.evaluatedPermission === "deny") &&
+    typeof event.bindToolUseId === "function" &&
+    typeof event.rejectToolUse === "function"
+  );
+}
+
+function isRuntimeMcpToolWithModelEndEvent(
+  event: unknown,
+): event is RuntimeMcpToolWithModelEndEvent {
+  if (!isObjectRecord(event)) return false;
+  return (
+    event.type === "oma.mcp_tool_with_model_end" &&
+    "messageEnd" in event &&
+    isRuntimeMcpToolUseEvent(event.mcpToolUse) &&
+    Array.isArray(event.suppressedPiToolCallIds) &&
+    event.suppressedPiToolCallIds.every((id) => typeof id === "string")
+  );
+}
+
+function isRuntimeMcpToolResultEvent(
+  event: unknown,
+): event is RuntimeMcpToolResultEvent {
+  if (!isObjectRecord(event)) return false;
+  return (
+    event.type === "oma.mcp_tool_result" &&
+    typeof event.mcpToolUseId === "string" &&
+    Array.isArray(event.content) &&
+    typeof event.isError === "boolean"
+  );
+}
+
+function isRuntimeMcpConnectionFailedEvent(
+  event: unknown,
+): event is RuntimeMcpConnectionFailedEvent {
+  if (!isObjectRecord(event)) return false;
+  return (
+    event.type === "oma.mcp_connection_failed" &&
+    typeof event.mcpServerName === "string" &&
+    typeof event.message === "string" &&
+    (event.retryStatus === "retrying" ||
+      event.retryStatus === "exhausted" ||
+      event.retryStatus === "terminal")
   );
 }
 

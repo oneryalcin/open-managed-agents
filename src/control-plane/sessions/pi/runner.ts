@@ -6,12 +6,13 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type {
-  RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
+  RuntimeInternalEvent,
+  RuntimeMcpConnectionFailedEvent,
+  RuntimeMcpToolWithModelEndEvent,
   RuntimeSessionFileMount,
   RuntimeSessionOutputCollection,
   RuntimeSessionPrepareOptions,
-  RuntimeToolPermissionUseEvent,
   RuntimeToolPermissionWithModelEndEvent,
 } from "../../events/types.ts";
 import { RuntimeUnsupportedSessionFileResourcesError } from "../../events/types.ts";
@@ -28,6 +29,14 @@ import {
   PiToolPermissionBridge,
   type BuiltinToolAccessResolver,
 } from "./tool-permissions.ts";
+import { McpConnection } from "./mcp/client.ts";
+import { createGuardedMcpFetch, type McpFetch } from "./mcp/fetch.ts";
+import {
+  createMcpToolDefinitions,
+  type McpServersProvider,
+  type McpToolAccessResolver,
+  type McpToolCallOutcomeLabel,
+} from "./mcp/bridge.ts";
 import type {
   SandboxedBuiltinToolName,
   SandboxProvider,
@@ -75,16 +84,32 @@ interface RuntimeHandle {
   closeWhenIdle: boolean;
   lastUsedAt: number;
   timer: ReturnType<typeof setTimeout> | undefined;
+  /** Custom tools ∪ MCP pi-names — drives translator suppression + asserts. */
   customToolNames: Set<string>;
-  emitInternal:
-    | ((
-        event:
-          | RuntimeCustomToolUseEvent
-          | RuntimeToolPermissionUseEvent
-          | RuntimeToolPermissionWithModelEndEvent,
-      ) => void)
-    | undefined;
+  /** MCP pi-names only, for the MCP-aware message-end coalescing matcher. */
+  mcpToolNames: Set<string>;
+  mcpConnections: readonly McpConnection[];
+  /** Connect failures queued at build time; flushed at turn start (§4.2). */
+  pendingMcpFailures: RuntimeMcpConnectionFailedEvent[];
+  emitInternal: ((event: RuntimeInternalEvent) => void) | undefined;
 }
+
+export interface PiMcpOptions {
+  /** Deployment gate (plan 0122 §4.6): dialing is opt-in, default off. */
+  enabled: boolean;
+  servers?: McpServersProvider;
+  access?: McpToolAccessResolver;
+  /** Test seam (SSRF allowAddress) — production uses the guarded default. */
+  fetch?: McpFetch;
+  operationTimeoutMs?: number;
+  outputCapBytes?: number;
+  /** Consecutive connect failures before exhausted (OMA policy, default 5). */
+  maxConsecutiveFailures?: number;
+  onToolCall?: (outcome: McpToolCallOutcomeLabel) => void;
+  onConnection?: (event: "connected" | "connect_failed") => void;
+}
+
+const DEFAULT_MCP_MAX_CONSECUTIVE_FAILURES = 5;
 
 export class PiSessionRunner implements RuntimeEventRunner {
   private readonly authStorage = AuthStorage.create();
@@ -102,6 +127,13 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly idleTtlMs: number;
   private readonly now: () => number;
   private readonly sessionFactory: PiRuntimeSessionFactory | undefined;
+  private readonly mcpFetch: McpFetch;
+  /**
+   * Consecutive connect failures per (session, server). Runner-level so the
+   * count SURVIVES handle recreation — fresh-handle retry is the mechanism
+   * (plan 0122 §4.6). Cleared on closeSession.
+   */
+  private readonly mcpFailureCounts = new Map<string, Map<string, number>>();
   private closed = false;
 
   constructor(
@@ -122,12 +154,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
       builtinToolAccess?: BuiltinToolAccessResolver;
       /** 0121 C2 telemetry: sandbox lifecycle events. Must not throw. */
       onSandboxEvent?: (event: "created" | "disposed" | "error") => void;
+      /** MCP connector (plan 0122 M1). Absent = fully inert. */
+      mcp?: PiMcpOptions;
     } = {},
   ) {
     this.resolveSandboxProviderFactory();
     this.idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
     this.now = opts.now ?? Date.now;
     this.sessionFactory = opts.sessionFactory;
+    this.mcpFetch = opts.mcp?.fetch ?? createGuardedMcpFetch();
     this.customToolBridge = new PiCustomToolBridge({
       customTools: opts.customTools,
       timeoutMs: opts.customToolTimeoutMs,
@@ -300,6 +335,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
   ): Promise<void> {
     this.closedSessionIds.add(sessionId);
+    this.mcpFailureCounts.delete(sessionId);
     try {
       const existing = this.sessions.get(sessionId);
       if (existing) {
@@ -385,9 +421,35 @@ export class PiSessionRunner implements RuntimeEventRunner {
             return;
           }
         }
+        if (event.type === "oma.mcp_tool_use") {
+          // Opportunistic coalescing, mirroring the permission path: when
+          // the message_end carrying this toolCall is still queued, persist
+          // it atomically with the use event; otherwise the use event stands
+          // alone (both orders produce correct wire output — plan 0122 §4.4).
+          const match = takeMessageEndForMcpToolCall(
+            handle.mcpToolNames,
+            [gatedEvents, queue],
+            event.piToolCallId,
+          );
+          if (match !== undefined) {
+            queue.push({
+              type: "oma.mcp_tool_with_model_end",
+              messageEnd: match.event,
+              mcpToolUse: event,
+              suppressedPiToolCallIds: match.suppressedPiToolCallIds,
+            } satisfies RuntimeMcpToolWithModelEndEvent);
+            wake?.();
+            return;
+          }
+        }
         queue.push(event);
         wake?.();
       };
+      // Connect failures queued at session build flush now — the first
+      // moment an event consumer exists (plan 0122 §4.2).
+      for (const failure of handle.pendingMcpFailures.splice(0)) {
+        queue.push(failure);
+      }
     }
 
     const onAbort = () => {
@@ -555,6 +617,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         const sandboxProviderFactory = this.resolveSandboxProviderFactory();
         let sandbox: SandboxProvider | undefined;
         let session: PiRuntimeSession | undefined;
+        let mcp: PreparedMcp = EMPTY_MCP;
         try {
           try {
             sandbox = await sandboxProviderFactory?.(
@@ -577,6 +640,20 @@ export class PiSessionRunner implements RuntimeEventRunner {
             }
             await sandbox.materializeFileResources(mounts);
           }
+          // MCP wiring is skipped entirely under a sessionFactory — the
+          // factory bypasses createPiSession, so tools could never reach Pi
+          // and a green test on this path would test nothing (plan 0122 §5).
+          if (this.sessionFactory === undefined) {
+            mcp = await this.prepareMcp(workspaceId, sessionId, customToolContext);
+            for (const name of mcp.toolNames) {
+              if (customToolNames.has(name)) {
+                throw new Error(
+                  `MCP tool name collides with a custom tool: ${name}`,
+                );
+              }
+              customToolNames.add(name);
+            }
+          }
           assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
           session =
             this.sessionFactory === undefined
@@ -585,6 +662,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
                   sessionId,
                   sandbox,
                   customToolContext,
+                  mcp.toolDefinitions,
                 )
               : await this.sessionFactory(workspaceId, sessionId);
           assertActiveToolSurface(
@@ -594,6 +672,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           );
         } catch (error) {
           this.disposeSandbox(sandbox);
+          this.disposeMcpConnections(mcp.connections);
           session?.dispose();
           throw error;
         }
@@ -603,14 +682,22 @@ export class PiSessionRunner implements RuntimeEventRunner {
           sandbox,
           running: false,
           needsFreshPromptAfterInterrupt: false,
-          closeWhenIdle: false,
+          // Retrying MCP failures use fresh-handle mechanics: dispose at
+          // idle so the NEXT turn re-runs connect/discovery (plan 0122 §4.6).
+          closeWhenIdle: mcp.pendingFailures.some(
+            (failure) => failure.retryStatus === "retrying",
+          ),
           lastUsedAt: this.now(),
           timer: undefined,
           customToolNames,
+          mcpToolNames: mcp.toolNames,
+          mcpConnections: mcp.connections,
+          pendingMcpFailures: [...mcp.pendingFailures],
           emitInternal: undefined,
         };
         if (this.closed || this.closedSessionIds.has(sessionId)) {
           this.disposeSandbox(sandbox);
+          this.disposeMcpConnections(mcp.connections);
           session.dispose();
           this.pendingSessions.delete(sessionId);
           throw new Error(
@@ -632,11 +719,119 @@ export class PiSessionRunner implements RuntimeEventRunner {
     return created;
   }
 
+  /**
+   * Connect + discover the agent's declared MCP servers (plan 0122 §4.2).
+   * Failures are captured, never propagated: they queue on the handle and
+   * flush as session.error events at turn start (emitInternal does not exist
+   * yet at build time). Exhausted servers (count >= max, or MCP disabled by
+   * deployment) are skipped without dialing and without re-emitting.
+   */
+  private async prepareMcp(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    context: { agentId?: string } | undefined,
+  ): Promise<PreparedMcp> {
+    const mcpOpts = this.opts.mcp;
+    if (!mcpOpts) return EMPTY_MCP;
+    const servers = mcpOpts.servers?.(workspaceId, sessionId, context) ?? [];
+    if (servers.length === 0) return EMPTY_MCP;
+
+    const maxFailures =
+      mcpOpts.maxConsecutiveFailures ?? DEFAULT_MCP_MAX_CONSECUTIVE_FAILURES;
+    let counts = this.mcpFailureCounts.get(sessionId);
+    if (!counts) {
+      counts = new Map<string, number>();
+      this.mcpFailureCounts.set(sessionId, counts);
+    }
+
+    const connections: McpConnection[] = [];
+    const toolDefinitions: ToolDefinition<any, any, any>[] = [];
+    const toolNames = new Set<string>();
+    const pendingFailures: RuntimeMcpConnectionFailedEvent[] = [];
+
+    for (const server of servers) {
+      const count = counts.get(server.name) ?? 0;
+      if (count >= maxFailures) continue; // exhausted: no dial, no re-emit
+      if (!mcpOpts.enabled) {
+        counts.set(server.name, maxFailures); // emit the exhausted event once
+        pendingFailures.push({
+          type: "oma.mcp_connection_failed",
+          mcpServerName: server.name,
+          message: "MCP is disabled by deployment configuration",
+          retryStatus: "exhausted",
+        });
+        continue;
+      }
+      let connection: McpConnection;
+      try {
+        connection = await McpConnection.connect(server, {
+          fetch: this.mcpFetch,
+          ...(mcpOpts.operationTimeoutMs === undefined
+            ? {}
+            : { operationTimeoutMs: mcpOpts.operationTimeoutMs }),
+        });
+      } catch (error) {
+        const failures = count + 1;
+        counts.set(server.name, failures);
+        mcpOpts.onConnection?.("connect_failed");
+        pendingFailures.push({
+          type: "oma.mcp_connection_failed",
+          mcpServerName: server.name,
+          message: error instanceof Error ? error.message : String(error),
+          retryStatus: failures >= maxFailures ? "exhausted" : "retrying",
+        });
+        continue;
+      }
+      counts.set(server.name, 0);
+      mcpOpts.onConnection?.("connected");
+      connections.push(connection);
+      const definitions = createMcpToolDefinitions({
+        workspaceId,
+        sessionId,
+        connection,
+        permissionBridge: this.toolPermissionBridge,
+        getEmitter: () => this.sessions.get(sessionId)?.emitInternal,
+        ...(mcpOpts.access === undefined ? {} : { access: mcpOpts.access }),
+        ...(context === undefined ? {} : { agentContext: context }),
+        ...(mcpOpts.outputCapBytes === undefined
+          ? {}
+          : { outputCapBytes: mcpOpts.outputCapBytes }),
+        ...(mcpOpts.onToolCall === undefined
+          ? {}
+          : { onToolCall: mcpOpts.onToolCall }),
+        // Mid-call transport failure: reconnect on the next turn via
+        // fresh-handle mechanics. Connect-failure counting stays at dial
+        // time only (plan 0122 §4.6).
+        onTransportFailure: () => {
+          const handle = this.sessions.get(sessionId);
+          if (handle) handle.closeWhenIdle = true;
+        },
+      });
+      for (const definition of definitions) {
+        if (toolNames.has(definition.name)) {
+          throw new Error(
+            `MCP tool name collision across servers: ${definition.name}`,
+          );
+        }
+        toolNames.add(definition.name);
+        toolDefinitions.push(definition);
+      }
+    }
+    return { connections, toolDefinitions, toolNames, pendingFailures };
+  }
+
+  private disposeMcpConnections(connections: readonly McpConnection[]): void {
+    for (const connection of connections) {
+      void connection.close();
+    }
+  }
+
   private async createPiSession(
     workspaceId: WorkspaceId,
     sessionId: string,
     sandbox: SandboxProvider | undefined,
     context: { agentId?: string } | undefined,
+    mcpTools: readonly ToolDefinition<any, any, any>[] = [],
   ): Promise<PiRuntimeSession> {
     const provider = this.opts.provider ?? "anthropic";
     const modelId = this.opts.model ?? "claude-haiku-4-5";
@@ -656,7 +851,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
         () => this.sessions.get(sessionId)?.emitInternal,
         context,
       ),
+      ...mcpTools,
     ];
+    const mcpToolNames = mcpTools.map((tool) => tool.name);
     const { session } = await createAgentSession({
       model,
       thinkingLevel: this.opts.thinkingLevel ?? "off",
@@ -665,8 +862,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
         ? [
             ...sandboxTools.map((tool) => tool.name),
             ...customToolNames,
+            ...mcpToolNames,
           ]
-        : customToolNames,
+        : [...customToolNames, ...mcpToolNames],
       customTools,
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
@@ -822,6 +1020,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       new Error("Runtime session evicted"),
     );
     this.disposeSandbox(handle.sandbox);
+    this.disposeMcpConnections(handle.mcpConnections);
     handle.session.dispose();
   }
 
@@ -880,8 +1079,73 @@ function isInternalRuntimeEvent(event: unknown): boolean {
   return (
     type === "oma.custom_tool_use" ||
     type === "oma.tool_permission_use" ||
-    type === "oma.tool_permission_with_model_end"
+    type === "oma.tool_permission_with_model_end" ||
+    type === "oma.mcp_tool_use" ||
+    type === "oma.mcp_tool_with_model_end" ||
+    type === "oma.mcp_tool_result" ||
+    type === "oma.mcp_connection_failed"
   );
+}
+
+interface PreparedMcp {
+  connections: readonly McpConnection[];
+  toolDefinitions: readonly ToolDefinition<any, any, any>[];
+  toolNames: Set<string>;
+  pendingFailures: readonly RuntimeMcpConnectionFailedEvent[];
+}
+
+const EMPTY_MCP: PreparedMcp = {
+  connections: [],
+  toolDefinitions: [],
+  toolNames: new Set(),
+  pendingFailures: [],
+};
+
+/** message_end toolCall blocks whose pi-name is an MCP tool of this handle. */
+function mcpToolCallsInMessage(
+  mcpToolNames: ReadonlySet<string>,
+  event: unknown,
+): Array<{ toolCallId: string }> {
+  if (mcpToolNames.size === 0) return [];
+  if (typeof event !== "object" || event === null) return [];
+  const typed = event as { type?: unknown; message?: unknown };
+  if (typed.type !== "message_end") return [];
+  if (typeof typed.message !== "object" || typed.message === null) return [];
+  const message = typed.message as { role?: unknown; content?: unknown };
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
+  const out: Array<{ toolCallId: string }> = [];
+  for (const block of message.content) {
+    if (typeof block !== "object" || block === null) continue;
+    const toolCall = block as { type?: unknown; id?: unknown; name?: unknown };
+    if (toolCall.type !== "toolCall") continue;
+    if (typeof toolCall.id !== "string" || typeof toolCall.name !== "string") {
+      continue;
+    }
+    if (!mcpToolNames.has(toolCall.name)) continue;
+    out.push({ toolCallId: toolCall.id });
+  }
+  return out;
+}
+
+/** MCP-aware variant of takeMessageEndForToolCall (plan 0122 §4.4 step 2). */
+function takeMessageEndForMcpToolCall(
+  mcpToolNames: ReadonlySet<string>,
+  eventQueues: unknown[][],
+  piToolCallId: string,
+): { event: unknown; suppressedPiToolCallIds: string[] } | undefined {
+  for (const events of eventQueues) {
+    let suppressedPiToolCallIds: string[] = [];
+    const index = events.findIndex((event) => {
+      const calls = mcpToolCallsInMessage(mcpToolNames, event);
+      if (!calls.some((call) => call.toolCallId === piToolCallId)) return false;
+      suppressedPiToolCallIds = calls.map((call) => call.toolCallId);
+      return true;
+    });
+    if (index === -1) continue;
+    const [event] = events.splice(index, 1);
+    return { event, suppressedPiToolCallIds };
+  }
+  return undefined;
 }
 
 function sandboxedToolEvent(
