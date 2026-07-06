@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { invalidRequest } from "../errors.ts";
 import { parseJsonBody } from "../http.ts";
+import { log } from "../logging.ts";
 import type { ControlPlaneRouteEnv } from "../workspace.ts";
 import type { AdminService } from "./service.ts";
 
@@ -63,13 +64,15 @@ function emitAdminAudit(
     revoked_at?: string | null;
   },
 ): void {
-  console.info(
-    JSON.stringify({
-      type: "admin_audit",
-      request_id: requestId,
-      ...event,
-    }),
-  );
+  // Wire shape predates the structured logger; `type: "admin_audit"` is the
+  // grep contract and stays (0121 C1 — the logger adds ts/level/event around
+  // it). Emitted at the audit level: OMA_LOG_LEVEL must never be able to
+  // silence the admin audit trail.
+  log.audit("admin_audit", {
+    type: "admin_audit",
+    request_id: requestId,
+    ...event,
+  });
 }
 
 async function parseOptionalJsonBody(req: {

@@ -408,14 +408,15 @@ describe("Custom tool API round trip", () => {
 
       expect(replay).toEqual(accepted);
       expect(runner.claimCount).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(
-        "custom tool result callback failed after commit",
-        expect.objectContaining({
-          sessionId: session.id,
-          customToolUseId: customUse?.id,
-          error: expect.any(Error),
-        }),
-      );
+      // Logger emits one JSON line per event (0121 C1).
+      const callbackFailure = errorSpy.mock.calls
+        .map((call) => JSON.parse(String(call[0])) as Record<string, unknown>)
+        .find((record) => record.event === "custom_tool_result_callback_failed");
+      expect(callbackFailure).toMatchObject({
+        sessionId: session.id,
+        customToolUseId: customUse?.id,
+        error: { name: "Error" },
+      });
       const final = await getEvents(fixture.app, session.id);
       expect(
         final.filter((event) => event.type === "user.custom_tool_result"),

@@ -49,7 +49,7 @@ still tracked separately in the roadmap.
 ## Working notes
 
 - [Scratch: Pi 0.75.4 empirical findings](scratch-pi-findings.md) — what we learn from probing Pi; feeds back into the ADRs below as decisions firm up.
-- [Threat model](threat-model.md) — tenant boundary, auth, and DoS sections now describe shipped mechanisms (plan 0113, #129); egress, secrets, log redaction, and teardown remain open before untrusted multi-tenant deployment.
+- [Threat model](threat-model.md) — tenant boundary, auth, DoS, and log-redaction sections describe shipped mechanisms (plans 0113, 0121 C1); egress + secrets are design-decided (ADR 0016, shipped); teardown remains open before untrusted multi-tenant deployment.
 - [Egress + secrets buy-vs-build survey](references/egress-secrets-buy-vs-build.md) — verdict: vendor Anthropic's sandbox-runtime proxy stack for allowlist + sentinel-substitution egress; envelope-encrypt secrets in our own SQLite (no vault dependency, OpenBao as a designed-for-later backend).
 
 ## Implementation plans

@@ -91,9 +91,48 @@ Deployment-mode terminology and sequencing are defined in
 
 **Question to answer:** What appears in logs, and how do we keep secrets out of them?
 
-- Open: do prompts/responses get logged? At MVP scale (single user, debug-level logging), yes; at scale, this is a privacy/secret-leakage risk.
-- Open: tool outputs may contain secrets (e.g., a bash command that prints an env var). Mitigation: configurable redaction in event persistence layer (regex over `text` content blocks before SQLite insert?).
-- Open: error stack traces from `Tool.execute()` shouldn't include user input. Sanitize before persisting/streaming.
+**Decided (plan [0121](plans/0121-observability.md) §3.4, implemented in C1).**
+The former open bullets split across two channels with different answers:
+
+- **Log channel — closed, programmatically.** Every control-plane log line
+  goes through `src/control-plane/logging.ts`, which enforces redaction at
+  emit time rather than by review convention:
+  - *R1 — logs carry identifiers and classifications, never content or
+    credentials.* A field denylist replaces content-bearing keys
+    (`message`/`text`/`prompt`/`content`/`input`/`output`/`body`/
+    `authorization`, matched per name segment so compound keys like
+    `tool_output`/`errorMessage` are caught, plus any key matching
+    `*key*`/`*secret*`/`*token*`/`*password*` — digest **suffixes** like
+    `key_sha256` excepted; `password_hash`-style names stay denied) with
+    `"[redacted]"` before serialization.
+  - *R2 — error messages are the leak channel.* Error values serialize to
+    `{name, message}` (plus one level of scrubbed `cause`) where the
+    message — and every other string value — first passes a secret
+    scrubber: `oma_…` API keys, 32-byte-base64 key shapes, credential
+    header/env assignments (whole value, including `Bearer`/`Basic` scheme
+    forms and `Proxy-Authorization`), common foreign shapes (`sk-…`,
+    GitHub `gh?_…`, JWTs, AWS `AKIA…`), and credential-bearing URL query
+    params — then a 1 KB cap. Stack traces are omitted unless
+    `OMA_LOG_STACKS=1` (and are scrubbed when present). Tests assert
+    planted secrets are **absent** from output, not merely truncated; the
+    scrubber is pattern-based, so novel secret formats can pass — sites
+    handling known-sensitive material must log classifications, not
+    messages.
+  - `admin_audit` events are emitted at a dedicated `audit` level that
+    bypasses `OMA_LOG_LEVEL`: diagnostic verbosity settings cannot silence
+    the admin audit trail. (The `bin/open-managed-agents.mjs` Node-version
+    guard is a separate pre-boot process and prints one plain error line by
+    necessity; it carries no tenant data or secrets.)
+- **Persist/stream channel — deliberately verbatim (R3).** Session
+  transcripts and tool outputs are the product; scrubbing them would break
+  replay and wire parity, so persistence-layer content redaction is
+  **deferred** for the single-node trusted-operator tier (0112). Two
+  residuals are named, not papered over: (a) the asymmetry with 0118 —
+  secrets are encrypted at rest, yet a secret *echoed into session content*
+  (e.g. a tool printing an env var) persists in cleartext SQLite; (b) this
+  is the same residual as ADR-0016 §6's deferred response-redaction item.
+  Both revisit together when the deployment tier changes
+  (managed/multi-tenant).
 
 ### 6. Sandbox teardown
 
