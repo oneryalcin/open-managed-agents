@@ -433,3 +433,44 @@ describe("createStoreBackedMcpToolAccessResolver (plan 0122 §4.4)", () => {
     expect(resolve("wrk", "sesn", "srv", "echo").enabled).toBe(true);
   });
 });
+
+describe("publishMcpToolUse bind-after-abort orphan guard (plan 0122 §4.4)", () => {
+  it("emits a terminal result when the use event binds after the abort raced it", async () => {
+    // The race: Pi's signal aborts between emit and the events service
+    // persisting/binding the use event. The bind callback must close the
+    // loop with a synthetic error result — no orphaned agent.mcp_tool_use.
+    const permissionBridge = new PiToolPermissionBridge({});
+    const results: RuntimeMcpToolResultEvent[] = [];
+    let pendingUse: RuntimeMcpToolUseEvent | undefined;
+    const emitter: McpEmitter = (event) => {
+      if (event.type === "oma.mcp_tool_use") pendingUse = event;
+      else results.push(event);
+    };
+    const controller = new AbortController();
+    const publish = permissionBridge.publishMcpToolUse({
+      workspaceId: "wrk_default",
+      sessionId: "sesn_1",
+      mcpServerName: "srv",
+      toolName: "echo",
+      piToolCallId: "toolu_race",
+      input: {},
+      permission: "allow",
+      signal: controller.signal,
+      getEmitter: () => emitter,
+    });
+    controller.abort(); // abort BEFORE the events service binds
+    await expect(publish).rejects.toThrow("MCP tool echo aborted");
+
+    const release = vi.fn();
+    pendingUse?.bindToolUseId("sevt_late_bind", release);
+    expect(results).toEqual([
+      {
+        type: "oma.mcp_tool_result",
+        mcpToolUseId: "sevt_late_bind",
+        content: [{ type: "text", text: "MCP tool echo aborted" }],
+        isError: true,
+      },
+    ]);
+    expect(release).toHaveBeenCalledExactlyOnceWith("interrupted");
+  });
+});
