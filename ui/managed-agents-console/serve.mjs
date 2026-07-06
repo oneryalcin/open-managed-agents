@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve, sep } from "node:path";
 
 const root = resolve(new URL(".", import.meta.url).pathname);
 const port = Number(process.env.OMA_CONSOLE_PORT ?? 4177);
@@ -29,7 +29,9 @@ function resolvePath(urlPath) {
   const clean = normalize(decodeURIComponent(urlPath.split("?")[0] ?? "/"));
   const relative = clean === "/" ? "index.html" : clean.replace(/^\/+/, "");
   const candidate = resolve(join(root, relative));
-  if (!candidate.startsWith(root)) return null;
+  // Boundary-correct containment (#154): a bare startsWith(root) also
+  // accepts prefix-sharing siblings like <root>-private.
+  if (candidate !== root && !candidate.startsWith(root + sep)) return null;
   if (!existsSync(candidate)) return null;
   const stat = statSync(candidate);
   if (stat.isDirectory()) return join(candidate, "index.html");
