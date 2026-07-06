@@ -159,7 +159,10 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     maxSize: MAX_REQUEST_BODY_BYTES,
     onError: (c) => {
       const err = requestTooLarge();
-      return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+      return withAdminNoStore(
+        c.req.path,
+        jsonError(toApiErrorBody(err, c.get("requestId")), err.status),
+      );
     },
   });
 
@@ -254,15 +257,21 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
 
   app.notFound((c) => {
     const err = new ApiError(404, "not_found_error", "Route not found");
-    return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+    return withAdminNoStore(
+      c.req.path,
+      jsonError(toApiErrorBody(err, c.get("requestId")), err.status),
+    );
   });
 
   app.onError((error, c) => {
     const err = ensureApiError(error);
-    return jsonError(
-      toApiErrorBody(err, c.get("requestId")),
-      err.status,
-      err.retryAfterSeconds,
+    return withAdminNoStore(
+      c.req.path,
+      jsonError(
+        toApiErrorBody(err, c.get("requestId")),
+        err.status,
+        err.retryAfterSeconds,
+      ),
     );
   });
 
@@ -585,6 +594,13 @@ function isManagedAgentsRoute(path: string): boolean {
 
 function isAdminRoute(path: string): boolean {
   return path === "/admin" || path.startsWith("/admin/");
+}
+
+function withAdminNoStore(path: string, response: Response): Response {
+  if (isAdminRoute(path)) {
+    response.headers.set("cache-control", "no-store");
+  }
+  return response;
 }
 
 function hasRequiredBeta(path: string, betaFeatures: Set<string>): boolean {

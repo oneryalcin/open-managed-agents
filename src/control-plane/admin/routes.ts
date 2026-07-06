@@ -46,6 +46,7 @@ export function adminRoutes(service: AdminService): Hono<ControlPlaneRouteEnv> {
       action: "revoke_key",
       workspace_id: revoked.workspace_id,
       key_sha256: revoked.key_sha256,
+      revoked_at: revoked.revoked_at,
     });
     return c.json(revoked, 200);
   });
@@ -59,6 +60,7 @@ function emitAdminAudit(
     action: "create_workspace" | "mint_key" | "revoke_key";
     workspace_id: string;
     key_sha256?: string;
+    revoked_at?: string | null;
   },
 ): void {
   console.info(

@@ -163,6 +163,14 @@ Keeping it a top-level `/admin/keys/:sha256` (not nested under a workspace)
 matches the CLI, where the digest alone identifies the key. The response echoes
 `workspace_id` so the caller can confirm scope.
 
+*Retry note:* `POST /admin/workspaces/:id/keys` is intentionally
+non-idempotent in v1. Replaying a lost mint response would require storing or
+reconstructing the plaintext key, violating the "returned once, stored nowhere"
+property. If a client times out after a successful write, the recovery path is
+operator-visible cleanup: list key digests for the workspace, revoke the stray
+digest, and mint a fresh key. A future hardening option may add an
+`Idempotency-Key` conflict guard, but it must not replay plaintext.
+
 ---
 
 ## 5. Admin auth middleware

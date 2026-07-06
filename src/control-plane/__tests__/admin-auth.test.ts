@@ -35,6 +35,15 @@ describe("admin auth", () => {
     expect(() =>
       loadAdminKey({ OMA_ADMIN_KEY: "not-a-canonical-256-bit-key" }),
     ).toThrow("exactly 32 random bytes");
+    expect(() =>
+      loadAdminKey({ OMA_ADMIN_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }),
+    ).toThrow("exactly 32 random bytes");
+    const base64UrlEncoded32Bytes = Buffer.alloc(32, 0xff)
+      .toString("base64")
+      .replaceAll("/", "_");
+    expect(() =>
+      loadAdminKey({ OMA_ADMIN_KEY: base64UrlEncoded32Bytes }),
+    ).toThrow("exactly 32 random bytes");
   });
 
   it("verifies only the exact admin key without retaining plaintext fields", () => {

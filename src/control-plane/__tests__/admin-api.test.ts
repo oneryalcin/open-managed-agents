@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDeploymentControlPlane,
+  MAX_REQUEST_BODY_BYTES,
   type DeploymentControlPlane,
 } from "../app.ts";
 import { generateAdminKey } from "../admin/auth.ts";
@@ -97,6 +98,7 @@ describe("admin API", () => {
       adminKey: ADMIN_KEY,
     });
     expect(missing.status).toBe(404);
+    expect(missing.headers.get("cache-control")).toBe("no-store");
     expect(console.info).toHaveBeenCalledWith(
       expect.stringContaining('"action":"create_workspace"'),
     );
@@ -182,6 +184,7 @@ describe("admin API", () => {
         body,
       });
       expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.headers.get("cache-control")).toBe("no-store");
     }
 
     for (const body of [
@@ -195,6 +198,7 @@ describe("admin API", () => {
         { method: "POST", adminKey: ADMIN_KEY, body },
       );
       expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.headers.get("cache-control")).toBe("no-store");
     }
 
     const invalidJson = await Promise.resolve(
@@ -208,6 +212,28 @@ describe("admin API", () => {
       }),
     );
     expect(invalidJson.status).toBe(400);
+    expect(invalidJson.headers.get("cache-control")).toBe("no-store");
+
+    const unknownRoute = await adminRequest(plane.app, "/admin/nope", {
+      adminKey: ADMIN_KEY,
+    });
+    expect(unknownRoute.status).toBe(404);
+    expect(unknownRoute.headers.get("cache-control")).toBe("no-store");
+
+    const tooLargeBody = JSON.stringify({ name: "x".repeat(MAX_REQUEST_BODY_BYTES) });
+    const tooLarge = await Promise.resolve(
+      plane.app.request("/admin/workspaces", {
+        method: "POST",
+        headers: {
+          "x-admin-key": ADMIN_KEY,
+          "content-type": "application/json",
+          "content-length": String(Buffer.byteLength(tooLargeBody)),
+        },
+        body: tooLargeBody,
+      }),
+    );
+    expect(tooLarge.status).toBe(413);
+    expect(tooLarge.headers.get("cache-control")).toBe("no-store");
     plane.stores.close();
   });
 
@@ -258,6 +284,9 @@ describe("admin API", () => {
     });
     expect(console.info).toHaveBeenCalledWith(
       expect.stringContaining(`"key_sha256":"${keySha256}"`),
+    );
+    expect(console.info).toHaveBeenCalledWith(
+      expect.stringContaining(`"revoked_at":"${revokedBody.revoked_at}"`),
     );
 
     const managed = await managedRequest(plane.app, "/v1/agents", {
