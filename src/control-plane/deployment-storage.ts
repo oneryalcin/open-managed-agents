@@ -218,6 +218,7 @@ function createDurableDeploymentStores(
       sqlitePragmas: () => readSqlitePragmas(db),
       close: () => {
         try {
+          secrets?.scrubMasterKey(); // shares db (closed below); scrub the key
           db.close();
         } finally {
           releaseLock();

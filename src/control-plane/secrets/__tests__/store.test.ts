@@ -26,6 +26,14 @@ describe("SqliteSecretsStore", () => {
     store.close();
   });
 
+  it("scrubMasterKey zeroes the key so reveal fails while the db stays open", () => {
+    store.put(WRK, "github", "ghp_secret_token");
+    expect(store.reveal(WRK, "github")).toBe("ghp_secret_token");
+    store.scrubMasterKey();
+    // Zeroed key -> kekId fingerprint no longer matches the sealed row.
+    expect(() => store.reveal(WRK, "github")).toThrow(/different master key/);
+  });
+
   it("put/reveal round-trips the plaintext", () => {
     store.put(WRK, "github", "ghp_secret_token");
     expect(store.reveal(WRK, "github")).toBe("ghp_secret_token");
