@@ -10,6 +10,7 @@ import { createBestEffortSessionOutputCoordinator } from "../deployment-session-
 import {
   createDeploymentStoresFromEnv,
 } from "../deployment-storage.ts";
+import { generateMasterKey } from "../secrets/master-key.ts";
 import { DefaultEnvironmentService } from "../environments/service.ts";
 import { DefaultFileService } from "../files/service.ts";
 import { LocalObjectFileStorage } from "../files/store.ts";
@@ -936,6 +937,55 @@ describe("deployment storage", () => {
     });
     expect(stores.mode).toBe("durable");
     stores.close();
+  });
+
+  it("constructs a durable secrets store when a master key is configured", async () => {
+    const paths = await durablePaths();
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+      OMA_MASTER_KEY: generateMasterKey(),
+    });
+    expect(stores.secrets).toBeDefined();
+    stores.secrets!.put("wrk_default", "github", "REAL-TOKEN");
+    expect(stores.secrets!.reveal("wrk_default", "github")).toBe("REAL-TOKEN");
+    stores.close();
+  });
+
+  it("leaves the secrets store absent when no master key is configured", async () => {
+    const paths = await durablePaths();
+    const durable = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    expect(durable.secrets).toBeUndefined();
+    durable.close();
+
+    const memory = createDeploymentStoresFromEnv({});
+    expect(memory.secrets).toBeUndefined();
+    memory.close();
+  });
+
+  it("honors the master key in in-memory mode", () => {
+    const stores = createDeploymentStoresFromEnv({
+      OMA_MASTER_KEY: generateMasterKey(),
+    });
+    expect(stores.mode).toBe("memory");
+    expect(stores.secrets).toBeDefined();
+    stores.secrets!.put("wrk_default", "api", "SEED");
+    expect(stores.secrets!.reveal("wrk_default", "api")).toBe("SEED");
+    stores.close();
+  });
+
+  it("fails startup when the master key is malformed", async () => {
+    const paths = await durablePaths();
+    expect(() =>
+      createDeploymentStoresFromEnv({
+        OMA_SQLITE_PATH: paths.sqlitePath,
+        OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+        OMA_MASTER_KEY: "not-a-valid-key",
+      }),
+    ).toThrow(/must be exactly 32 random bytes/);
   });
 
   it("rejects reusing a durable SQLite database with a different object root", async () => {

@@ -2,7 +2,10 @@ import {
   createHostPassthroughSandboxProvider,
   type SandboxProviderFactory,
 } from "./provider.ts";
-import { createDockerSandboxProviderFactory } from "./docker.ts";
+import {
+  createDockerSandboxProviderFactory,
+  type DockerSandboxEgressFactoryOptions,
+} from "./docker.ts";
 import { createMicrosandboxSandboxProviderFactory } from "./microsandbox.ts";
 
 export type SandboxProviderSelection =
@@ -29,6 +32,13 @@ export interface SandboxProviderSelectionResolverOptions {
   allowDockerLocal?: boolean;
   allowMicrosandboxLocal?: boolean;
   hostPassthroughWorkspaceRoot?: string;
+  /**
+   * Per-session credentialed egress (plan 0117e-3). docker-local only:
+   * microsandbox keeps its no-secret posture and host-passthrough has no
+   * network boundary to wire — passing egress with either is an error, never
+   * a silent ignore.
+   */
+  egress?: DockerSandboxEgressFactoryOptions;
 }
 
 export function parseSandboxProviderSelection(
@@ -100,8 +110,12 @@ export function resolveSandboxProviderFactory(
   selection: SandboxProviderSelection | undefined,
   opts: SandboxProviderSelectionResolverOptions = {},
 ): SandboxProviderFactory | undefined {
-  if (selection === undefined || selection.type === "none") return undefined;
+  if (selection === undefined || selection.type === "none") {
+    rejectEgressOption(opts, selection?.type ?? "none");
+    return undefined;
+  }
   if (selection.type === "host-passthrough") {
+    rejectEgressOption(opts, selection.type);
     if (selection.unsafeAllowHostPassthrough !== true) {
       throw new Error(
         "`unsafeAllowHostPassthrough` must be true for host-passthrough",
@@ -136,9 +150,11 @@ export function resolveSandboxProviderFactory(
       operationTimeoutMs: selection.operationTimeoutMs,
       reapStaleContainersOlderThanMs:
         selection.reapStaleContainersOlderThanMs,
+      ...(opts.egress === undefined ? {} : { egress: opts.egress }),
     });
   }
   if (selection.type === "microsandbox-local") {
+    rejectEgressOption(opts, selection.type);
     if (opts.allowMicrosandboxLocal !== true) {
       throw new Error(
         "Microsandbox-local sandbox provider is disabled by deployment configuration",
@@ -152,6 +168,17 @@ export function resolveSandboxProviderFactory(
   }
   const _exhaustive: never = selection;
   throw new Error(`Unsupported sandbox provider type: ${String(_exhaustive)}`);
+}
+
+function rejectEgressOption(
+  opts: SandboxProviderSelectionResolverOptions,
+  providerType: string,
+): void {
+  if (opts.egress !== undefined) {
+    throw new Error(
+      `egress is only supported by docker-local, not ${providerType}`,
+    );
+  }
 }
 
 function objectInput(input: unknown, label: string): Record<string, unknown> {

@@ -52,6 +52,16 @@ import {
   type AdmissionLimits,
   type DeploymentAdmissionEnv,
 } from "./admission.ts";
+import { randomBytes } from "node:crypto";
+import {
+  hasEgressNetworkingConfig,
+  resolveSessionEgressBundle,
+} from "./egress/policy.ts";
+import type { SecretsStore } from "./secrets/types.ts";
+import { DEFAULT_SIDECAR_PORT } from "./sessions/pi/sandbox/docker-egress.ts";
+import type { EgressBundleResolver } from "./sessions/pi/sandbox/docker.ts";
+import { secretsRoutes } from "./secrets/routes.ts";
+import { DefaultSecretsService, type SecretsService } from "./secrets/service.ts";
 import { sessionsRoutes } from "./sessions/routes.ts";
 import { DefaultSessionService } from "./sessions/service.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
@@ -77,6 +87,9 @@ export interface ControlPlaneServices {
   agents: AgentService;
   environments: EnvironmentService;
   files?: FileService;
+  // Absent = no secrets backend wired; the routes still register and return
+  // the clear "requires a master key" 400 (never a confusing 404).
+  secrets?: SecretsService;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
   auth?: ControlPlaneAuth;
@@ -192,6 +205,10 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
       services.admission,
     ),
   );
+  app.route(
+    "/v1/secrets",
+    secretsRoutes(services.secrets ?? new DefaultSecretsService(undefined)),
+  );
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route(
     "/v1/sessions/:sessionId/events",
@@ -247,9 +264,31 @@ export function createDeploymentControlPlane(
         "In-memory stores are per-process, so no API key could ever be provisioned and every request would fail with 401.",
     );
   }
+  // A configured master key means this deployment handles real credentials
+  // (secret values + credentialed egress). Without api-key auth every route —
+  // including POST/DELETE /v1/secrets — resolves to wrk_default unauthenticated,
+  // so anyone who can reach the port could overwrite the credentials the egress
+  // proxy injects. Refuse to boot that combination rather than warn (mirrors
+  // the api-key-requires-durable guard above); an operator who genuinely wants
+  // keyless secrets must not get there by forgetting OMA_AUTH_MODE.
+  if (stores.secrets !== undefined && authMode !== "api-key") {
+    stores.close();
+    throw new Error(
+      "A secrets master key (OMA_MASTER_KEY/OMA_MASTER_KEY_FILE) requires OMA_AUTH_MODE=api-key: " +
+        "without it the /v1/secrets API is unauthenticated and resolves to wrk_default, so anyone " +
+        "reaching the server could read metadata and overwrite the credentials used for egress injection.",
+    );
+  }
   const broadcaster = new SessionEventBroadcaster(stores.events);
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
+    resolveEgressBundle:
+      opts.runner?.resolveEgressBundle ??
+      createSessionEgressBundleResolver({
+        sessions: stores.sessions,
+        environments: stores.environments,
+        ...(stores.secrets === undefined ? {} : { secrets: stores.secrets }),
+      }),
     fileMountResolver: createFileMountResolver(stores.sessions, stores.files),
     customTools:
       opts.runner?.customTools ??
@@ -287,6 +326,7 @@ export function createDeploymentControlPlane(
     agents: new DefaultAgentService(stores.agents),
     environments: new DefaultEnvironmentService(stores.environments),
     files: new DefaultFileService(stores.files),
+    secrets: new DefaultSecretsService(stores.secrets),
     sessions: new DefaultSessionService(
       stores.sessions,
       stores.agents,
@@ -294,6 +334,10 @@ export function createDeploymentControlPlane(
       stores.files,
       {
         runtime: runner,
+        egressCapability: {
+          canHonorNetworking: runtimeConfig.egress !== undefined,
+          hasSecretsStore: stores.secrets !== undefined,
+        },
         deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,
         idempotencyLedger: stores.events,
         createSessionRowsWithIdempotency:
@@ -355,6 +399,44 @@ export function createInMemoryControlPlaneApp(
         : undefined,
     ),
   });
+}
+
+/**
+ * Per-session egress bundle resolution (plan 0117e-3, Option A): session ->
+ * environment -> networking config -> secrets, resolved at sandbox-create
+ * time inside the docker factory closure. Returns undefined for a session
+ * whose environment grants no egress — including hosted-shape networking
+ * (`{type:"unrestricted"}`), which OMA has always ignored. Mints a fresh
+ * URL-safe proxy-auth token per session.
+ */
+export function createSessionEgressBundleResolver(stores: {
+  sessions: Pick<SqliteSessionStore, "retrieveAny">;
+  environments: Pick<SqliteEnvironmentStore, "retrieve">;
+  secrets?: Pick<SecretsStore, "reveal">;
+}): EgressBundleResolver {
+  return async (workspaceId, sessionId) => {
+    // Reads the PERSISTED session row to reach environment_id. This is why
+    // DefaultSessionService.assertEgressHonorable rejects egress + file
+    // resources: that path runs prepareSession (which lands here via the
+    // docker factory) BEFORE store.create inserts the row, so a lookup here
+    // would miss and the boundary would silently vanish. Keep the two in sync.
+    const session = stores.sessions.retrieveAny(workspaceId, sessionId);
+    if (!session) return undefined;
+    const environment = stores.environments.retrieve(
+      workspaceId,
+      session.environment_id,
+    );
+    if (!environment) return undefined;
+    if (!hasEgressNetworkingConfig(environment.config)) return undefined;
+    const resolved = resolveSessionEgressBundle({
+      environmentConfig: environment.config,
+      revealSecret: (name) => stores.secrets?.reveal(workspaceId, name),
+      listenPort: DEFAULT_SIDECAR_PORT,
+      proxyAuthToken: randomBytes(24).toString("hex"),
+    });
+    if (resolved === undefined) return undefined;
+    return { bundle: resolved.bundle, sandboxEnv: resolved.sandboxEnv };
+  };
 }
 
 function createFileMountResolver(
@@ -430,6 +512,9 @@ function isManagedAgentsRoute(path: string): boolean {
     "/v1/agents",
     "/v1/environments",
     "/v1/files",
+    // Secrets MUST be auth-gated: leaving it off this list would skip the
+    // auth middleware and fall back to wrk_default (plan 0117e-2).
+    "/v1/secrets",
     "/v1/sessions",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }

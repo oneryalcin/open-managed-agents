@@ -13,7 +13,12 @@ import type {
   WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 import { matchGlob } from "./glob.ts";
-import { reapEgressSidecars } from "./docker-egress.ts";
+import {
+  createEgressSidecar,
+  egressProxyUrl,
+  reapEgressSidecars,
+} from "./docker-egress.ts";
+import type { SessionEgressBundle } from "../../../egress/policy.ts";
 import {
   createSandboxInvocationStats,
   createSandboxToolDefinitions,
@@ -74,6 +79,37 @@ export interface DockerSandboxOptions {
   egress?: { wiring: SandboxEgressWiring; dispose: () => void };
 }
 
+/**
+ * Per-(workspace, session) egress bundle resolution (plan 0117e-3, Option A).
+ * Built in app.ts, closing over the stores: session -> environment ->
+ * networking config -> resolved secrets. `undefined` = the environment grants
+ * no egress (default deny; --network none, no sidecar).
+ */
+export type EgressBundleResolver = (
+  workspaceId: string,
+  sessionId: string,
+) => Promise<
+  { bundle: SessionEgressBundle; sandboxEnv: Record<string, string> } | undefined
+>;
+
+export interface DockerSandboxEgressFactoryOptions {
+  /** Image running egress-proxy-main. Production: the appliance's own tag. */
+  sidecarImage: string;
+  /** Dev/test: repo bind-mounted at /app when the image lacks OMA source. */
+  sidecarRepoMount?: string;
+  resolveEgressBundle: EgressBundleResolver;
+}
+
+export interface DockerSandboxFactoryOptions
+  extends Omit<DockerSandboxOptions, "egress"> {
+  /**
+   * Deployment-static egress config. Per-session: the factory closure calls
+   * `resolveEgressBundle`, stands up the sidecar for a granted environment,
+   * and hands `createDockerSandboxProvider` the per-session wiring.
+   */
+  egress?: DockerSandboxEgressFactoryOptions;
+}
+
 export interface DockerSandboxReaperOptions {
   dockerCommand?: string;
   olderThanMs: number;
@@ -131,8 +167,9 @@ export interface DockerShellCommand {
 }
 
 export function createDockerSandboxProviderFactory(
-  opts: DockerSandboxOptions = {},
+  opts: DockerSandboxFactoryOptions = {},
 ): SandboxProviderFactory {
+  const { egress: egressConfig, ...baseOpts } = opts;
   let swept = false;
   let sweepPromise: Promise<void> | undefined;
   return async (workspaceId, sessionId) => {
@@ -155,7 +192,55 @@ export function createDockerSandboxProviderFactory(
       );
       await sweepPromise;
     }
-    return createDockerSandboxProvider(workspaceId, sessionId, opts);
+    const egress = egressConfig
+      ? await createSessionEgress(workspaceId, sessionId, egressConfig, baseOpts)
+      : undefined;
+    try {
+      return await createDockerSandboxProvider(workspaceId, sessionId, {
+        ...baseOpts,
+        ...(egress === undefined ? {} : { egress }),
+      });
+    } catch (error) {
+      // createDockerSandboxProvider disposes on its own run failure, but a
+      // throw before that point (option validation) would leak the sidecar.
+      // dispose() is idempotent, so the overlap is harmless.
+      egress?.dispose();
+      throw error;
+    }
+  };
+}
+
+/**
+ * Resolve the session's egress bundle and, when the environment grants
+ * egress, stand up the per-session sidecar (plan 0117e-3). Returns undefined
+ * for a no-egress environment — the sandbox stays at --network none.
+ */
+async function createSessionEgress(
+  workspaceId: string,
+  sessionId: string,
+  egressConfig: DockerSandboxEgressFactoryOptions,
+  baseOpts: Omit<DockerSandboxOptions, "egress">,
+): Promise<NonNullable<DockerSandboxOptions["egress"]> | undefined> {
+  const resolved = await egressConfig.resolveEgressBundle(workspaceId, sessionId);
+  if (resolved === undefined) return undefined;
+  const sidecar = await createEgressSidecar({
+    dockerCommand: baseOpts.dockerCommand ?? "docker",
+    sessionId,
+    bundle: resolved.bundle,
+    sidecarImage: egressConfig.sidecarImage,
+    ...(egressConfig.sidecarRepoMount === undefined
+      ? {}
+      : { sidecarRepoMount: egressConfig.sidecarRepoMount }),
+    operationTimeoutMs: baseOpts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+  });
+  return {
+    wiring: {
+      networkName: sidecar.networkName,
+      caCertDirHostPath: sidecar.sharedDirHostPath,
+      proxyUrl: egressProxyUrl(sidecar),
+      sandboxEnv: resolved.sandboxEnv,
+    },
+    dispose: sidecar.dispose,
   };
 }
 

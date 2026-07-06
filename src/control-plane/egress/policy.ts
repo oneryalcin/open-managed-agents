@@ -92,6 +92,22 @@ const CREDENTIAL_KEYS = new Set([
 const NETWORKING_KEYS = new Set(["allow", "credentials"]);
 
 /**
+ * Whether `config.networking` is OMA's egress-policy shape (`allow` /
+ * `credentials`), as opposed to absent or the hosted wire shape
+ * (`{ type: "unrestricted" }` etc.), which OMA has always ignored — the
+ * sandbox stays at --network none. Callers on the session path (0117e) use
+ * this to decide whether to strict-parse: routing hosted-shape configs into
+ * {@link parseNetworkingConfig} would reject every pre-egress environment.
+ */
+export function hasEgressNetworkingConfig(config: JsonObject): boolean {
+  const networking = config["networking"];
+  return (
+    isPlainObject(networking) &&
+    ("allow" in networking || "credentials" in networking)
+  );
+}
+
+/**
  * Parse `config.networking` into an EgressPolicy. Returns undefined when the
  * config has no `networking` key (default deny — no proxy is stood up).
  * Throws EgressPolicyError on any invalid shape.
