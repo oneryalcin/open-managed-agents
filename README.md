@@ -126,8 +126,9 @@ What's still missing — the
 the authoritative sequencing:
 
 - session usage metering (`usage` is `null`);
-- skills and MCP execution (both wire-accepted today but runtime-inert; now
-  unblocked by the egress + secrets boundary);
+- skills execution (wire-accepted today but runtime-inert; unblocked by the
+  egress + secrets boundary). MCP execution shipped 2026-07-07 (0122 M1,
+  unauthenticated servers; vaults/auth follow in M2);
 - agent versioning, broader event-topology parity, file-upload idempotency,
   remote sandbox providers, RBAC within a workspace, and CI.
 

@@ -477,6 +477,63 @@ export interface RuntimeToolPermissionWithModelEndEvent {
   suppressedPiToolCallIds: readonly string[];
 }
 
+/**
+ * MCP internal runtime events (plan 0122 §4.4) — modeled on the
+ * tool-permission pair: the use event binds its `sevt_*` id BEFORE the tool
+ * executes so the result event can reference it, and the ask-path rides the
+ * same pending-confirmation store.
+ */
+export interface RuntimeMcpToolUseEvent {
+  type: "oma.mcp_tool_use";
+  piToolCallId: string;
+  mcpServerName: string;
+  /** Bare tool name as reported by the server (wire parity: events carry this). */
+  name: string;
+  input: JsonObject;
+  evaluatedPermission: "allow" | "ask" | "deny";
+  bindToolUseId: (
+    toolUseId: string,
+    releaseToolUseId: (reason?: RuntimeActionCloseReason) => void,
+  ) => void;
+  rejectToolUse: (error: Error) => void;
+}
+
+export interface RuntimeMcpToolWithModelEndEvent {
+  type: "oma.mcp_tool_with_model_end";
+  messageEnd: unknown;
+  mcpToolUse: RuntimeMcpToolUseEvent;
+  suppressedPiToolCallIds: readonly string[];
+}
+
+/**
+ * Terminal result for a persisted `agent.mcp_tool_use` — emitted on EVERY
+ * path (success, in-band error, deny, confirmation timeout, abort, call
+ * timeout, transport failure). `mcpToolUseId` is the bound `sevt_*` id.
+ */
+export interface RuntimeMcpToolResultEvent {
+  type: "oma.mcp_tool_result";
+  mcpToolUseId: string;
+  content: ManagedAgentsContentBlock[];
+  isError: boolean;
+}
+
+/** Connect/discovery failure, flushed at turn start as a session.error. */
+export interface RuntimeMcpConnectionFailedEvent {
+  type: "oma.mcp_connection_failed";
+  mcpServerName: string;
+  message: string;
+  retryStatus: "retrying" | "exhausted" | "terminal";
+}
+
+export type RuntimeInternalEvent =
+  | RuntimeCustomToolUseEvent
+  | RuntimeToolPermissionUseEvent
+  | RuntimeToolPermissionWithModelEndEvent
+  | RuntimeMcpToolUseEvent
+  | RuntimeMcpToolWithModelEndEvent
+  | RuntimeMcpToolResultEvent
+  | RuntimeMcpConnectionFailedEvent;
+
 export interface RuntimeTranslatorContext {
   customToolNames?: ReadonlySet<string>;
   publicToolUseIdForPiToolCallId?: (piToolCallId: string) => string | undefined;

@@ -357,6 +357,61 @@ the default `info`; and errors no longer print stack traces unless
 level that **ignores** `OMA_LOG_LEVEL` — turning down diagnostic noise can
 never silence the admin audit trail.
 
+## MCP servers
+
+Design: [0122](plans/0122-mcp-connector.md) M1. Agents can declare remote MCP
+servers (`mcp_servers` + a matching `mcp_toolset` per server) and sessions
+call their tools. The MCP client runs in the **control plane** — the sandbox
+never dials MCP servers, and (from M2) never sees credentials.
+
+**Enabling.** Off by default, like every outbound capability:
+
+```
+OMA_ENABLE_MCP=true              # the gate; orthogonal to the sandbox provider
+OMA_MCP_OPERATION_TIMEOUT_MS=…   # optional; per connect/list/call, default 60000
+```
+
+With the gate off, agents declaring MCP servers still work — each server
+emits one `session.error` (`mcp_connection_failed_error`, message "MCP is
+disabled by deployment configuration", `retry_status: exhausted`) and the
+session continues without those tools.
+
+**Supported servers.** Remote streamable-HTTP transport only (upstream
+parity). No stdio, WebSocket, or legacy HTTP+SSE — wrap local stdio servers
+with an mcp-proxy-style shim if needed.
+
+**What will refuse to connect.** Agent-supplied URLs are attacker-influenced
+input, so control-plane dials are SSRF-guarded: hostnames resolving to
+private/loopback/link-local/reserved ranges (including cloud metadata
+addresses), IP-literal targets in those ranges, and any redirect are refused.
+Validation also rejects URLs with embedded `user:pass@` credentials at agent
+creation (an OMA deviation — hosted accepts these; probe 47). There is no operator override; if you need a private MCP server,
+front it with a public, authenticated endpoint (M2).
+
+**Permissions.** MCP toolsets default to `always_ask` (upstream parity): each
+call pauses the session with `requires_action` until a
+`user.tool_confirmation` referencing the `agent.mcp_tool_use` event id
+arrives. Configure per-tool or per-toolset via `default_config`/`configs`
+`permission_policy` on the `mcp_toolset`.
+
+**Failure and retry.** Session creation never blocks on MCP connectivity
+(the `mcp_connection_failed_error` wire shape follows the Anthropic SDK
+types; probe 47 did not capture a live failure frame):
+failures surface as `session.error` events with `retry_status`
+(`retrying` → will retry on the next idle→running transition; `exhausted` →
+retry budget spent, no more dials this session). Retry uses fresh-handle
+mechanics — a session with a failed server doesn't keep a warm runtime handle
+between turns; the next message rebuilds it and re-dials. The budget is 5
+consecutive failures per (session, server) — an OMA policy, upstream
+publishes none.
+
+**Output cap.** Tool results are capped (400 KB default) with an explicit
+`[truncated by oma: N bytes total]` marker — a deviation from hosted, which
+spills >100K-token outputs to a sandbox file.
+
+Metrics: `oma_mcp_tool_calls_total{outcome}` and
+`oma_mcp_connections_total{event}` (see Observability above).
+
 ## Deployment target shape
 
 The current MVP is suitable for local development and single-node demos.

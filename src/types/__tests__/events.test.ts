@@ -45,6 +45,10 @@ const WIRE_COMPATIBLE_EVENT_TYPES = [
   "agent.tool_use",
   "agent.tool_result",
   "agent.custom_tool_use",
+  // Verified against @anthropic-ai/sdk BetaManagedAgentsAgentMCPToolUseEvent /
+  // ...MCPToolResultEvent (plan 0122 §3.2, scratch/46 probe notes).
+  "agent.mcp_tool_use",
+  "agent.mcp_tool_result",
   // Span observability
   "span.model_request_start",
   "span.model_request_end",

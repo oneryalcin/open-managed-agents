@@ -184,7 +184,7 @@ These four invariants make the rules above *correct under concurrency*. Each is 
 | `web_fetch`, `web_search` | TBD — could run in sandbox (Pi default) or via control plane (more control) | |
 | Pi `AgentSession` instance | | ✅ |
 | Custom tool execution | | ✅ |
-| MCP tool routing (post-MVP) | | ✅ via Anthropic-style MCP proxy |
+| MCP tool routing (0122 M1) | | ✅ control-plane MCP client (streamable HTTP, SSRF-guarded); sandbox never dials MCP servers |
 | Session state, event buffer, pending calls | | ✅ |
 | Files written to `/mnt/session/outputs/` | ✅ (written here) | ✅ (downloaded from here on idle) |
 

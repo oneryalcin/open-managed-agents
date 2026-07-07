@@ -95,6 +95,10 @@ import type {
 } from "./sessions/types.ts";
 import type { PiSessionFileMountResolver } from "./sessions/pi/runner.ts";
 import { createStoreBackedBuiltinToolAccessResolver } from "./sessions/pi/tool-permissions.ts";
+import {
+  createStoreBackedMcpServersProvider,
+  createStoreBackedMcpToolAccessResolver,
+} from "./sessions/pi/mcp/bridge.ts";
 import { translatePiEvent } from "./sessions/pi/translator.ts";
 
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
@@ -563,6 +567,31 @@ export function createDeploymentControlPlane(
       sessions: stores.sessions,
       agents: stores.agents,
     }),
+    // Plan 0122 §4.6: always wired (disabled agents still get their
+    // exhausted session.error), dialing gated by OMA_ENABLE_MCP.
+    mcp: opts.runner?.mcp ?? {
+      enabled: runtimeConfig.mcp !== undefined,
+      servers: createStoreBackedMcpServersProvider({
+        sessions: stores.sessions,
+        agents: stores.agents,
+      }),
+      access: createStoreBackedMcpToolAccessResolver({
+        sessions: stores.sessions,
+        agents: stores.agents,
+      }),
+      ...(runtimeConfig.mcp?.operationTimeoutMs === undefined
+        ? {}
+        : { operationTimeoutMs: runtimeConfig.mcp.operationTimeoutMs }),
+      ...(metrics === undefined
+        ? {}
+        : {
+            onToolCall: (
+              outcome: "ok" | "error" | "denied" | "timeout" | "aborted",
+            ) => metrics.mcpToolCalls.inc({ outcome }),
+            onConnection: (event: "connected" | "connect_failed") =>
+              metrics.mcpConnections.inc({ event }),
+          }),
+    },
   });
   const runtime = { runner, translate: translatePiEvent };
   const sessionEvents = new DefaultSessionEventsService(

@@ -23,6 +23,8 @@ export const EVENT_TYPES = [
   "agent.tool_use",
   "agent.tool_result",
   "agent.custom_tool_use",
+  "agent.mcp_tool_use",
+  "agent.mcp_tool_result",
   // Span observability
   "span.model_request_start",
   "span.model_request_end",
@@ -91,6 +93,41 @@ export interface ManagedAgentsUserToolConfirmationEventInput {
 
 export interface ManagedAgentsUserInterruptEventInput {
   type: "user.interrupt";
+}
+
+/**
+ * agent.mcp_tool_use / agent.mcp_tool_result payloads (plan 0122 §3.2, SDK
+ * shapes). Both are emit-only: never accepted on the user event surface.
+ * Correlation is by top-level event id — `mcp_tool_use_id` is the
+ * `agent.mcp_tool_use` event's `sevt_*` id; there is no payload-level
+ * `tool_use_id` (unlike `agent.tool_use`).
+ */
+export interface ManagedAgentsMcpToolUsePayload {
+  mcp_server_name: string;
+  name: string;
+  input: JsonObject;
+  evaluated_permission?: "allow" | "ask" | "deny";
+  /** Probe 47: hosted emits this (null outside subagent threads). */
+  session_thread_id: string | null;
+}
+
+export interface ManagedAgentsMcpToolResultPayload {
+  mcp_tool_use_id: string;
+  content?: ManagedAgentsContentBlock[];
+  is_error?: boolean | null;
+}
+
+/**
+ * session.error payload for MCP connection failures (plan 0122 §3.3).
+ * `retry_status.type` semantics: `retrying` — will retry on the next
+ * idle→running transition; `exhausted` — retry budget spent (or MCP disabled
+ * by deployment), no further dials this session; `terminal` — reserved.
+ */
+export interface ManagedAgentsMcpConnectionFailedError extends JsonObject {
+  type: "mcp_connection_failed_error";
+  mcp_server_name: string;
+  message: string;
+  retry_status: { type: "retrying" | "exhausted" | "terminal" };
 }
 
 export interface ManagedAgentsSpanModelUsage {

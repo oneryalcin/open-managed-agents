@@ -53,8 +53,8 @@ If this round-trips cleanly on one user, one session, one tool call, with a mid-
 
 Each of these is an additive feature, not a redesign:
 
-- **Vaults** — MCP credential storage with OAuth auto-refresh
-- **MCP servers** — `mcp_toolset`, `mcp_servers` declarations on agents
+- **Vaults** — MCP credential storage with OAuth auto-refresh (0122 M2/M3)
+- ~~**MCP servers**~~ — execution shipped (plan 0122 M1); vault-backed auth still deferred
 - **Memory stores** — FUSE-mounted persistent memory across sessions
 - **Outcomes** — `user.define_outcome`, rubric-graded iterate-revise loop
 - **Multiagent** — `multiagent: coordinator` + session threads
@@ -82,7 +82,7 @@ Keep that matrix, `src/types/events.ts`, and
 |---|---|---|
 | `user.define_outcome` | Outcomes | Post-MVP |
 | `user.tool_result` | Self-hosted sandbox agent-tool results | Self-hosted sandbox mode |
-| `agent.mcp_tool_use`, `agent.mcp_tool_result` | MCP servers | Post-MVP (vaults + MCP cycle) |
+| `agent.mcp_tool_use`, `agent.mcp_tool_result` | MCP servers | Implemented (0122 M1) |
 | `agent.thread_context_compacted` | Pi compaction | Cycle C (SessionManager) — Pi will emit this when context fills; we translate then |
 | `agent.thread_message_sent`, `agent.thread_message_received` | Multiagent | Post-MVP |
 | `session.updated` | Session update requests | Post-MVP |
