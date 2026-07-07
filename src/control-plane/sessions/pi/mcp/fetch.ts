@@ -26,7 +26,7 @@ export type McpFetch = (
 
 export function createGuardedMcpFetch(opts: PinnedLookupOptions = {}): McpFetch {
   const dispatcher = new Agent({
-    connect: { lookup: createPinnedLookup(opts) },
+    connect: { lookup: ipv4FirstLookup(createPinnedLookup(opts)) },
   });
   return async (url, init) => {
     // Node skips the lookup seam entirely for IP-literal hostnames, so a
@@ -41,6 +41,30 @@ export function createGuardedMcpFetch(opts: PinnedLookupOptions = {}): McpFetch 
       redirect: "error",
     }) as unknown as Promise<Response>;
   };
+}
+
+/**
+ * Reorder vetted addresses IPv4-first. Live smoke 48: dual-stack MCP hosts
+ * (e.g. DeepWiki on AWS) resolve v6-first, and on networks without working
+ * v6 egress each new connection burned ~15s of v6 SYN timeouts before
+ * falling back — racing the MCP handshake into its request timeout. Every
+ * address here has already passed the blocked-range check; only the dial
+ * order changes.
+ */
+function ipv4FirstLookup(inner: ReturnType<typeof createPinnedLookup>) {
+  return ((hostname, options, callback) => {
+    inner(hostname, options, (err, address, family) => {
+      if (err || !Array.isArray(address)) {
+        callback(err, address, family);
+        return;
+      }
+      const sorted = [
+        ...address.filter((entry) => entry.family === 4),
+        ...address.filter((entry) => entry.family !== 4),
+      ];
+      callback(null, sorted);
+    });
+  }) as ReturnType<typeof createPinnedLookup>;
 }
 
 function assertLiteralHostAllowed(

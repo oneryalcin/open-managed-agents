@@ -710,6 +710,17 @@ Accepted as-is: Opus LOW-5 (cap approximations — commented), LOW-6
 publish/persist duplication until after M2 and confirmed M2 readiness
 (byte-exact URLs at the store layer, clean requestInit seam).
 
+**Live OMA smoke 48 (2026-07-07, `scratch/48-mcp-live-smoke.ts`):** the full
+production stack end-to-end — real model turn (claude-sonnet-4-6) through
+the real runner/Pi loop/bridge with the PRODUCTION SSRF guard against the
+public DeepWiki server; correlated `agent.mcp_tool_use`/`mcp_tool_result`
+persisted and the model answered from the tool output. Caught a shipping
+bug hermetic tests could not: undici 8.7's connect path spent ~15s per new
+connection to dual-stack hosts (v6-first racing, ignores lookup order),
+timing out MCP handshakes on networks without v6 egress. Fixed by pinning
+undici to 7.28.0 (Node 24's bundled family, 533ms) + IPv4-first ordering in
+the guarded fetch.
+
 **Open questions (for the live hosted probe / implementation):**
 
 1. **Model-visible tool naming** — `mcp__{server}__{tool}` with
