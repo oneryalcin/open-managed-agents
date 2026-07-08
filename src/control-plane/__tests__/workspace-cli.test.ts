@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -133,9 +134,13 @@ describe("oma-workspaces CLI", () => {
     // Direct tsx entry (no npx indirection) with a hard timeout: execFileSync
     // blocks the event loop, so a hung child would otherwise wedge the whole
     // suite beyond Vitest's control.
+    // Resolve tsx via its exported `./cli` subpath (walks up to the real
+    // install) rather than a cwd-relative path into its private dist layout —
+    // the latter breaks under git worktrees and hoisted/PnP node_modules.
+    const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
     const stdout = execFileSync(
       process.execPath,
-      ["node_modules/tsx/dist/cli.mjs", "scripts/oma-workspaces.ts", "list-workspaces"],
+      [tsxCli, "scripts/oma-workspaces.ts", "list-workspaces"],
       {
         env: { ...process.env, OMA_SQLITE_PATH: db },
         encoding: "utf8",
