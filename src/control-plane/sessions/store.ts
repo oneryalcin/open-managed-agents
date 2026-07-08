@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   agent_id       TEXT NOT NULL,
   agent_version  INTEGER NOT NULL,
   environment_id TEXT NOT NULL,
+  vault_ids      TEXT NOT NULL DEFAULT '[]',
   status         TEXT NOT NULL,
   title          TEXT,
   metadata       TEXT NOT NULL,
@@ -102,6 +103,7 @@ interface SessionDbRow {
   agent_id: string;
   agent_version: number;
   environment_id: string;
+  vault_ids: string;
   status: SessionRow["status"];
   title: string | null;
   metadata: string;
@@ -144,11 +146,12 @@ export class SqliteSessionStore implements SessionStore {
   constructor(db: DatabaseSync) {
     this.db = db;
     this.db.exec(SCHEMA);
+    ensureVaultIdsColumn(this.db);
     this.insertStmt = this.db.prepare(
       `INSERT INTO sessions (
         id, workspace_id, type, agent_id, agent_version, environment_id,
-        status, title, metadata, created_at, updated_at, archived_at, usage
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        vault_ids, status, title, metadata, created_at, updated_at, archived_at, usage
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.insertResourceStmt = this.db.prepare(
       `INSERT INTO session_resources (
@@ -306,6 +309,7 @@ export class SqliteSessionStore implements SessionStore {
         s.agent.id,
         s.agent.version,
         s.environment_id,
+        JSON.stringify(s.vault_ids ?? []),
         s.status,
         s.title,
         JSON.stringify(s.metadata),
@@ -582,6 +586,7 @@ export class SqliteSessionStore implements SessionStore {
         version: row.agent_version,
       },
       environment_id: row.environment_id,
+      vault_ids: parseVaultIds(row.vault_ids),
       status: row.status,
       title: row.title,
       metadata: JSON.parse(row.metadata) as Record<string, string>,
@@ -596,6 +601,21 @@ export class SqliteSessionStore implements SessionStore {
       ) as unknown as SessionRow["resources"],
     };
   }
+}
+
+function ensureVaultIdsColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(sessions)").all() as Array<{
+    name: string;
+  }>;
+  if (columns.some((column) => column.name === "vault_ids")) return;
+  db.exec("ALTER TABLE sessions ADD COLUMN vault_ids TEXT NOT NULL DEFAULT '[]'");
+}
+
+function parseVaultIds(value: string): string[] {
+  const parsed = JSON.parse(value) as unknown;
+  return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
+    ? [...parsed]
+    : [];
 }
 
 function selectListArgs(

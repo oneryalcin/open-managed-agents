@@ -14,6 +14,7 @@ import { createGuardedMcpFetch } from "../fetch.ts";
 import {
   capContent,
   createMcpToolDefinitions,
+  createStoreBackedMcpCredentialResolver,
   createStoreBackedMcpToolAccessResolver,
   normalizeMcpContent,
   type McpEmitter,
@@ -456,6 +457,68 @@ describe("createStoreBackedMcpToolAccessResolver (plan 0122 §4.4)", () => {
     ]);
     // "echo" ≠ "Echo": the disable does not apply.
     expect(resolve("wrk", "sesn", "srv", "echo").enabled).toBe(true);
+  });
+});
+
+describe("createStoreBackedMcpCredentialResolver (plan 0122 M2)", () => {
+  it("uses session vault_ids order and exact server URL matching", () => {
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: {
+        retrieveAny: () =>
+          ({
+            vault_ids: ["vlt_first", "vlt_second"],
+          }) as never,
+      },
+      vaults: {
+        resolveCredential: (_workspaceId, vaultIds, serverUrl) => {
+          expect(vaultIds).toEqual(["vlt_first", "vlt_second"]);
+          if (serverUrl !== "https://mcp.example.com/mcp") return undefined;
+          return {
+            credentialId: "vcrd_first",
+            updatedAt: "2026-07-08T00:00:00.000Z",
+            token: "REAL_TOKEN",
+          };
+        },
+      },
+    });
+
+    expect(
+      resolve("wrk_default", "sesn_1", "https://mcp.example.com/mcp"),
+    ).toEqual({
+      authorization: "Bearer REAL_TOKEN",
+      fingerprint: "vcrd_first:2026-07-08T00:00:00.000Z",
+    });
+    expect(
+      resolve("wrk_default", "sesn_1", "https://mcp.example.com/mcp/"),
+    ).toBeUndefined();
+  });
+
+  it("uses creation-time vault_ids when pre-commit session row is not visible", () => {
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: {
+        retrieveAny: () => undefined,
+      },
+      vaults: {
+        resolveCredential: (_workspaceId, vaultIds, serverUrl) => {
+          expect(vaultIds).toEqual(["vlt_precommit"]);
+          expect(serverUrl).toBe("https://mcp.example.com/mcp");
+          return {
+            credentialId: "vcrd_precommit",
+            updatedAt: "2026-07-08T00:00:00.000Z",
+            token: "PRECOMMIT_TOKEN",
+          };
+        },
+      },
+    });
+
+    expect(
+      resolve("wrk_default", "sesn_precommit", "https://mcp.example.com/mcp", {
+        vaultIds: ["vlt_precommit"],
+      }),
+    ).toEqual({
+      authorization: "Bearer PRECOMMIT_TOKEN",
+      fingerprint: "vcrd_precommit:2026-07-08T00:00:00.000Z",
+    });
   });
 });
 

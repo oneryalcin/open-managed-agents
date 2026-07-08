@@ -80,6 +80,10 @@ import { sessionsRoutes } from "./sessions/routes.ts";
 import { DefaultSessionService } from "./sessions/service.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
 import type { SessionService } from "./sessions/types.ts";
+import { vaultsRoutes } from "./vaults/routes.ts";
+import { DefaultVaultService } from "./vaults/service.ts";
+import { SqliteVaultStore } from "./vaults/store.ts";
+import type { VaultService } from "./vaults/types.ts";
 import {
   createFileMountResolver,
   createSessionEgressBundleResolver,
@@ -87,6 +91,7 @@ import {
 } from "./wiring.ts";
 import { createStoreBackedBuiltinToolAccessResolver } from "./sessions/pi/tool-permissions.ts";
 import {
+  createStoreBackedMcpCredentialResolver,
   createStoreBackedMcpServersProvider,
   createStoreBackedMcpToolAccessResolver,
 } from "./sessions/pi/mcp/bridge.ts";
@@ -116,6 +121,7 @@ export interface ControlPlaneServices {
   // Absent = no secrets backend wired; the routes still register and return
   // the clear "requires a master key" 400 (never a confusing 404).
   secrets?: SecretsService;
+  vaults?: VaultService;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
   auth?: ControlPlaneAuth;
@@ -313,6 +319,9 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     "/v1/secrets",
     secretsRoutes(services.secrets ?? new DefaultSecretsService(undefined)),
   );
+  if (services.vaults) {
+    app.route("/v1/vaults", vaultsRoutes(services.vaults));
+  }
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route(
     "/v1/sessions/:sessionId/events",
@@ -481,6 +490,7 @@ export function createDeploymentControlPlane(
     );
   }
   const broadcaster = new SessionEventBroadcaster(stores.events);
+  const vaultService = new DefaultVaultService(stores.vaults);
   const sandboxProviderName = runtimeConfig.sandboxProviderSelection?.type ?? "none";
   if (metrics !== undefined) {
     // Turn outcomes/durations at the single post-commit chokepoint (plan
@@ -566,6 +576,10 @@ export function createDeploymentControlPlane(
         sessions: stores.sessions,
         agents: stores.agents,
       }),
+      credentials: createStoreBackedMcpCredentialResolver({
+        sessions: stores.sessions,
+        vaults: vaultService,
+      }),
       access: createStoreBackedMcpToolAccessResolver({
         sessions: stores.sessions,
         agents: stores.agents,
@@ -579,7 +593,9 @@ export function createDeploymentControlPlane(
             onToolCall: (
               outcome: "ok" | "error" | "denied" | "timeout" | "aborted",
             ) => metrics.mcpToolCalls.inc({ outcome }),
-            onConnection: (event: "connected" | "connect_failed") =>
+            onConnection: (
+              event: "connected" | "connect_failed" | "auth_failed",
+            ) =>
               metrics.mcpConnections.inc({ event }),
           }),
     },
@@ -631,6 +647,7 @@ export function createDeploymentControlPlane(
     environments: new DefaultEnvironmentService(stores.environments),
     files: new DefaultFileService(stores.files),
     secrets: new DefaultSecretsService(stores.secrets),
+    vaults: vaultService,
     sessions: new DefaultSessionService(
       stores.sessions,
       stores.agents,
@@ -642,6 +659,7 @@ export function createDeploymentControlPlane(
           canHonorNetworking: runtimeConfig.egress !== undefined,
           hasSecretsStore: stores.secrets !== undefined,
         },
+        vaults: vaultService,
         deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,
         idempotencyLedger: stores.events,
         createSessionRowsWithIdempotency:
@@ -725,6 +743,7 @@ export function createInMemoryControlPlaneApp(
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
+  const vaultStore = SqliteVaultStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
   const fileStorage = new InMemoryFileStorage();
   const sessionOutputCoordinator = createBestEffortSessionOutputCoordinator({
@@ -737,10 +756,12 @@ export function createInMemoryControlPlaneApp(
     events: eventStore,
   });
   const broadcaster = new SessionEventBroadcaster(eventStore);
+  const vaultService = new DefaultVaultService(vaultStore);
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore),
     environments: new DefaultEnvironmentService(environmentStore),
     files: new DefaultFileService(fileStorage),
+    vaults: vaultService,
     sessions: new DefaultSessionService(
       sessionStore,
       agentStore,
@@ -748,6 +769,7 @@ export function createInMemoryControlPlaneApp(
       fileStorage,
       {
         ...(opts.runtime?.runner ? { runtime: opts.runtime.runner } : {}),
+        vaults: vaultService,
         idempotencyLedger: eventStore,
         createSessionRowsWithIdempotency:
           sessionStore.createAndCompleteIdempotency.bind(sessionStore),
@@ -782,6 +804,9 @@ function isManagedAgentsRoute(path: string): boolean {
     // Secrets MUST be auth-gated: leaving it off this list would skip the
     // auth middleware and fall back to wrk_default (plan 0117e-2).
     "/v1/secrets",
+    // Vault credentials also carry secret metadata and must not silently bind
+    // to wrk_default if someone forgets the auth prefix registration.
+    "/v1/vaults",
     "/v1/sessions",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }

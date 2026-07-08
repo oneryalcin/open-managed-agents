@@ -80,6 +80,8 @@ function isDeniedKey(key: string): boolean {
 // (C1 review, Codex P2 / Opus M1).
 const HEADER_ASSIGNMENT =
   /(x-api-key|x-admin-key|proxy-authorization|authorization)(\s*[:=]\s*)(?:(?:Bearer|Basic|Digest)\s+)?\S+/gi;
+const JSON_HEADER_ASSIGNMENT =
+  /(["'])(x-api-key|x-admin-key|proxy-authorization|authorization)\1(\s*:\s*)(["'])(?:(?:Bearer|Basic|Digest)\s+)?[^"']+\4/gi;
 // Workspace API keys: oma_ + base64url(32 bytes) (workspaces/store.ts).
 const OMA_KEY = /oma_[A-Za-z0-9_-]+/g;
 // Admin/master keys: base64(32 bytes) = 43 chars + optional pad, standalone.
@@ -108,6 +110,11 @@ const QUERY_CREDENTIAL =
 
 export function scrubSecrets(text: string): string {
   let out = text
+    .replace(
+      JSON_HEADER_ASSIGNMENT,
+      (_m, keyQuote: string, name: string, sep: string, valueQuote: string) =>
+        `${keyQuote}${name}${keyQuote}${sep}${valueQuote}[redacted]${valueQuote}`,
+    )
     .replace(HEADER_ASSIGNMENT, (_m, name: string, sep: string) => `${name}${sep}[redacted]`)
     .replace(OMA_KEY, "[redacted]")
     .replace(BASE64_32_BYTES, "[redacted]");

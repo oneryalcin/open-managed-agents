@@ -432,6 +432,12 @@ export interface RuntimeSessionPrepareOptions {
    * row is committed. The committed row remains authoritative after create.
    */
   environmentId?: string;
+  /**
+   * Creation-time hint for MCP credential resolution during pre-commit
+   * file-resource preparation. The committed row remains authoritative after
+   * create; this only covers the row-not-yet-visible window.
+   */
+  vaultIds?: readonly string[];
   agent?: {
     type: "agent";
     id: string;
@@ -520,6 +526,7 @@ export interface RuntimeMcpToolResultEvent {
 /** Connect/discovery failure, flushed at turn start as a session.error. */
 export interface RuntimeMcpConnectionFailedEvent {
   type: "oma.mcp_connection_failed";
+  errorType?: "mcp_connection_failed_error" | "mcp_authentication_failed_error";
   mcpServerName: string;
   message: string;
   retryStatus: "retrying" | "exhausted" | "terminal";

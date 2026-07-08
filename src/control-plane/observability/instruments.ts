@@ -100,7 +100,7 @@ export function createControlPlaneMetrics(): ControlPlaneMetrics {
 }
 
 const MCP_TOOL_CALL_OUTCOMES = ["ok", "error", "denied", "timeout", "aborted"];
-const MCP_CONNECTION_EVENTS = ["connected", "connect_failed"];
+const MCP_CONNECTION_EVENTS = ["connected", "connect_failed", "auth_failed"];
 
 export function registerProcessGauges(registry: MetricsRegistry): void {
   const loopDelay = monitorEventLoopDelay({ resolution: 20 });

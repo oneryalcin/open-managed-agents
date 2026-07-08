@@ -19,6 +19,7 @@ export interface SessionRow {
   type: "session";
   agent: ManagedAgentsSessionAgentRef;
   environment_id: string;
+  vault_ids?: string[];
   status: ManagedAgentsSessionStatus;
   title: string | null;
   metadata: Record<string, string>;

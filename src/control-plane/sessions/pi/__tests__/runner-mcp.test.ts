@@ -31,7 +31,8 @@ function mcpRunner(opts: {
   access?: (toolName: string) => { enabled: boolean; permission: "allow" | "ask" | "deny" };
   maxConsecutiveFailures?: number;
   idleTtlMs?: number;
-  onConnection?: (event: "connected" | "connect_failed") => void;
+  credentials?: () => { authorization: string; fingerprint: string } | undefined;
+  onConnection?: (event: "connected" | "connect_failed" | "auth_failed") => void;
   customTools?: () => readonly { type: "custom"; name: string; input_schema: Record<string, never> }[];
 }): PiSessionRunner {
   return new PiSessionRunner({
@@ -40,6 +41,9 @@ function mcpRunner(opts: {
     mcp: {
       enabled: opts.enabled ?? true,
       servers: () => [{ name: "srv", url: opts.url }],
+      ...(opts.credentials === undefined
+        ? {}
+        : { credentials: () => opts.credentials?.() }),
       access: (_w, _s, _server, toolName) =>
         opts.access?.(toolName) ?? { enabled: true, permission: "allow" },
       fetch: seamFetch,
@@ -75,6 +79,37 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     const names = runner.customToolNames?.("wrk_default", "sesn_mcp");
     expect(names?.has("mcp__srv__echo")).toBe(true);
     expect(names?.has("mcp__srv__hidden")).toBe(false);
+  });
+
+  it("sends bearer credentials to the MCP server on the wire", async () => {
+    fixture = await startMcpFixture([echoTool()], {
+      requireBearer: "REAL_TOKEN",
+    });
+    runner = mcpRunner({
+      url: fixture.url,
+      credentials: () => ({
+        authorization: "Bearer REAL_TOKEN",
+        fingerprint: "vcrd_real:1",
+      }),
+    });
+
+    await runner.prepareSession("wrk_default", "sesn_bearer");
+
+    expect(runner.customToolNames?.("wrk_default", "sesn_bearer")?.has(
+      "mcp__srv__echo",
+    )).toBe(true);
+    expect(fixture.authorizations.length).toBeGreaterThan(0);
+    expect(fixture.authorizations.every(
+      (entry) => entry.authorization === "Bearer REAL_TOKEN",
+    )).toBe(true);
+    expect(fixture.authorizations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "POST",
+          authorization: "Bearer REAL_TOKEN",
+        }),
+      ]),
+    );
   });
 
   it("deployment gate off: session builds, zero dials", async () => {
@@ -146,6 +181,83 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     await runner.prepareSession("wrk_default", "sesn_budget");
     expect(attempts).toEqual(["connect_failed", "connect_failed"]);
+  });
+
+  it("classifies reached 401/403 MCP dials as authentication failures", async () => {
+    const leakedToken = "TOKEN_THAT_MUST_NOT_PERSIST";
+    const connectionEvents: Array<"connected" | "connect_failed" | "auth_failed"> = [];
+    const connect = vi
+      .spyOn(McpConnection, "connect")
+      .mockRejectedValue(
+        Object.assign(new Error(`probe 401 echoed Bearer ${leakedToken}`), {
+          code: 401,
+        }),
+      );
+    runner = mcpRunner({
+      url: "https://mcp.example.com/mcp",
+      credentials: () => ({
+        authorization: `Bearer ${leakedToken}`,
+        fingerprint: "vcrd_bad:1",
+      }),
+      onConnection: (event) => connectionEvents.push(event),
+    });
+
+    const controller = new AbortController();
+    let failure: unknown;
+    try {
+      for await (const event of runner.runUserMessage(
+        "wrk_default",
+        "sesn_auth_class",
+        "hello",
+        { signal: controller.signal },
+      )) {
+        if ((event as { type?: unknown }).type === "oma.mcp_connection_failed") {
+          failure = event;
+          controller.abort();
+          break;
+        }
+      }
+    } catch {
+      // Abort/model failure after the flush is irrelevant.
+    }
+    expect(connect).toHaveBeenCalledWith(
+      { name: "srv", url: "https://mcp.example.com/mcp" },
+      expect.objectContaining({ authorization: `Bearer ${leakedToken}` }),
+    );
+    expect(JSON.stringify(failure)).not.toContain(leakedToken);
+    expect(failure).toMatchObject({
+      message: "MCP authentication failed",
+      errorType: "mcp_authentication_failed_error",
+      retryStatus: "retrying",
+    });
+    expect(connectionEvents).toEqual(["auth_failed"]);
+  });
+
+  it("keeps exhausted handles refreshable when the credential fingerprint changes", async () => {
+    const connect = vi
+      .spyOn(McpConnection, "connect")
+      .mockRejectedValue(Object.assign(new Error("Forbidden"), { code: 403 }));
+    let fingerprint = "vcrd_bad:1";
+    runner = mcpRunner({
+      url: "https://mcp.example.com/mcp",
+      maxConsecutiveFailures: 1,
+      credentials: () => ({
+        authorization: `Bearer ${fingerprint}`,
+        fingerprint,
+      }),
+    });
+
+    await runner.prepareSession("wrk_default", "sesn_rotate");
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    // Same exhausted fingerprint: no re-dial, but the skipped handle must
+    // remain closeWhenIdle so a later rotation is observed on the next build.
+    await runner.prepareSession("wrk_default", "sesn_rotate");
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    fingerprint = "vcrd_bad:2";
+    await runner.prepareSession("wrk_default", "sesn_rotate");
+    expect(connect).toHaveBeenCalledTimes(2);
   });
 
   it("recovers on the next rebuild when the server comes back", async () => {

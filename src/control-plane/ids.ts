@@ -31,3 +31,11 @@ export function newSessionId(): string {
 export function newSecretId(): string {
   return `sec_${uuidv7()}`;
 }
+
+export function newVaultId(): string {
+  return `vlt_${uuidv7()}`;
+}
+
+export function newVaultCredentialId(): string {
+  return `vcrd_${uuidv7()}`;
+}

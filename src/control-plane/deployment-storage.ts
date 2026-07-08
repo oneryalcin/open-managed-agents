@@ -38,6 +38,7 @@ import {
 } from "./secrets/master-key.ts";
 import { SqliteSecretsStore } from "./secrets/store.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
+import { SqliteVaultStore } from "./vaults/store.ts";
 import { SqliteWorkspaceStore } from "./workspaces/store.ts";
 
 export interface DeploymentStorageEnv {
@@ -73,6 +74,7 @@ export interface DeploymentStores {
   // Present only when a master key is configured (OMA_MASTER_KEY[_FILE]);
   // undefined otherwise. The secrets HTTP API 4xxs when this is absent.
   secrets?: SqliteSecretsStore;
+  vaults: SqliteVaultStore;
   mode: "memory" | "durable";
   sessionCoordinator: DeploymentSessionCoordinator;
   sessionOutputCoordinator: DeploymentSessionOutputCoordinator;
@@ -118,12 +120,13 @@ function createInMemoryDeploymentStores(
   const sessions = SqliteSessionStore.open(":memory:");
   const events = EventStore.open(":memory:");
   const workspaces = SqliteWorkspaceStore.open(":memory:");
-  // Honor the key even in memory so tests can exercise the secrets path; each
-  // in-memory store owns its own :memory: db and closes it individually.
+  // Honor the key even in memory so tests can exercise the secrets path. When
+  // secrets exist, vault metadata and secrets intentionally share one handle:
+  // M2 credential writes rely on one outer transaction spanning both tables.
+  const vaultDb = new DatabaseSync(":memory:");
   const secrets =
-    masterKey === undefined
-      ? undefined
-      : SqliteSecretsStore.open(":memory:", masterKey);
+    masterKey === undefined ? undefined : new SqliteSecretsStore(vaultDb, masterKey);
+  const vaults = new SqliteVaultStore(vaultDb, secrets);
   const files = new InMemoryFileStorage();
   const sessionCoordinator = createInMemorySessionCoordinator({
     sessions,
@@ -146,6 +149,7 @@ function createInMemoryDeploymentStores(
     events,
     files,
     secrets,
+    vaults,
     mode: "memory",
     sessionCoordinator,
     sessionOutputCoordinator,
@@ -156,7 +160,8 @@ function createInMemoryDeploymentStores(
       sessions.close();
       events.close();
       workspaces.close();
-      secrets?.close();
+      secrets?.scrubMasterKey();
+      vaults.close();
     },
   };
 }
@@ -188,6 +193,7 @@ function createDurableDeploymentStores(
     // shared db exactly once.
     const secrets =
       masterKey === undefined ? undefined : new SqliteSecretsStore(db, masterKey);
+    const vaults = new SqliteVaultStore(db, secrets);
     const files = new LocalObjectFileStorage(db, resolvedObjectRoot);
     const sessionCoordinator = createSingleDatabaseSessionCoordinator({
       sessions,
@@ -211,6 +217,7 @@ function createDurableDeploymentStores(
       events,
       files,
       secrets,
+      vaults,
       mode: "durable",
       sessionCoordinator,
       sessionOutputCoordinator,

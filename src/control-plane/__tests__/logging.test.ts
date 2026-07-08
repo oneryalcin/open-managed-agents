@@ -145,6 +145,13 @@ describe("secret scrubbing (absence-based)", () => {
     );
   });
 
+  it("masks JSON-serialized authorization headers", () => {
+    const token = "jsonserializedbearer";
+    const scrubbed = scrubSecrets(JSON.stringify({ authorization: `Bearer ${token}` }));
+    expect(scrubbed).not.toContain(token);
+    expect(scrubbed).toContain('"authorization":"[redacted]"');
+  });
+
   it("scrubs foreign provider key shapes", () => {
     const jwt =
       "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk";
