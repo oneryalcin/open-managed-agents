@@ -85,7 +85,6 @@ interface FileDbRow {
   sha256: string;
 }
 
-
 export class LocalObjectFileStorage implements FileStorage {
   private readonly objectRoot: string;
   private readonly objectsDir: string;
@@ -735,7 +734,6 @@ export class LocalObjectFileStorage implements FileStorage {
     }
   }
 }
-
 
 function publicListSql(cursorPredicate: string, order: "ASC" | "DESC"): string {
   return `

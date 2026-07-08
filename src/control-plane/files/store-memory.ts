@@ -444,7 +444,6 @@ export class InMemoryFileStorage implements FileStorage {
   }
 }
 
-
 async function* singleChunk(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   yield bytes;
 }
