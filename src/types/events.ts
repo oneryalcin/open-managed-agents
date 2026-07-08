@@ -130,6 +130,13 @@ export interface ManagedAgentsMcpConnectionFailedError extends JsonObject {
   retry_status: { type: "retrying" | "exhausted" | "terminal" };
 }
 
+export interface ManagedAgentsMcpAuthenticationFailedError extends JsonObject {
+  type: "mcp_authentication_failed_error";
+  mcp_server_name: string;
+  message: string;
+  retry_status: { type: "retrying" | "exhausted" | "terminal" };
+}
+
 export interface ManagedAgentsSpanModelUsage {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;

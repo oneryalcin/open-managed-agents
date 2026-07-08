@@ -315,20 +315,6 @@ describe("Core control-plane API", () => {
       "Field `sandbox_provider` is not yet supported by this server.",
     );
 
-    await expectError(
-      await app.request("/v1/sessions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          agent: agent.id,
-          environment_id: environment.id,
-          vault_ids: [],
-        }),
-      }),
-      400,
-      "invalid_request_error",
-      "Field `vault_ids` is not yet supported by this server.",
-    );
   });
 
   it("rejects unknown session-create fields instead of silently ignoring them", async () => {

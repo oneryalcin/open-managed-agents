@@ -36,6 +36,7 @@ import type { FileStorage, FileStorageRecord } from "../files/types.ts";
 import { newFileId, newSessionId, newSessionResourceId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { parseCreateSession, parseAgentRef } from "./request.ts";
+import type { VaultService } from "../vaults/types.ts";
 import {
   normalizeSessionFileResources,
   type SessionFileResourceMountInput,
@@ -97,6 +98,7 @@ export interface DefaultSessionServiceOptions {
   maxFileResources?: number;
   maxMountedBytes?: number;
   egressCapability?: SessionEgressCapability;
+  vaults?: Pick<VaultService, "assertVaultsUsable">;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
   deleteSessionRows?: (
     workspaceId: WorkspaceId,
@@ -116,6 +118,7 @@ export interface DefaultSessionServiceOptions {
 export class DefaultSessionService implements SessionService {
   private readonly maxActiveSessionsPerWorkspace: number | undefined;
   private readonly egressCapability: SessionEgressCapability | undefined;
+  private readonly vaults: Pick<VaultService, "assertVaultsUsable"> | undefined;
   private readonly maxFileResources: number;
   private readonly maxMountedBytes: number;
   private readonly runtime:
@@ -162,6 +165,7 @@ export class DefaultSessionService implements SessionService {
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.egressCapability = opts.egressCapability;
+    this.vaults = opts.vaults;
     this.runtime = opts.runtime;
     this.deleteSessionRows = opts.deleteSessionRows;
     this.idempotencyLedger = opts.idempotencyLedger;
@@ -353,6 +357,7 @@ export class DefaultSessionService implements SessionService {
     if (!environment) {
       throw invalidRequest(`Environment ${req.environment_id} not found`);
     }
+    this.assertVaultsUsable(workspaceId, req.vault_ids ?? []);
     this.assertEgressHonorable(environment);
 
     const now = new Date().toISOString();
@@ -380,6 +385,7 @@ export class DefaultSessionService implements SessionService {
         version: agent.version,
       },
       environment_id: environment.id,
+      vault_ids: req.vault_ids ?? [],
       status: "idle",
       title: req.title ?? null,
       metadata: req.metadata ?? {},
@@ -451,6 +457,17 @@ export class DefaultSessionService implements SessionService {
       }
       throw error;
     }
+  }
+
+  private assertVaultsUsable(
+    workspaceId: WorkspaceId,
+    vaultIds: readonly string[],
+  ): void {
+    if (vaultIds.length === 0) return;
+    if (!this.vaults) {
+      throw invalidRequest("Vaults are not supported by this server.");
+    }
+    this.vaults.assertVaultsUsable(workspaceId, vaultIds);
   }
 
   retrieve(

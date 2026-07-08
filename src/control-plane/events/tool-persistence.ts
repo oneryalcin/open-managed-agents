@@ -174,7 +174,7 @@ export function materializeMcpConnectionFailedRows(
         type: "session.error",
         payload: {
           error: {
-            type: "mcp_connection_failed_error",
+            type: input.event.errorType ?? "mcp_connection_failed_error",
             mcp_server_name: input.event.mcpServerName,
             message: input.event.message,
             retry_status: { type: input.event.retryStatus },

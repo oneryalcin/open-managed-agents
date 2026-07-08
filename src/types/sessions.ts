@@ -21,6 +21,7 @@ export type CreateManagedSessionAgentInput =
 export interface CreateManagedSessionRequest {
   agent: CreateManagedSessionAgentInput;
   environment_id: string;
+  vault_ids?: string[];
   title?: string | null;
   metadata?: Record<string, string>;
   resources?: CreateManagedSessionResourceInput[];
@@ -49,6 +50,7 @@ export interface ManagedAgentsSession {
   type: "session";
   agent: ManagedAgentsSessionAgentRef;
   environment_id: string;
+  vault_ids: string[];
   status: ManagedAgentsSessionStatus;
   title: string | null;
   metadata: Record<string, string>;

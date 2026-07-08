@@ -379,6 +379,37 @@ describe("MCP events e2e (plan 0122 §5)", () => {
     });
   });
 
+  it("persists MCP authentication failures with the hosted auth-failure discriminator", async () => {
+    const runner = new ScriptedRunner([
+      {
+        type: "oma.mcp_connection_failed",
+        errorType: "mcp_authentication_failed_error",
+        mcpServerName: "srv",
+        message: "Unauthorized",
+        retryStatus: "exhausted",
+      } satisfies RuntimeInternalEvent,
+    ]);
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: translatePiEvent },
+    });
+    const session = await setupSession(app);
+
+    await sendMessage(app, session.id, "hello");
+    const events = await eventuallyEvents(app, session.id, (all) =>
+      all.some((event) => event.type === "session.error"),
+    );
+    expect(
+      events.find((event) => event.type === "session.error"),
+    ).toMatchObject({
+      error: {
+        type: "mcp_authentication_failed_error",
+        mcp_server_name: "srv",
+        message: "Unauthorized",
+        retry_status: { type: "exhausted" },
+      },
+    });
+  });
+
   it("coalesced mcp_tool_with_model_end persists agent.message + mcp_tool_use, no generic tool_use", async () => {
     const mcpToolUse = {
       type: "oma.mcp_tool_use" as const,

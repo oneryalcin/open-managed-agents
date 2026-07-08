@@ -7,6 +7,7 @@ export function toManagedSession(row: SessionRow): ManagedAgentsSession {
     type: row.type,
     agent: row.agent,
     environment_id: row.environment_id,
+    vault_ids: [...(row.vault_ids ?? [])],
     status: row.status,
     title: row.title,
     metadata: row.metadata,

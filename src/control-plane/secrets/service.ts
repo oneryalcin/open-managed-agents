@@ -8,6 +8,7 @@
 import { invalidRequest, notFound } from "../errors.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import type { SecretMetadata, SecretsStore } from "./types.ts";
+import { VAULT_SECRET_PREFIX } from "../vaults/store.ts";
 
 // Wire shape: metadata only, workspace implied by the caller's key.
 export interface ManagedSecret {
@@ -34,11 +35,19 @@ export class DefaultSecretsService implements SecretsService {
   create(workspaceId: WorkspaceId, input: unknown): ManagedSecret {
     const store = this.requireStore();
     const { name, value } = parseCreateSecret(input);
+    if (name.startsWith(VAULT_SECRET_PREFIX)) {
+      throw invalidRequest(
+        `Secret names starting with ${JSON.stringify(VAULT_SECRET_PREFIX)} are reserved`,
+      );
+    }
     return toManagedSecret(store.put(workspaceId, name, value));
   }
 
   list(workspaceId: WorkspaceId): ManagedSecret[] {
-    return this.requireStore().list(workspaceId).map(toManagedSecret);
+    return this.requireStore()
+      .list(workspaceId)
+      .filter((row) => !row.name.startsWith(VAULT_SECRET_PREFIX))
+      .map(toManagedSecret);
   }
 
   delete(workspaceId: WorkspaceId, name: string): void {

@@ -5,6 +5,8 @@ import type {
 import { isJsonObject } from "../../types/json.ts";
 import { invalidRequest } from "../errors.ts";
 
+const MAX_SESSION_VAULT_IDS = 20;
+
 export function parseCreateSession(input: unknown): CreateManagedSessionRequest {
   const obj = objectInput(input);
   rejectUnsupportedField(obj, "sandbox");
@@ -12,15 +14,41 @@ export function parseCreateSession(input: unknown): CreateManagedSessionRequest 
   rejectUnsupportedField(obj, "sandboxProviderSelection");
   rejectUnsupportedField(obj, "sandboxProviderSelectionOptions");
   rejectUnsupportedField(obj, "sandboxProviderFactory");
-  rejectUnsupportedField(obj, "vault_ids");
-  rejectUnknownFields(obj, ["agent", "environment_id", "title", "metadata", "resources"]);
+  rejectUnknownFields(obj, [
+    "agent",
+    "environment_id",
+    "vault_ids",
+    "title",
+    "metadata",
+    "resources",
+  ]);
   return {
     agent: agentField(obj),
     environment_id: stringField(obj, "environment_id", { required: true }),
+    vault_ids: vaultIdsField(obj),
     title: nullableStringField(obj, "title") ?? undefined,
     metadata: metadataField(obj) ?? undefined,
     resources: resourcesField(obj),
   };
+}
+
+function vaultIdsField(obj: Record<string, unknown>): string[] | undefined {
+  const value = obj.vault_ids;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw invalidRequest("`vault_ids` must be an array of vault ids");
+  }
+  if (value.length > MAX_SESSION_VAULT_IDS) {
+    throw invalidRequest(
+      `\`vault_ids\` must contain at most ${MAX_SESSION_VAULT_IDS} vaults`,
+    );
+  }
+  return value.map((item) => {
+    if (typeof item !== "string" || !item.startsWith("vlt_")) {
+      throw invalidRequest("`vault_ids` entries must be vault ids");
+    }
+    return item;
+  });
 }
 
 export function parseAgentRef(agent: CreateManagedSessionRequest["agent"]): {

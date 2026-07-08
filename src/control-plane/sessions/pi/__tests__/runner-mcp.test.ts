@@ -31,6 +31,7 @@ function mcpRunner(opts: {
   access?: (toolName: string) => { enabled: boolean; permission: "allow" | "ask" | "deny" };
   maxConsecutiveFailures?: number;
   idleTtlMs?: number;
+  credentials?: () => { authorization: string; fingerprint: string } | undefined;
   onConnection?: (event: "connected" | "connect_failed") => void;
   customTools?: () => readonly { type: "custom"; name: string; input_schema: Record<string, never> }[];
 }): PiSessionRunner {
@@ -40,6 +41,9 @@ function mcpRunner(opts: {
     mcp: {
       enabled: opts.enabled ?? true,
       servers: () => [{ name: "srv", url: opts.url }],
+      ...(opts.credentials === undefined
+        ? {}
+        : { credentials: () => opts.credentials?.() }),
       access: (_w, _s, _server, toolName) =>
         opts.access?.(toolName) ?? { enabled: true, permission: "allow" },
       fetch: seamFetch,
@@ -146,6 +150,74 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     await runner.prepareSession("wrk_default", "sesn_budget");
     expect(attempts).toEqual(["connect_failed", "connect_failed"]);
+  });
+
+  it("classifies reached 401/403 MCP dials as authentication failures", async () => {
+    const connect = vi
+      .spyOn(McpConnection, "connect")
+      .mockRejectedValue(Object.assign(new Error("Unauthorized"), { code: 401 }));
+    runner = mcpRunner({
+      url: "https://mcp.example.com/mcp",
+      credentials: () => ({
+        authorization: "Bearer bad",
+        fingerprint: "vcrd_bad:1",
+      }),
+    });
+
+    const controller = new AbortController();
+    let failure: unknown;
+    try {
+      for await (const event of runner.runUserMessage(
+        "wrk_default",
+        "sesn_auth_class",
+        "hello",
+        { signal: controller.signal },
+      )) {
+        if ((event as { type?: unknown }).type === "oma.mcp_connection_failed") {
+          failure = event;
+          controller.abort();
+          break;
+        }
+      }
+    } catch {
+      // Abort/model failure after the flush is irrelevant.
+    }
+    expect(connect).toHaveBeenCalledWith(
+      { name: "srv", url: "https://mcp.example.com/mcp" },
+      expect.objectContaining({ authorization: "Bearer bad" }),
+    );
+    expect(failure).toMatchObject({
+      errorType: "mcp_authentication_failed_error",
+      retryStatus: "retrying",
+    });
+  });
+
+  it("redials after retry exhaustion when the credential fingerprint changes", async () => {
+    const connect = vi
+      .spyOn(McpConnection, "connect")
+      .mockRejectedValue(Object.assign(new Error("Forbidden"), { code: 403 }));
+    let fingerprint = "vcrd_bad:1";
+    runner = mcpRunner({
+      url: "https://mcp.example.com/mcp",
+      maxConsecutiveFailures: 1,
+      idleTtlMs: 20,
+      credentials: () => ({
+        authorization: `Bearer ${fingerprint}`,
+        fingerprint,
+      }),
+    });
+
+    await runner.prepareSession("wrk_default", "sesn_rotate");
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    fingerprint = "vcrd_bad:2";
+    await vi.waitFor(
+      async () => {
+        await runner!.prepareSession("wrk_default", "sesn_rotate");
+        expect(connect).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 5_000, interval: 25 },
+    );
   });
 
   it("recovers on the next rebuild when the server comes back", async () => {

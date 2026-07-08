@@ -22,6 +22,7 @@ import type {
 } from "../../../events/types.ts";
 import type { SessionStore } from "../../types.ts";
 import type { WorkspaceId } from "../../../workspace.ts";
+import type { VaultService } from "../../../vaults/types.ts";
 import type {
   BuiltinToolPermission,
   PiToolPermissionBridge,
@@ -359,6 +360,17 @@ export type McpServersProvider = (
   context?: { agentId?: string },
 ) => readonly { name: string; url: string }[];
 
+export interface McpResolvedCredential {
+  authorization: string;
+  fingerprint: string;
+}
+
+export type McpCredentialResolver = (
+  workspaceId: WorkspaceId,
+  sessionId: string,
+  serverUrl: string,
+) => McpResolvedCredential | undefined;
+
 export function createStoreBackedMcpServersProvider(opts: {
   sessions: Pick<SessionStore, "retrieveAny">;
   agents: Pick<AgentStore, "retrieveAny">;
@@ -382,6 +394,27 @@ export function createStoreBackedMcpServersProvider(opts: {
     return agent.mcp_servers
       .filter((server) => referenced.has(server.name))
       .map((server) => ({ name: server.name, url: server.url }));
+  };
+}
+
+export function createStoreBackedMcpCredentialResolver(opts: {
+  sessions: Pick<SessionStore, "retrieveAny">;
+  vaults: Pick<VaultService, "resolveCredential">;
+}): McpCredentialResolver {
+  return (workspaceId, sessionId, serverUrl) => {
+    const session = opts.sessions.retrieveAny(workspaceId, sessionId);
+    const vaultIds = session?.vault_ids ?? [];
+    if (vaultIds.length === 0) return undefined;
+    const resolved = opts.vaults.resolveCredential(
+      workspaceId,
+      vaultIds,
+      serverUrl,
+    );
+    if (!resolved) return undefined;
+    return {
+      authorization: `Bearer ${resolved.token}`,
+      fingerprint: `${resolved.credentialId}:${resolved.updatedAt}`,
+    };
   };
 }
 

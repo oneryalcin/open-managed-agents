@@ -28,6 +28,7 @@ export interface McpServerDeclaration {
 
 export interface McpConnectionOptions {
   fetch: McpFetch;
+  authorization?: string;
   /** Per-operation timeout (connect, listTools, callTool). */
   operationTimeoutMs?: number;
 }
@@ -65,9 +66,16 @@ export class McpConnection {
   ): Promise<McpConnection> {
     const timeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
     const client = new Client({ name: "open-managed-agents", version: "0" });
+    const requestInit =
+      opts.authorization === undefined
+        ? undefined
+        : { headers: { Authorization: opts.authorization } };
     const transport = new StreamableHTTPClientTransport(
       new URL(declaration.url),
-      { fetch: opts.fetch },
+      {
+        fetch: opts.fetch,
+        ...(requestInit === undefined ? {} : { requestInit }),
+      },
     );
     try {
       await client.connect(transport, { timeout: timeoutMs });

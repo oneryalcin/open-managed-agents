@@ -520,6 +520,7 @@ export interface RuntimeMcpToolResultEvent {
 /** Connect/discovery failure, flushed at turn start as a session.error. */
 export interface RuntimeMcpConnectionFailedEvent {
   type: "oma.mcp_connection_failed";
+  errorType?: "mcp_connection_failed_error" | "mcp_authentication_failed_error";
   mcpServerName: string;
   message: string;
   retryStatus: "retrying" | "exhausted" | "terminal";
