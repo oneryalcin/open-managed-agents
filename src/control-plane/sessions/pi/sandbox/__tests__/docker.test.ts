@@ -32,7 +32,7 @@ import {
 } from "../docker-egress.ts";
 import { resolveSessionEgressBundle } from "../../../../egress/policy.ts";
 import { DatabaseSync } from "node:sqlite";
-import { createSessionEgressBundleResolver } from "../../../../app.ts";
+import { createSessionEgressBundleResolver } from "../../../../wiring.ts";
 import { SqliteEnvironmentStore } from "../../../../environments/store.ts";
 import {
   generateMasterKey,

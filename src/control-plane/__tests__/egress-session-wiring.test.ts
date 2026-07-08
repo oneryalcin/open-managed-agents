@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   createDeploymentControlPlane,
-  createSessionEgressBundleResolver,
   type DeploymentControlPlane,
 } from "../app.ts";
+import { createSessionEgressBundleResolver } from "../wiring.ts";
 import { buildHooksFromBundle } from "../egress/policy.ts";
 import {
   createEgressProxy,
