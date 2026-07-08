@@ -369,6 +369,7 @@ export type McpCredentialResolver = (
   workspaceId: WorkspaceId,
   sessionId: string,
   serverUrl: string,
+  context?: { vaultIds?: readonly string[] },
 ) => McpResolvedCredential | undefined;
 
 export function createStoreBackedMcpServersProvider(opts: {
@@ -401,9 +402,9 @@ export function createStoreBackedMcpCredentialResolver(opts: {
   sessions: Pick<SessionStore, "retrieveAny">;
   vaults: Pick<VaultService, "resolveCredential">;
 }): McpCredentialResolver {
-  return (workspaceId, sessionId, serverUrl) => {
+  return (workspaceId, sessionId, serverUrl, context) => {
     const session = opts.sessions.retrieveAny(workspaceId, sessionId);
-    const vaultIds = session?.vault_ids ?? [];
+    const vaultIds = session?.vault_ids ?? context?.vaultIds ?? [];
     if (vaultIds.length === 0) return undefined;
     const resolved = opts.vaults.resolveCredential(
       workspaceId,

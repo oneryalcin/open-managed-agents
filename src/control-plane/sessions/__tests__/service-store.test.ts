@@ -1231,7 +1231,8 @@ describe("session service/store", () => {
 
   it("materializes file resources before persisting the session row", async () => {
     const runtime = new FakeRuntimePreparer();
-    const fixture = createFixture({ fileStorage: true, runtime });
+    const vaults = { assertVaultsUsable: vi.fn() };
+    const fixture = createFixture({ fileStorage: true, runtime, vaults });
     const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
     const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
     const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
@@ -1243,6 +1244,7 @@ describe("session service/store", () => {
     const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
       agent: agent.id,
       environment_id: environment.id,
+      vault_ids: ["vlt_first", "vlt_second"],
       resources: [{ type: "file", file_id: source.metadata.id }],
     });
 
@@ -1250,6 +1252,7 @@ describe("session service/store", () => {
     expect(runtime.prepares[0]).toMatchObject({
       workspaceId: DEFAULT_WORKSPACE_ID,
       sessionId: session.id,
+      vaultIds: ["vlt_first", "vlt_second"],
       agent: { id: agent.id, version: 1 },
     });
     expect(runtime.prepares[0]?.visibleDuringPrepare).toBe(false);
@@ -1261,6 +1264,10 @@ describe("session service/store", () => {
         sizeBytes: 5,
       }),
     ]);
+    expect(vaults.assertVaultsUsable).toHaveBeenCalledWith(
+      DEFAULT_WORKSPACE_ID,
+      ["vlt_first", "vlt_second"],
+    );
   });
 
   it("does not prepare runtime for resource-free sessions", async () => {
@@ -1375,6 +1382,9 @@ function createFixture(
     maxFileResources?: number;
     maxMountedBytes?: number;
     runtime?: RuntimeEventRunner;
+    vaults?: {
+      assertVaultsUsable(workspaceId: string, vaultIds: readonly string[]): void;
+    };
     sessionStore?: SqliteSessionStore;
     pendingSnapshotCleanupRetryDelayMs?: number;
     pendingSnapshotCleanupMaxAttempts?: number;
@@ -1418,6 +1428,7 @@ function createFixture(
         ? {}
         : { maxMountedBytes: opts.maxMountedBytes }),
       ...(opts.runtime === undefined ? {} : { runtime: opts.runtime }),
+      ...(opts.vaults === undefined ? {} : { vaults: opts.vaults }),
       ...(opts.pendingSnapshotCleanupRetryDelayMs === undefined
         ? {}
         : {
@@ -1461,6 +1472,7 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
     sessionId: string;
     visibleDuringPrepare: boolean;
     fileMounts: NonNullable<RuntimeSessionPrepareOptions["fileMounts"]>;
+    vaultIds: readonly string[] | undefined;
     agent: RuntimeSessionPrepareOptions["agent"];
   }> = [];
   readonly closed: Array<{ workspaceId: string; sessionId: string }> = [];
@@ -1482,6 +1494,7 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
       visibleDuringPrepare:
         this.currentStore?.retrieveAny(workspaceId, sessionId) !== undefined,
       fileMounts: opts.fileMounts ?? [],
+      vaultIds: opts.vaultIds,
       agent: opts.agent,
     });
     if (this.opts.throwOnPrepare) throw this.opts.throwOnPrepare;

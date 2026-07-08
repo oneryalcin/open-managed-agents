@@ -51,6 +51,11 @@ export class DefaultSecretsService implements SecretsService {
   }
 
   delete(workspaceId: WorkspaceId, name: string): void {
+    if (name.startsWith(VAULT_SECRET_PREFIX)) {
+      throw invalidRequest(
+        `Secret names starting with ${JSON.stringify(VAULT_SECRET_PREFIX)} are reserved`,
+      );
+    }
     if (!this.requireStore().delete(workspaceId, name)) {
       throw notFound(`Secret ${name} not found`);
     }

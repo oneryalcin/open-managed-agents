@@ -492,6 +492,34 @@ describe("createStoreBackedMcpCredentialResolver (plan 0122 M2)", () => {
       resolve("wrk_default", "sesn_1", "https://mcp.example.com/mcp/"),
     ).toBeUndefined();
   });
+
+  it("uses creation-time vault_ids when pre-commit session row is not visible", () => {
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: {
+        retrieveAny: () => undefined,
+      },
+      vaults: {
+        resolveCredential: (_workspaceId, vaultIds, serverUrl) => {
+          expect(vaultIds).toEqual(["vlt_precommit"]);
+          expect(serverUrl).toBe("https://mcp.example.com/mcp");
+          return {
+            credentialId: "vcrd_precommit",
+            updatedAt: "2026-07-08T00:00:00.000Z",
+            token: "PRECOMMIT_TOKEN",
+          };
+        },
+      },
+    });
+
+    expect(
+      resolve("wrk_default", "sesn_precommit", "https://mcp.example.com/mcp", {
+        vaultIds: ["vlt_precommit"],
+      }),
+    ).toEqual({
+      authorization: "Bearer PRECOMMIT_TOKEN",
+      fingerprint: "vcrd_precommit:2026-07-08T00:00:00.000Z",
+    });
+  });
 });
 
 describe("publishMcpToolUse bind-after-abort orphan guard (plan 0122 §4.4)", () => {

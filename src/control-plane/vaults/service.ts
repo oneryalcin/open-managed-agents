@@ -4,6 +4,7 @@ import type { WorkspaceId } from "../workspace.ts";
 import type {
   ListVaultCredentialsOptions,
   ListVaultsOptions,
+  ManagedDeletedVault,
   ManagedVault,
   ManagedVaultCredential,
   VaultCredentialResolution,
@@ -82,10 +83,11 @@ export class DefaultVaultService implements VaultService {
     return toManagedVault(row);
   }
 
-  deleteVault(workspaceId: WorkspaceId, vaultId: string): void {
+  deleteVault(workspaceId: WorkspaceId, vaultId: string): ManagedDeletedVault {
     if (!this.store.deleteVault(workspaceId, vaultId)) {
       throw notFound(`Vault ${vaultId} not found`);
     }
+    return { id: vaultId, type: "vault_deleted" };
   }
 
   createCredential(
@@ -129,7 +131,7 @@ export class DefaultVaultService implements VaultService {
     } catch (error) {
       if (isSqliteUniqueConstraint(error)) {
         throw conflict(
-          `An active credential for ${req.mcpServerUrl} already exists in vault ${vaultId}`,
+          `An active credential for that MCP server already exists in vault ${vaultId}`,
         );
       }
       if (error instanceof Error && error.message.startsWith("Secrets require")) {
@@ -176,15 +178,27 @@ export class DefaultVaultService implements VaultService {
   ): ManagedVaultCredential {
     this.assertVaultExists(workspaceId, vaultId);
     const req = parseCredentialUpdate(input);
-    const row = this.store.updateCredential(
-      workspaceId,
-      vaultId,
-      credentialId,
-      req,
-      new Date().toISOString(),
-    );
-    if (!row) throw notFound(`Vault credential ${credentialId} not found`);
-    return toManagedCredential(row);
+    try {
+      const row = this.store.updateCredential(
+        workspaceId,
+        vaultId,
+        credentialId,
+        req,
+        new Date().toISOString(),
+      );
+      if (!row) throw notFound(`Vault credential ${credentialId} not found`);
+      return toManagedCredential(row);
+    } catch (error) {
+      if (isSqliteUniqueConstraint(error)) {
+        throw conflict(
+          `An active credential for that MCP server already exists in vault ${vaultId}`,
+        );
+      }
+      if (error instanceof Error && error.message.startsWith("Secrets require")) {
+        throw invalidRequest(error.message);
+      }
+      throw error;
+    }
   }
 
   archiveCredential(

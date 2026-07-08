@@ -111,7 +111,7 @@ export interface PiMcpOptions {
   /** Consecutive connect failures before exhausted (OMA policy, default 5). */
   maxConsecutiveFailures?: number;
   onToolCall?: (outcome: McpToolCallOutcomeLabel) => void;
-  onConnection?: (event: "connected" | "connect_failed") => void;
+  onConnection?: (event: "connected" | "connect_failed" | "auth_failed") => void;
 }
 
 const DEFAULT_MCP_MAX_CONSECUTIVE_FAILURES = 5;
@@ -223,6 +223,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         sessionId,
         opts.fileMounts,
         sandboxContext,
+        opts.vaultIds === undefined ? undefined : { vaultIds: opts.vaultIds },
       );
       this.touch(sessionId, handle);
     } finally {
@@ -610,13 +611,20 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
     fileMounts?: readonly PiSessionFileMount[],
     context?: SandboxProviderSessionContext,
+    credentialContext?: { vaultIds?: readonly string[] },
   ): Promise<RuntimeHandle> {
     if (this.closed) throw new Error("PiSessionRunner is closed");
     if (this.closedSessionIds.has(sessionId)) {
       throw new Error(`Runtime session ${sessionId} is closed`);
     }
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.closeWhenIdle && !existing.running) {
+        this.evict(sessionId, existing);
+      } else {
+        return existing;
+      }
+    }
 
     const pending = this.pendingSessions.get(sessionId);
     if (pending) return pending;
@@ -658,7 +666,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
           // factory bypasses createPiSession, so tools could never reach Pi
           // and a green test on this path would test nothing (plan 0122 §5).
           if (this.sessionFactory === undefined) {
-            mcp = await this.prepareMcp(workspaceId, sessionId, customToolContext);
+            mcp = await this.prepareMcp(workspaceId, sessionId, {
+              ...customToolContext,
+              ...(credentialContext === undefined ? {} : credentialContext),
+            });
             for (const name of mcp.toolNames) {
               if (customToolNames.has(name)) {
                 throw new Error(
@@ -700,7 +711,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           // idle so the NEXT turn re-runs connect/discovery (plan 0122 §4.6).
           // Exhausted failures also close: unchanged fingerprints skip dialing
           // on rebuild, while rotated credentials can reset the budget.
-          closeWhenIdle: mcp.pendingFailures.length > 0,
+          closeWhenIdle: mcp.pendingFailures.length > 0 || mcp.skippedExhausted,
           lastUsedAt: this.now(),
           timer: undefined,
           customToolNames,
@@ -744,7 +755,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private async prepareMcp(
     workspaceId: WorkspaceId,
     sessionId: string,
-    context: { agentId?: string } | undefined,
+    context: { agentId?: string; vaultIds?: readonly string[] } | undefined,
   ): Promise<PreparedMcp> {
     const mcpOpts = this.opts.mcp;
     if (!mcpOpts) return EMPTY_MCP;
@@ -763,6 +774,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     const toolDefinitions: ToolDefinition<any, any, any>[] = [];
     const toolNames = new Set<string>();
     const pendingFailures: RuntimeMcpConnectionFailedEvent[] = [];
+    let skippedExhausted = false;
 
     // Dial concurrently (review 0122-M1: a serial loop let N slow servers
     // stall the turn for N×timeout while pinning the sandbox); outcomes are
@@ -774,18 +786,29 @@ export class PiSessionRunner implements RuntimeEventRunner {
       count: number;
     }> = [];
     for (const server of servers) {
-      const credential = mcpOpts.credentials?.(workspaceId, sessionId, server.url);
-      const fingerprint = credential?.fingerprint ?? MCP_UNAUTHENTICATED_FINGERPRINT;
-      const count = currentMcpFailureCount(counts, server.name, fingerprint);
-      if (count >= maxFailures) continue; // exhausted: no dial, no re-emit
       if (!mcpOpts.enabled) {
-        counts.set(server.name, { count: maxFailures, fingerprint }); // emit once
+        counts.set(server.name, {
+          count: maxFailures,
+          fingerprint: MCP_UNAUTHENTICATED_FINGERPRINT,
+        }); // emit once
         pendingFailures.push({
           type: "oma.mcp_connection_failed",
           mcpServerName: server.name,
           message: "MCP is disabled by deployment configuration",
           retryStatus: "exhausted",
         });
+        continue;
+      }
+      const credential = mcpOpts.credentials?.(
+        workspaceId,
+        sessionId,
+        server.url,
+        context,
+      );
+      const fingerprint = credential?.fingerprint ?? MCP_UNAUTHENTICATED_FINGERPRINT;
+      const count = currentMcpFailureCount(counts, server.name, fingerprint);
+      if (count >= maxFailures) {
+        skippedExhausted = true;
         continue;
       }
       dialable.push({ server, credential, fingerprint, count });
@@ -819,12 +842,18 @@ export class PiSessionRunner implements RuntimeEventRunner {
       if (!("connection" in outcome) || outcome.connection === undefined) {
         const failures = count + 1;
         counts.set(server.name, { count: failures, fingerprint: outcome.fingerprint });
-        mcpOpts.onConnection?.("connect_failed");
+        const errorType =
+          "errorType" in outcome ? outcome.errorType : undefined;
+        mcpOpts.onConnection?.(
+          errorType === "mcp_authentication_failed_error"
+            ? "auth_failed"
+            : "connect_failed",
+        );
         pendingFailures.push({
           type: "oma.mcp_connection_failed",
-          errorType: "errorType" in outcome ? outcome.errorType : undefined,
+          errorType,
           mcpServerName: server.name,
-          message: "failure" in outcome ? outcome.failure ?? "connect failed" : "connect failed",
+          message: mcpFailureMessage(errorType),
           retryStatus: failures >= maxFailures ? "exhausted" : "retrying",
         });
         continue;
@@ -866,7 +895,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
             type: "oma.mcp_connection_failed",
             errorType: mcpConnectErrorType(error),
             mcpServerName: failedServerName,
-            message: `MCP call failed mid-turn: ${error.message}`,
+            message: mcpFailureMessage(mcpConnectErrorType(error)),
             retryStatus: failures >= maxFailures ? "exhausted" : "retrying",
           });
         },
@@ -881,7 +910,13 @@ export class PiSessionRunner implements RuntimeEventRunner {
         toolDefinitions.push(definition);
       }
     }
-    return { connections, toolDefinitions, toolNames, pendingFailures };
+    return {
+      connections,
+      toolDefinitions,
+      toolNames,
+      pendingFailures,
+      skippedExhausted,
+    };
   }
 
   private disposeMcpConnections(connections: readonly McpConnection[]): void {
@@ -1173,11 +1208,20 @@ function mcpConnectErrorType(
     : "mcp_connection_failed_error";
 }
 
+function mcpFailureMessage(
+  errorType: "mcp_connection_failed_error" | "mcp_authentication_failed_error" | undefined,
+): string {
+  return errorType === "mcp_authentication_failed_error"
+    ? "MCP authentication failed"
+    : "MCP connection failed";
+}
+
 interface PreparedMcp {
   connections: readonly McpConnection[];
   toolDefinitions: readonly ToolDefinition<any, any, any>[];
   toolNames: Set<string>;
   pendingFailures: readonly RuntimeMcpConnectionFailedEvent[];
+  skippedExhausted: boolean;
 }
 
 const EMPTY_MCP: PreparedMcp = {
@@ -1185,6 +1229,7 @@ const EMPTY_MCP: PreparedMcp = {
   toolDefinitions: [],
   toolNames: new Set(),
   pendingFailures: [],
+  skippedExhausted: false,
 };
 
 /** message_end toolCall blocks whose pi-name is an MCP tool of this handle. Exported for direct contract tests (review 0122-M1, Sonnet 1). */

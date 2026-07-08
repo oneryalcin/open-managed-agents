@@ -410,6 +410,7 @@ export class DefaultSessionService implements SessionService {
             this.runtime.prepareSession(workspaceId, row.id, {
               fileMounts: mounts,
               environmentId: row.environment_id,
+              vaultIds: row.vault_ids,
               agent: row.agent,
             }),
           ),

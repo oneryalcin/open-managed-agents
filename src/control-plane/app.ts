@@ -593,7 +593,9 @@ export function createDeploymentControlPlane(
             onToolCall: (
               outcome: "ok" | "error" | "denied" | "timeout" | "aborted",
             ) => metrics.mcpToolCalls.inc({ outcome }),
-            onConnection: (event: "connected" | "connect_failed") =>
+            onConnection: (
+              event: "connected" | "connect_failed" | "auth_failed",
+            ) =>
               metrics.mcpConnections.inc({ event }),
           }),
     },

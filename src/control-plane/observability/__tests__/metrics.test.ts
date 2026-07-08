@@ -3,6 +3,7 @@
 // spot-checks (§9 Opus M1: the escaping footgun is prevented by closed-enum
 // labels; these tests prove the rest of the format).
 import { describe, expect, it } from "vitest";
+import { createControlPlaneMetrics } from "../instruments.ts";
 import { EXPOSITION_CONTENT_TYPE, MetricsRegistry } from "../metrics.ts";
 
 interface ParsedSample {
@@ -106,6 +107,16 @@ describe("metrics registry", () => {
     expect(sample(samples, "oma_test_hostile_total", { method: "other" })?.value).toBe(3);
     expect(registry.exposition()).not.toContain("EVIL");
     expect(registry.exposition()).not.toContain("fake_metric");
+  });
+
+  it("exposes MCP authentication failures as a distinct connection outcome", () => {
+    const instruments = createControlPlaneMetrics();
+    instruments.mcpConnections.inc({ event: "auth_failed" });
+
+    const { samples } = parseExposition(instruments.registry.exposition());
+    expect(
+      sample(samples, "oma_mcp_connections_total", { event: "auth_failed" })?.value,
+    ).toBe(1);
   });
 
   it("accounts histogram buckets cumulatively with +Inf equal to count", () => {

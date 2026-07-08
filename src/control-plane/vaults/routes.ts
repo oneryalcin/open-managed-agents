@@ -41,8 +41,10 @@ export function vaultsRoutes(service: VaultService): Hono<ControlPlaneRouteEnv> 
   });
 
   app.delete("/:vaultId", (c) => {
-    service.deleteVault(workspaceIdFrom(c), c.req.param("vaultId"));
-    return c.body(null, 204);
+    return c.json(
+      service.deleteVault(workspaceIdFrom(c), c.req.param("vaultId")),
+      200,
+    );
   });
 
   app.post("/:vaultId/credentials", async (c) => {

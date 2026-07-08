@@ -53,6 +53,11 @@ export interface ManagedVaultCredential {
   archived_at: string | null;
 }
 
+export interface ManagedDeletedVault {
+  id: string;
+  type: "vault_deleted";
+}
+
 export interface VaultCredentialResolution {
   credentialId: string;
   updatedAt: string;
@@ -166,7 +171,7 @@ export interface VaultService {
     input: unknown,
   ): ManagedVault;
   archiveVault(workspaceId: WorkspaceId, vaultId: string): ManagedVault;
-  deleteVault(workspaceId: WorkspaceId, vaultId: string): void;
+  deleteVault(workspaceId: WorkspaceId, vaultId: string): ManagedDeletedVault;
   createCredential(
     workspaceId: WorkspaceId,
     vaultId: string,

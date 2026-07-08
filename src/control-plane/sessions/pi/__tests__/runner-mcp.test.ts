@@ -32,7 +32,7 @@ function mcpRunner(opts: {
   maxConsecutiveFailures?: number;
   idleTtlMs?: number;
   credentials?: () => { authorization: string; fingerprint: string } | undefined;
-  onConnection?: (event: "connected" | "connect_failed") => void;
+  onConnection?: (event: "connected" | "connect_failed" | "auth_failed") => void;
   customTools?: () => readonly { type: "custom"; name: string; input_schema: Record<string, never> }[];
 }): PiSessionRunner {
   return new PiSessionRunner({
@@ -153,15 +153,22 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
   });
 
   it("classifies reached 401/403 MCP dials as authentication failures", async () => {
+    const leakedToken = "TOKEN_THAT_MUST_NOT_PERSIST";
+    const connectionEvents: Array<"connected" | "connect_failed" | "auth_failed"> = [];
     const connect = vi
       .spyOn(McpConnection, "connect")
-      .mockRejectedValue(Object.assign(new Error("Unauthorized"), { code: 401 }));
+      .mockRejectedValue(
+        Object.assign(new Error(`probe 401 echoed Bearer ${leakedToken}`), {
+          code: 401,
+        }),
+      );
     runner = mcpRunner({
       url: "https://mcp.example.com/mcp",
       credentials: () => ({
-        authorization: "Bearer bad",
+        authorization: `Bearer ${leakedToken}`,
         fingerprint: "vcrd_bad:1",
       }),
+      onConnection: (event) => connectionEvents.push(event),
     });
 
     const controller = new AbortController();
@@ -184,15 +191,18 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     }
     expect(connect).toHaveBeenCalledWith(
       { name: "srv", url: "https://mcp.example.com/mcp" },
-      expect.objectContaining({ authorization: "Bearer bad" }),
+      expect.objectContaining({ authorization: `Bearer ${leakedToken}` }),
     );
+    expect(JSON.stringify(failure)).not.toContain(leakedToken);
     expect(failure).toMatchObject({
+      message: "MCP authentication failed",
       errorType: "mcp_authentication_failed_error",
       retryStatus: "retrying",
     });
+    expect(connectionEvents).toEqual(["auth_failed"]);
   });
 
-  it("redials after retry exhaustion when the credential fingerprint changes", async () => {
+  it("keeps exhausted handles refreshable when the credential fingerprint changes", async () => {
     const connect = vi
       .spyOn(McpConnection, "connect")
       .mockRejectedValue(Object.assign(new Error("Forbidden"), { code: 403 }));
@@ -200,7 +210,6 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     runner = mcpRunner({
       url: "https://mcp.example.com/mcp",
       maxConsecutiveFailures: 1,
-      idleTtlMs: 20,
       credentials: () => ({
         authorization: `Bearer ${fingerprint}`,
         fingerprint,
@@ -210,14 +219,14 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     await runner.prepareSession("wrk_default", "sesn_rotate");
     expect(connect).toHaveBeenCalledTimes(1);
 
+    // Same exhausted fingerprint: no re-dial, but the skipped handle must
+    // remain closeWhenIdle so a later rotation is observed on the next build.
+    await runner.prepareSession("wrk_default", "sesn_rotate");
+    expect(connect).toHaveBeenCalledTimes(1);
+
     fingerprint = "vcrd_bad:2";
-    await vi.waitFor(
-      async () => {
-        await runner!.prepareSession("wrk_default", "sesn_rotate");
-        expect(connect).toHaveBeenCalledTimes(2);
-      },
-      { timeout: 5_000, interval: 25 },
-    );
+    await runner.prepareSession("wrk_default", "sesn_rotate");
+    expect(connect).toHaveBeenCalledTimes(2);
   });
 
   it("recovers on the next rebuild when the server comes back", async () => {

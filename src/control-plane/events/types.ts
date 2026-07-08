@@ -432,6 +432,12 @@ export interface RuntimeSessionPrepareOptions {
    * row is committed. The committed row remains authoritative after create.
    */
   environmentId?: string;
+  /**
+   * Creation-time hint for MCP credential resolution during pre-commit
+   * file-resource preparation. The committed row remains authoritative after
+   * create; this only covers the row-not-yet-visible window.
+   */
+  vaultIds?: readonly string[];
   agent?: {
     type: "agent";
     id: string;

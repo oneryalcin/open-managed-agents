@@ -137,7 +137,8 @@ describe("vaults API", () => {
       method: "DELETE",
       key,
     });
-    expect(deleted.status).toBe(204);
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ id: vault.id, type: "vault_deleted" });
     expect(
       fixture.secrets?.reveal(
         "wrk_default",
@@ -166,6 +167,52 @@ describe("vaults API", () => {
       data: [{ id: vault.id }],
     });
     fixture.close();
+  });
+
+  it("returns master-key guidance 400 when rotating an existing credential without a secrets store", () => {
+    const db = new DatabaseSync(":memory:");
+    const secrets = new SqliteSecretsStore(
+      db,
+      parseMasterKey(generateMasterKey(), "test"),
+    );
+    const seeded = new SqliteVaultStore(db, secrets);
+    const serviceWithSecrets = new DefaultVaultService(seeded);
+    const vault = serviceWithSecrets.createVault("wrk_default", {
+      display_name: "Seeded vault",
+    });
+    const credential = serviceWithSecrets.createCredential("wrk_default", vault.id, {
+      auth: {
+        type: "static_bearer",
+        mcp_server_url: SERVER_URL,
+        token: TOKEN,
+      },
+    });
+
+    const serviceWithoutSecrets = new DefaultVaultService(
+      new SqliteVaultStore(db, undefined),
+    );
+    let thrown: unknown;
+    try {
+      serviceWithoutSecrets.updateCredential(
+        "wrk_default",
+        vault.id,
+        credential.id,
+        {
+          auth: {
+            type: "static_bearer",
+            token: "rotated",
+          },
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      status: 400,
+      type: "invalid_request_error",
+      message: expect.stringContaining("OMA_MASTER_KEY"),
+    });
+    db.close();
   });
 
   it("hides cross-workspace vaults and credentials as not found", async () => {

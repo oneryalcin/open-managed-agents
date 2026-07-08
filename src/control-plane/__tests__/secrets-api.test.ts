@@ -80,6 +80,27 @@ describe("secrets API", () => {
     fixture.close();
   });
 
+  it("does not allow generic delete of reserved vault-backed secret names", async () => {
+    const fixture = makeSecretsFixture();
+    const key = fixture.mintKey("wrk_default");
+    fixture.secrets.put("wrk_default", "vault/vlt_123/vcrd_456", SECRET_VALUE);
+
+    const deleted = await request(
+      fixture.app,
+      "/v1/secrets/vault%2Fvlt_123%2Fvcrd_456",
+      {
+        method: "DELETE",
+        key,
+      },
+    );
+
+    expect(deleted.status).toBe(400);
+    expect(
+      fixture.secrets.reveal("wrk_default", "vault/vlt_123/vcrd_456"),
+    ).toBe(SECRET_VALUE);
+    fixture.close();
+  });
+
   it("isolates secrets between workspaces", async () => {
     const fixture = makeSecretsFixture();
     const keyA = fixture.mintKey(
