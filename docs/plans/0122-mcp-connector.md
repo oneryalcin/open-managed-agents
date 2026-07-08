@@ -27,7 +27,8 @@ modeled on the **tool-permission** bridge, not the custom-tool bridge.
   `session.error` connect-failure semantics. No auth of any kind.
 - **M2** — `/v1/vaults` + credentials CRUD on `SecretsStore`; `static_bearer`
   injection by exact-URL match; `vault_ids` on session create;
-  `mcp_authentication_failed_error`. Closes the exit criterion.
+  `mcp_authentication_failed_error`. Closes the exit criterion. **Full spec:
+  §7A (amendment, 2026-07-08).**
 - **M3** — `mcp_oauth` credential type + refresh worker +
   `mcp_oauth_validate`.
 
@@ -613,20 +614,8 @@ Suite discipline: `pkill -f vitest` first, foreground
 
 ## 7. M2 / M3 sketch (not specified here; each gets a plan amendment before implementation)
 
-- **M2 — vaults + `static_bearer`.** `/v1/vaults` + nested credentials CRUD
-  (SDK shapes captured: `BetaManagedAgentsVault {id, display_name, metadata,
-  created_at, updated_at, archived_at, type}`; credential fields write-only;
-  `mcp_server_url` unique per vault among active credentials, 409 on
-  duplicate, structural fields immutable → archive-and-recreate). Values in
-  `SecretsStore` (0118), metadata rows in a new table. Session create
-  accepts `vault_ids` (drop `service.ts:961` rejection); connect-time
-  credential resolution by **byte-exact URL match** (M1 persists raw
-  strings precisely for this, §4.1); injection via the transport's
-  `requestInit` Authorization header — control-plane-side only.
-  `mcp_authentication_failed_error` on 401/403. Exit criterion test: agent
-  session calls a bearer-protected MCP fixture; sandbox-side grep proves the
-  token appears nowhere in the sandbox or event stream (the 0121 redaction
-  chokepoint already covers logs).
+- **M2 — vaults + `static_bearer`.** ~~Sketch~~ — **superseded by the full
+  amendment in §7A (2026-07-08).**
 - **M3 — `mcp_oauth` + refresh.** Credential type with `refresh` block
   (`token_endpoint`, `client_id`, `scope`, `refresh_token`,
   `token_endpoint_auth: none|client_secret_basic|client_secret_post`);
@@ -638,6 +627,338 @@ Suite discipline: `pkill -f vitest` first, foreground
   OAuth authorization flow ever** — upstream's product boundary (the API
   consumer runs the dance; the platform stores/injects/refreshes) is ours
   too.
+
+---
+
+## 7A. M2 plan amendment (2026-07-08): vaults + `static_bearer`
+
+Amends the §7 M2 sketch into a full slice spec. `file:line` against `main`
+at `a6d2ffc` (M1 merged); the #160 `events/service.ts` split is in flight —
+M2 touches the MCP persistence path, so **M2 implementation starts only
+after #160 lands** and line references there must be re-confirmed.
+
+### 7A.1 Definition of done (M2)
+
+Closes the roadmap exit criterion: *"an agent in a workspace can use one MCP
+server whose credentials it cannot read."* Concretely:
+
+- `/v1/vaults` + nested `/credentials` CRUD, workspace-scoped, wire-shaped
+  per upstream (§7A.2). `static_bearer` only; `mcp_oauth` and
+  `environment_variable` credential types are rejected with the standard
+  not-yet-supported error (M3 / non-goal §8).
+- `sessions.create` accepts `vault_ids` (drop the `service.ts:961`
+  rejection), validates and persists them, echoes them on the session
+  record.
+- Connect-time credential resolution by **byte-exact URL match** (M1
+  persists raw URL strings precisely for this, §4.1), first-vault-wins,
+  unauthenticated fallback when nothing matches — all upstream-documented
+  runtime behavior.
+- Injection as an `Authorization: Bearer` header on every transport request
+  (POST and GET/SSE), control-plane-side only. The token never reaches the
+  sandbox, the event stream, the session handle, or the logs.
+- `mcp_authentication_failed_error` on MCP 401/403 from a reached server,
+  same
+  `session.error` + `retry_status` envelope as `mcp_connection_failed_error`.
+- **Exit-criterion test**: a live/e2e session calls a bearer-protected MCP
+  fixture successfully, and a sweep proves the token appears nowhere in the
+  sandbox, persisted events, or captured logs (0121 redaction chokepoint
+  covers the log leg).
+
+### 7A.2 Wire contract (evidence: vaults.md + mcp-connector.md crawls 2026-07-06; api-reference 2026-07-08)
+
+**Endpoints** (all under the workspace API key, like agents/sessions):
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/v1/vaults` | create |
+| GET | `/v1/vaults` | list, `page`/`next_page`, newest first, `include_archived=true` opt-in |
+| GET | `/v1/vaults/{vault_id}` | retrieve |
+| POST | `/v1/vaults/{vault_id}` | update (`display_name`, `metadata`) |
+| DELETE | `/v1/vaults/{vault_id}` | hard delete, no record retained |
+| POST | `/v1/vaults/{vault_id}/archive` | cascades to credentials; secrets purged, records retained |
+| POST | `/v1/vaults/{vault_id}/credentials` | create |
+| GET | `/v1/vaults/{vault_id}/credentials` | list (same pagination) |
+| GET | `/v1/vaults/{vault_id}/credentials/{credential_id}` | retrieve (metadata only) |
+| POST | `/v1/vaults/{vault_id}/credentials/{credential_id}` | update (rotate token, `display_name`) |
+| DELETE | `/v1/vaults/{vault_id}/credentials/{credential_id}` | hard delete |
+| POST | `/v1/vaults/{vault_id}/credentials/{credential_id}/archive` | purges secret; key freed for a replacement |
+| POST | `.../mcp_oauth_validate` | **M3** — 404/not-supported in M2 |
+
+**Records.** Vault: `{type: "vault", id: "vlt_…", display_name, metadata,
+created_at, updated_at, archived_at}` (docs show a literal create/response
+pair). Credential: id prefix `vcrd_` (seen in the validation object);
+response carries `display_name`, timestamps, `archived_at`, and an `auth`
+block **without secret fields** — `token` (and M3's `access_token`/
+`refresh_token`/`client_secret`) are write-only, never returned. The exact
+credential-response field set is not shown in the docs → **probe 50**
+captures it before implementation; until then the store models
+`{type: "static_bearer", mcp_server_url}` as the readable auth subset.
+
+**Constraints (upstream-documented):**
+
+- `mcp_server_url` unique among **active** credentials in a vault; duplicate
+  → 409. Archived credentials free their key for a replacement.
+- Structural fields immutable after create (`mcp_server_url`; M3:
+  `token_endpoint`, `client_id`) → archive-and-recreate.
+- Max 20 credentials per vault.
+- Credentials are **not validated at write time** — an invalid token
+  surfaces at session runtime as the error event, never blocks the session.
+- Vaults/credentials are workspace-scoped; any key in the workspace can
+  reference them (revocation = archive/delete).
+
+**Runtime behavior (upstream-documented, mcp-connector.md §368-379):**
+
+- Credential matched by exact `mcp_server_url` == declared server `url`;
+  upstream's own docs warn trailing-slash variants don't match.
+- No match → connect unauthenticated (may then 401 like any M1 connect).
+- Multiple vaults matching → **first vault in `vault_ids` order wins**.
+- `mcp_authentication_failed_error` = "server reached but rejected the
+  credential from the attached vault"; `mcp_connection_failed_error` stays
+  the transport/network class. Same envelope (`mcp_server_name`,
+  `retry_status`), same retry-on-idle→running semantics.
+- Rotation propagates to running sessions without restart upstream
+  ("re-resolved periodically"). **OMA approximation**: resolution happens at
+  connect time, and M1's fresh-handle mechanics (§4.6) rebuild connections
+  on every idle→running transition and after failures — so rotation
+  propagates at the next handle build, not mid-turn. Named deviation;
+  periodic mid-session re-resolution lands with M3's refresh worker.
+
+### 7A.3 Design
+
+**Storage.** New `vaults` + `vault_credentials` tables (metadata,
+workspace-scoped, `archived_at` soft state) in a new
+`src/control-plane/vaults/` module following the house layout
+(`types/store/service/routes` — mirror `secrets/` + `agents/`). Token
+values go in the existing `SecretsStore` (0118, ADR 0016) under a
+**reserved synthetic name** `vault/{vault_id}/{credential_id}`:
+
+- One sealing path, one master-key-rotation path (`rotateMasterKey` covers
+  vault tokens for free), `reveal()` stays the single loud plaintext seam.
+- The user-facing `/v1/secrets` surface (OMA-specific, not wire parity)
+  must not see these rows: `create` rejects names starting with the
+  reserved `vault/` prefix, and `list` filters the prefix out. (Names are
+  currently unconstrained beyond length — reserving the prefix is a
+  narrow, documented break.)
+- Archive/delete of a credential deletes the `SecretsStore` row (purge);
+  vault archive cascades. Metadata rows survive archive, vanish on delete.
+- **Atomic writes (review 7A-2, corrected round 2).** Durable deployment
+  already hands `SqliteSecretsStore` the SAME `DatabaseSync` as every
+  other store (`deployment-storage.ts:189`); the limitation is only that
+  the portable `SecretsStore` interface exposes no transaction seam. And
+  `withSqliteTransaction` is savepoint-based, so it **nests** — an outer
+  transaction wrapping `secrets.put`/`delete` (which open their own
+  savepoints) is safe. So M2 does the cheap, correct thing: the vault
+  store is constructed with the same `DatabaseSync` as the secrets store
+  (memory-mode wiring shares one `:memory:` handle between the two), and
+  every credential create/rotate/archive/delete wraps its metadata write
+  plus the `SecretsStore` call in one outer `withSqliteTransaction` —
+  metadata and secret commit or roll back together; no orphans in either
+  direction. The **fail-toward-less-retention ordering** (seal-then-
+  metadata on create, purge-then-metadata on archive; purge retry
+  idempotent since `SecretsStore.delete` of a missing name returns
+  `false`) is kept as the invariant *inside* the transaction and the
+  fallback for any future wiring that doesn't share a handle — but the
+  plan no longer treats separate handles as the premise.
+- **No master key → no credential writes (review 7A-3).** `SecretsStore`
+  is `undefined` without `OMA_MASTER_KEY` and credential create/rotate
+  must fail loudly with the same wire-shaped `invalid_request` the
+  `/v1/secrets` surface returns today (`secrets/service.ts:50`
+  `requireStore` message), never half-create metadata (the create ordering
+  above guarantees this: the secret write is first and it is the failing
+  step). Vault CRUD and credential list/retrieve/archive/delete remain
+  available — they are metadata-only.
+- **Reserved-prefix compatibility (review 7A-5).** Any pre-existing
+  user-created secret named `vault/…` (none known; the surface shipped
+  2026-07-06) stays deletable by exact name but disappears from `list` and
+  cannot be recreated. Accepted, documented break on an OMA-specific
+  surface — noted in `dev-deployment.md`.
+
+**Routes & auth gate (review 7A-4).** `vaultsRoutes` mounts under
+`/v1/vaults` in `app.ts` AND the path must be registered in the
+managed-route auth prefix list — the known footgun from `/v1/secrets` is a
+mounted route missing from the gate silently binding to `wrk_default`.
+Locked by tests, not convention: unauthenticated requests to every
+`/v1/vaults*` route → 401; workspace A retrieving workspace B's vault or
+credential by guessed id → 404 (not 403 — no existence oracle).
+
+**Session create.** Drop `rejectUnsupportedField(obj, "vault_ids")`
+(`sessions/service.ts:961`), parse as an array of `vlt_` ids (each must
+exist in the workspace and be unarchived at create time — archived vault →
+4xx, matching upstream's "future sessions referencing this vault fail").
+Persist as a JSON column on `sessions` (schema bump), echo on the wire.
+Order is semantic (first-vault-wins) and must round-trip byte-stable.
+Upstream cap per session is undocumented → probe 50; until evidence, cap at
+20 with a loud comment (same posture as M1's server cap).
+
+**Credential resolution seam.** New optional `credentials?:
+McpCredentialResolver` on `PiMcpOptions` (`runner.ts:99`):
+
+```
+type McpCredentialResolver = (
+  workspaceId, sessionId, serverUrl: string,
+) => { token: string } | undefined;
+```
+
+`prepareMcp` calls it per dialable server immediately before
+`McpConnection.connect` and hands the token straight into the transport —
+never stored on the handle, never in a declaration object that might get
+logged. Store-backed impl in `app.ts` (next to
+`createStoreBackedMcpServersProvider`): session row → `vault_ids` in
+order → first active credential with `mcp_server_url === serverUrl`
+(byte-exact) → `SecretsStore.reveal`. Absent resolver or no match =
+unauthenticated connect (M1 behavior unchanged). Vault CRUD is **not**
+gated by `OMA_ENABLE_MCP` (storage is inert); only injection is, by
+geometry — no MCP dials happen when the gate is off.
+
+**Injection.** `McpConnection.connect` gains `authorization?: string`;
+passes `requestInit: { headers: { Authorization: "Bearer …" } }` to
+`StreamableHTTPClientTransport`. **Probe 49 passed** (2026-07-08,
+`scratch/49-mcp-auth-sdk-probe.{mjs,md}`): at SDK 1.29.0,
+`requestInit.headers.authorization` reaches both POST and GET/SSE request
+legs, so no guarded-fetch wrapper is needed for M2.
+
+**Auth-failure classification.** Connect rejections carry the HTTP status
+(SDK `StreamableHTTPError.code` — probe 49 confirms). Classification rule,
+updated by **probe 50** (2026-07-08): MCP server 401/403 after a reached
+HTTP endpoint → `mcp_authentication_failed_error`, **whether or not a vault
+credential was injected**. Hosted emitted the auth class for both a bogus
+`static_bearer` credential and a no-`vault_ids` Linear MCP session; reserve
+`mcp_connection_failed_error` for network/timeout/non-auth HTTP failures.
+Plumbing: the failure path §4.6 already built gains an error-type parameter —
+`persistMcpConnectionFailed` (events service; post-#160 location) takes
+`type: "mcp_connection_failed_error" | "mcp_authentication_failed_error"`,
+and `ManagedAgentsMcpAuthenticationFailedError` joins `types/events.ts`
+(same shape, different discriminator). Auth failures share the M1
+consecutive-failure budget — deliberate, prevents hammering a server that
+keeps saying 403 — **but the budget must not outlive the credential that
+earned it** (review 7A-1, 2026-07-08): M1's exhausted state suppresses all
+further dials for the session, so a bad token would exhaust the budget and
+a subsequent rotation would never be retried. Fix: the
+`mcpFailureCounts` entry records the **resolved-credential fingerprint**
+(`credential_id` + `updated_at`; `"none"` when unauthenticated) used on the
+last failed dial; when `prepareMcp` resolves a different fingerprint for
+that server — token rotated, credential added after exhaustion, vault
+attached — the count resets and dialing resumes. Fingerprint comparison
+uses metadata only; the token value never enters the key.
+
+**Redaction.** The revealed token exists transiently in `prepareMcp` stack
+frames and the transport's header map. Register it with the 0121 logger
+redaction registry for the dial's duration (same pattern as egress secret
+injection), and never place it on the handle, an event payload, or an error
+message — the auth-failure event carries the server name and status class,
+not the header. Test asserts the token string is absent from every
+persisted event and captured log line.
+
+**Metrics.** `oma_mcp_connections_total` gains outcome `auth_failed`
+(alongside `connected`/`connect_failed`); `instruments.ts` + the `app.ts`
+hook extend accordingly. No new instrument.
+
+**IDs.** `newVaultId` (`vlt_`), `newVaultCredentialId` (`vcrd_`) in
+`ids.ts`, UUIDv7 like the rest.
+
+### 7A.4 Probes (before implementation, same discipline as 46/47)
+
+- **Probe 49 (SDK, hermetic)** — DONE 2026-07-08
+  (`scratch/49-mcp-auth-sdk-probe.{mjs,md}`): `requestInit.headers` reaches
+  POST and GET/SSE at SDK 1.29.0; credentialed 401/403 reject as
+  `StreamableHTTPError` with `.code`.
+- **Probe 50 (hosted, live)** — DONE 2026-07-08
+  (`scratch/50-vaults-hosted-probe.{py,md}`): captured vault + credential
+  CRUD shapes, duplicate/immutability/archive behavior, write-only secret
+  fields, session `vault_ids` echo, raw pagination optionality, and live
+  `mcp_authentication_failed_error` frames for both bogus static-bearer and
+  no-vault unauthenticated Linear MCP sessions.
+
+### 7A.5 Testing (M2)
+
+- **Vault CRUD matrix** (`vaults/__tests__/`): create/retrieve/update/list
+  round-trips; 409 on duplicate active `mcp_server_url`; archived
+  credential frees the key; structural-field update rejected; max-20
+  enforced; `include_archived` filter; write-only fields never in any
+  response (assert on serialized JSON, not the object); cross-workspace
+  invisibility; hard delete vs archive record retention; archive purges
+  the `SecretsStore` row (assert `reveal` → undefined).
+- **Secrets-surface guard**: `/v1/secrets` create rejects `vault/` prefix;
+  list excludes vault-backed rows; `rotateMasterKey` rewraps vault tokens
+  (rotate, then `reveal` still round-trips).
+- **Atomicity + master-key**: credential create with an injected
+  metadata-write failure rolls back the secret row too (no orphan —
+  `reveal` → undefined after the failure); archive with an injected
+  failure rolls back both, and the retry succeeds (purge idempotent);
+  these atomicity tests run against the memory-mode wiring, which makes
+  them double as the guard that vault + secrets stores share one handle
+  there — separately-constructed `:memory:` stores would fail them;
+  with no master key, credential create/rotate return the `requireStore`
+  wire-shaped error and write nothing, while vault CRUD and credential
+  metadata reads/archive still work.
+- **Auth gate**: unauthenticated request to each `/v1/vaults*` route → 401
+  (locks the prefix-list registration); cross-workspace guessed-id → 404.
+- **Session create**: `vault_ids` accepted/persisted/echoed order-stable;
+  unknown vault 4xx; archived vault 4xx; cross-workspace vault invisible
+  (404-equivalent, not 403 — no existence oracle); cap enforced.
+- **Resolution unit tests**: byte-exact match (trailing-slash mismatch →
+  no match → unauthenticated), first-vault-wins across two matching
+  vaults, archived credential skipped, no-vault sessions unchanged.
+- **Injection e2e** (fixture grows a `requireBearer` option returning 401
+  + `WWW-Authenticate` on mismatch): correct token → tools discovered and
+  callable, Authorization asserted on POST and GET legs server-side; wrong
+  token → `mcp_authentication_failed_error` persisted with `retry_status`,
+  no-vault 401/403 from the same auth-requiring server also →
+  `mcp_authentication_failed_error` (probe 50), budget counts, exhausted
+  after 5; rotation mid-session → next
+  idle→running handle build connects with the new token; **rotation after
+  exhaustion** → fingerprint change resets the count and the server dials
+  again (locks review 7A-1 — without the reset this scenario never
+  reconnects).
+- **Secret-never-leaks** (the exit criterion): hermetic sweep asserting the
+  token string absent from all persisted events, runner-emitted payloads,
+  and captured log output; live smoke (probe-51-style, extending
+  `scratch/48`) re-verifies against a real model turn with sandbox-side
+  grep.
+- **Classification**: unauthenticated 401/403 from an auth-requiring MCP
+  server produces `mcp_authentication_failed_error` (locks the probe-50
+  disposition).
+
+### 7A.6 Docs (M2)
+
+- `dev-deployment.md`: vaults section (create vault → credential →
+  `vault_ids` walkthrough; `static_bearer`-only note; reserved `vault/`
+  secret-name prefix).
+- `threat-model.md`: credential storage (envelope under `SecretsStore`) and
+  the injection boundary (control-plane dial, never sandbox) — extends the
+  §3 control-plane-dials class from M1.
+- Parity ledger (§8 updates): `mcp_oauth` + `mcp_oauth_validate` → M3;
+  `environment_variable` credentials already listed; **vault/credential
+  webhooks** (`vault.archived`, `vault_credential.*`) — OMA has no webhook
+  surface at all; named gap, not an M2 item. Periodic mid-session
+  re-resolution → named deviation until M3.
+- Roadmap 0114: mark the third exit criterion's MCP half done on merge.
+
+### 7A.7 M2 non-goals (beyond §8)
+
+- `mcp_oauth`, refresh worker, `mcp_oauth_validate` — M3.
+- Vault/credential webhooks — no webhook surface exists; parity-ledger gap.
+- Periodic mid-session credential re-resolution — M3 (rides the refresh
+  worker); M2 propagates rotation at handle-rebuild boundaries.
+- `sessions.update` of `vault_ids` — no session-update surface (§8).
+- Console UI for vaults — later console slice, with MCP servers (§8).
+
+### 7A.8 Probe-closed questions
+
+1. Credential GET/list response `auth` field set — probe 50: static bearer
+   returns exactly `{type, mcp_server_url}`; no secret fields.
+2. Per-session `vault_ids` echo — probe 50: create response includes
+   order-stable `vault_ids`. Cap was not falsified; keep interim cap 20,
+   matching the per-vault credential cap and M1 server cap.
+3. Unauthenticated-401 classification — probe 50: hosted still emits
+   `mcp_authentication_failed_error` for an auth-requiring MCP server when
+   no vault credential is attached.
+4. Vault metadata constraints — SDK/API reference and docs agree with
+   agents/sessions: max 16 pairs, keys up to 64 chars, values up to 512
+   chars; reuse the existing metadata validator.
+5. Raw pagination shape — probe 50: list responses include `next_page` only
+   when another page exists; terminal one-page responses omit it rather than
+   returning `null`.
 
 ---
 
@@ -740,3 +1061,25 @@ parity without the probe" condition is satisfied.
    should work out of the box like hosted; the opt-in posture matches every
    other outbound capability in the appliance. No reviewer objected;
    standing decision unless the user overrides.
+
+**M2 amendment review round 1 (2026-07-08, engineer pass on §7A):** 5
+findings, all valid, all folded: (1) failure-budget must reset on
+credential change — real blocker, exhaustion would have outlived rotation
+(§7A.3 fingerprint rule + §7A.5 test); (2) vault↔secret write ordering
+across separate sqlite handles, failing toward less secret retention
+(§7A.3); (3) master-key-absent behavior made explicit — credential writes
+fail wire-shaped, metadata surfaces stay up (§7A.3); (4) `/v1/vaults` must
+be registered in the managed-route auth prefix list, locked by 401 +
+cross-workspace-404 tests (§7A.3/§7A.5); (5) reserved `vault/`
+secret-name prefix compatibility statement (§7A.3). None affect the wire
+contract: budget policy, write ordering, and route gating are internal;
+the prefix lives on the OMA-only `/v1/secrets` surface; the master-key
+error reuses the existing wire-shaped `invalid_request` envelope.
+
+**Round 2 (same day):** finding 2's premise corrected — durable
+deployment already shares one `DatabaseSync` across all stores
+(`deployment-storage.ts:189`) and `withSqliteTransaction` is
+savepoint-based (nests), so vault credential writes get a REAL shared
+transaction, not best-effort ordering; the ordering rules survive as
+in-transaction invariant + fallback (§7A.3). With that, §7A judged
+implementation-ready (pending probes 49/50).
