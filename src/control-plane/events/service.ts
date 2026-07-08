@@ -1,19 +1,12 @@
 import {
-  type ListSessionEventsResponse,
   type ManagedAgentsContentBlock,
+  type ListSessionEventsResponse,
   type ManagedAgentsEvent,
-  type ManagedAgentsOpaqueContentBlock,
   type ManagedAgentsUserCustomToolResultEventInput,
   type ManagedAgentsUserEventInput,
   type ManagedAgentsUserToolConfirmationEventInput,
   type SendSessionEventsRequest,
 } from "../../types/events.ts";
-import {
-  isJsonObject,
-  isJsonValue,
-  type JsonObject,
-  type JsonValue,
-} from "../../types/json.ts";
 import { ApiError, invalidRequest, notFound, rateLimited, toApiErrorBody } from "../errors.ts";
 import { log } from "../logging.ts";
 import {
@@ -29,7 +22,6 @@ import type { DeploymentRuntimeEventCoordinator } from "../deployment-runtime-ev
 import type { SessionRow, SessionStore } from "../sessions/types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { newRuntimeTurnId, newRequestId } from "../ids.ts";
-import { MAX_EVENTS_PER_REQUEST } from "./constants.ts";
 import {
   spanModelRequestEndDraft,
   spanModelRequestStartDraft,
@@ -68,13 +60,52 @@ import {
   RuntimeTurnOwnershipLostError,
   toManagedAgentsEvent,
 } from "./types.ts";
-
-const SUPPORTED_USER_EVENT_TYPES = new Set([
-  "user.message",
-  "user.interrupt",
-  "user.custom_tool_result",
-  "user.tool_confirmation",
-] as const);
+import {
+  archiveGuardKey,
+  requireActiveSession,
+  requireExistingSession,
+  sessionNotArchivable,
+  sessionScopeKey,
+} from "./session-guards.ts";
+import {
+  eventPayload,
+  hasToolResultForToolUseId,
+  lostMcpToolConfirmationPayload,
+  lostToolConfirmationPayload,
+  parseSendRequest,
+  sameCustomToolResult,
+  sameCustomToolResultPayload,
+  sameToolConfirmation,
+  toSendResponseEvent,
+} from "./request.ts";
+import {
+  actionClosedWithoutResult,
+  hasTerminalIdleDraft,
+  isAcknowledgedInFlightAction,
+  isRuntimeCustomToolUseEvent,
+  isRuntimeLeaseExpired,
+  isRuntimeMcpConnectionFailedEvent,
+  isRuntimeMcpToolResultEvent,
+  isRuntimeMcpToolUseEvent,
+  isRuntimeMcpToolWithModelEndEvent,
+  isRuntimeToolPermissionUseEvent,
+  isRuntimeToolPermissionWithModelEndEvent,
+  isRuntimeTurnClosed,
+  leaseExpiresAt,
+  runtimeErrorDraft,
+  runtimeLeaseRetryDelayMs,
+  runtimeTurnStillOwned,
+  textFromContent,
+  toError,
+  unique,
+} from "./runtime-helpers.ts";
+import {
+  materializeMcpConnectionFailedRows,
+  materializeMcpToolResultRows,
+  materializeMcpToolUseRows,
+  materializeToolPermissionUseRows,
+  toolPermissionRuntimeChanges,
+} from "./tool-persistence.ts";
 
 interface ToolConfirmationCommit {
   event: ManagedAgentsUserToolConfirmationEventInput;
@@ -1920,23 +1951,29 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     try {
       const now = new Date().toISOString();
-      const useRows = this.materializeToolPermissionUseRows(
+      const useRows = materializeToolPermissionUseRows({
         workspaceId,
         sessionId,
         event,
         now,
-      );
+        onReleased: (toolUseId, reason) => {
+          if (reason !== undefined) {
+            this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
+          }
+          this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+        },
+      });
       persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
-        ...this.toolPermissionRuntimeChanges(
+        ...toolPermissionRuntimeChanges({
           workspaceId,
           sessionId,
           turnId,
           ownerId,
           ownerGeneration,
-          event.evaluatedPermission,
-          useRows[0].id,
+          evaluatedPermission: event.evaluatedPermission,
+          toolUseId: useRows[0].id,
           now,
-        ),
+        }),
       });
       if (event.evaluatedPermission === "ask") {
         this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
@@ -1965,12 +2002,18 @@ export class DefaultSessionEventsService implements SessionEventsService {
     const permission = event.permissionUse;
     try {
       const now = new Date().toISOString();
-      const useRows = this.materializeToolPermissionUseRows(
+      const useRows = materializeToolPermissionUseRows({
         workspaceId,
         sessionId,
-        permission,
+        event: permission,
         now,
-      );
+        onReleased: (toolUseId, reason) => {
+          if (reason !== undefined) {
+            this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
+          }
+          this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+        },
+      });
       const suppressedPiToolCallIds = new Set([
         permission.piToolCallId,
         ...event.suppressedPiToolCallIds,
@@ -2009,16 +2052,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
         this.broadcaster,
         [...useRows, ...remainingRows],
         {
-          ...this.toolPermissionRuntimeChanges(
+          ...toolPermissionRuntimeChanges({
             workspaceId,
             sessionId,
             turnId,
             ownerId,
             ownerGeneration,
-            permission.evaluatedPermission,
-            useRows[0].id,
+            evaluatedPermission: permission.evaluatedPermission,
+            toolUseId: useRows[0].id,
             now,
-          ),
+          }),
           closedModelRequestStarts:
             spanEndDrafts.length === 0 ||
             closingModelRequestStartId === undefined
@@ -2046,93 +2089,6 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
   }
 
-  private materializeToolPermissionUseRows(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    event: RuntimeToolPermissionUseEvent,
-    now: string,
-  ): PersistedSessionEvent[] {
-    const useRows = materializePersistedEvents(
-      workspaceId,
-      sessionId,
-      [
-        {
-          type: "agent.tool_use",
-          payload: {
-            name: event.name,
-            input: event.input,
-            evaluated_permission: event.evaluatedPermission,
-          },
-        },
-      ],
-      now,
-    );
-    event.bindToolUseId(useRows[0].id, (reason) => {
-      if (reason !== undefined) {
-        this.closeReleasedRuntimeAction(
-          workspaceId,
-          sessionId,
-          useRows[0].id,
-          reason,
-        );
-      }
-      this.removePendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
-    });
-    return useRows;
-  }
-
-  private toolPermissionRuntimeChanges(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
-    ownerId: string,
-    ownerGeneration: number,
-    // Shared with the MCP path (plan 0122): only the permission matters here.
-    evaluatedPermission: "allow" | "ask" | "deny",
-    toolUseId: string,
-    now: string,
-  ): Pick<EventStoreRuntimeChanges, "openedActions" | "turnStates"> {
-    return {
-      openedActions:
-        evaluatedPermission === "ask"
-          ? [
-              {
-                workspaceId,
-                sessionId,
-                turnId,
-                actionId: toolUseId,
-                actionType: "tool_confirmation",
-                now,
-              },
-            ]
-          : [],
-      turnStates:
-        evaluatedPermission === "ask"
-          ? [
-              {
-                workspaceId,
-                sessionId,
-                turnId,
-                ownerId,
-                ownerGeneration,
-                state: "paused",
-                now,
-              },
-            ]
-          : [
-              {
-                workspaceId,
-                sessionId,
-                turnId,
-                ownerId,
-                ownerGeneration,
-                state: "running",
-                now,
-              },
-            ],
-    };
-  }
-
   // ── MCP persistence (plan 0122 §4.4/§4.5) — mirrors the tool-permission
   // pair: sevt_* id bound on persist (before the tool executes), ask-path
   // opens a tool_confirmation action, allow-path continues running.
@@ -2149,23 +2105,29 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     try {
       const now = new Date().toISOString();
-      const useRows = this.materializeMcpToolUseRows(
+      const useRows = materializeMcpToolUseRows({
         workspaceId,
         sessionId,
         event,
         now,
-      );
+        onReleased: (toolUseId, reason) => {
+          if (reason !== undefined) {
+            this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
+          }
+          this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+        },
+      });
       persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
-        ...this.toolPermissionRuntimeChanges(
+        ...toolPermissionRuntimeChanges({
           workspaceId,
           sessionId,
           turnId,
           ownerId,
           ownerGeneration,
-          event.evaluatedPermission,
-          useRows[0].id,
+          evaluatedPermission: event.evaluatedPermission,
+          toolUseId: useRows[0].id,
           now,
-        ),
+        }),
       });
       if (event.evaluatedPermission === "ask") {
         this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
@@ -2194,12 +2156,18 @@ export class DefaultSessionEventsService implements SessionEventsService {
     const mcpToolUse = event.mcpToolUse;
     try {
       const now = new Date().toISOString();
-      const useRows = this.materializeMcpToolUseRows(
+      const useRows = materializeMcpToolUseRows({
         workspaceId,
         sessionId,
-        mcpToolUse,
+        event: mcpToolUse,
         now,
-      );
+        onReleased: (toolUseId, reason) => {
+          if (reason !== undefined) {
+            this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
+          }
+          this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+        },
+      });
       const suppressedPiToolCallIds = new Set([
         mcpToolUse.piToolCallId,
         ...event.suppressedPiToolCallIds,
@@ -2238,16 +2206,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
         this.broadcaster,
         [...useRows, ...remainingRows],
         {
-          ...this.toolPermissionRuntimeChanges(
+          ...toolPermissionRuntimeChanges({
             workspaceId,
             sessionId,
             turnId,
             ownerId,
             ownerGeneration,
-            mcpToolUse.evaluatedPermission,
-            useRows[0].id,
+            evaluatedPermission: mcpToolUse.evaluatedPermission,
+            toolUseId: useRows[0].id,
             now,
-          ),
+          }),
           closedModelRequestStarts:
             spanEndDrafts.length === 0 ||
             closingModelRequestStartId === undefined
@@ -2275,44 +2243,6 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
   }
 
-  private materializeMcpToolUseRows(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    event: RuntimeMcpToolUseEvent,
-    now: string,
-  ): PersistedSessionEvent[] {
-    const useRows = materializePersistedEvents(
-      workspaceId,
-      sessionId,
-      [
-        {
-          type: "agent.mcp_tool_use",
-          payload: {
-            mcp_server_name: event.mcpServerName,
-            name: event.name,
-            input: event.input,
-            evaluated_permission: event.evaluatedPermission,
-            // Probe 47 wire parity: hosted emits null outside subagent threads.
-            session_thread_id: null,
-          },
-        },
-      ],
-      now,
-    );
-    event.bindToolUseId(useRows[0].id, (reason) => {
-      if (reason !== undefined) {
-        this.closeReleasedRuntimeAction(
-          workspaceId,
-          sessionId,
-          useRows[0].id,
-          reason,
-        );
-      }
-      this.removePendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
-    });
-    return useRows;
-  }
-
   /** Terminal result for a persisted agent.mcp_tool_use — no action state. */
   private persistMcpToolResult(
     workspaceId: WorkspaceId,
@@ -2325,21 +2255,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     const now = new Date().toISOString();
-    const rows = materializePersistedEvents(
+    const rows = materializeMcpToolResultRows({
       workspaceId,
       sessionId,
-      [
-        {
-          type: "agent.mcp_tool_result",
-          payload: {
-            mcp_tool_use_id: event.mcpToolUseId,
-            content: event.content as unknown as JsonValue,
-            is_error: event.isError,
-          },
-        },
-      ],
       now,
-    );
+      event,
+    });
     persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
       turnStates: [
         {
@@ -2366,24 +2287,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
     const now = new Date().toISOString();
-    const rows = materializePersistedEvents(
+    const rows = materializeMcpConnectionFailedRows({
       workspaceId,
       sessionId,
-      [
-        {
-          type: "session.error",
-          payload: {
-            error: {
-              type: "mcp_connection_failed_error",
-              mcp_server_name: event.mcpServerName,
-              message: event.message,
-              retry_status: { type: event.retryStatus },
-            },
-          },
-        },
-      ],
       now,
-    );
+      event,
+    });
     persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
       turnStates: [
         {
@@ -3059,482 +2968,4 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): void {
     this.flushPendingActions(workspaceId, sessionId);
   }
-}
-
-function requireActiveSession(
-  store: SessionStore,
-  workspaceId: WorkspaceId,
-  sessionId: string,
-): void {
-  if (!store.retrieve(workspaceId, sessionId)) {
-    throw notFound(`Session ${sessionId} not found`);
-  }
-}
-
-function requireExistingSession(
-  store: SessionStore,
-  workspaceId: WorkspaceId,
-  sessionId: string,
-): SessionRow {
-  const session = store.retrieveAny(workspaceId, sessionId);
-  if (!session) {
-    throw notFound(`Session ${sessionId} not found`);
-  }
-  return session;
-}
-
-function sessionNotArchivable(
-  sessionId: string,
-  status: "running" | "rescheduling",
-): Error {
-  return invalidRequest(
-    `Session ${sessionId} cannot be archived while its status is "${status}". Only pending or idle sessions may be archived.`,
-  );
-}
-
-function archiveGuardKey(workspaceId: WorkspaceId, sessionId: string): string {
-  return JSON.stringify([workspaceId, sessionId]);
-}
-
-function sessionScopeKey(workspaceId: WorkspaceId, sessionId: string): string {
-  return JSON.stringify([workspaceId, sessionId]);
-}
-
-function parseSendRequest(input: unknown): SendSessionEventsRequest {
-  const obj = objectInput(input);
-  const value = obj.events;
-  if (!Array.isArray(value)) {
-    throw invalidRequest("`events` must be a non-empty array");
-  }
-  if (value.length === 0) {
-    throw invalidRequest("`events` must be a non-empty array");
-  }
-  if (value.length > MAX_EVENTS_PER_REQUEST) {
-    throw invalidRequest(
-      `\`events\` must contain at most ${MAX_EVENTS_PER_REQUEST} items`,
-    );
-  }
-  const events = value.map((item, index) => parseUserEvent(item, index));
-  rejectMixedInterruptAndMessage(events);
-  return { events };
-}
-
-function rejectMixedInterruptAndMessage(
-  events: readonly SendSessionEventsRequest["events"][number][],
-): void {
-  const hasInterrupt = events.some((event) => event.type === "user.interrupt");
-  if (!hasInterrupt) return;
-  const hasMessage = events.some((event) => event.type === "user.message");
-  if (!hasMessage) return;
-  throw invalidRequest(
-    "`events` cannot mix user.interrupt and user.message in one request",
-  );
-}
-
-function parseUserEvent(
-  input: unknown,
-  index: number,
-): SendSessionEventsRequest["events"][number] {
-  const event = objectInput(input);
-  if ("session_id" in event) {
-    throw invalidRequest(
-      `\`events[${index}].session_id\` is not allowed; session ID comes from the URL path`,
-    );
-  }
-  const type = nonEmptyString(event.type, `events[${index}].type`);
-  if (!SUPPORTED_USER_EVENT_TYPES.has(type as never)) {
-    throw invalidRequest(
-      `\`events[${index}].type\` must be one of user.message, user.interrupt, user.custom_tool_result, user.tool_confirmation`,
-    );
-  }
-  if (!isJsonValue(event)) {
-    throw invalidRequest(`\`events[${index}]\` must be JSON-compatible`);
-  }
-  if (type === "user.message") {
-    const content = parseContentArray(event.content, `events[${index}].content`);
-    return { type: "user.message", content };
-  }
-  if (type === "user.interrupt") {
-    return { type: "user.interrupt" };
-  }
-  if (type === "user.custom_tool_result") {
-    const customToolUseId = nonEmptyString(
-      event.custom_tool_use_id,
-      `events[${index}].custom_tool_use_id`,
-    );
-    const contentValue = event.content;
-    return {
-      type: "user.custom_tool_result",
-      custom_tool_use_id: customToolUseId,
-      ...(contentValue === undefined
-        ? {}
-        : {
-            content: parseContentArray(
-              contentValue,
-              `events[${index}].content`,
-            ),
-          }),
-      ...optionalBooleanSpread(event.is_error, `events[${index}].is_error`),
-    };
-  }
-  const toolUseId = nonEmptyString(
-    event.tool_use_id,
-    `events[${index}].tool_use_id`,
-  );
-  const result = event.result;
-  if (result !== "allow" && result !== "deny") {
-    throw invalidRequest(
-      `\`events[${index}].result\` must be \`allow\` or \`deny\``,
-    );
-  }
-  const denyMessage = event.deny_message;
-  if (result === "allow" && denyMessage !== undefined) {
-    throw invalidRequest(
-      `\`events[${index}].deny_message\` is only valid when result is \`deny\``,
-    );
-  }
-  if (
-    result === "deny" &&
-    denyMessage !== undefined &&
-    denyMessage !== null &&
-    typeof denyMessage !== "string"
-  ) {
-    throw invalidRequest(
-      `\`events[${index}].deny_message\` must be a string or null`,
-    );
-  }
-  const normalizedDenyMessage =
-    denyMessage === undefined || denyMessage === null || typeof denyMessage === "string"
-      ? denyMessage
-      : undefined;
-  return {
-    type: "user.tool_confirmation",
-    tool_use_id: toolUseId,
-    result,
-    ...(normalizedDenyMessage === undefined
-      ? {}
-      : { deny_message: normalizedDenyMessage }),
-  };
-}
-
-function parseContentArray(
-  input: unknown,
-  field: string,
-): ManagedAgentsContentBlock[] {
-  if (!Array.isArray(input) || input.length === 0) {
-    throw invalidRequest(`\`${field}\` must be a non-empty array`);
-  }
-  return input.map((block, index) => parseContentBlock(block, `${field}[${index}]`));
-}
-
-function parseContentBlock(
-  input: unknown,
-  field: string,
-): ManagedAgentsContentBlock {
-  const block = objectInput(input);
-  if (!isJsonValue(block)) {
-    throw invalidRequest(`\`${field}\` must be JSON-compatible`);
-  }
-  const type = nonEmptyString(block.type, `${field}.type`);
-  if (type === "text") {
-    return {
-      type,
-      text: nonEmptyString(block.text, `${field}.text`),
-    };
-  }
-  return block as ManagedAgentsOpaqueContentBlock;
-}
-
-function eventPayload(event: SendSessionEventsRequest["events"][number]): JsonObject {
-  const { type: _type, ...payload } = event;
-  return payload as Record<string, JsonValue>;
-}
-
-function toSendResponseEvent(
-  row: PersistedSessionEvent | undefined,
-): ManagedAgentsEvent {
-  if (!row) throw new Error("Persisted event row missing");
-  const event = toManagedAgentsEvent(row);
-  if (row.type === "user.tool_confirmation") {
-    return { ...event, processed_at: null };
-  }
-  return event;
-}
-
-function sameToolConfirmation(
-  completed: {
-    result: "allow" | "deny";
-    denyMessage?: string | null;
-  },
-  event: ManagedAgentsUserToolConfirmationEventInput,
-): boolean {
-  return (
-    completed.result === event.result &&
-    (completed.denyMessage ?? null) === (event.deny_message ?? null)
-  );
-}
-
-function sameCustomToolResult(
-  left: ManagedAgentsUserCustomToolResultEventInput,
-  right: ManagedAgentsUserCustomToolResultEventInput,
-): boolean {
-  return (
-    left.custom_tool_use_id === right.custom_tool_use_id &&
-    JSON.stringify(left.content ?? null) === JSON.stringify(right.content ?? null) &&
-    (left.is_error ?? false) === (right.is_error ?? false)
-  );
-}
-
-function sameCustomToolResultPayload(
-  payload: JsonObject,
-  event: ManagedAgentsUserCustomToolResultEventInput,
-): boolean {
-  return (
-    payload.custom_tool_use_id === event.custom_tool_use_id &&
-    JSON.stringify(payload.content ?? null) === JSON.stringify(event.content ?? null) &&
-    (payload.is_error ?? false) === (event.is_error ?? false)
-  );
-}
-
-function hasToolResultForToolUseId(
-  rows: readonly PersistedSessionEvent[],
-  toolUseId: string,
-): boolean {
-  return rows.some(
-    (row) =>
-      (row.type === "agent.tool_result" &&
-        row.payload.tool_use_id === toolUseId) ||
-      (row.type === "agent.mcp_tool_result" &&
-        row.payload.mcp_tool_use_id === toolUseId),
-  );
-}
-
-function lostToolConfirmationPayload(toolUseId: string): JsonObject {
-  return {
-    tool_use_id: toolUseId,
-    content: [
-      {
-        type: "text",
-        text: `Tool confirmation ${toolUseId} was accepted, but runtime state is no longer available and the builtin tool execution outcome is unknown.`,
-      },
-    ],
-    is_error: true,
-  };
-}
-
-function lostMcpToolConfirmationPayload(toolUseId: string): JsonObject {
-  return {
-    mcp_tool_use_id: toolUseId,
-    content: [
-      {
-        type: "text",
-        text: `Tool confirmation ${toolUseId} was accepted, but runtime state is no longer available and the MCP tool execution outcome is unknown.`,
-      },
-    ],
-    is_error: true,
-  };
-}
-
-function leaseExpiresAt(now: string, ttlMs: number): string {
-  return new Date(Date.parse(now) + ttlMs).toISOString();
-}
-
-function isRuntimeLeaseExpired(leaseExpiresAtValue: string): boolean {
-  return Date.parse(leaseExpiresAtValue) <= Date.now();
-}
-
-function runtimeLeaseRetryDelayMs(leaseExpiresAtValue: string): number {
-  return Math.max(0, Date.parse(leaseExpiresAtValue) - Date.now());
-}
-
-function isRuntimeTurnClosed(state: string): boolean {
-  return state === "completed" || state === "terminalized";
-}
-
-function actionClosedWithoutResult(
-  action: PendingRuntimeActionRecord | undefined,
-): boolean {
-  return (
-    action?.close_reason === "interrupted" ||
-    action?.close_reason === "timeout" ||
-    action?.close_reason === "terminalized"
-  );
-}
-
-function isAcknowledgedInFlightAction(
-  action: PendingRuntimeActionRecord | undefined,
-): boolean {
-  return (
-    action?.state === "acknowledged" &&
-    !isRuntimeTurnClosed(action.turn.state) &&
-    action.close_reason === null
-  );
-}
-
-function unique(values: readonly string[]): string[] {
-  return [...new Set(values)];
-}
-
-function runtimeTurnStillOwned(turnId: string): ApiError {
-  return new ApiError(
-    529,
-    "overloaded_error",
-    `Runtime turn ${turnId} is still owned by another worker; retry later`,
-  );
-}
-
-function optionalBooleanSpread(
-  value: unknown,
-  field: string,
-): { is_error?: boolean } {
-  if (value === undefined) return {};
-  if (typeof value === "boolean") return { is_error: value };
-  throw invalidRequest(`\`${field}\` must be a boolean`);
-}
-
-function textFromContent(content: ManagedAgentsContentBlock[]): string | undefined {
-  const text = content
-    .filter((block): block is { type: "text"; text: string } => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
-  return text.length > 0 ? text : undefined;
-}
-
-function runtimeErrorDraft(error: unknown): EventDraft {
-  const message = "Runtime execution failed";
-  return {
-    type: "session.error",
-    payload: { message },
-  };
-}
-
-function isRuntimeCustomToolUseEvent(
-  event: unknown,
-): event is RuntimeCustomToolUseEvent {
-  if (!isObjectRecord(event)) return false;
-  return (
-    event.type === "oma.custom_tool_use" &&
-    typeof event.piToolCallId === "string" &&
-    typeof event.name === "string" &&
-    isJsonObject(event.input) &&
-    typeof event.bindCustomToolUseId === "function" &&
-    typeof event.rejectCustomToolUse === "function"
-  );
-}
-
-function isRuntimeToolPermissionUseEvent(
-  event: unknown,
-): event is RuntimeToolPermissionUseEvent {
-  if (!isObjectRecord(event)) return false;
-  return (
-    event.type === "oma.tool_permission_use" &&
-    typeof event.piToolCallId === "string" &&
-    typeof event.name === "string" &&
-    isJsonObject(event.input) &&
-    (event.evaluatedPermission === "allow" ||
-      event.evaluatedPermission === "ask" ||
-      event.evaluatedPermission === "deny") &&
-    typeof event.bindToolUseId === "function" &&
-    typeof event.rejectToolUse === "function"
-  );
-}
-
-function isRuntimeToolPermissionWithModelEndEvent(
-  event: unknown,
-): event is RuntimeToolPermissionWithModelEndEvent {
-  if (!isObjectRecord(event)) return false;
-  return (
-    event.type === "oma.tool_permission_with_model_end" &&
-    "messageEnd" in event &&
-    isRuntimeToolPermissionUseEvent(event.permissionUse) &&
-    Array.isArray(event.suppressedPiToolCallIds) &&
-    event.suppressedPiToolCallIds.every((id) => typeof id === "string")
-  );
-}
-
-function isRuntimeMcpToolUseEvent(
-  event: unknown,
-): event is RuntimeMcpToolUseEvent {
-  if (!isObjectRecord(event)) return false;
-  return (
-    event.type === "oma.mcp_tool_use" &&
-    typeof event.piToolCallId === "string" &&
-    typeof event.mcpServerName === "string" &&
-    typeof event.name === "string" &&
-    isJsonObject(event.input) &&
-    (event.evaluatedPermission === "allow" ||
-      event.evaluatedPermission === "ask" ||
-      event.evaluatedPermission === "deny") &&
-    typeof event.bindToolUseId === "function" &&
-    typeof event.rejectToolUse === "function"
-  );
-}
-
-function isRuntimeMcpToolWithModelEndEvent(
-  event: unknown,
-): event is RuntimeMcpToolWithModelEndEvent {
-  if (!isObjectRecord(event)) return false;
-  return (
-    event.type === "oma.mcp_tool_with_model_end" &&
-    "messageEnd" in event &&
-    isRuntimeMcpToolUseEvent(event.mcpToolUse) &&
-    Array.isArray(event.suppressedPiToolCallIds) &&
-    event.suppressedPiToolCallIds.every((id) => typeof id === "string")
-  );
-}
-
-function isRuntimeMcpToolResultEvent(
-  event: unknown,
-): event is RuntimeMcpToolResultEvent {
-  if (!isObjectRecord(event)) return false;
-  return (
-    event.type === "oma.mcp_tool_result" &&
-    typeof event.mcpToolUseId === "string" &&
-    Array.isArray(event.content) &&
-    typeof event.isError === "boolean"
-  );
-}
-
-function isRuntimeMcpConnectionFailedEvent(
-  event: unknown,
-): event is RuntimeMcpConnectionFailedEvent {
-  if (!isObjectRecord(event)) return false;
-  return (
-    event.type === "oma.mcp_connection_failed" &&
-    typeof event.mcpServerName === "string" &&
-    typeof event.message === "string" &&
-    (event.retryStatus === "retrying" ||
-      event.retryStatus === "exhausted" ||
-      event.retryStatus === "terminal")
-  );
-}
-
-function hasTerminalIdleDraft(drafts: readonly EventDraft[]): boolean {
-  return drafts.some((draft) => {
-    if (draft.type !== "session.status_idle") return false;
-    const stopReason = draft.payload.stop_reason;
-    if (!isJsonObject(stopReason)) return true;
-    return stopReason.type !== "requires_action";
-  });
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function objectInput(input: unknown): Record<string, unknown> {
-  if (!isJsonObject(input)) {
-    throw invalidRequest("Request body must be a JSON object");
-  }
-  return input;
-}
-
-function nonEmptyString(value: unknown, field: string): string {
-  if (typeof value === "string" && value.length > 0) return value;
-  throw invalidRequest(`\`${field}\` must be a non-empty string`);
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
