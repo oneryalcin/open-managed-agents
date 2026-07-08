@@ -735,9 +735,9 @@ values go in the existing `SecretsStore` (0118, ADR 0016) under a
 - One sealing path, one master-key-rotation path (`rotateMasterKey` covers
   vault tokens for free), `reveal()` stays the single loud plaintext seam.
 - The user-facing `/v1/secrets` surface (OMA-specific, not wire parity)
-  must not see these rows: `create` rejects names starting with the
-  reserved `vault/` prefix, and `list` filters the prefix out. (Names are
-  currently unconstrained beyond length — reserving the prefix is a
+  must not own these rows: `create` and `delete` reject names starting with
+  the reserved `vault/` prefix, and `list` filters the prefix out. (Names
+  are currently unconstrained beyond length — reserving the prefix is a
   narrow, documented break.)
 - Archive/delete of a credential deletes the `SecretsStore` row (purge);
   vault archive cascades. Metadata rows survive archive, vanish on delete.
@@ -767,11 +767,13 @@ values go in the existing `SecretsStore` (0118, ADR 0016) under a
   above guarantees this: the secret write is first and it is the failing
   step). Vault CRUD and credential list/retrieve/archive/delete remain
   available — they are metadata-only.
-- **Reserved-prefix compatibility (review 7A-5).** Any pre-existing
-  user-created secret named `vault/…` (none known; the surface shipped
-  2026-07-06) stays deletable by exact name but disappears from `list` and
-  cannot be recreated. Accepted, documented break on an OMA-specific
-  surface — noted in `dev-deployment.md`.
+- **Reserved-prefix compatibility (review 7A-5; implementation review
+  tightened).** Any pre-existing user-created secret named `vault/…` (none
+  known; the surface shipped 2026-07-06) disappears from `list` and cannot
+  be created or deleted through `/v1/secrets`. The vault lifecycle is the
+  sole owner of that namespace; keeping generic delete open would let a
+  workspace caller remove a live vault credential's backing token via
+  encoded slash params.
 
 **Routes & auth gate (review 7A-4).** `vaultsRoutes` mounts under
 `/v1/vaults` in `app.ts` AND the path must be registered in the
@@ -878,9 +880,9 @@ hook extend accordingly. No new instrument.
   response (assert on serialized JSON, not the object); cross-workspace
   invisibility; hard delete vs archive record retention; archive purges
   the `SecretsStore` row (assert `reveal` → undefined).
-- **Secrets-surface guard**: `/v1/secrets` create rejects `vault/` prefix;
-  list excludes vault-backed rows; `rotateMasterKey` rewraps vault tokens
-  (rotate, then `reveal` still round-trips).
+- **Secrets-surface guard**: `/v1/secrets` create/delete rejects `vault/`
+  prefix; list excludes vault-backed rows; `rotateMasterKey` rewraps vault
+  tokens (rotate, then `reveal` still round-trips).
 - **Atomicity + master-key**: credential create with an injected
   metadata-write failure rolls back the secret row too (no orphan —
   `reveal` → undefined after the failure); archive with an injected
@@ -901,7 +903,9 @@ hook extend accordingly. No new instrument.
   vaults, archived credential skipped, no-vault sessions unchanged.
 - **Injection e2e** (fixture grows a `requireBearer` option returning 401
   + `WWW-Authenticate` on mismatch): correct token → tools discovered and
-  callable, Authorization asserted on POST and GET legs server-side; wrong
+  callable, Authorization asserted on every SDK-issued HTTP request
+  server-side (the fixture rejects any missing token; POST is observed);
+  wrong
   token → `mcp_authentication_failed_error` persisted with `retry_status`,
   no-vault 401/403 from the same auth-requiring server also →
   `mcp_authentication_failed_error` (probe 50), budget counts, exhausted
@@ -1083,3 +1087,44 @@ savepoint-based (nests), so vault credential writes get a REAL shared
 transaction, not best-effort ordering; the ordering rules survive as
 in-transaction invariant + fallback (§7A.3). With that, §7A judged
 implementation-ready (pending probes 49/50).
+
+**M2 implementation review, 2026-07-08:** merge-blockers fixed before merge:
+creation-time `vault_ids` are threaded into pre-commit runtime preparation
+(file-resource sessions no longer prewarm unauthenticated MCP handles);
+generic `/v1/secrets` delete rejects the reserved `vault/` namespace
+including encoded slash params; MCP connection failures persist fixed
+token-free messages instead of SDK/server-controlled response text; JSON
+serialized `authorization` fields are scrubbed as a log backstop; exhausted
+handles are evicted before reuse so a rotated credential is picked up on the
+next operation; `auth_failed` is a first-class MCP connection metric outcome;
+rotate-without-master-key returns the same 400 guidance as create; vault
+hard delete returns the probe-shaped `200 {id,type:"vault_deleted"}`.
+Test coverage added for direct `SqliteVaultStore.resolveCredential`
+(first-vault-wins, archived skip, exact URL), transaction rollback across
+secret+metadata writes, master-key rewrap of vault tokens, bearer fixture
+wire auth, reserved-secret delete, session-create negatives, max-20,
+include_archived, pagination, immutable `mcp_server_url`, and token-free
+failure events.
+
+Explicit M2 dispositions after review:
+
+- **Vault list envelope:** OMA keeps the existing house list envelope
+  (`data`, `has_more`, `next_page` with `next_page: null` on the final page)
+  even though probe 50 observed hosted vaults omit false/null pagination
+  fields. This is a deliberate house-wide deviation for now, not an
+  accidental implementation detail; revisit with the broader list-envelope
+  parity pass rather than making vaults the one inconsistent OMA list.
+- **Credential delete response:** upstream credential-delete body was not
+  captured by probe 50. OMA keeps 204 empty for credential delete until a
+  targeted hosted probe proves otherwise.
+- **Exhausted-server rebuild cost:** a session whose MCP server remains
+  permanently exhausted can rebuild its handle/sandbox on each operation so
+  credential rotation is observed immediately. Accepted M2 tradeoff: this is
+  bounded by active user operations and preferable to waiting up to the
+  15-minute idle TTL after a token is fixed.
+- **Missing secret after metadata survives:** if the backing reserved secret
+  row disappears, resolution returns undefined and the MCP dial proceeds
+  unauthenticated. This is a v1 degradation path, not a confidentiality leak;
+  the reserved-delete guard removes the generic API path that could trigger
+  it. A future hardening pass can surface this as a configuration error
+  instead of unauthenticated fallback.

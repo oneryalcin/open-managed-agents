@@ -23,16 +23,19 @@ export interface McpFixture {
   toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
   /** HTTP-level requests observed, in order (method + path). */
   httpRequests: string[];
+  /** HTTP-level Authorization headers observed, in order. */
+  authorizations: Array<{ method: string; path: string; authorization: string | null }>;
   close: () => Promise<void>;
 }
 
 export async function startMcpFixture(
   tools: readonly McpFixtureTool[],
-  opts: { path?: string; port?: number } = {},
+  opts: { path?: string; port?: number; requireBearer?: string } = {},
 ): Promise<McpFixture> {
   const path = opts.path ?? "/mcp";
   const toolCalls: McpFixture["toolCalls"] = [];
   const httpRequests: string[] = [];
+  const authorizations: McpFixture["authorizations"] = [];
 
   const mcp = new McpServer({ name: "oma-test-fixture", version: "0.0.1" });
   for (const tool of tools) {
@@ -56,6 +59,19 @@ export async function startMcpFixture(
 
   const http: Server = createServer(async (req, res) => {
     httpRequests.push(`${req.method} ${req.url}`);
+    authorizations.push({
+      method: req.method ?? "",
+      path: req.url ?? "",
+      authorization: req.headers.authorization ?? null,
+    });
+    if (
+      opts.requireBearer !== undefined &&
+      req.headers.authorization !== `Bearer ${opts.requireBearer}`
+    ) {
+      res.writeHead(401, { "content-type": "text/plain" });
+      res.end("unauthorized");
+      return;
+    }
     let body: unknown;
     if (req.method === "POST") {
       const chunks: Buffer[] = [];
@@ -93,6 +109,7 @@ export async function startMcpFixture(
     url: `http://127.0.0.1:${address.port}${path}`,
     toolCalls,
     httpRequests,
+    authorizations,
     close: async () => {
       // Keep-alive sockets from SDK clients (or fire-and-forget disposals)
       // must not wedge teardown.

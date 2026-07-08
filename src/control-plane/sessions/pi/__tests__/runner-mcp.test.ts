@@ -81,6 +81,37 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     expect(names?.has("mcp__srv__hidden")).toBe(false);
   });
 
+  it("sends bearer credentials to the MCP server on the wire", async () => {
+    fixture = await startMcpFixture([echoTool()], {
+      requireBearer: "REAL_TOKEN",
+    });
+    runner = mcpRunner({
+      url: fixture.url,
+      credentials: () => ({
+        authorization: "Bearer REAL_TOKEN",
+        fingerprint: "vcrd_real:1",
+      }),
+    });
+
+    await runner.prepareSession("wrk_default", "sesn_bearer");
+
+    expect(runner.customToolNames?.("wrk_default", "sesn_bearer")?.has(
+      "mcp__srv__echo",
+    )).toBe(true);
+    expect(fixture.authorizations.length).toBeGreaterThan(0);
+    expect(fixture.authorizations.every(
+      (entry) => entry.authorization === "Bearer REAL_TOKEN",
+    )).toBe(true);
+    expect(fixture.authorizations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "POST",
+          authorization: "Bearer REAL_TOKEN",
+        }),
+      ]),
+    );
+  });
+
   it("deployment gate off: session builds, zero dials", async () => {
     fixture = await startMcpFixture([echoTool()]);
     runner = mcpRunner({ url: fixture.url, enabled: false });

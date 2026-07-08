@@ -123,6 +123,115 @@ describe("vaults API", () => {
     fixture.close();
   });
 
+  it("enforces the max-20 active credential boundary", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    for (let i = 0; i < 20; i += 1) {
+      const created = await createCredential(fixture.app, key, vault.id, {
+        token: `token-${i}`,
+        serverUrl: `https://mcp.example.com/${i}`,
+      });
+      expect(created.status, `credential ${i}`).toBe(200);
+    }
+
+    const overflow = await createCredential(fixture.app, key, vault.id, {
+      token: "overflow",
+      serverUrl: "https://mcp.example.com/overflow",
+    });
+    expect(overflow.status).toBe(400);
+    expect(await overflow.text()).toContain("20 active credentials");
+    fixture.close();
+  });
+
+  it("lists archived credentials only when include_archived=true", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const created = await createCredential(fixture.app, key, vault.id, {
+      token: TOKEN,
+    });
+    const credential = (await created.json()) as { id: string };
+    await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/archive`,
+      { method: "POST", key },
+    );
+
+    const hidden = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials`,
+      { key },
+    );
+    expect(await hidden.json()).toMatchObject({ data: [] });
+    const visible = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials?include_archived=true`,
+      { key },
+    );
+    expect(await visible.json()).toMatchObject({
+      data: [expect.objectContaining({ id: credential.id, archived_at: expect.any(String) })],
+    });
+    fixture.close();
+  });
+
+  it("paginates vault lists with next_page", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    await createVault(fixture.app, key, "A");
+    await createVault(fixture.app, key, "B");
+
+    const first = await request(fixture.app, "/v1/vaults?limit=1", { key });
+    const firstBody = (await first.json()) as {
+      data: Array<{ id: string }>;
+      next_page: string | null;
+      has_more: boolean;
+    };
+    expect(firstBody.data).toHaveLength(1);
+    expect(firstBody.has_more).toBe(true);
+    expect(firstBody.next_page).toBe(firstBody.data[0]?.id);
+
+    const second = await request(
+      fixture.app,
+      `/v1/vaults?limit=1&page=${firstBody.next_page}`,
+      { key },
+    );
+    expect((await second.json()) as { data: unknown[] }).toMatchObject({
+      data: [expect.any(Object)],
+    });
+    fixture.close();
+  });
+
+  it("rejects credential mcp_server_url updates as immutable", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const created = await createCredential(fixture.app, key, vault.id, {
+      token: TOKEN,
+    });
+    const credential = (await created.json()) as { id: string };
+
+    const update = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}`,
+      {
+        method: "POST",
+        key,
+        body: {
+          auth: {
+            type: "static_bearer",
+            mcp_server_url: "https://mcp.example.com/changed",
+            token: "new",
+          },
+        },
+      },
+    );
+
+    expect(update.status).toBe(400);
+    expect(await update.text()).toContain("immutable");
+    fixture.close();
+  });
+
   it("hard delete removes credential metadata and purges the secret", async () => {
     const fixture = makeVaultsFixture();
     const key = fixture.mintKey("wrk_default");
@@ -268,6 +377,32 @@ describe("vaults API", () => {
     );
     fixture.close();
   });
+
+  it("rejects unknown and archived vault_ids at session create", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const agent = await createAgent(fixture.app, key);
+    const environment = await createEnvironment(fixture.app, key);
+    const vault = await createVault(fixture.app, key);
+    await request(fixture.app, `/v1/vaults/${vault.id}/archive`, {
+      method: "POST",
+      key,
+    });
+
+    for (const vaultId of ["vlt_missing", vault.id]) {
+      const res = await request(fixture.app, "/v1/sessions", {
+        method: "POST",
+        key,
+        body: {
+          agent: agent.id,
+          environment_id: environment.id,
+          vault_ids: [vaultId],
+        },
+      });
+      expect(res.status, vaultId).toBe(400);
+    }
+    fixture.close();
+  });
 });
 
 function makeVaultsFixture(opts: { secretsStore?: boolean } = {}) {
@@ -334,7 +469,7 @@ function createCredential(
   app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> },
   key: string,
   vaultId: string,
-  opts: { token: string },
+  opts: { token: string; serverUrl?: string },
 ): Promise<Response> {
   return request(app, `/v1/vaults/${vaultId}/credentials`, {
     method: "POST",
@@ -342,7 +477,7 @@ function createCredential(
     body: {
       auth: {
         type: "static_bearer",
-        mcp_server_url: SERVER_URL,
+        mcp_server_url: opts.serverUrl ?? SERVER_URL,
         token: opts.token,
       },
     },

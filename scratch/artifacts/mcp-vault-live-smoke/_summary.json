@@ -1,0 +1,34 @@
+{
+  "ok": true,
+  "model": "claude-haiku-4-5",
+  "session_id": "sesn_019f43fc-240a-70be-b429-0abbb36f9ddc",
+  "vault_id": "vlt_019f43fc-2403-7244-ad16-529e46eac54d",
+  "mcp_tool_calls": [
+    {
+      "name": "echo",
+      "args": {
+        "text": "M2_VAULT_SMOKE_OK"
+      }
+    }
+  ],
+  "observed_authorization_methods": [
+    "POST",
+    "POST",
+    "POST",
+    "GET",
+    "POST"
+  ],
+  "token_in_events": false,
+  "event_types": [
+    "user.message",
+    "session.status_running",
+    "span.model_request_start",
+    "span.model_request_end",
+    "agent.mcp_tool_use",
+    "agent.mcp_tool_result",
+    "span.model_request_start",
+    "agent.message",
+    "span.model_request_end",
+    "session.status_idle"
+  ]
+}
