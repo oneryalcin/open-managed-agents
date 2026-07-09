@@ -517,6 +517,99 @@ describe("vaults API", () => {
     fixture.close();
   });
 
+  it("returns the ordinary archived 400 when an archive wins the validate refresh race", async () => {
+    // Plan 0124 implementation-audit F3: the token endpoint responds only
+    // after the credential is archived through the API, so the refresh
+    // persist deterministically loses its fence (stale) and the current
+    // snapshot is gone. Must NOT be misreported as a successful validate.
+    let archive: () => Promise<void> = async () => {
+      throw new Error("archive was not configured");
+    };
+    const fetch = (async (input) => {
+      if (String(input).includes("oauth.example.com")) {
+        await archive();
+        return new Response(
+          JSON.stringify({ access_token: "oauth-archive-race-0124" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
+      id: string;
+    };
+    archive = async () => {
+      const response = await request(
+        fixture.app,
+        `/v1/vaults/${vault.id}/credentials/${credential.id}/archive`,
+        { method: "POST", key },
+      );
+      expect(response.status).toBe(200);
+    };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).toContain("Credential is archived.");
+    expect(text).not.toContain("oauth-archive-race-0124");
+    fixture.close();
+  });
+
+  it("returns the ordinary 404 when a hard delete wins the validate refresh race", async () => {
+    // Same F3 race through the refresh-FAILURE stale branch: the token
+    // endpoint deletes the credential and then fails transiently, so the
+    // fenced failure persist finds no row and the snapshot is gone.
+    let remove: () => Promise<void> = async () => {
+      throw new Error("delete was not configured");
+    };
+    const fetch = (async (input) => {
+      if (String(input).includes("oauth.example.com")) {
+        await remove();
+        return new Response(
+          JSON.stringify({ error: "temporarily_unavailable" }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
+      id: string;
+    };
+    remove = async () => {
+      const response = await request(
+        fixture.app,
+        `/v1/vaults/${vault.id}/credentials/${credential.id}`,
+        { method: "DELETE", key },
+      );
+      expect(response.status).toBe(200);
+    };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain("not found");
+    fixture.close();
+  });
+
   it("accepts missing mcp_oauth expires_at but rejects past expires_at", async () => {
     const fixture = makeVaultsFixture();
     const key = fixture.mintKey("wrk_default");

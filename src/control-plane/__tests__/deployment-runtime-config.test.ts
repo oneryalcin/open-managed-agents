@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createDeploymentControlPlaneApp } from "./helpers.ts";
-import { createDeploymentControlPlane } from "../app.ts";
+import { createDeploymentControlPlane, MANAGED_AGENTS_BETA } from "../app.ts";
+import { generateMasterKey } from "../secrets/master-key.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createDeploymentPiSessionRunner,
   parseDeploymentRuntimeConfigFromEnv,
@@ -16,6 +20,144 @@ describe("deployment runtime config", () => {
     const plane = createDeploymentControlPlane({ OMA_ENABLE_MCP: "true" });
     await plane.close();
     await expect(plane.close()).resolves.toBeUndefined();
+  });
+
+  it("joins a validate refresh into the ticker's in-flight refresh (one coordinator, one POST)", async () => {
+    // §7B.5 validate-racing-the-ticker + plan 0124 composition: the ticker
+    // and the validate route must share ONE RefreshCoordinator, so their
+    // refreshes single-flight into one token-endpoint POST. If app wiring
+    // ever gave them separate coordinators, this test sees two POSTs.
+    const tokenEndpoint = "http://127.0.0.1:43125/token";
+    const rotatedAccess = "rotated-access-0124";
+    let tokenPosts = 0;
+    let releaseToken!: () => void;
+    const tokenGate = new Promise<void>((resolve) => {
+      releaseToken = resolve;
+    });
+    let firstTokenHit!: () => void;
+    const tokenHit = new Promise<void>((resolve) => {
+      firstTokenHit = resolve;
+    });
+    const fetch = (async (input: string | URL, init?: RequestInit) => {
+      if (String(input).startsWith(tokenEndpoint)) {
+        tokenPosts += 1;
+        firstTokenHit();
+        await tokenGate;
+        return new Response(
+          JSON.stringify({ access_token: rotatedAccess, expires_in: 3600 }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      const authorization = new Headers(init?.headers).get("authorization");
+      if (authorization === `Bearer ${rotatedAccess}`) {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: { capabilities: {} } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as never;
+    const root = mkdtempSync(join(tmpdir(), "oma-refresh-race-"));
+    const plane = createDeploymentControlPlane(
+      {
+        OMA_ENABLE_MCP: "true",
+        OMA_MASTER_KEY: generateMasterKey(),
+        OMA_AUTH_MODE: "api-key",
+        OMA_SQLITE_PATH: join(root, "oma.sqlite"),
+        OMA_FILE_STORAGE_ROOT: join(root, "objects"),
+      },
+      {
+        testMcp: {
+          fetch,
+          allowInsecureTokenEndpoint: (url) => url.href === tokenEndpoint,
+        },
+      },
+    );
+    const key = plane.stores.workspaces.mintKey("wrk_default", "test").plaintextKey;
+    try {
+      const vault = await requestJson<{ id: string }>(plane.app, key, "/v1/vaults", {
+        display_name: "Race vault",
+      });
+      const credential = await requestJson<{ id: string }>(
+        plane.app,
+        key,
+        `/v1/vaults/${vault.id}/credentials`,
+        {
+          display_name: "Race credential",
+          auth: {
+            type: "mcp_oauth",
+            mcp_server_url: "https://mcp.example.com/race",
+            access_token: "initial-access-0124",
+            expires_at: "2099-12-31T23:59:59Z",
+            refresh: {
+              refresh_token: "refresh-0124",
+              token_endpoint: tokenEndpoint,
+              client_id: "client-id",
+              token_endpoint_auth: { type: "none" },
+            },
+          },
+        },
+      );
+      // Backdate the seeded schedule so the row is due, then create a second
+      // credential: its onSchedulingChanged hook wakes the sleeping ticker,
+      // which finds the due row and starts a refresh into the blocked gate.
+      const due = plane.stores.vaults
+        .listDueRefreshes("2100-01-01T00:00:00.000Z", 50)
+        .find((row) => row.credentialId === credential.id);
+      expect(due).toBeDefined();
+      plane.stores.vaults.persistOauthRefreshFailure({
+        workspaceId: due!.workspaceId,
+        vaultId: due!.vaultId,
+        credentialId: due!.credentialId,
+        expectedAuthVersion: due!.authVersion,
+        status: "transient",
+        refreshAttempts: 1,
+        nextRefreshAt: "1970-01-01T00:00:00.000Z",
+      });
+      await requestJson(plane.app, key, `/v1/vaults/${vault.id}/credentials`, {
+        display_name: "Wake trigger",
+        auth: {
+          type: "mcp_oauth",
+          mcp_server_url: "https://mcp.example.com/wake",
+          access_token: "wake-access-0124",
+          expires_at: "2099-12-31T23:59:59Z",
+          refresh: {
+            refresh_token: "wake-refresh-0124",
+            token_endpoint: tokenEndpoint,
+            client_id: "client-id",
+            token_endpoint_auth: { type: "none" },
+          },
+        },
+      });
+      await tokenHit;
+
+      // Ticker's refresh is now in flight and blocked. A validate on the same
+      // credential must JOIN that flight rather than start its own.
+      const validatePromise = plane.app.request(
+        `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+        {
+          method: "POST",
+          headers: { "anthropic-beta": MANAGED_AGENTS_BETA, "x-api-key": key },
+        },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      releaseToken();
+      const validateResponse = await validatePromise;
+      expect(validateResponse.status).toBe(200);
+      const body = (await validateResponse.json()) as {
+        status: string;
+        refresh: { status: string };
+      };
+      expect(body.status).toBe("valid");
+      expect(tokenPosts).toBe(1);
+    } finally {
+      releaseToken();
+      await plane.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("treats absent config as no provider, not host passthrough", () => {
@@ -461,6 +603,25 @@ describe("deployment runtime config", () => {
     ]);
   });
 });
+
+async function requestJson<T = unknown>(
+  app: ReturnType<typeof createDeploymentControlPlane>["app"],
+  key: string,
+  path: string,
+  body: unknown,
+): Promise<T> {
+  const res = await app.request(path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "anthropic-beta": MANAGED_AGENTS_BETA,
+      "x-api-key": key,
+    },
+    body: JSON.stringify(body),
+  });
+  expect(res.status, await res.clone().text()).toBe(200);
+  return (await res.json()) as T;
+}
 
 class FakeSessionFactory {
   readonly sessions: FakeSession[] = [];

@@ -377,7 +377,15 @@ From review round 2:
 - Custom-runner deployment: validate and ticker still function
   (round 2 F5).
 - Validation snapshot, refresh-response nullability, and archive/delete races
-  are pinned exactly (implementation audit F1-F3).
+  are pinned exactly (implementation audit F1-F3): archive winning the race
+  during a refresh-success persist → ordinary 400; hard delete winning during
+  a refresh-failure persist → ordinary 404 (both route-level, deterministic
+  via the token-endpoint handler mutating through the API).
+- §7B.5's "validate racing the ticker → single-flight, exactly one POST" is
+  satisfied by coordinator-level single-flight tests PLUS a deployment-level
+  composition race (deployment-runtime-config.test.ts): a validate issued
+  while the ticker's refresh is blocked in-flight joins that flight through
+  the ONE shared coordinator — separate coordinators would produce two POSTs.
 
 From review round 3:
 
