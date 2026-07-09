@@ -15,7 +15,9 @@ import { SqliteSecretsStore } from "../secrets/store.ts";
 import { DefaultSessionService } from "../sessions/service.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
 import { DefaultVaultService } from "../vaults/service.ts";
+import { RefreshCoordinator } from "../vaults/oauth-refresh.ts";
 import { SqliteVaultStore, vaultSecretName } from "../vaults/store.ts";
+import type { McpFetch } from "../sessions/pi/mcp/fetch.ts";
 import { SqliteWorkspaceStore } from "../workspaces/store.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
 import { createRawControlPlaneApp, MANAGED_AGENTS_BETA } from "./helpers.ts";
@@ -152,6 +154,459 @@ describe("vaults API", () => {
       refresh_token: OAUTH_REFRESH,
       client_secret: OAUTH_CLIENT_SECRET,
     });
+    expect(
+      fixture.vaultStore.readCredentialRuntimeMetadata(
+        "wrk_default",
+        vault.id,
+        credential.id,
+      )?.nextRefreshAt,
+    ).toBe("2099-12-31T23:54:59.000Z");
+    fixture.close();
+  });
+
+  it("gates mcp_oauth_validate before credential lookup or network", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const response = await request(
+      fixture.app,
+      "/v1/vaults/vlt_missing/credentials/vcrd_missing/mcp_oauth_validate",
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message: "MCP is disabled on this deployment",
+      },
+    });
+    fixture.close();
+  });
+
+  it("returns the probe-52 no-refresh-token validation shape", async () => {
+    const fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          error: "invalid_token",
+          error_description: `echo ${OAUTH_ACCESS}`,
+        }),
+        { status: 401, headers: { "content-type": "application/json" } },
+      )) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const created = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials`,
+      {
+        method: "POST",
+        key,
+        body: {
+          auth: {
+            type: "mcp_oauth",
+            mcp_server_url: SERVER_URL,
+            access_token: OAUTH_ACCESS,
+          },
+        },
+      },
+    );
+    const credential = await created.json() as { id: string };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      type: "vault_credential_validation",
+      credential_id: credential.id,
+      vault_id: vault.id,
+      has_refresh_token: false,
+      status: "invalid",
+      mcp_probe: {
+        method: "initialize",
+        http_response: {
+          status_code: 401,
+          content_type: "application/json",
+          body_truncated: false,
+        },
+      },
+      refresh: { status: "no_refresh_token", http_response: null },
+    });
+    expect(JSON.stringify(body)).not.toContain(OAUTH_ACCESS);
+    fixture.close();
+  });
+
+  it.each([
+    {
+      name: "reports a successful initial probe without refresh",
+      fetch: async () => new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: { capabilities: {} } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      expected: { status: "valid", refresh: { status: "not_attempted" }, probeStatus: 200 },
+    },
+    {
+      name: "maps a non-auth HTTP failure to unknown without refresh",
+      fetch: async () => new Response("upstream unavailable", {
+        status: 503,
+        headers: { "content-type": "text/plain" },
+      }),
+      expected: { status: "unknown", refresh: { status: "not_attempted" }, probeStatus: 503 },
+    },
+    {
+      name: "maps a probe transport failure to unknown without refresh",
+      fetch: async () => {
+        throw new TypeError("network down");
+      },
+      expected: { status: "unknown", refresh: { status: "not_attempted" }, probeStatus: null },
+    },
+  ])("$name", async ({ fetch, expected }) => {
+    const fixture = makeVaultsFixture({ mcpFetch: fetch as McpFetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
+      id: string;
+    };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      status: string;
+      refresh: { status: string };
+      mcp_probe: { http_response: { status_code: number } | null };
+    };
+    expect(body).toMatchObject({
+      type: "vault_credential_validation",
+      credential_id: credential.id,
+      vault_id: vault.id,
+      status: expected.status,
+      refresh: expected.refresh,
+    });
+    expect(body.mcp_probe.http_response?.status_code ?? null).toBe(expected.probeStatus);
+    fixture.close();
+  });
+
+  it.each([
+    { name: "invalid", tokenStatus: 400, tokenBody: { error: "invalid_grant" }, status: "invalid" },
+    { name: "transient", tokenStatus: 503, tokenBody: { error: "temporarily_unavailable" }, status: "unknown" },
+  ])("maps a $name refresh failure at the route boundary", async ({ tokenStatus, tokenBody, status }) => {
+    const fetch = (async (input) => {
+      if (String(input).includes("oauth.example.com")) {
+        return new Response(JSON.stringify(tokenBody), {
+          status: tokenStatus,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
+      id: string;
+    };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      type: "vault_credential_validation",
+      credential_id: credential.id,
+      vault_id: vault.id,
+      status,
+      mcp_probe: { http_response: { status_code: 401 } },
+      refresh: {
+        status: "failed",
+        http_response: { status_code: tokenStatus, content_type: "application/json" },
+      },
+    });
+    fixture.close();
+  });
+
+  it("refreshes once, re-probes with the rotated token, and omits grant bodies", async () => {
+    const calls: string[] = [];
+    const fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("oauth.example.com")) {
+        calls.push("refresh");
+        return new Response(
+          JSON.stringify({
+            access_token: "oauth-rotated-0122",
+            refresh_token: "oauth-refresh-rotated-0122",
+            expires_in: 600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      const authorization = new Headers(init?.headers).get("authorization");
+      calls.push(authorization ?? "none");
+      if (authorization === "Bearer oauth-rotated-0122") {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: { capabilities: {} } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const created = await createOauthCredential(fixture.app, key, vault.id);
+    const credential = await created.json() as { id: string };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      status: "valid",
+      has_refresh_token: true,
+      refresh: {
+        status: "refreshed",
+        http_response: { status_code: 200, content_type: "application/json" },
+      },
+      mcp_probe: { http_response: { status_code: 200 } },
+    });
+    expect(calls).toEqual([
+      `Bearer ${OAUTH_ACCESS}`,
+      "refresh",
+      "Bearer oauth-rotated-0122",
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("oauth-rotated-0122");
+    expect(serialized).not.toContain("oauth-refresh-rotated-0122");
+    fixture.close();
+  });
+
+  it.each([
+    { name: "an auth rejection", retry: "auth", status: "invalid", probeStatus: 401 },
+    { name: "a non-auth HTTP failure", retry: "http", status: "unknown", probeStatus: 503 },
+    { name: "a transport failure", retry: "transport", status: "unknown", probeStatus: null },
+  ])("maps $name after a successful refresh", async ({ retry, status, probeStatus }) => {
+    let probeCalls = 0;
+    const fetch = (async (input) => {
+      if (String(input).includes("oauth.example.com")) {
+        return new Response(JSON.stringify({ access_token: "oauth-retry-0122" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      probeCalls += 1;
+      if (probeCalls === 1) {
+        return new Response(JSON.stringify({ error: "invalid_token" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (retry === "transport") throw new TypeError("retry transport failure");
+      return new Response(
+        JSON.stringify({ error: retry === "auth" ? "invalid_token" : "unavailable" }),
+        {
+          status: retry === "auth" ? 401 : 503,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
+      id: string;
+    };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    const body = await response.json() as {
+      status: string;
+      refresh: { status: string };
+      mcp_probe: { http_response: { status_code: number } | null };
+    };
+    expect(body).toMatchObject({ status, refresh: { status: "refreshed" } });
+    expect(body.mcp_probe.http_response?.status_code ?? null).toBe(probeStatus);
+    fixture.close();
+  });
+
+  it("re-probes the CAS winner after a stale refresh failure", async () => {
+    const winningAccess = "oauth-cas-winner-0122";
+    let rotate: () => Promise<void> = async () => {
+      throw new Error("rotation was not configured");
+    };
+    const fetch = (async (input, init) => {
+      if (String(input).includes("oauth.example.com")) {
+        await rotate();
+        return new Response(JSON.stringify({ error: "temporarily_unavailable" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const authorization = new Headers(init?.headers).get("authorization");
+      if (authorization === `Bearer ${winningAccess}`) {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: { capabilities: {} } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
+      id: string;
+    };
+    rotate = async () => {
+      const response = await request(
+        fixture.app,
+        `/v1/vaults/${vault.id}/credentials/${credential.id}`,
+        {
+          method: "POST",
+          key,
+          body: {
+            auth: {
+              type: "mcp_oauth",
+              access_token: winningAccess,
+              expires_at: "2099-12-31T23:59:59Z",
+              refresh: { refresh_token: "oauth-cas-refresh-0122" },
+            },
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+    };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    const body = await response.json();
+    expect(body).toMatchObject({
+      status: "valid",
+      mcp_probe: { http_response: { status_code: 200 } },
+      refresh: {
+        status: "failed",
+        http_response: { status_code: 503, content_type: "application/json" },
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain(winningAccess);
+    fixture.close();
+  });
+
+  it("returns the ordinary archived 400 when an archive wins the validate refresh race", async () => {
+    // Plan 0124 implementation-audit F3: the token endpoint responds only
+    // after the credential is archived through the API, so the refresh
+    // persist deterministically loses its fence (stale) and the current
+    // snapshot is gone. Must NOT be misreported as a successful validate.
+    let archive: () => Promise<void> = async () => {
+      throw new Error("archive was not configured");
+    };
+    const fetch = (async (input) => {
+      if (String(input).includes("oauth.example.com")) {
+        await archive();
+        return new Response(
+          JSON.stringify({ access_token: "oauth-archive-race-0124" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
+      id: string;
+    };
+    archive = async () => {
+      const response = await request(
+        fixture.app,
+        `/v1/vaults/${vault.id}/credentials/${credential.id}/archive`,
+        { method: "POST", key },
+      );
+      expect(response.status).toBe(200);
+    };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).toContain("Credential is archived.");
+    expect(text).not.toContain("oauth-archive-race-0124");
+    fixture.close();
+  });
+
+  it("returns the ordinary 404 when a hard delete wins the validate refresh race", async () => {
+    // Same F3 race through the refresh-FAILURE stale branch: the token
+    // endpoint deletes the credential and then fails transiently, so the
+    // fenced failure persist finds no row and the snapshot is gone.
+    let remove: () => Promise<void> = async () => {
+      throw new Error("delete was not configured");
+    };
+    const fetch = (async (input) => {
+      if (String(input).includes("oauth.example.com")) {
+        await remove();
+        return new Response(
+          JSON.stringify({ error: "temporarily_unavailable" }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as McpFetch;
+    const fixture = makeVaultsFixture({ mcpFetch: fetch });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
+      id: string;
+    };
+    remove = async () => {
+      const response = await request(
+        fixture.app,
+        `/v1/vaults/${vault.id}/credentials/${credential.id}`,
+        { method: "DELETE", key },
+      );
+      expect(response.status).toBe(200);
+    };
+
+    const response = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}/mcp_oauth_validate`,
+      { method: "POST", key },
+    );
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain("not found");
     fixture.close();
   });
 
@@ -198,6 +653,25 @@ describe("vaults API", () => {
       expect(res.status, tokenEndpoint).toBe(400);
       expect(await res.text()).toContain(expected);
     }
+    fixture.close();
+  });
+
+  it("allows only an explicitly approved insecure token endpoint in tests", async () => {
+    const endpoint = "http://127.0.0.1:43123/token";
+    const fixture = makeVaultsFixture({
+      allowInsecureTokenEndpoint: (url) => url.href === endpoint,
+    });
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const allowed = await createOauthCredential(fixture.app, key, vault.id, {
+      tokenEndpoint: endpoint,
+    });
+    expect(allowed.status).toBe(200);
+    const denied = await createOauthCredential(fixture.app, key, vault.id, {
+      serverUrl: `${SERVER_URL}/denied-local`,
+      tokenEndpoint: "http://127.0.0.1:43124/token",
+    });
+    expect(denied.status).toBe(400);
     fixture.close();
   });
 
@@ -250,6 +724,13 @@ describe("vaults API", () => {
       refresh_token: "oauth-refresh-rotated",
       client_secret: OAUTH_CLIENT_SECRET,
     });
+    expect(
+      fixture.vaultStore.readCredentialRuntimeMetadata(
+        "wrk_default",
+        vault.id,
+        credential.id,
+      )?.nextRefreshAt,
+    ).toBe("2099-12-31T23:54:59.000Z");
 
     for (const body of [
       {
@@ -609,7 +1090,13 @@ describe("vaults API", () => {
   });
 });
 
-function makeVaultsFixture(opts: { secretsStore?: boolean } = {}) {
+function makeVaultsFixture(
+  opts: {
+    secretsStore?: boolean;
+    mcpFetch?: McpFetch;
+    allowInsecureTokenEndpoint?: (url: URL) => boolean;
+  } = {},
+) {
   const db = new DatabaseSync(":memory:");
   const agentStore = new SqliteAgentStore(db);
   const environmentStore = new SqliteEnvironmentStore(db);
@@ -621,7 +1108,11 @@ function makeVaultsFixture(opts: { secretsStore?: boolean } = {}) {
       ? undefined
       : new SqliteSecretsStore(db, parseMasterKey(generateMasterKey(), "test"));
   const vaultStore = new SqliteVaultStore(db, secrets);
-  const vaultService = new DefaultVaultService(vaultStore);
+  const vaultService = new DefaultVaultService(vaultStore, {
+    ...(opts.allowInsecureTokenEndpoint === undefined
+      ? {}
+      : { allowInsecureTokenEndpoint: opts.allowInsecureTokenEndpoint }),
+  });
   const fileStorage = new InMemoryFileStorage();
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const app = createRawControlPlaneApp({
@@ -630,6 +1121,15 @@ function makeVaultsFixture(opts: { secretsStore?: boolean } = {}) {
     files: new DefaultFileService(fileStorage),
     secrets: new DefaultSecretsService(secrets),
     vaults: vaultService,
+    ...(opts.mcpFetch === undefined
+      ? {}
+      : {
+          mcp: {
+            fetch: opts.mcpFetch,
+            refresh: new RefreshCoordinator({ store: vaultStore, fetch: opts.mcpFetch }),
+            operationTimeoutMs: 1000,
+          },
+        }),
     sessions: new DefaultSessionService(
       sessionStore,
       agentStore,
@@ -646,6 +1146,7 @@ function makeVaultsFixture(opts: { secretsStore?: boolean } = {}) {
   });
   return {
     app,
+    vaultStore,
     workspaces,
     sessions: sessionStore,
     secrets,

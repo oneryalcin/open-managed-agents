@@ -98,7 +98,7 @@ implementing any row** (house discipline; the 0113 probes are the model).
 | Capability | Hosted | OMA today | Note |
 | --- | --- | --- | --- |
 | Skills | Loaded into session container | **Wire-accepted, runtime-inert** (`skills` parsed/stored/echoed; nothing in `sessions/pi/` consumes it) | Fundamentally files + instructions into the sandbox; no heavy dependency. **Now unblocked** (egress done) |
-| MCP servers | Sessions connect, auth handled | **Execution DONE (0122 M1); vault auth DONE (M2, 2026-07-09)** — `mcp_oauth` refresh pending M3 | Servers work end-to-end behind `OMA_ENABLE_MCP`, `static_bearer` credentials the agent cannot read |
+| MCP servers | Sessions connect, auth handled | **DONE (0122 M1-M3, 2026-07-09)** — execution, vault-backed `static_bearer`, and proactive/reactive `mcp_oauth` refresh are live-smoke proven | Servers work end-to-end behind `OMA_ENABLE_MCP`; access, refresh, and client-secret values stay outside model-visible events |
 | Sandbox networking | `environment.config.networking: {type: "limited", allowed_hosts}` | **DONE (2026-07-06)** — `networking.allow`/`credentials` parsed into a per-session egress policy; docker-local sidecar honors it, else `--network none` (0117c–e) | The enabling gap — now closed; skills, MCP, web tools, repo mounts unblocked |
 | Secret handling | Vault + boundary injection; secrets never in sandbox | **DONE (2026-07-06)** — envelope-encrypted `SqliteSecretsStore`, sentinels in the sandbox, real values injected only at the TLS-terminated proxy leg (0117c/d, 0118) | Same egress boundary does allowlist + injection; #130 closed |
 | Session usage | Cumulative token usage per session | `usage: null` | Wire schema + span-level usage already captured in [observability schema findings](../references/managed-agents-observability-schema-findings.md); metering = aggregation |
@@ -179,8 +179,10 @@ reach the network or use skills demos poorly):
    **M2 vaults + `static_bearer` shipped 2026-07-09** (#167: `/v1/vaults` +
    credentials CRUD, byte-exact URL resolution, control-plane-only bearer
    injection, `mcp_authentication_failed_error`; tokens in `SecretsStore`,
-   live-smoke-proven never to reach the sandbox or event stream — the exit
-   criterion's MCP half is DONE). M3 `mcp_oauth` refresh remains.
+   live-smoke-proven never to reach the sandbox or event stream). **M3 OAuth
+   refresh DONE 2026-07-09**: validate endpoint, lazy/ticker/401 refresh,
+   warm-handle rotation, redirect blocking, and encoded-secret leak sweep all
+   pass smoke 54. The exit criterion's MCP half is complete.
 
 ## Deferred, with seams kept clean
 

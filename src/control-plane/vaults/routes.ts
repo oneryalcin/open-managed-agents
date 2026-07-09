@@ -1,9 +1,17 @@
 import { Hono } from "hono";
 import { parseJsonBody, parseLimit } from "../http.ts";
 import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
+import { invalidRequest } from "../errors.ts";
+import {
+  validateMcpOauthCredential,
+  type McpOauthValidationDependencies,
+} from "./mcp-oauth-validate.ts";
 import type { VaultService } from "./types.ts";
 
-export function vaultsRoutes(service: VaultService): Hono<ControlPlaneRouteEnv> {
+export function vaultsRoutes(
+  service: VaultService,
+  mcp?: McpOauthValidationDependencies,
+): Hono<ControlPlaneRouteEnv> {
   const app = new Hono<ControlPlaneRouteEnv>();
 
   app.post("/", async (c) => {
@@ -73,6 +81,22 @@ export function vaultsRoutes(service: VaultService): Hono<ControlPlaneRouteEnv> 
   app.post("/:vaultId/credentials/:credentialId/archive", (c) => {
     return c.json(
       service.archiveCredential(
+        workspaceIdFrom(c),
+        c.req.param("vaultId"),
+        c.req.param("credentialId"),
+      ),
+      200,
+    );
+  });
+
+  app.post("/:vaultId/credentials/:credentialId/mcp_oauth_validate", async (c) => {
+    if (mcp === undefined) {
+      throw invalidRequest("MCP is disabled on this deployment");
+    }
+    return c.json(
+      await validateMcpOauthCredential(
+        service,
+        mcp,
         workspaceIdFrom(c),
         c.req.param("vaultId"),
         c.req.param("credentialId"),

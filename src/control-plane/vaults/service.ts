@@ -17,6 +17,10 @@ import type {
   VaultService,
   VaultStore,
 } from "./types.ts";
+import {
+  nextRefreshAt,
+  OAUTH_REFRESH_LONG_LIVED_RECHECK_MS,
+} from "./oauth-refresh.ts";
 
 const MAX_DISPLAY_NAME_LENGTH = 255;
 const MAX_METADATA_PAIRS = 16;
@@ -35,7 +39,13 @@ type CredentialAuthInput = Record<string, unknown> & {
 };
 
 export class DefaultVaultService implements VaultService {
-  constructor(private readonly store: VaultStore) {}
+  constructor(
+    private readonly store: VaultStore,
+    private readonly opts: {
+      onSchedulingChanged?: () => void;
+      allowInsecureTokenEndpoint?: (url: URL) => boolean;
+    } = {},
+  ) {}
 
   createVault(workspaceId: WorkspaceId, input: unknown): ManagedVault {
     const req = parseVaultCreate(input);
@@ -119,10 +129,10 @@ export class DefaultVaultService implements VaultService {
         `Vault ${vaultId} cannot have more than ${MAX_CREDENTIALS_PER_VAULT} active credentials`,
       );
     }
-    const req = parseCredentialCreate(input);
+    const req = parseCredentialCreate(input, this.opts.allowInsecureTokenEndpoint);
     const now = new Date().toISOString();
     try {
-      return toManagedCredential(
+      const created = toManagedCredential(
         this.store.createCredential({
           row: {
             id: newVaultCredentialId(),
@@ -138,8 +148,17 @@ export class DefaultVaultService implements VaultService {
             archived_at: null,
           },
           token: req.secretValue,
+          nextRefreshAt: oauthSchedule(
+            new Date(now),
+            req.auth,
+            req.auth.type === "mcp_oauth" && req.auth.refresh !== undefined,
+          ),
         }),
       );
+      if (req.auth.type === "mcp_oauth" && req.auth.refresh !== undefined) {
+        this.opts.onSchedulingChanged?.();
+      }
+      return created;
     } catch (error) {
       if (isSqliteUniqueConstraint(error)) {
         throw conflict(
@@ -197,14 +216,42 @@ export class DefaultVaultService implements VaultService {
     if (!existing) throw notFound(`Vault credential ${credentialId} not found`);
     const req = parseCredentialUpdate(input, existing);
     try {
+      const currentOauth = this.store.readOauthRefreshState(
+        workspaceId,
+        vaultId,
+        credentialId,
+      );
+      const updatedAt = new Date().toISOString();
+      const nextAuth = req.auth?.type === "mcp_oauth"
+        ? {
+            ...existing.auth,
+            ...(req.auth.expiresAt === undefined
+              ? {}
+              : req.auth.expiresAt === null
+                ? { expires_at: undefined }
+                : { expires_at: req.auth.expiresAt }),
+          }
+        : existing.auth;
       const row = this.store.updateCredential(
         workspaceId,
         vaultId,
         credentialId,
         req,
-        new Date().toISOString(),
+        updatedAt,
+        req.auth === undefined
+          ? undefined
+          : {
+              nextRefreshAt: oauthSchedule(
+                new Date(updatedAt),
+                nextAuth,
+                req.auth.type === "mcp_oauth" &&
+                  (req.auth.refreshToken !== undefined ||
+                    currentOauth?.secrets.refreshToken !== undefined),
+              ),
+            },
       );
       if (!row) throw notFound(`Vault credential ${credentialId} not found`);
+      if (req.auth !== undefined) this.opts.onSchedulingChanged?.();
       return toManagedCredential(row);
     } catch (error) {
       if (isSqliteUniqueConstraint(error)) {
@@ -276,11 +323,32 @@ export class DefaultVaultService implements VaultService {
     );
   }
 
+  readOauthValidationSnapshot(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ) {
+    return this.store.readOauthRefreshState(workspaceId, vaultId, credentialId);
+  }
+
   private assertVaultExists(workspaceId: WorkspaceId, vaultId: string): VaultRow {
     const row = this.store.retrieveVaultAny(workspaceId, vaultId);
     if (!row) throw notFound(`Vault ${vaultId} not found`);
     return row;
   }
+}
+
+function oauthSchedule(
+  now: Date,
+  auth: VaultCredentialAuth,
+  hasRefreshToken: boolean,
+): string | null {
+  if (auth.type !== "mcp_oauth" || auth.refresh === undefined || !hasRefreshToken) {
+    return null;
+  }
+  return auth.expires_at === undefined
+    ? new Date(now.getTime() + OAUTH_REFRESH_LONG_LIVED_RECHECK_MS).toISOString()
+    : nextRefreshAt(now, new Date(auth.expires_at)).toISOString();
 }
 
 function parseVaultCreate(input: unknown): {
@@ -309,14 +377,17 @@ function parseVaultUpdate(input: unknown): {
   return updates;
 }
 
-function parseCredentialCreate(input: unknown): {
+function parseCredentialCreate(
+  input: unknown,
+  allowInsecureTokenEndpoint?: (url: URL) => boolean,
+): {
   displayName: string | null;
   metadata: Record<string, string>;
   auth: VaultCredentialRow["auth"];
   secretValue: string;
 } {
   const obj = objectInput(input);
-  const parsed = parseCredentialAuthCreate(obj.auth);
+  const parsed = parseCredentialAuthCreate(obj.auth, allowInsecureTokenEndpoint);
   return {
     displayName:
       obj.display_name === undefined
@@ -368,7 +439,10 @@ function parseCredentialUpdate(
   return updates;
 }
 
-function parseCredentialAuthCreate(input: unknown): {
+function parseCredentialAuthCreate(
+  input: unknown,
+  allowInsecureTokenEndpoint?: (url: URL) => boolean,
+): {
   auth: VaultCredentialRow["auth"];
   secretValue: string;
 } {
@@ -385,7 +459,7 @@ function parseCredentialAuthCreate(input: unknown): {
       secretValue: staticBearerTokenField(auth),
     };
   }
-  const refresh = oauthRefreshCreate(auth.refresh);
+  const refresh = oauthRefreshCreate(auth.refresh, allowInsecureTokenEndpoint);
   const accessToken = secretField(auth, "access_token", { required: true });
   const expiresAt = expiresAtField(auth.expires_at);
   return {
@@ -483,7 +557,10 @@ function secretField(
   return value;
 }
 
-function oauthRefreshCreate(input: unknown):
+function oauthRefreshCreate(
+  input: unknown,
+  allowInsecureTokenEndpoint?: (url: URL) => boolean,
+):
   | {
       metadata: NonNullable<Extract<VaultCredentialAuth, { type: "mcp_oauth" }>["refresh"]>;
       refreshToken: string;
@@ -492,7 +569,11 @@ function oauthRefreshCreate(input: unknown):
   | undefined {
   if (input === undefined) return undefined;
   const refresh = objectField({ refresh: input }, "refresh");
-  const tokenEndpoint = tokenEndpointField(refresh, "token_endpoint");
+  const tokenEndpoint = tokenEndpointField(
+    refresh,
+    "token_endpoint",
+    allowInsecureTokenEndpoint,
+  );
   const clientId = stringField(refresh, "client_id", { required: true });
   const scope =
     refresh.scope === undefined
@@ -529,6 +610,7 @@ function oauthRefreshCreate(input: unknown):
 function tokenEndpointField(
   obj: Record<string, unknown>,
   field: string,
+  allowInsecureTokenEndpoint?: (url: URL) => boolean,
 ): string {
   const value = stringField(obj, field, { required: true });
   if (value.length > MAX_TOKEN_ENDPOINT_LENGTH) {
@@ -538,7 +620,8 @@ function tokenEndpointField(
   }
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:") {
+    const explicitlyAllowed = allowInsecureTokenEndpoint?.(url) === true;
+    if (url.protocol !== "https:" && !explicitlyAllowed) {
       throw invalidRequest(`\`${field}\` must be an https URL`);
     }
     if (url.username || url.password || url.hash) {
@@ -546,7 +629,7 @@ function tokenEndpointField(
         `\`${field}\` must not include userinfo or fragments`,
       );
     }
-    if (isBlockedIpLiteral(url.hostname)) {
+    if (isBlockedIpLiteral(url.hostname) && !explicitlyAllowed) {
       throw invalidRequest(`\`${field}\` host is not allowed`);
     }
     return value;

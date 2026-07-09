@@ -81,6 +81,7 @@ import { DefaultSessionService } from "./sessions/service.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
 import type { SessionService } from "./sessions/types.ts";
 import { vaultsRoutes } from "./vaults/routes.ts";
+import type { McpOauthValidationDependencies } from "./vaults/mcp-oauth-validate.ts";
 import { DefaultVaultService } from "./vaults/service.ts";
 import { SqliteVaultStore } from "./vaults/store.ts";
 import type { VaultService } from "./vaults/types.ts";
@@ -96,6 +97,9 @@ import {
   createStoreBackedMcpToolAccessResolver,
 } from "./sessions/pi/mcp/bridge.ts";
 import { createDefaultMcpRuntime } from "./sessions/pi/mcp/runtime.ts";
+import { DEFAULT_MCP_OPERATION_TIMEOUT_MS } from "./sessions/pi/mcp/client.ts";
+import { createOauthRefreshTicker } from "./vaults/oauth-refresh-ticker.ts";
+import type { WakeLoop } from "./wake-loop.ts";
 import { translatePiEvent } from "./sessions/pi/translator.ts";
 
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
@@ -123,6 +127,7 @@ export interface ControlPlaneServices {
   // the clear "requires a master key" 400 (never a confusing 404).
   secrets?: SecretsService;
   vaults?: VaultService;
+  mcp?: McpOauthValidationDependencies;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
   auth?: ControlPlaneAuth;
@@ -150,6 +155,11 @@ export interface InMemoryControlPlaneAppOptions {
 
 export interface DeploymentControlPlaneAppOptions {
   runner?: DeploymentPiSessionRunnerOptions;
+  /** Hermetic-test seam; the appliance entrypoint never supplies it. */
+  testMcp?: {
+    fetch?: McpOauthValidationDependencies["fetch"];
+    allowInsecureTokenEndpoint?: (url: URL) => boolean;
+  };
 }
 
 export type DeploymentAuthMode = "api-key" | "disabled";
@@ -321,7 +331,7 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     secretsRoutes(services.secrets ?? new DefaultSecretsService(undefined)),
   );
   if (services.vaults) {
-    app.route("/v1/vaults", vaultsRoutes(services.vaults));
+    app.route("/v1/vaults", vaultsRoutes(services.vaults, services.mcp));
   }
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route(
@@ -386,13 +396,15 @@ export interface DeploymentControlPlane {
   app: Hono<AppEnv>;
   stores: DeploymentStores;
   authMode: DeploymentAuthMode;
+  /** Owns background workers and stores; callers must not close stores directly. */
+  close(): Promise<void>;
 }
 
 export function createDeploymentControlPlaneApp(
   env: DeploymentControlPlaneEnv = process.env,
   opts: DeploymentControlPlaneAppOptions = {},
 ): Hono<AppEnv> {
-  return createDeploymentControlPlane(env, opts).app;
+  return createDeploymentControlPlane(env, opts, { backgroundWorkers: false }).app;
 }
 
 // Same wiring as createDeploymentControlPlaneApp, but hands back the stores
@@ -402,6 +414,7 @@ export function createDeploymentControlPlaneApp(
 export function createDeploymentControlPlane(
   env: DeploymentControlPlaneEnv = process.env,
   opts: DeploymentControlPlaneAppOptions = {},
+  internal: { backgroundWorkers?: boolean } = {},
 ): DeploymentControlPlane {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
@@ -491,7 +504,16 @@ export function createDeploymentControlPlane(
     );
   }
   const broadcaster = new SessionEventBroadcaster(stores.events);
-  const vaultService = new DefaultVaultService(stores.vaults);
+  let wakeOauthTicker: () => void = () => undefined;
+  const vaultService = new DefaultVaultService(stores.vaults, {
+    onSchedulingChanged: () => wakeOauthTicker(),
+    ...(opts.testMcp?.allowInsecureTokenEndpoint === undefined
+      ? {}
+      : {
+          allowInsecureTokenEndpoint:
+            opts.testMcp.allowInsecureTokenEndpoint,
+        }),
+  });
   const sandboxProviderName = runtimeConfig.sandboxProviderSelection?.type ?? "none";
   if (metrics !== undefined) {
     // Turn outcomes/durations at the single post-commit chokepoint (plan
@@ -533,9 +555,11 @@ export function createDeploymentControlPlane(
     );
     setLogEventHook((level) => metrics.logEvents.inc({ level }));
   }
-  const defaultMcpRuntime =
-    opts.runner?.mcp === undefined
-      ? createDefaultMcpRuntime(stores.vaults)
+  const mcpRuntime =
+    runtimeConfig.mcp !== undefined || opts.runner?.mcp === undefined
+      ? createDefaultMcpRuntime(stores.vaults, opts.testMcp?.fetch, {
+          onScheduled: () => wakeOauthTicker(),
+        })
       : undefined;
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
@@ -577,7 +601,7 @@ export function createDeploymentControlPlane(
     // exhausted session.error), dialing gated by OMA_ENABLE_MCP.
     mcp: opts.runner?.mcp ?? {
       enabled: runtimeConfig.mcp !== undefined,
-      fetch: defaultMcpRuntime!.fetch,
+      fetch: mcpRuntime!.fetch,
       servers: createStoreBackedMcpServersProvider({
         sessions: stores.sessions,
         agents: stores.agents,
@@ -585,7 +609,7 @@ export function createDeploymentControlPlane(
       credentials: createStoreBackedMcpCredentialResolver({
         sessions: stores.sessions,
         vaults: vaultService,
-        refresh: defaultMcpRuntime!.refreshCoordinator,
+        refresh: mcpRuntime!.refreshCoordinator,
       }),
       access: createStoreBackedMcpToolAccessResolver({
         sessions: stores.sessions,
@@ -655,6 +679,17 @@ export function createDeploymentControlPlane(
     files: new DefaultFileService(stores.files),
     secrets: new DefaultSecretsService(stores.secrets),
     vaults: vaultService,
+    ...(runtimeConfig.mcp === undefined
+      ? {}
+      : {
+          mcp: {
+            fetch: mcpRuntime!.fetch,
+            refresh: mcpRuntime!.refreshCoordinator,
+            operationTimeoutMs:
+              runtimeConfig.mcp.operationTimeoutMs ??
+              DEFAULT_MCP_OPERATION_TIMEOUT_MS,
+          },
+        }),
     sessions: new DefaultSessionService(
       stores.sessions,
       stores.agents,
@@ -724,7 +759,28 @@ export function createDeploymentControlPlane(
         : { metricsTokenSha256: sha256Token(metricsToken) }),
     },
   });
-  return { app, stores, authMode };
+  const oauthTicker: WakeLoop | undefined =
+    runtimeConfig.mcp !== undefined && internal.backgroundWorkers !== false
+      ? createOauthRefreshTicker({
+          store: stores.vaults,
+          refresh: mcpRuntime!.refreshCoordinator,
+          onError: (error) => log.error("oauth_refresh_ticker_error", { error }),
+        })
+      : undefined;
+  wakeOauthTicker = () => oauthTicker?.wake();
+  let closePromise: Promise<void> | undefined;
+  return {
+    app,
+    stores,
+    authMode,
+    close() {
+      closePromise ??= (async () => {
+        await oauthTicker?.close();
+        stores.close();
+      })();
+      return closePromise;
+    },
+  };
 }
 
 // undefined = the appliance's 127.0.0.1 default. Everything not provably

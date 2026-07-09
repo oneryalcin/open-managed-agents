@@ -6,9 +6,14 @@ import { createGuardedMcpFetch, type McpFetch } from "./fetch.ts";
 export function createDefaultMcpRuntime(
   store: VaultStore,
   fetch: McpFetch = createGuardedMcpFetch(),
+  opts: { onScheduled?: () => void } = {},
 ): { fetch: McpFetch; refreshCoordinator: RefreshCoordinator } {
   return {
     fetch,
-    refreshCoordinator: new RefreshCoordinator({ store, fetch }),
+    refreshCoordinator: new RefreshCoordinator({
+      store,
+      fetch,
+      ...(opts.onScheduled === undefined ? {} : { onScheduled: opts.onScheduled }),
+    }),
   };
 }

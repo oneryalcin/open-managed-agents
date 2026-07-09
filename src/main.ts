@@ -77,7 +77,8 @@ export async function startAppliance(
   const port = parseAppliancePort(resolved.OMA_PORT);
   const host = resolved.OMA_HOST ?? "127.0.0.1";
 
-  const { app, stores, authMode } = createDeploymentControlPlane(resolved);
+  const plane = createDeploymentControlPlane(resolved);
+  const { app, stores, authMode } = plane;
 
   let server: ReturnType<typeof serve> | undefined;
   try {
@@ -127,7 +128,7 @@ export async function startAppliance(
       port: boundPort,
       close: async () => {
         await closeServer(bound.server);
-        stores.close();
+        await plane.close();
       },
     };
   } catch (error) {
@@ -136,7 +137,7 @@ export async function startAppliance(
     if (server !== undefined) {
       await closeServer(server).catch(() => {});
     }
-    stores.close();
+    await plane.close();
     throw error;
   }
 }

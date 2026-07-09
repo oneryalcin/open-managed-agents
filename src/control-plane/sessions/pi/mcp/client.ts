@@ -15,7 +15,7 @@ import {
   type McpCredentialBinding,
 } from "./credential.ts";
 
-const DEFAULT_OPERATION_TIMEOUT_MS = 60_000;
+export const DEFAULT_MCP_OPERATION_TIMEOUT_MS = 60_000;
 
 // Discovery bounds (review 0122-M1, Codex-adv HIGH): the tool list is
 // attacker-influenced input parsed in the shared control plane, so a hostile
@@ -72,7 +72,7 @@ export class McpConnection {
     declaration: McpServerDeclaration,
     opts: McpConnectionOptions,
   ): Promise<McpConnection> {
-    const timeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
+    const timeoutMs = opts.operationTimeoutMs ?? DEFAULT_MCP_OPERATION_TIMEOUT_MS;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const client = new Client({ name: "open-managed-agents", version: "0" });
       const transport = new StreamableHTTPClientTransport(

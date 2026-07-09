@@ -112,10 +112,11 @@ const QUERY_CREDENTIAL =
 // (plan 0122 §7B.9 slice 0). The pattern scrubber below catches credential
 // *shapes*; this catches the specific values a chokepoint already holds
 // (e.g. the bearer token injected into an MCP dial, echoed back by a
-// hostile server in a tool result). Limitations are deliberate: verbatim
-// echoes only (encoded/split reflections pass — the server already holds
-// the plaintext, this protects event/log readers), and values under 8
-// chars are ignored so a pathological 1-char "secret" cannot shred output.
+// hostile server in a tool result). Common whole-value encodings are covered
+// because event/log serialization can transform an otherwise verbatim echo;
+// arbitrarily split or encrypted reflections remain outside this boundary.
+// Values under 8 chars are ignored so a pathological 1-char "secret" cannot
+// shred output.
 const MIN_KNOWN_SECRET_LENGTH = 8;
 
 export function scrubKnownSecrets(
@@ -128,11 +129,23 @@ export function scrubKnownSecrets(
   // replacement leaving its prefix behind.
   const eligible = [...new Set(values)]
     .filter((value) => value.length >= MIN_KNOWN_SECRET_LENGTH)
+    .flatMap(knownSecretRepresentations)
+    .filter((value) => value.length >= MIN_KNOWN_SECRET_LENGTH)
+    .filter((value, index, all) => all.indexOf(value) === index)
     .sort((a, b) => b.length - a.length);
   for (const value of eligible) {
     out = out.split(value).join("[redacted]");
   }
   return out;
+}
+
+export function knownSecretRepresentations(value: string): string[] {
+  return [
+    value,
+    encodeURIComponent(value),
+    JSON.stringify(value).slice(1, -1),
+    Buffer.from(value).toString("base64"),
+  ];
 }
 
 export function scrubSecrets(text: string): string {
