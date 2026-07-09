@@ -79,7 +79,14 @@ export interface McpToolDefinitionOptions {
   agentContext?: { agentId?: string };
   outputCapBytes?: number;
   onToolCall?: (outcome: McpToolCallOutcomeLabel) => void;
-  /** Transport-level callTool rejection: connection-class failure (§4.6). */
+  /**
+   * Transport-level callTool rejection: connection-class failure (§4.6).
+   * `error` is RAW and UNSCRUBBED — its message can embed a hostile
+   * server's response body, including echoed credentials. Callers must
+   * read structured fields only (`.code`); never persist or log
+   * `error.message` (review #170, Sonnet — safe today by this contract,
+   * not by construction).
+   */
   onTransportFailure?: (mcpServerName: string, error: Error) => void;
   /**
    * Live secret values injected into this connection's dials (the bearer
@@ -104,6 +111,13 @@ export function createMcpToolDefinitions(
   const capBytes = opts.outputCapBytes ?? DEFAULT_MCP_OUTPUT_CAP_BYTES;
   const out: ReturnType<typeof defineTool>[] = [];
   for (const tool of opts.connection.tools) {
+    // Discovery output is server-controlled too (review #170, Opus): the
+    // bearer rides the listTools request, so a hostile server can echo the
+    // credential into tool metadata that reaches the model WITHOUT any
+    // call. Descriptions are free text → scrubbed. A NAME carrying the
+    // credential cannot be scrubbed without breaking call routing — it is
+    // an exfil attempt, not a tool: refuse to register it.
+    if (scrub(tool.name, opts.knownSecrets) !== tool.name) continue;
     const access =
       opts.access?.(
         opts.workspaceId,
@@ -118,7 +132,7 @@ export function createMcpToolDefinitions(
       ...defineTool({
         name: piName,
         label: piName,
-        description: tool.description ?? tool.name,
+        description: scrub(tool.description ?? tool.name, opts.knownSecrets),
         // Arbitrary third-party JSON Schema; Pi validates with TypeBox.
         // Servers re-validate in-band anyway (probe 46), so a permissive
         // fallback at execute time keeps a hostile schema from wedging the

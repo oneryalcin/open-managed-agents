@@ -102,7 +102,7 @@ describe("vaults API", () => {
     expect(firstRes.status).toBe(200);
     const first = (await firstRes.json()) as { id: string };
     const duplicate = await createCredential(fixture.app, key, vault.id, {
-      token: "other",
+      token: "other-token",
     });
     expect(duplicate.status).toBe(409);
 
@@ -129,7 +129,7 @@ describe("vaults API", () => {
     const vault = await createVault(fixture.app, key);
     for (let i = 0; i < 20; i += 1) {
       const created = await createCredential(fixture.app, key, vault.id, {
-        token: `token-${i}`,
+        token: `token-value-${i}`,
         serverUrl: `https://mcp.example.com/${i}`,
       });
       expect(created.status, `credential ${i}`).toBe(200);
@@ -221,7 +221,7 @@ describe("vaults API", () => {
           auth: {
             type: "static_bearer",
             mcp_server_url: "https://mcp.example.com/changed",
-            token: "new",
+            token: "new-token-1",
           },
         },
       },
@@ -260,6 +260,20 @@ describe("vaults API", () => {
       { key },
     );
     expect(retrievedCredential.status).toBe(404);
+    fixture.close();
+  });
+
+  it("rejects tokens shorter than the scrub floor", async () => {
+    // A token under scrubKnownSecrets' 8-char guard could not be redacted
+    // if a hostile server echoed it (review #170, Codex) — unstorable.
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const res = await createCredential(fixture.app, key, vault.id, {
+      token: "tok",
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("at least 8 characters");
     fixture.close();
   });
 
@@ -309,7 +323,7 @@ describe("vaults API", () => {
         {
           auth: {
             type: "static_bearer",
-            token: "rotated",
+            token: "rotated-token",
           },
         },
       );

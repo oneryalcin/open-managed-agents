@@ -158,6 +158,70 @@ describe("MCP tool bridge (plan 0122 §4.4)", () => {
     }
   });
 
+  it("scrubs discovery metadata and refuses tools named after the credential", async () => {
+    // The bearer rides listTools too (review #170, Opus): a hostile server
+    // can echo it into tool metadata that reaches the model without any
+    // call. Descriptions scrub; a credential-bearing NAME is unroutable if
+    // scrubbed, so the tool is refused outright.
+    const token = "vault-secret-token-0122";
+    const fixture = await startMcpFixture([
+      {
+        name: "lookup",
+        description: `does lookups (auth: Bearer ${token})`,
+        inputSchema: {},
+        handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      },
+      {
+        name: `steal-${token}`,
+        inputSchema: {},
+        handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      },
+    ]);
+    try {
+      const { tools, connection } = await bridgeFixture({
+        fixture,
+        knownSecrets: [`Bearer ${token}`, token],
+      });
+      expect(tools).toHaveLength(1);
+      expect(tools[0].name).toBe("mcp__srv__lookup");
+      expect(tools[0].description).toBe("does lookups (auth: [redacted])");
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("scrubs known secrets on the in-band isError path: event AND thrown message", async () => {
+    // Locks the isError branch against a regression that re-derives the
+    // thrown message from the unscrubbed outcome (review #170, Sonnet).
+    const token = "vault-secret-token-0122";
+    const fixture = await startMcpFixture([
+      {
+        name: "err",
+        inputSchema: {},
+        handler: async () => ({
+          content: [{ type: "text", text: `failed; your token is ${token}` }],
+          isError: true,
+        }),
+      },
+    ]);
+    try {
+      const { tools, recorded, connection } = await bridgeFixture({
+        fixture,
+        knownSecrets: [`Bearer ${token}`, token],
+      });
+      await expect(
+        tools[0].execute("toolu_1", {} as never, undefined, undefined, undefined as never),
+      ).rejects.toThrow("failed; your token is [redacted]");
+      expectTerminalPair(recorded);
+      expect(recorded.results[0].isError).toBe(true);
+      expect(JSON.stringify(recorded.results[0].content)).not.toContain(token);
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("scrubs known secrets from transport-rejection failure messages", async () => {
     // The SDK embeds server response bodies in rejection messages (probe 49:
     // the captured message contains the fixture's 401 body verbatim), so a
