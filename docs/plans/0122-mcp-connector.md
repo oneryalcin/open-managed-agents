@@ -1174,16 +1174,18 @@ finding).** The store stays synchronous SQLite. The coordinator owns:
   silent perpetual backoff (review: Sonnet 13).
 - Failure classification (review: Opus F6; permanent set widened round 2,
   Codex + Opus F5): permanence keys on the OAuth error CODE — the
-  PERMANENT set is `invalid_grant`, `invalid_client`,
-  `unauthorized_client`, `invalid_scope`, `unsupported_grant_type` (all
-  are operator/consumer misconfiguration or dead grants that retries
-  cannot fix) → `refresh_status = invalid`,
+  PERMANENT set is `invalid_grant`, `invalid_refresh_token`,
+  `invalid_client`, `unauthorized_client`, `invalid_scope`,
+  `unsupported_grant_type` (all are operator/consumer misconfiguration or
+  dead grants that retries cannot fix) → `refresh_status = invalid`,
   `next_refresh_at = NULL`, lazy/hinted refresh SKIPS (stale token still
   injected → the existing auth-failed signal; only a credential update or
   a successful validate-refresh clears it). ALL other failures — other
   4xx, 5xx, 429, network, redirect-rejection — → `transient` with
   exponential backoff, jittered, capped at 15 min, honoring `Retry-After`
-  when present (also capped). `refresh_attempts` RESETS to 0 on success.
+  when present (also capped). Slack-style HTTP 200 bodies with `ok:
+  false` and an `error` field are errors, not successes (probe 53).
+  `refresh_attempts` RESETS to 0 on success.
 
 **Refresh persistence: compare-and-swap on a MONOTONIC version, fenced
 (review: independent H4, Sonnet 3, Opus F1; fence corrected round 2 —
@@ -1328,8 +1330,8 @@ coordinator through an explicit `allowInsecureTokenEndpoint` test seam
 production wiring.
 
 **`mcp_oauth_validate` (synchronous handler).** Gate check (above) →
-active credential lookup (archived → 404; static_bearer → 400 interim,
-probe 52) → (1) `mcp_probe`: initialize-dial `mcp_server_url` via
+active credential lookup (archived → 400 per probe 52; static_bearer →
+400 per probe 52) → (1) `mcp_probe`: initialize-dial `mcp_server_url` via
 `McpConnection` + guarded fetch with the CURRENT access token; capture
 status/content-type/body capped at 4KB with `body_truncated`, body passed
 through `scrubKnownSecrets` (a hostile server echoing the access token
@@ -1350,29 +1352,21 @@ surface is the flow we must never expose is negative value.
 
 ### 7B.4 Probes (before implementation)
 
-- **Probe 52 (hosted, live)** — `scratch/52-mcp-oauth-hosted-probe`:
-  mcp_oauth credential CRUD wire shapes (readable `auth` subset on
-  create/get/list — the M3 blind spot; update-merge semantics on the
-  `refresh` block; structural immutability of `token_endpoint`/`client_id`
-  → expected 400); `mcp_oauth_validate` response field set for a bogus
-  credential (captures `invalid`/`unknown` + `mcp_probe`/`refresh` shapes
-  live; `has_refresh_token` both ways; **whether hosted's
-  `refresh.http_response` is ever populated with a token-bearing body** —
-  review Opus F4, OMA's own no-body floor is committed either way; the
-  `?beta=true` query quirk from the docs curl example); validate called on
-  a `static_bearer` credential and on an **archived** credential. A
-  `valid` capture needs a real OAuth grant — best-effort (skip if no
-  grant is at hand; the shape evidence is the requirement).
-- **Probe 53 (real providers, live, bogus tokens)** — review Sonnet 11:
-  the hermetic fixture encodes the plan author's own RFC assumptions
-  while the motivating providers were never checked.
-  `scratch/53-oauth-provider-probe`: POST the refresh grant with a
-  syntactically-plausible bogus refresh token at the Slack, Linear, and
-  Notion token endpoints; capture whether form-encoding is accepted (vs a
-  JSON-required error), the error taxonomy (`invalid_grant` reachable?),
-  and each provider's documented rotation policy (docs read). No real
-  grants required; request-format acceptance + error shapes is the
-  evidence sought.
+- **Probe 52 (hosted, live, COMPLETE 2026-07-09)** —
+  `scratch/52-mcp-oauth-hosted-probe.{py,md}` plus raw redacted output in
+  `scratch/artifacts/52-mcp-oauth-hosted-probe.json`: mcp_oauth
+  credential CRUD wire shapes; update-merge semantics; structural
+  immutability; validate response field set for bogus credentials;
+  `has_refresh_token` both ways; validate on `static_bearer` and archived
+  credentials. Key deltas folded below: `expires_at` is optional but must
+  be future if present; archived validate is 400, not the interim 404.
+- **Probe 53 (real providers, live bogus tokens, COMPLETE 2026-07-09)** —
+  `scratch/53-oauth-provider-probe.{py,md}` plus raw redacted output in
+  `scratch/artifacts/53-oauth-provider-probe.json`: Slack, Linear, and
+  Notion token endpoints accepted the bogus refresh request far enough to
+  return OAuth-shaped errors. Slack returned HTTP 200 with
+  `{ok:false,error:"invalid_refresh_token"}`, so the fixture and
+  classifier must handle provider-specific success-status error bodies.
 - **No SDK probe needed** — M3 adds no new SDK surface (probe 49 already
   pinned that headers land on both legs; moving the injection source to
   the fetch wrapper is OMA-owned code). The OAuth token-endpoint fixture
@@ -1391,7 +1385,8 @@ surface is the flow we must never expose is negative value.
   metadata failure → old tokens still resolve), `expires_in` → computed
   `expires_at`; `expires_in` absent → long-lived policy; `expires_in`
   0/negative and `expires_at` already past at create → immediate-due
-  without thrash (FLOOR honored); `invalid_grant` →
+  without thrash (FLOOR honored); Slack-style HTTP 200 `ok:false` body →
+  error; `invalid_grant` / `invalid_refresh_token` →
   `refresh_status=invalid` + lazy/hinted-skip; other-4xx and 500 and
   redirect → `transient` + backoff written; 200-with-error-body → error;
   non-JSON body → error; oversized body → capped read, error; 429 →
@@ -1452,10 +1447,10 @@ surface is the flow we must never expose is negative value.
   never in any serialized response; structural immutability
   (`token_endpoint`, `client_id`, `mcp_server_url`) → 400; token_endpoint
   validation (http → 400, userinfo → 400, fragment → 400, oversize → 400);
-  `expires_at` interim rule (required with `refresh` → 400 when missing;
-  optional without) locked; refresh-block merge update; validate endpoint
-  statuses (valid via fixture, invalid, unknown, no_refresh_token,
-  static_bearer-called, archived → 404, gate-off → 400 with ZERO network
+  `expires_at` hosted rule (optional; if present must be future) locked;
+  refresh-block merge update; validate endpoint statuses (valid via
+  fixture, invalid, unknown, no_refresh_token, static_bearer-called → 400,
+  archived → 400, gate-off → 400 with ZERO network
   calls); **blocked-range literal-IP token_endpoint**
   (`https://169.254.169.254/token`) → 400 (round-2 Sonnet — the SSRF
   check itself, not just syntax); **`allowInsecureTokenEndpoint`
@@ -1530,20 +1525,30 @@ threading, lifecycle) and a single pass is how one gets silently dropped:
 6. Wake loop/ticker + deployment shutdown wiring.
 7. Live-style smoke + full leak sweep.
 
-### 7B.8 Open questions (probes 52/53 / review)
+### 7B.8 Probe-closed questions (52/53, 2026-07-09)
 
-1. Readable `auth` subset for mcp_oauth credential responses — probe 52.
-2. `mcp_oauth_validate` on a `static_bearer` credential — probe 52
-   (interim: 400); on an archived credential — probe 52 (interim: 404).
-3. Whether hosted requires `expires_at` on create when a `refresh` block
-   is present (docs example always includes it) — probe 52; interim:
-   required with `refresh`, optional without (treat absent as long-lived).
-4. `validated_at`/probe ordering fields in the validation object under a
-   `valid` outcome — probe 52 best-effort (needs a live grant).
-5. Whether hosted's `refresh.http_response` ever carries a token-bearing
-   body — probe 52; OMA's no-body floor stands regardless (§7B.3).
-6. Slack/Linear/Notion token-endpoint request-format acceptance and error
-   taxonomy — probe 53 (bogus tokens; shapes the fixture's realism).
+1. Readable `auth` subset for mcp_oauth credential responses: no refresh
+   returns `{type, mcp_server_url, expires_at?}`; refresh returns
+   `{type, mcp_server_url, expires_at?, refresh:{token_endpoint,
+   client_id, scope, token_endpoint_auth:{type}}}`. Secret fields are
+   absent from create/get/list/update responses.
+2. `mcp_oauth_validate` on a `static_bearer` credential returns 400
+   invalid request. On an archived `mcp_oauth` credential it also returns
+   400 with `"Credential is archived."`
+3. `expires_at` is optional with and without a refresh block. If present,
+   it must be future; a past value returns 400
+   `"auth.expires_at must be in the future."`
+4. `validated_at` and validation object keys for invalid/unknown outcomes
+   are pinned by probe 52. A `valid` outcome still needs a real OAuth
+   grant and remains best-effort future evidence, not a blocker.
+5. Hosted returned `refresh.http_response: null` for Slack and
+   postman-echo refresh failures in probe 52. OMA's no-body floor for
+   validate remains the implementation rule.
+6. Probe 53: Slack returns HTTP 200 with `{ok:false,
+   error:"invalid_refresh_token"}` for bogus refresh; Linear returns JSON
+   `invalid_client` over form+Basic/form+post; Notion returns JSON
+   `invalid_client` over JSON+Basic and form+Basic. The fixture must cover
+   HTTP-success error bodies and `invalid_refresh_token` permanence.
 
 ---
 
@@ -1719,10 +1724,10 @@ adversarial), Opus, Sonnet, plus an independent engineer pass against
 |---|---|---|
 | 1 — mid-turn freshness | Codex-adv HIGH, Opus F3+F7 | Injection moved from connect-time `requestInit` to a call-time async token provider at the fetch layer (per-request header from a live closure; no reconnect, no re-registration); 401-hinted forced refresh covers early revocation / wrong `expires_at`; §3.4's `authProvider` question answered (rejected). |
 | 2 — async seam + layering | independent H1, Opus F5 | `McpCredentialResolver` becomes async; resolution moves inside the parallel dial map (M1 no-serial-stalls preserved); new `RefreshCoordinator` service owns refresh HTTP + single-flight; store stays sync SQLite. |
-| 3 — refresh write integrity | independent H4, Sonnet 1+3, Opus F1 | CAS persist (`WHERE updated_at = ? AND archived_at IS NULL`, secret write only after the row-update takes) — stale/archived → discard, no clobber, no purged-secret resurrection; burned-token crash window narrowed to persist-on-receipt and ACCEPTED as a named §7B.1 residual (network↔persist gap, correctly rediagnosed per Opus F1). |
-| 4 — validate endpoint | Codex P2, independent H3, Sonnet 2+6+17, Opus F4+F8 | Gated on `OMA_ENABLE_MCP` (wire-shaped 400 before any dial, zero-egress test) — four reviewers found this hole independently; validate's refresh joins the single-flight map; `refresh.http_response` never carries a body; archived → 404; success clears `invalid` + reschedules. |
+| 3 — refresh write integrity | independent H4, Sonnet 1+3, Opus F1 | CAS persist (`WHERE auth_version = ? AND archived_at IS NULL`, secret write only after the row-update takes) — stale/archived → discard, no clobber, no purged-secret resurrection; burned-token crash window narrowed to persist-on-receipt and ACCEPTED as a named §7B.1 residual (network↔persist gap, correctly rediagnosed per Opus F1). |
+| 4 — validate endpoint | Codex P2, independent H3, Sonnet 2+6+17, Opus F4+F8 | Gated on `OMA_ENABLE_MCP` (wire-shaped 400 before any dial, zero-egress test) — four reviewers found this hole independently; validate's refresh joins the single-flight map; OMA keeps `refresh.http_response` body-free; archived → 400 per probe 52; success clears `invalid` + reschedules. |
 | 5 — token_endpoint strictness | Codex-adv HIGH, independent M5 | https-only, no userinfo/fragment, ≤2048, literal-IP pre-check at write time; hermetic fixture via explicit `allowInsecureTokenEndpoint` test seam. |
-| 6 — refresh HTTP hardening | independent H2+M6, Opus F6+F10+F12, Sonnet 9+12+13+15+16 | Timeout 30s + 64KB body cap + JSON checks; RFC-correct per-mode client auth (Basic = urlencoded-then-base64 header only); `invalid_grant`-keyed permanence (other 4xx transient); scope narrowing persisted; token_type checked; Retry-After honored; redirect rejection kept and classified transient with a named log reason. |
+| 6 — refresh HTTP hardening | independent H2+M6, Opus F6+F10+F12, Sonnet 9+12+13+15+16 | Timeout 30s + 64KB body cap + JSON checks; RFC-correct per-mode client auth (Basic = urlencoded-then-base64 header only); permanent OAuth errors include `invalid_grant`, `invalid_refresh_token`, `invalid_client`, `unauthorized_client`, `invalid_scope`, and `unsupported_grant_type`; scope narrowing persisted; token_type checked; Retry-After honored; redirect rejection kept and classified transient with a named log reason. |
 | 7 — scheduling | Sonnet 4+5+10, independent M7 | Min-sleep floor (short-TTL thrash), `refresh_attempts` reset on success, wake loop owned by the deployment and closed before stores, `close()` awaits in-flight runs. |
 | 8 — storage/dispatch | Sonnet 20+21, Opus F9+F13 | Structural fields as nullable columns (bulk due-SELECT never touches `reveal()`); `auth_type`-keyed JSON-blob accessor with a named boundary test (blob string never leaves the store — the leak Sonnet 20 projected); mixed-row migration test; oauth secret-missing degradation named. |
 | 9 — redaction reality | Opus F2 (verified false seam), F11 | The draft cited a redaction registry that does not exist; M3 builds `scrubKnownSecrets(text, values)` — exact-value scrubbing at the chokepoints that hold the live secrets; form-body param patterns added incl. first-param. |

@@ -1,0 +1,408 @@
+=== probe52.findings ===
+{
+  "cleanup": {
+    "vault_archive": {
+      "body": {
+        "archived_at": "2026-07-09T09:31:57.584995Z",
+        "created_at": "2026-07-09T09:31:48.606070Z",
+        "display_name": "oma-probe52-33d48a558b",
+        "id": "vlt_011CcrFYF3VBdArVzgXeZA1d",
+        "metadata": {
+          "probe": "str",
+          "run": "str"
+        },
+        "type": "vault",
+        "updated_at": "2026-07-09T09:31:57.584995Z"
+      },
+      "status": 200
+    },
+    "vault_delete": {
+      "body": {
+        "id": "vlt_011CcrFYF3VBdArVzgXeZA1d",
+        "type": "vault_deleted"
+      },
+      "status": 200
+    }
+  },
+  "env_key_source": "/Users/oner/dev/junk/cwc-workshops/.env",
+  "immutable_client_id": {
+    "body": {
+      "error": {
+        "message": "Failed to parse request body: unknown field \"client_id\"",
+        "type": "invalid_request_error"
+      },
+      "request_id": "str",
+      "type": "error"
+    },
+    "status": 400
+  },
+  "immutable_token_endpoint": {
+    "body": {
+      "error": {
+        "message": "Failed to parse request body: unknown field \"token_endpoint\"",
+        "type": "invalid_request_error"
+      },
+      "request_id": "str",
+      "type": "error"
+    },
+    "status": 400
+  },
+  "oauth_expired_create": {
+    "body": {
+      "error": {
+        "message": "auth.expires_at must be in the future.",
+        "type": "invalid_request_error"
+      },
+      "request_id": "str",
+      "type": "error"
+    },
+    "status": 400
+  },
+  "oauth_list": {
+    "data_len": 4,
+    "first": {
+      "archived_at": null,
+      "auth": {
+        "expires_at": "str",
+        "mcp_server_url": "https://mcp.linear.app/mcp",
+        "refresh": {
+          "client_id": "str",
+          "scope": "str",
+          "token_endpoint": "str",
+          "token_endpoint_auth": {
+            "type": "client_secret_post"
+          }
+        },
+        "type": "mcp_oauth"
+      },
+      "created_at": "2026-07-09T09:31:51.660571Z",
+      "display_name": "oauth refresh 33d48a558b",
+      "id": "vcrd_01UuL8fvmRArd8mmi1o5m92S",
+      "metadata": {
+        "case": "str",
+        "probe": "str"
+      },
+      "type": "vault_credential",
+      "updated_at": "2026-07-09T09:31:51.660571Z",
+      "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+    },
+    "has_next_page": null,
+    "keys": [
+      "data"
+    ],
+    "next_page": null
+  },
+  "oauth_no_expires_no_refresh_create": {
+    "body": {
+      "archived_at": null,
+      "auth": {
+        "mcp_server_url": "https://mcp.linear.app/mcp?probe=no-exp-no-refresh-33d48a558b",
+        "type": "mcp_oauth"
+      },
+      "created_at": "2026-07-09T09:31:50.622019Z",
+      "display_name": "oauth no expires no refresh 33d48a558b",
+      "id": "vcrd_014ddFbjYV22W3sCt9QDkdpF",
+      "metadata": {
+        "case": "str",
+        "probe": "str"
+      },
+      "type": "vault_credential",
+      "updated_at": "2026-07-09T09:31:50.622019Z",
+      "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+    },
+    "status": 200
+  },
+  "oauth_no_expires_with_refresh_create": {
+    "body": {
+      "archived_at": null,
+      "auth": {
+        "mcp_server_url": "https://mcp.linear.app/mcp?probe=no-exp-refresh-33d48a558b",
+        "refresh": {
+          "client_id": "str",
+          "scope": "str",
+          "token_endpoint": "str",
+          "token_endpoint_auth": {
+            "type": "client_secret_post"
+          }
+        },
+        "type": "mcp_oauth"
+      },
+      "created_at": "2026-07-09T09:31:51.091777Z",
+      "display_name": "oauth no expires refresh 33d48a558b",
+      "id": "vcrd_01C98witru7y6AZyByL3v9YM",
+      "metadata": {
+        "case": "str",
+        "probe": "str"
+      },
+      "type": "vault_credential",
+      "updated_at": "2026-07-09T09:31:51.091777Z",
+      "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+    },
+    "status": 200
+  },
+  "oauth_no_refresh_auth_keys": [
+    "expires_at",
+    "mcp_server_url",
+    "type"
+  ],
+  "oauth_no_refresh_create": {
+    "archived_at": null,
+    "auth": {
+      "expires_at": "str",
+      "mcp_server_url": "https://mcp.linear.app/mcp",
+      "type": "mcp_oauth"
+    },
+    "created_at": "2026-07-09T09:31:48.989605Z",
+    "display_name": "oauth no refresh 33d48a558b",
+    "id": "vcrd_01C3vezGR9uPWrDpueUsJa3K",
+    "metadata": {
+      "case": "str",
+      "probe": "str"
+    },
+    "type": "vault_credential",
+    "updated_at": "2026-07-09T09:31:48.989605Z",
+    "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+  },
+  "oauth_no_refresh_secret_absent": true,
+  "oauth_retrieve": {
+    "archived_at": null,
+    "auth": {
+      "expires_at": "str",
+      "mcp_server_url": "https://mcp.linear.app/mcp",
+      "refresh": {
+        "client_id": "str",
+        "scope": "str",
+        "token_endpoint": "str",
+        "token_endpoint_auth": {
+          "type": "client_secret_post"
+        }
+      },
+      "type": "mcp_oauth"
+    },
+    "created_at": "2026-07-09T09:31:51.660571Z",
+    "display_name": "oauth refresh 33d48a558b",
+    "id": "vcrd_01UuL8fvmRArd8mmi1o5m92S",
+    "metadata": {
+      "case": "str",
+      "probe": "str"
+    },
+    "type": "vault_credential",
+    "updated_at": "2026-07-09T09:31:51.660571Z",
+    "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+  },
+  "oauth_update_merge": {
+    "body": {
+      "archived_at": null,
+      "auth": {
+        "expires_at": "str",
+        "mcp_server_url": "https://mcp.linear.app/mcp",
+        "refresh": {
+          "client_id": "str",
+          "scope": "str",
+          "token_endpoint": "str",
+          "token_endpoint_auth": {
+            "type": "client_secret_post"
+          }
+        },
+        "type": "mcp_oauth"
+      },
+      "created_at": "2026-07-09T09:31:51.660571Z",
+      "display_name": "oauth refresh 33d48a558b",
+      "id": "vcrd_01UuL8fvmRArd8mmi1o5m92S",
+      "metadata": {
+        "case": "str",
+        "probe": "str"
+      },
+      "type": "vault_credential",
+      "updated_at": "2026-07-09T09:31:52.863573Z",
+      "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+    },
+    "status": 200
+  },
+  "oauth_with_refresh_auth_keys": [
+    "expires_at",
+    "mcp_server_url",
+    "refresh",
+    "type"
+  ],
+  "oauth_with_refresh_create": {
+    "archived_at": null,
+    "auth": {
+      "expires_at": "str",
+      "mcp_server_url": "https://mcp.linear.app/mcp",
+      "refresh": {
+        "client_id": "str",
+        "scope": "str",
+        "token_endpoint": "str",
+        "token_endpoint_auth": {
+          "type": "client_secret_post"
+        }
+      },
+      "type": "mcp_oauth"
+    },
+    "created_at": "2026-07-09T09:31:51.660571Z",
+    "display_name": "oauth refresh 33d48a558b",
+    "id": "vcrd_01UuL8fvmRArd8mmi1o5m92S",
+    "metadata": {
+      "case": "str",
+      "probe": "str"
+    },
+    "type": "vault_credential",
+    "updated_at": "2026-07-09T09:31:51.660571Z",
+    "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+  },
+  "oauth_with_refresh_refresh_keys": [
+    "client_id",
+    "scope",
+    "token_endpoint",
+    "token_endpoint_auth"
+  ],
+  "oauth_with_refresh_secret_absent": true,
+  "reflective_refresh_create": {
+    "body": {
+      "archived_at": null,
+      "auth": {
+        "expires_at": "str",
+        "mcp_server_url": "https://mcp.linear.app/mcp",
+        "refresh": {
+          "client_id": "str",
+          "scope": "str",
+          "token_endpoint": "str",
+          "token_endpoint_auth": {
+            "type": "none"
+          }
+        },
+        "type": "mcp_oauth"
+      },
+      "created_at": "2026-07-09T09:31:55.025561Z",
+      "display_name": "oauth reflective 33d48a558b",
+      "id": "vcrd_01WX43Ze7be3UhyaynqnTNjY",
+      "metadata": {
+        "case": "str",
+        "probe": "str"
+      },
+      "type": "vault_credential",
+      "updated_at": "2026-07-09T09:31:55.025561Z",
+      "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+    },
+    "status": 200
+  },
+  "run_id": "33d48a558b",
+  "validate_archived_oauth": {
+    "body": {
+      "error": {
+        "message": "Credential is archived.",
+        "type": "invalid_request_error"
+      },
+      "request_id": "str",
+      "type": "error"
+    },
+    "status": 400
+  },
+  "validate_no_refresh": {
+    "body": {
+      "credential_id": "vcrd_01C3vezGR9uPWrDpueUsJa3K",
+      "has_refresh_token": false,
+      "mcp_probe": {
+        "http_response": {
+          "body": "{\"error\":\"invalid_token\",\"error_description\":\"Invalid access token\"}",
+          "body_truncated": false,
+          "content_type": "application/json",
+          "status_code": 401
+        },
+        "method": "initialize"
+      },
+      "refresh": {
+        "http_response": "NoneType",
+        "status": "no_refresh_token"
+      },
+      "status": "invalid",
+      "type": "vault_credential_validation",
+      "validated_at": "2026-07-09T09:31:49.348722Z",
+      "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+    },
+    "status": 200
+  },
+  "validate_no_refresh_raw_keys": [
+    "credential_id",
+    "has_refresh_token",
+    "mcp_probe",
+    "refresh",
+    "status",
+    "type",
+    "validated_at",
+    "vault_id"
+  ],
+  "validate_reflective_refresh": {
+    "body": {
+      "credential_id": "vcrd_01WX43Ze7be3UhyaynqnTNjY",
+      "has_refresh_token": true,
+      "mcp_probe": {
+        "http_response": {
+          "body": "{\"error\":\"invalid_token\",\"error_description\":\"Invalid access token\"}",
+          "body_truncated": false,
+          "content_type": "application/json",
+          "status_code": 401
+        },
+        "method": "initialize"
+      },
+      "refresh": {
+        "http_response": "NoneType",
+        "status": "failed"
+      },
+      "status": "unknown",
+      "type": "vault_credential_validation",
+      "validated_at": "2026-07-09T09:31:55.457370Z",
+      "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+    },
+    "raw_body_contains_generated_secret": false,
+    "status": 200
+  },
+  "validate_static_bearer": {
+    "body": {
+      "error": {
+        "message": "The request was invalid",
+        "type": "invalid_request_error"
+      },
+      "request_id": "str",
+      "type": "error"
+    },
+    "status": 400
+  },
+  "validate_with_refresh": {
+    "body": {
+      "credential_id": "vcrd_01UuL8fvmRArd8mmi1o5m92S",
+      "has_refresh_token": true,
+      "mcp_probe": {
+        "http_response": {
+          "body": "{\"error\":\"invalid_token\",\"error_description\":\"Invalid access token\"}",
+          "body_truncated": false,
+          "content_type": "application/json",
+          "status_code": 401
+        },
+        "method": "initialize"
+      },
+      "refresh": {
+        "http_response": "NoneType",
+        "status": "failed"
+      },
+      "status": "unknown",
+      "type": "vault_credential_validation",
+      "validated_at": "2026-07-09T09:31:53.501545Z",
+      "vault_id": "vlt_011CcrFYF3VBdArVzgXeZA1d"
+    },
+    "status": 200
+  },
+  "vault_create": {
+    "archived_at": null,
+    "created_at": "2026-07-09T09:31:48.606070Z",
+    "display_name": "oma-probe52-33d48a558b",
+    "id": "vlt_011CcrFYF3VBdArVzgXeZA1d",
+    "metadata": {
+      "probe": "str",
+      "run": "str"
+    },
+    "type": "vault",
+    "updated_at": "2026-07-09T09:31:48.606070Z"
+  }
+}
