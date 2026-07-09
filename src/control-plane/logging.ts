@@ -108,6 +108,33 @@ const FOREIGN_KEY_SHAPES = [
 const QUERY_CREDENTIAL =
   /([?&](?:key|apikey|api_key|token|access_token|secret|password|sig|signature|credential)=)[^&\s"']+/gi;
 
+// Exact-value scrubbing for KNOWN live secrets in server-controlled text
+// (plan 0122 §7B.9 slice 0). The pattern scrubber below catches credential
+// *shapes*; this catches the specific values a chokepoint already holds
+// (e.g. the bearer token injected into an MCP dial, echoed back by a
+// hostile server in a tool result). Limitations are deliberate: verbatim
+// echoes only (encoded/split reflections pass — the server already holds
+// the plaintext, this protects event/log readers), and values under 8
+// chars are ignored so a pathological 1-char "secret" cannot shred output.
+const MIN_KNOWN_SECRET_LENGTH = 8;
+
+export function scrubKnownSecrets(
+  text: string,
+  values: readonly string[],
+): string {
+  let out = text;
+  // Longest first: if one value contains another (full header vs bare
+  // token), the containing value must not be broken by an inner
+  // replacement leaving its prefix behind.
+  const eligible = [...new Set(values)]
+    .filter((value) => value.length >= MIN_KNOWN_SECRET_LENGTH)
+    .sort((a, b) => b.length - a.length);
+  for (const value of eligible) {
+    out = out.split(value).join("[redacted]");
+  }
+  return out;
+}
+
 export function scrubSecrets(text: string): string {
   let out = text
     .replace(

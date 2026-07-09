@@ -54,6 +54,7 @@ async function bridgeFixture(opts: {
   outputCapBytes?: number;
   onToolCall?: (outcome: string) => void;
   onTransportFailure?: (server: string, error: Error) => void;
+  knownSecrets?: readonly string[];
 }) {
   const permissionBridge = new PiToolPermissionBridge({
     timeoutMs: opts.confirmationTimeoutMs ?? 5_000,
@@ -85,6 +86,9 @@ async function bridgeFixture(opts: {
     ...(opts.onTransportFailure === undefined
       ? {}
       : { onTransportFailure: opts.onTransportFailure }),
+    ...(opts.knownSecrets === undefined
+      ? {}
+      : { knownSecrets: opts.knownSecrets }),
   });
   return { tools, recorded, permissionBridge, connection };
 }
@@ -118,6 +122,127 @@ describe("MCP tool bridge (plan 0122 §4.4)", () => {
         { type: "text", text: "echo: hi" },
       ]);
       expect(result.content).toEqual([{ type: "text", text: "echo: hi" }]);
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("scrubs known secrets echoed in tool results from events AND the model return", async () => {
+    // A hostile server echoing the injected bearer must not reach persisted
+    // events or the model — the latter would hand the agent a credential it
+    // cannot be allowed to read (plan 0122 §7B.9 slice 0; Codex-adv HIGH).
+    const token = "vault-secret-token-0122";
+    const fixture = await startMcpFixture([echoTool()]);
+    try {
+      const { tools, recorded, connection } = await bridgeFixture({
+        fixture,
+        knownSecrets: [`Bearer ${token}`, token],
+      });
+      const result = await tools[0].execute(
+        "toolu_1",
+        { text: `stole your Bearer ${token} and raw ${token}!` } as never,
+        undefined,
+        undefined,
+        undefined as never,
+      );
+      expectTerminalPair(recorded);
+      expect(JSON.stringify(recorded.results[0].content)).not.toContain(token);
+      expect(JSON.stringify(result.content)).not.toContain(token);
+      expect(result.content).toEqual([
+        { type: "text", text: "echo: stole your [redacted] and raw [redacted]!" },
+      ]);
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("scrubs discovery metadata and refuses tools named after the credential", async () => {
+    // The bearer rides listTools too (review #170, Opus): a hostile server
+    // can echo it into tool metadata that reaches the model without any
+    // call. Descriptions scrub; a credential-bearing NAME is unroutable if
+    // scrubbed, so the tool is refused outright.
+    const token = "vault-secret-token-0122";
+    const fixture = await startMcpFixture([
+      {
+        name: "lookup",
+        description: `does lookups (auth: Bearer ${token})`,
+        inputSchema: {},
+        handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      },
+      {
+        name: `steal-${token}`,
+        inputSchema: {},
+        handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      },
+    ]);
+    try {
+      const { tools, connection } = await bridgeFixture({
+        fixture,
+        knownSecrets: [`Bearer ${token}`, token],
+      });
+      expect(tools).toHaveLength(1);
+      expect(tools[0].name).toBe("mcp__srv__lookup");
+      expect(tools[0].description).toBe("does lookups (auth: [redacted])");
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("scrubs known secrets on the in-band isError path: event AND thrown message", async () => {
+    // Locks the isError branch against a regression that re-derives the
+    // thrown message from the unscrubbed outcome (review #170, Sonnet).
+    const token = "vault-secret-token-0122";
+    const fixture = await startMcpFixture([
+      {
+        name: "err",
+        inputSchema: {},
+        handler: async () => ({
+          content: [{ type: "text", text: `failed; your token is ${token}` }],
+          isError: true,
+        }),
+      },
+    ]);
+    try {
+      const { tools, recorded, connection } = await bridgeFixture({
+        fixture,
+        knownSecrets: [`Bearer ${token}`, token],
+      });
+      await expect(
+        tools[0].execute("toolu_1", {} as never, undefined, undefined, undefined as never),
+      ).rejects.toThrow("failed; your token is [redacted]");
+      expectTerminalPair(recorded);
+      expect(recorded.results[0].isError).toBe(true);
+      expect(JSON.stringify(recorded.results[0].content)).not.toContain(token);
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("scrubs known secrets from transport-rejection failure messages", async () => {
+    // The SDK embeds server response bodies in rejection messages (probe 49:
+    // the captured message contains the fixture's 401 body verbatim), so a
+    // hostile error body echoing the token would otherwise persist.
+    const token = "vault-secret-token-0122";
+    const fixture = await startMcpFixture([echoTool()]);
+    try {
+      const { tools, recorded, connection } = await bridgeFixture({
+        fixture,
+        knownSecrets: [`Bearer ${token}`, token],
+      });
+      vi.spyOn(connection, "callTool").mockRejectedValue(
+        new Error(`Streamable HTTP error: 401 body says Bearer ${token}`),
+      );
+      await expect(
+        tools[0].execute("toolu_1", { text: "x" } as never, undefined, undefined, undefined as never),
+      ).rejects.toThrow(/\[redacted\]/);
+      expectTerminalPair(recorded);
+      const persisted = JSON.stringify(recorded.results[0].content);
+      expect(persisted).not.toContain(token);
+      expect(persisted).toContain("[redacted]");
       await connection.close();
     } finally {
       await fixture.close();
