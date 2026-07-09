@@ -35,43 +35,46 @@ describe("PendingActionStore", () => {
     expect(flush).not.toHaveBeenCalled();
   });
 
-  it("remove keeps the entry alive while its timer is still armed", () => {
+  it("remove leaves the armed timer live (no orphaned double-timer on re-add)", () => {
     const flush = vi.fn();
     const store = new PendingActionStore(flush);
-    store.add(WS, SID, "a"); // arms a timer
+    store.add(WS, SID, "a"); // arms timer T1
+    store.remove(WS, SID, "a"); // ids empty, but T1 still armed → entry survives
 
-    store.remove(WS, SID, "a"); // ids now empty, but timer still armed
-    // Entry survives (timer armed) so a later flush can still coalesce/drain it.
-    expect(store.drainForFlush(WS, SID)).toEqual([]);
-    // has() reports empty (length 0) regardless.
-    expect(store.has(WS, SID)).toBe(false);
+    // A guarded remove keeps the entry so the surviving timer is reused. If
+    // remove instead deleted eagerly, this add would arm a SECOND timer while
+    // T1 dangles — both would fire and flush twice.
+    store.add(WS, SID, "b");
+    vi.runAllTimers();
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(store.snapshotForFlush(WS, SID)).toEqual(["b"]);
   });
 
-  it("drainForFlush snapshots ids and cancels the timer but does NOT consume the ids", () => {
+  it("snapshotForFlush returns ids and cancels the timer but does NOT consume the ids", () => {
     const flush = vi.fn();
     const store = new PendingActionStore(flush);
     store.add(WS, SID, "a");
 
-    expect(store.drainForFlush(WS, SID)).toEqual(["a"]);
+    expect(store.snapshotForFlush(WS, SID)).toEqual(["a"]);
     // Timer was force-cleared, so the deferred flush no longer fires.
     vi.runAllTimers();
     expect(flush).not.toHaveBeenCalled();
     // Ids persist until resolved via remove() — a re-flush re-emits the full
     // pending set (the "re-emit requires_action with all pending IDs" contract).
-    expect(store.drainForFlush(WS, SID)).toEqual(["a"]);
+    expect(store.snapshotForFlush(WS, SID)).toEqual(["a"]);
   });
 
-  it("re-arms a fresh flush after a drain and re-emits the full remaining set", () => {
+  it("re-arms a fresh flush after a snapshot and re-emits the full remaining set", () => {
     const flush = vi.fn();
     const store = new PendingActionStore(flush);
     store.add(WS, SID, "a");
-    store.drainForFlush(WS, SID); // snapshots "a", clears the timer (ids persist)
+    store.snapshotForFlush(WS, SID); // snapshots "a", clears the timer (ids persist)
 
     store.add(WS, SID, "b"); // timer was cleared, so this must re-arm a flush
     vi.runAllTimers();
     expect(flush).toHaveBeenCalledTimes(1);
     // "a" was never resolved, so the re-emit carries both.
-    expect(store.drainForFlush(WS, SID)).toEqual(["a", "b"]);
+    expect(store.snapshotForFlush(WS, SID)).toEqual(["a", "b"]);
   });
 
   it("scopes pending ids per session key", () => {
@@ -79,7 +82,7 @@ describe("PendingActionStore", () => {
     store.add(WS, "sesn_a", "x");
     store.add(WS, "sesn_b", "y");
 
-    expect(store.drainForFlush(WS, "sesn_a")).toEqual(["x"]);
-    expect(store.drainForFlush(WS, "sesn_b")).toEqual(["y"]);
+    expect(store.snapshotForFlush(WS, "sesn_a")).toEqual(["x"]);
+    expect(store.snapshotForFlush(WS, "sesn_b")).toEqual(["y"]);
   });
 });

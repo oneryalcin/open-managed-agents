@@ -2806,11 +2806,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
 
   private flushPendingActions(workspaceId: WorkspaceId, sessionId: string): void {
     // Coalesce both stores into ONE requires_action event (custom then
-    // confirmations, preserving id order). drainForFlush clears each timer and
-    // drops the entry when empty; a re-entrant flush is a safe no-op.
+    // confirmations, preserving id order). snapshotForFlush clears each timer
+    // and drops the entry when empty (ids persist until resolved); a re-entrant
+    // flush is a safe no-op.
     const ids = [
-      ...this.pendingCustomToolActions.drainForFlush(workspaceId, sessionId),
-      ...this.pendingToolConfirmations.drainForFlush(workspaceId, sessionId),
+      ...this.pendingCustomToolActions.snapshotForFlush(workspaceId, sessionId),
+      ...this.pendingToolConfirmations.snapshotForFlush(workspaceId, sessionId),
     ];
     if (ids.length === 0) return;
     this.persistRuntimeDrafts(workspaceId, sessionId, [

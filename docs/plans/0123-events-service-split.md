@@ -145,7 +145,7 @@ export class PendingActionStore {
   remove(key: string, id: string): void;      // filter ids; delete iff empty AND timer===undefined (2793)
   clear(key: string): string[];               // ALWAYS clearTimeout + delete; return drained ids (2798)
   has(key: string): boolean;                  // ids.length > 0 (2810)
-  drainForFlush(key: string): string[];       // clearTimeout + set timer=undefined, return ids, delete iff empty (2933-2947)
+  snapshotForFlush(key: string): string[];       // clearTimeout + set timer=undefined, return ids, delete iff empty (2933-2947)
 }
 ```
 
@@ -163,7 +163,7 @@ inline maps + the eight quartet methods.
   earlier draft wrongly said `clear` shared `remove`'s guard — it does not;
   copying that would leave stale entries and re-emit `requires_action` for
   interrupted/deleted waits.)*
-- `drainForFlush` (models 2933-2947): force `clearTimeout` + `timer = undefined`,
+- `snapshotForFlush` (models 2933-2947): force `clearTimeout` + `timer = undefined`,
   then delete **iff `ids.length === 0`** (guard already satisfied). Not a bare
   `= undefined` — the `clearTimeout` matters.
 
@@ -251,11 +251,11 @@ a design choice.
 **C1 (flush coalescing).** `flushPendingActions` stays in the **service** as the
 coordinator; it becomes:
 ```
-const ids = [...customTools.drainForFlush(key), ...confirmations.drainForFlush(key)];
+const ids = [...customTools.snapshotForFlush(key), ...confirmations.snapshotForFlush(key)];
 if (ids.length) publish one session.status_idle{requires_action, event_ids: ids};
 ```
 The single-event contract is preserved because the merge/publish never leaves
-the service. Collaborators expose `drainForFlush`; they do **not** each publish.
+the service. Collaborators expose `snapshotForFlush`; they do **not** each publish.
 
 **C2 (confirmation→MCP).** No cross-collaborator call — `isMcpToolUseEventId`
 and `lostToolConfirmationResultDraft` are private to `ToolConfirmations`. This
@@ -377,7 +377,7 @@ is the shared foundation Slice 2 composes.
 ## 8. Risks
 
 - **Delete-timing drift (C1 substrate).** Three different delete conditions
-  across `remove` (guarded), `clear` (unconditional), `drainForFlush` (empty-only
+  across `remove` (guarded), `clear` (unconditional), `snapshotForFlush` (empty-only
   post-timer-clear) — see corrected §4.1. Easy to flatten by accident; a leaked
   empty entry is silent (the requires_action tests catch gross breakage, not a
   stale entry). Port each verbatim; add the `PendingActionStore` clear-with-timer
@@ -410,7 +410,7 @@ dispositions:
 | 7 | Custom-only sub-split of Slice 2 straddles flush across a collaborator + raw map | Opus | MED | **Accepted.** §7 hard-gates it: extract both collaborators together. |
 | 8 | C2 guard mis-mapped to a custom-tool terminalize test (never hits `lostToolConfirmationResultDraft`) | Codex native | P3 | **Accepted.** §6 C2 remapped to `tool-confirmation-api` lost-runtime tests. |
 | 9 | §5.1 caller attribution over-broad (only `claimTurnForTerminalization` shared; caller is `recoverAbandonedRuntimeTurns` 972/925, not the two named) | Sonnet | low | **Accepted.** §5.1 narrowed. |
-| 10 | `drainForFlush` spec "null the timer" too loose — needs `clearTimeout` + `= undefined` | Opus | low | **Accepted.** §4.1 spec tightened. |
+| 10 | `snapshotForFlush` spec "null the timer" too loose — needs `clearTimeout` + `= undefined` | Opus | low | **Accepted.** §4.1 spec tightened. |
 | 11 | Constructor must stay byte-identical (4 suites construct directly) | Opus | low | **Accepted.** §6 requires constructor byte-stability. |
 | 12 | `runtimeRunner` needed as a *reference* — claim branches on `?.claimCustomToolResult` existence (2405) | Opus | low | **Accepted.** §4 dep note added. |
 | 13 | `persistMcpToolResult`/`ConnectionFailed` carry no confirmation state — cohesion smell under `ToolConfirmations` | Opus | nit | **Noted.** §4.3 caveat; optional `mcp-transcript.ts` split. No correctness impact. |
@@ -422,3 +422,19 @@ dependencies (lifecycle guard, release-close) + one hard constraint (atomic
 persist); §5.1 re-scoped from "easy either/or" to the genuine sign-off gate;
 verification set widened by two suites + three new regressions. Slice 1
 unaffected and still safe to build first.
+
+### Slice 1 implementation review (2026-07-09)
+
+Slice 1 (`PendingActionStore`, PR #169) reviewed adversarially by Opus and for
+correctness by Sonnet (Codex was unavailable — CLI pinned to an unreleased
+model). Verdict: **behavior-preserving extraction, ship as-is.** All 5 methods,
+~20 call sites, and `flushPendingActions`'s merge/guard/payload semantics
+verified byte-equivalent to `main`; 112 tests green; no orphaned timer can fire
+against a deleted entry (every delete path clears or requires an unset timer).
+Three low-severity fixes folded in before merge: (a) `drainForFlush` →
+**`snapshotForFlush`** — the name implied it consumed the ids, which would
+mislead Stage 2 callers relying on the re-emit-full-set contract (spec above
+updated); (b) hardened the store unit test's "entry survives armed timer" case
+to prove no orphaned double-timer (the original assertions passed against a
+buggy eager-delete); (c) made the `session-lifecycle` white-box seed carry
+`workspaceId` to match the real entry shape.

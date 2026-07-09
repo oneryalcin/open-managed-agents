@@ -523,6 +523,7 @@ describe("session lifecycle API", () => {
     const { broadcaster, eventStore, service, sessionId, store } =
       createArchiveGuardHarness({ runner });
     guardState(service).pendingCustomToolActions.entries.set(sessionScopeKey("wrk_default", sessionId), {
+      workspaceId: "wrk_default",
       ids: ["sevt_pending_tool"],
       timer: undefined,
     });
@@ -677,6 +678,7 @@ interface GuardState {
     entries: Map<
       string,
       {
+        workspaceId: WorkspaceId;
         ids: string[];
         timer: ReturnType<typeof setTimeout> | undefined;
       }
