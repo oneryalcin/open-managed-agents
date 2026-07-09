@@ -32,26 +32,54 @@ routes.ts:73). Synchronous handler per §7B.3:
    passes through `scrubKnownSecrets` with the credential's live secret
    values (access token, refresh token, client secret).
 4. On 401/403 with a refresh block: refresh THROUGH
-   `RefreshCoordinator.refreshCredential` with `force: true` and
-   `expectedAuthVersion` = the probed version, then re-probe once.
-5. Map to `valid | invalid | unknown` per §7B.2 docs semantics; populate
-   `refresh.status` (`no_refresh_token` when absent).
-   **`refresh.http_response` NEVER carries a token-bearing body** —
-   status + content-type only (§7B.3, Opus F4: the 200 grant response IS
-   the secret).
+   `RefreshCoordinator.refreshCredential` with `trigger: "validate"`
+   (below) and `expectedAuthVersion` = the probed version, then re-probe
+   once.
+5. Map to `valid | invalid | unknown` — the FULL table (pre-impl review
+   F5; only the auth chain may conclude `invalid`):
+
+   | probe / refresh outcome | `status` | `mcp_probe.http_response` |
+   |---|---|---|
+   | initialize succeeds | `valid` | the captured response |
+   | HTTP reached, non-401/403 (400/404/5xx/…) | `unknown` | the captured response |
+   | transport failure (network/DNS/timeout/`redirect_blocked`/SSRF) | `unknown` | `null` |
+   | 401/403 → refresh outcome `invalid` | `invalid` | first probe's response |
+   | 401/403 → refresh `transient_error` or floor/skip | `unknown` | first probe's response |
+   | 401/403 → refresh ok → re-probe succeeds | `valid` | re-probe response |
+   | 401/403 → refresh ok → re-probe 401/403 again | `invalid` | re-probe response |
+
+   `refresh.status` populated per §7B.2 (`no_refresh_token` when
+   absent). **`refresh.http_response` NEVER carries a token-bearing
+   body** — status + content-type only (§7B.3, Opus F4: the 200 grant
+   response IS the secret).
 
 Response shape is the probe-52 literal in §7B.2 (`vault_credential_validation`).
 
-**Decision needed at implementation (flagged, not settled): validate vs
-the forced-refresh floor.** The slice-4 fold scopes `forcedAdmissions`
-by `authVersion` with a 60s floor. If a hostile 401 just burned the
-floor slot, an operator validate inside 60s would get
-`forced_refresh_floor` and report stale state. Recommended: add
-`trigger: "validate"` to `RefreshCredentialInput` — joins single-flight,
-bypasses the floor (operator-initiated, inherently rate-limited by being
-a manual API call), still records an admission so hint-triggered calls
-stay floored. Success already clears `invalid` + `auth_hint_at` and
-reschedules via `persistOauthRefreshSuccess` — no new store work.
+**Coordinator change — `trigger: "validate"` (settled by pre-impl
+review F1; do NOT pass `force: true`, which self-floors at
+`oauth-refresh.ts:129`).** Add `trigger?: "validate"` to
+`RefreshCredentialInput` with exactly three effects, all required:
+(a) BYPASSES the forced-floor **check** (`oauth-refresh.ts:129-146`) —
+an operator validate inside a hint's 60s window must still refresh;
+(b) still RECORDS an admission keyed by the probed `authVersion`
+(`:148`) so subsequent hint-triggered calls stay floored — noting that
+on refresh success the `auth_version` bump orphans that key by design
+(a hint against the NEW version is a new failure, not a repeat);
+(c) BYPASSES the invalid-skip (`oauth-refresh.ts:184`,
+`refreshStatus === "invalid" && force !== true`) — clearing `invalid`
+is validate's purpose. Joins single-flight like every trigger. Success
+already clears `invalid` + `auth_hint_at` and reschedules via
+`persistOauthRefreshSuccess` (`store.ts:256-264`) — no new store work.
+
+**Dependency seam (pre-impl review F3).** `vaultsRoutes(service)`
+(`routes.ts:6`) has no access to the guarded fetch or coordinator;
+`createDefaultMcpRuntime`'s products currently flow only to the runner
+(`app.ts:578-589`). Thread a new optional dependency into
+`vaultsRoutes`: `mcp?: { fetch: McpFetch; refresh: RefreshCoordinator }`,
+wired from the deployment's single runtime in `app.ts`. When the
+deployment has MCP off (`runtimeConfig.mcp === undefined`) OR the seam
+is absent (test override), validate returns the gate-off 400 — same
+response, one code path.
 
 ## Slice 6 — wake-loop ticker + shutdown
 
@@ -62,24 +90,47 @@ reschedules via `persistOauthRefreshSuccess` — no new store work.
   teardown bug class). Sessions snapshot-sweep adoption is a named
   follow-up, NOT in M3.
 - **Store seam**: `claimDueRefreshes(now, limit)` on `VaultStore` — the
-  credential row IS the job row. SELECT active `auth_type = 'mcp_oauth'`
-  rows with `next_refresh_at <= now`, EXCLUDING `refresh_status =
-  'invalid'` (invalid waits for validate; §7B invalid-skip). Also
-  `nextDueRefreshAt()` (or return it from the claim) for the loop's
-  `nextWakeAt`. Postgres-era `UPDATE … RETURNING` claim fits behind the
-  same signature; single-flight stays in-process (0113 D9).
-- **Ticker run**: for each claimed row call
-  `refreshCredential({...})` WITHOUT `force` — the lazy trigger; joins
-  any in-flight runtime refresh via single-flight. Sleep bounds: cap 15
-  min, floor 30s (§7B.3 branch-explicit policy already implemented in
-  `nextRefreshAt`). Restart recovery is inherent: first loop iteration
-  recomputes next wake from SQLite.
-- **Ownership**: created in `createDeploymentControlPlane` next to
-  `createDefaultMcpRuntime` (app.ts:536), gated on the same
-  `runtimeConfig.mcp !== undefined` check that gates dialing — the
-  ticker does NOT start when MCP is off (§7B.3 egress posture, four
-  reviewers). Deployment close path closes the loop BEFORE
-  `stores.close()` (app.ts:435–485 — every close call site).
+  credential row IS the job row. Plain SELECT (safe: in-process
+  single-flight is the concurrency control; the Postgres-era
+  `UPDATE … RETURNING` claim fits behind the same signature — 0113 D9)
+  of active `auth_type = 'mcp_oauth'` rows with `next_refresh_at <=
+  now`, EXCLUDING `refresh_status = 'invalid'` (invalid waits for
+  validate; §7B invalid-skip — and invalid rows carry
+  `next_refresh_at = NULL`, so they're doubly excluded). Separately,
+  `nextDueRefreshAt(now)` — a standalone store query the loop invokes
+  as its `nextWakeAt` callback each iteration (pre-impl review F7: NOT
+  a value plumbed out of `run()`).
+- **Ticker run**: for each claimed row call `refreshCredential({...})`
+  WITHOUT `force` and WITHOUT `trigger` — the lazy trigger; joins any
+  in-flight runtime refresh via single-flight. **`run()` AWAITS all
+  claimed refreshes before resolving** (pre-impl review F6): the loop
+  re-queries `nextWakeAt` only after the persists have advanced
+  `next_refresh_at`; fire-and-forget would re-select the still-due rows
+  and hot-spin at the 30s floor. Failed refreshes self-reschedule via
+  `transientBackoffMs` persists — the loop adds no backoff of its own.
+- **Sleep bounds**: `maxSleepMs` 15 min / `minSleepMs` 30s are NEW
+  `createWakeLoop` parameters (pre-impl review F9 — the exported
+  `nextRefreshAt`/`transientBackoffMs` schedule ROWS; these clamp the
+  LOOP). Restart recovery is inherent: first iteration recomputes next
+  wake from SQLite.
+- **Gating (pre-impl review F4 — two different gates, do not copy the
+  neighbor's)**: the ticker starts ONLY when `runtimeConfig.mcp !==
+  undefined` (the `OMA_ENABLE_MCP` egress gate, the condition behind
+  `enabled:` at app.ts:579) — NOT `opts.runner?.mcp === undefined`,
+  which is the test-override seam gating `createDefaultMcpRuntime`
+  creation (app.ts:537-538). A ticker gated on the latter would start
+  with MCP off, violating §7B.3's zero-egress posture.
+- **Ownership + shutdown (pre-impl review F2 — the app.ts:435-485
+  `stores.close()` sites are boot-error guards that run BEFORE the loop
+  exists; do not wire there)**: `createDeploymentControlPlane` must
+  expose the loop's close in its return shape (today `{ app, stores,
+  authMode }`, app.ts:727). The REAL teardown is `src/main.ts`: the
+  returned `close` (`await closeServer(server); stores.close()`,
+  main.ts:127-131) gains `await loop.close()` between the two, and the
+  startup-failure catch (main.ts:133-141) closes the loop before
+  `stores.close()` too. `close()` cancels the timer and awaits any
+  in-flight `run()` — so an in-flight refresh completes its persist
+  before the DB closes.
 - Metrics (if trivial): reuse the existing refresh outcome metric; no
   new instrumentation surface in M3.
 
@@ -124,6 +175,26 @@ From the §7B.5 matrix rows not yet pinned:
   close-cancels-timer, onError does not kill the loop.
 - Restart recompute: new store instance → correct next wake, no replay.
 
+From the pre-impl review (F8 — §7B.5 rows the first draft omitted):
+
+- Ticker backoff-on-5xx: transient failure reschedules via the persisted
+  backoff, loop does not hot-spin (§7B.5:1426).
+- Short-TTL token → floored cadence, no token-endpoint hammering
+  (§7B.5:1430).
+- `OMA_ENABLE_MCP` off → loop never starts (§7B.5:1431) AND the F4 gate
+  distinction: MCP off with default runtime present still means no ticker.
+- Integration test: deployment `close()` shuts the loop BEFORE stores
+  close; in-flight refresh completes its persist (§7B.5:1434).
+- `refresh.http_response` carries no body on the valid path
+  (§7B.5:1463).
+- `mcp_probe` oversized body → 4KB truncation + `body_truncated: true`
+  (§7B.5:1462).
+- Hostile MCP server echoing the access token into its 401 body →
+  scrubbed in `mcp_probe.http_response.body` (§7B.5:1467).
+- Validate with `trigger: "validate"` inside a hint's floor window →
+  refresh RUNS (floor bypassed); a hint-triggered call immediately after
+  a failed validate-refresh at the same authVersion → floored.
+
 ## Current source anchors (re-confirm before editing)
 
 - `src/control-plane/vaults/oauth-refresh.ts`: `RefreshCredentialInput`
@@ -135,8 +206,16 @@ From the §7B.5 matrix rows not yet pinned:
   reschedules; failure persists also clear `auth_hint_at` (572138e).
 - `src/control-plane/sessions/pi/mcp/runtime.ts`:
   `createDefaultMcpRuntime` composes the one guarded fetch +
-  coordinator; the ticker belongs beside it.
+  coordinator; the ticker belongs beside it (created at app.ts:538,
+  gated by the test-override seam at :537 — see F4 note above for why
+  the ticker's gate is different).
 - `src/control-plane/vaults/routes.ts`: no validate route; archive
-  route at :73 is the shape template.
-- `src/control-plane/app.ts`: `stores.close()` at 435/449/457/464/485;
-  no background loops exist yet — the close-ordering contract is new.
+  route at :73 is the shape template; `vaultsRoutes(service)` takes no
+  MCP dependencies yet (F3 seam is new).
+- `src/control-plane/app.ts`: return shape `{ app, stores, authMode }`
+  at :727 — no close handle yet. The `stores.close()` calls at
+  435/449/457/464/485 are boot-error guards, NOT the teardown path.
+- `src/main.ts`: the real teardown — returned `close` at :127-131
+  (`closeServer` → `stores.close()`) and the startup-failure catch at
+  :133-141. Loop close inserts between server close and store close in
+  BOTH.
