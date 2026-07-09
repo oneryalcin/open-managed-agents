@@ -1,7 +1,8 @@
 // Plan 0122 §4.2/§5 — McpConnection against the in-process fixture.
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { McpConnection } from "../client.ts";
+import { McpConnection, isMcpAuthError } from "../client.ts";
+import type { McpCredentialBinding } from "../credential.ts";
 import { createGuardedMcpFetch } from "../fetch.ts";
 import { echoTool, startMcpFixture, type McpFixture } from "./fixture.ts";
 
@@ -14,6 +15,137 @@ afterEach(async () => {
 });
 
 describe("McpConnection (plan 0122 §4.2)", () => {
+  it("injects authorization per request so a warm connection observes rotation", async () => {
+    fixture = await startMcpFixture([echoTool()]);
+    let token = "TOKEN_A";
+    const retained = new Set<string>();
+    const binding: McpCredentialBinding = {
+      fingerprint: "vcrd_1:1",
+      identity: {
+        workspaceId: "wrk_default",
+        vaultId: "vlt_1",
+        credentialId: "vcrd_1",
+        authVersion: 1,
+        authType: "mcp_oauth",
+      },
+      authorize: async () => {
+        retained.add(token);
+        retained.add(`Bearer ${token}`);
+        return {
+          authorization: `Bearer ${token}`,
+          identity: binding.identity,
+        };
+      },
+      forceRefresh: async () => ({ status: "failed" }),
+      knownSecrets: () => [...retained],
+    };
+    const connection = await McpConnection.connect(
+      { name: "srv", url: fixture.url },
+      { fetch: seamFetch, credential: binding },
+    );
+    token = "TOKEN_B";
+    await connection.callTool("echo", { text: "hi" });
+
+    expect(fixture.authorizations.some((entry) => entry.authorization === "Bearer TOKEN_A")).toBe(true);
+    expect(fixture.authorizations.at(-1)?.authorization).toBe("Bearer TOKEN_B");
+    expect(binding.knownSecrets()).toEqual(expect.arrayContaining([
+      "TOKEN_A",
+      "Bearer TOKEN_A",
+      "TOKEN_B",
+      "Bearer TOKEN_B",
+    ]));
+    await connection.close();
+  });
+
+  it("does not egress anonymously when a warm credential becomes unavailable", async () => {
+    fixture = await startMcpFixture([echoTool()]);
+    let active = true;
+    const binding: McpCredentialBinding = {
+      fingerprint: "vcrd_1:1",
+      identity: {
+        workspaceId: "wrk_default",
+        vaultId: "vlt_1",
+        credentialId: "vcrd_1",
+        authVersion: 1,
+        authType: "static_bearer",
+      },
+      authorize: async () => {
+        if (!active) throw new Error("MCP credential is no longer active");
+        return { authorization: "Bearer TOKEN_A", identity: binding.identity };
+      },
+      forceRefresh: async () => ({ status: "failed" }),
+      knownSecrets: () => ["TOKEN_A", "Bearer TOKEN_A"],
+    };
+    const connection = await McpConnection.connect(
+      { name: "srv", url: fixture.url },
+      { fetch: seamFetch, credential: binding },
+    );
+    const requestsBeforeArchive = fixture.httpRequests.length;
+    active = false;
+
+    await expect(connection.callTool("echo", { text: "hi" })).rejects.toThrow(
+      "no longer active",
+    );
+    expect(fixture.httpRequests).toHaveLength(requestsBeforeArchive);
+    await connection.close();
+  });
+
+  it("force-refreshes and redials connect/discovery once after a reached 401", async () => {
+    fixture = await startMcpFixture([echoTool()], {
+      requireBearer: "TOKEN_B",
+    });
+    let token = "TOKEN_A";
+    let authVersion = 1;
+    let refreshes = 0;
+    const binding: McpCredentialBinding = {
+      get fingerprint() {
+        return `vcrd_1:${authVersion}`;
+      },
+      get identity() {
+        return {
+          workspaceId: "wrk_default",
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authVersion,
+          authType: "mcp_oauth" as const,
+        };
+      },
+      authorize: async () => ({
+        authorization: `Bearer ${token}`,
+        identity: binding.identity,
+      }),
+      forceRefresh: async () => {
+        refreshes += 1;
+        token = "TOKEN_B";
+        authVersion = 2;
+        return {
+          status: "ready",
+          authorization: {
+            authorization: "Bearer TOKEN_B",
+            identity: binding.identity,
+          },
+        };
+      },
+      knownSecrets: () => [token, `Bearer ${token}`],
+    };
+
+    const connection = await McpConnection.connect(
+      { name: "srv", url: fixture.url },
+      { fetch: seamFetch, credential: binding },
+    );
+    expect(refreshes).toBe(1);
+    expect(fixture.authorizations.some((entry) => entry.authorization === "Bearer TOKEN_A")).toBe(
+      true,
+    );
+    expect(fixture.authorizations.at(-1)?.authorization).toBe("Bearer TOKEN_B");
+    await connection.close();
+  });
+
+  it("classifies auth only from structured status codes, never hostile text", () => {
+    expect(isMcpAuthError(Object.assign(new Error("unauthorized"), { code: 401 }))).toBe(true);
+    expect(isMcpAuthError(new Error("body echoed 401 and 403"))).toBe(false);
+  });
+
   it("connects, discovers tools with JSON-schema inputs, and calls them", async () => {
     fixture = await startMcpFixture([echoTool()]);
     const connection = await McpConnection.connect(

@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import type { WorkspaceId } from "../workspace.ts";
 import type {
+  PersistAuthHintInput,
+  PersistAuthHintResult,
   PersistOauthRefreshResult,
   VaultOauthRefreshState,
   VaultStore,
@@ -12,6 +14,7 @@ export const OAUTH_REFRESH_LEAD_MS = 5 * 60_000;
 export const OAUTH_REFRESH_FLOOR_MS = 30_000;
 export const OAUTH_REFRESH_MAX_BACKOFF_MS = 15 * 60_000;
 export const OAUTH_REFRESH_LONG_LIVED_RECHECK_MS = 15 * 60_000;
+export const OAUTH_FORCED_REFRESH_FLOOR_MS = 60_000;
 
 const PERMANENT_OAUTH_ERRORS = new Set([
   "invalid_grant",
@@ -82,7 +85,8 @@ export type RefreshCredentialResult =
         | "invalid_status"
         | "no_refresh_metadata"
         | "no_refresh_token"
-        | "missing_client_secret";
+        | "missing_client_secret"
+        | "forced_refresh_floor";
       state: RefreshCredentialState | undefined;
     };
 
@@ -101,6 +105,7 @@ interface TokenRefreshFailure {
 
 export class RefreshCoordinator {
   private readonly inflight = new Map<string, Promise<RefreshCredentialResult>>();
+  private readonly forcedAdmissions = new Map<string, number>();
   private readonly fetchImpl: FetchLike;
   private readonly now: () => Date;
   private readonly timeoutMs: number;
@@ -119,11 +124,30 @@ export class RefreshCoordinator {
     const key = `${input.workspaceId}\0${input.vaultId}\0${input.credentialId}`;
     const existing = this.inflight.get(key);
     if (existing) return existing;
+    if (input.force === true) {
+      const admittedAt = this.now().getTime();
+      const previousAdmission = this.forcedAdmissions.get(key);
+      if (
+        previousAdmission !== undefined &&
+        admittedAt - previousAdmission < OAUTH_FORCED_REFRESH_FLOOR_MS
+      ) {
+        return Promise.resolve({
+          outcome: "skipped",
+          reason: "forced_refresh_floor",
+          state: undefined,
+        });
+      }
+      this.forcedAdmissions.set(key, admittedAt);
+    }
     const promise = this.refreshCredentialOnce(input).finally(() => {
       this.inflight.delete(key);
     });
     this.inflight.set(key, promise);
     return promise;
+  }
+
+  recordAuthHint(input: PersistAuthHintInput): PersistAuthHintResult {
+    return this.opts.store.persistAuthHint(input);
   }
 
   private async refreshCredentialOnce(

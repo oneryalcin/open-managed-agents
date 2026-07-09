@@ -33,8 +33,8 @@ import { McpConnection } from "./mcp/client.ts";
 import { createGuardedMcpFetch, type McpFetch } from "./mcp/fetch.ts";
 import {
   createMcpToolDefinitions,
+  type McpCredentialBinding,
   type McpCredentialResolver,
-  type McpResolvedCredential,
   type McpServersProvider,
   type McpToolAccessResolver,
   type McpToolCallOutcomeLabel,
@@ -779,12 +779,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     // Dial concurrently (review 0122-M1: a serial loop let N slow servers
     // stall the turn for N×timeout while pinning the sandbox); outcomes are
     // processed in declaration order so failure events stay deterministic.
-    const dialable: Array<{
-      server: { name: string; url: string };
-      credential: McpResolvedCredential | undefined;
-      fingerprint: string;
-      count: number;
-    }> = [];
+    const dialable: Array<{ name: string; url: string }> = [];
     for (const server of servers) {
       if (!mcpOpts.enabled) {
         counts.set(server.name, {
@@ -799,38 +794,52 @@ export class PiSessionRunner implements RuntimeEventRunner {
         });
         continue;
       }
-      const credential = mcpOpts.credentials?.(
-        workspaceId,
-        sessionId,
-        server.url,
-        context,
-      );
-      const fingerprint = credential?.fingerprint ?? MCP_UNAUTHENTICATED_FINGERPRINT;
-      const count = currentMcpFailureCount(counts, server.name, fingerprint);
-      if (count >= maxFailures) {
-        skippedExhausted = true;
-        continue;
-      }
-      dialable.push({ server, credential, fingerprint, count });
+      dialable.push(server);
     }
     const dialed = await Promise.all(
-      dialable.map(async ({ server, credential, fingerprint, count }) => {
+      dialable.map(async (server) => {
+        let credential: McpCredentialBinding | undefined;
         try {
+          credential = await mcpOpts.credentials?.(
+            workspaceId,
+            sessionId,
+            server.url,
+            context,
+          );
+          const fingerprint =
+            credential?.fingerprint ?? MCP_UNAUTHENTICATED_FINGERPRINT;
+          const count = currentMcpFailureCount(counts, server.name, fingerprint);
+          if (count >= maxFailures) {
+            return { server, credential, fingerprint, count, skipped: true as const };
+          }
           const connection = await McpConnection.connect(server, {
             fetch: this.mcpFetch,
             ...(credential === undefined
               ? {}
-              : { authorization: credential.authorization }),
+              : { credential }),
             ...(mcpOpts.operationTimeoutMs === undefined
               ? {}
               : { operationTimeoutMs: mcpOpts.operationTimeoutMs }),
           });
-          return { server, credential, fingerprint, count, connection };
-        } catch (error) {
           return {
             server,
-            fingerprint,
+            credential,
+            fingerprint:
+              connection.credential?.fingerprint ?? MCP_UNAUTHENTICATED_FINGERPRINT,
             count,
+            connection,
+          };
+        } catch (error) {
+          const finalFingerprint =
+            credential?.fingerprint ?? MCP_UNAUTHENTICATED_FINGERPRINT;
+          return {
+            server,
+            fingerprint: finalFingerprint,
+            count: currentMcpFailureCount(
+              counts,
+              server.name,
+              finalFingerprint,
+            ),
             failure: error instanceof Error ? error.message : String(error),
             errorType: mcpConnectErrorType(error),
           };
@@ -839,6 +848,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     );
     for (const outcome of dialed) {
       const { server, count } = outcome;
+      if ("skipped" in outcome && outcome.skipped) {
+        skippedExhausted = true;
+        continue;
+      }
       if (!("connection" in outcome) || outcome.connection === undefined) {
         const failures = count + 1;
         counts.set(server.name, { count: failures, fingerprint: outcome.fingerprint });
@@ -876,27 +889,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
         ...(mcpOpts.onToolCall === undefined
           ? {}
           : { onToolCall: mcpOpts.onToolCall }),
-        // A hostile server can echo the injected credential back in tool
-        // results or error bodies; the bridge scrubs every server-controlled
-        // string with the live values (plan 0122 §7B.9 slice 0). Both forms:
-        // the full header value and the bare token.
-        ...(outcome.credential === undefined
-          ? {}
-          : {
-              knownSecrets: [
-                outcome.credential.authorization,
-                outcome.credential.authorization.replace(/^Bearer /, ""),
-              ],
-            }),
         // Mid-call transport failure is connection-class (review 0122-M1,
         // Codex-adv): count it against the retry budget, surface the
         // structured mcp_connection_failed_error (once per server per
         // handle), and reconnect next turn via fresh-handle mechanics.
         onTransportFailure: (failedServerName, error) => {
-          const entry = counts.get(failedServerName);
           const fingerprint =
-            entry?.fingerprint ?? MCP_UNAUTHENTICATED_FINGERPRINT;
-          const failures = (entry?.count ?? 0) + 1;
+            connection.credential?.fingerprint ?? MCP_UNAUTHENTICATED_FINGERPRINT;
+          const failures =
+            currentMcpFailureCount(counts, failedServerName, fingerprint) + 1;
           counts.set(failedServerName, { count: failures, fingerprint });
           const handle = this.sessions.get(sessionId);
           if (!handle) return;

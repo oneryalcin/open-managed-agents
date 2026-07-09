@@ -76,12 +76,43 @@ export interface ManagedDeletedVault {
 }
 
 export interface VaultCredentialResolution {
+  vaultId: string;
   credentialId: string;
+  authType: VaultCredentialAuth["type"];
+  authVersion: number;
+  expiresAt?: string;
+  refreshStatus: VaultOauthRefreshStatus | null;
+  authHintAt: string | null;
   updatedAt: string;
   token: string;
 }
 
 export type VaultOauthRefreshStatus = "ok" | "invalid" | "transient";
+
+export interface VaultCredentialRuntimeMetadata {
+  vaultId: string;
+  credentialId: string;
+  authType: VaultCredentialAuth["type"];
+  hasRefresh: boolean;
+  authVersion: number;
+  expiresAt?: string;
+  refreshStatus: VaultOauthRefreshStatus | null;
+  authHintAt: string | null;
+  nextRefreshAt: string | null;
+  refreshAttempts: number;
+}
+
+export interface PersistAuthHintInput {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  expectedAuthVersion: number;
+  authHintAt: string;
+}
+
+export type PersistAuthHintResult =
+  | { status: "updated"; metadata: VaultCredentialRuntimeMetadata }
+  | { status: "stale"; metadata: VaultCredentialRuntimeMetadata | undefined };
 
 export interface VaultOauthRefreshState {
   workspaceId: WorkspaceId;
@@ -237,6 +268,12 @@ export interface VaultStore {
     vaultIds: readonly string[],
     serverUrl: string,
   ): VaultCredentialResolution | undefined;
+  readCredentialRuntimeMetadata(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultCredentialRuntimeMetadata | undefined;
+  persistAuthHint(input: PersistAuthHintInput): PersistAuthHintResult;
   readOauthRefreshState(
     workspaceId: WorkspaceId,
     vaultId: string,
@@ -302,4 +339,9 @@ export interface VaultService {
     vaultIds: readonly string[],
     serverUrl: string,
   ): VaultCredentialResolution | undefined;
+  readCredentialRuntimeMetadata(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultCredentialRuntimeMetadata | undefined;
 }

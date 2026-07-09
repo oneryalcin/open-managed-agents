@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiSessionRunner } from "../runner.ts";
 import { McpConnection } from "../mcp/client.ts";
+import type { McpCredentialBinding } from "../mcp/credential.ts";
 import { createGuardedMcpFetch } from "../mcp/fetch.ts";
 import {
   echoTool,
@@ -43,7 +44,17 @@ function mcpRunner(opts: {
       servers: () => [{ name: "srv", url: opts.url }],
       ...(opts.credentials === undefined
         ? {}
-        : { credentials: () => opts.credentials?.() }),
+        : {
+            credentials: async () => {
+              const resolved = opts.credentials?.();
+              return resolved === undefined
+                ? undefined
+                : testCredentialBinding(
+                    resolved.authorization,
+                    resolved.fingerprint,
+                  );
+            },
+          }),
       access: (_w, _s, _server, toolName) =>
         opts.access?.(toolName) ?? { enabled: true, permission: "allow" },
       fetch: seamFetch,
@@ -58,7 +69,67 @@ function mcpRunner(opts: {
   });
 }
 
+function testCredentialBinding(
+  authorization: string,
+  fingerprint: string,
+): McpCredentialBinding {
+  const [credentialId = "vcrd_test", version = "1"] = fingerprint.split(":");
+  const identity = {
+    workspaceId: "wrk_default",
+    vaultId: "vlt_test",
+    credentialId,
+    authVersion: Number(version),
+    authType: "static_bearer" as const,
+  };
+  return {
+    fingerprint,
+    identity,
+    authorize: async () => ({ authorization, identity }),
+    forceRefresh: async () => ({ status: "failed", reason: "static" }),
+    knownSecrets: () => [authorization, authorization.replace(/^Bearer /, "")],
+  };
+}
+
 describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
+  it("resolves credentials in parallel across the dial map", async () => {
+    let started = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(McpConnection, "connect").mockImplementation(
+      async (server, opts) =>
+        ({
+          serverName: server.name,
+          tools: [],
+          credential: opts.credential,
+          close: async () => undefined,
+        }) as unknown as McpConnection,
+    );
+    runner = new PiSessionRunner({
+      mcp: {
+        enabled: true,
+        servers: () => [
+          { name: "one", url: "https://one.example/mcp" },
+          { name: "two", url: "https://two.example/mcp" },
+        ],
+        credentials: async (_workspaceId, _sessionId, serverUrl) => {
+          const ordinal = ++started;
+          await gate;
+          return testCredentialBinding(
+            `Bearer ${serverUrl}`,
+            `vcrd_${ordinal}:1`,
+          );
+        },
+      },
+    });
+
+    const prepared = runner.prepareSession("wrk_default", "sesn_parallel");
+    await vi.waitFor(() => expect(started).toBe(2));
+    release();
+    await prepared;
+  });
+
   it("registers discovered tools on the live Pi session, filtered by access", async () => {
     fixture = await startMcpFixture([
       echoTool(),
@@ -222,7 +293,9 @@ describe("PiSessionRunner MCP wiring (plan 0122 §5)", () => {
     }
     expect(connect).toHaveBeenCalledWith(
       { name: "srv", url: "https://mcp.example.com/mcp" },
-      expect.objectContaining({ authorization: `Bearer ${leakedToken}` }),
+      expect.objectContaining({
+        credential: expect.objectContaining({ fingerprint: "vcrd_bad:1" }),
+      }),
     );
     expect(JSON.stringify(failure)).not.toContain(leakedToken);
     expect(failure).toMatchObject({

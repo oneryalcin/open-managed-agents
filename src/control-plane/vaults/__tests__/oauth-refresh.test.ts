@@ -152,6 +152,90 @@ describe("RefreshCoordinator", () => {
     expect(fetch.calls).toHaveLength(1);
   });
 
+  it("joins simultaneous forced refreshes before applying the admission floor", async () => {
+    createOauthCredential(store, "client_secret_post");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetch = tokenEndpointFixture({
+      beforeResponse: () => gate,
+      response: { access_token: "NEXT_ACCESS" },
+    });
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => NOW });
+    const input = {
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+      force: true,
+    } as const;
+
+    const first = coordinator.refreshCredential(input);
+    const second = coordinator.refreshCredential(input);
+    release();
+
+    await expect(Promise.all([first, second])).resolves.toMatchObject([
+      { outcome: "ok" },
+      { outcome: "ok" },
+    ]);
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("skips repeated forced refresh admission inside sixty seconds", async () => {
+    createOauthCredential(store, "client_secret_post");
+    let now = NOW;
+    const fetch = tokenEndpointFixture({ response: { access_token: "NEXT_ACCESS" } });
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => now });
+    const input = {
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+      force: true,
+    } as const;
+
+    await expect(coordinator.refreshCredential(input)).resolves.toMatchObject({
+      outcome: "ok",
+    });
+    now = new Date(NOW.getTime() + 59_999);
+    await expect(coordinator.refreshCredential(input)).resolves.toEqual({
+      outcome: "skipped",
+      reason: "forced_refresh_floor",
+      state: undefined,
+    });
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("records auth hints through the coordinator with an auth-version fence", () => {
+    createOauthCredential(store, "client_secret_post");
+    const coordinator = new RefreshCoordinator({
+      store,
+      fetch: tokenEndpointFixture({ response: { access_token: "unused" } }),
+      now: () => NOW,
+    });
+
+    expect(
+      coordinator.recordAuthHint({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+        expectedAuthVersion: 1,
+        authHintAt: NOW.toISOString(),
+      }),
+    ).toMatchObject({
+      status: "updated",
+      metadata: { authHintAt: NOW.toISOString() },
+    });
+    expect(
+      coordinator.recordAuthHint({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+        expectedAuthVersion: 0,
+        authHintAt: NOW.toISOString(),
+      }),
+    ).toMatchObject({ status: "stale" });
+  });
+
   it("classifies Slack-style 200 ok:false errors as permanent invalid", async () => {
     createOauthCredential(store, "client_secret_post");
     const fetch = tokenEndpointFixture({
@@ -228,6 +312,18 @@ describe("RefreshCoordinator", () => {
       refreshStatus: "transient",
       refreshAttempts: 1,
       nextRefreshAt: "2026-07-09T12:02:00.000Z",
+    });
+    expect(store.readCredentialRuntimeMetadata(WRK, VAULT, CREDENTIAL)).toEqual({
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+      authType: "mcp_oauth",
+      hasRefresh: true,
+      authVersion: 1,
+      expiresAt: "2026-07-09T12:01:00.000Z",
+      refreshStatus: "transient",
+      refreshAttempts: 1,
+      nextRefreshAt: "2026-07-09T12:02:00.000Z",
+      authHintAt: null,
     });
   });
 

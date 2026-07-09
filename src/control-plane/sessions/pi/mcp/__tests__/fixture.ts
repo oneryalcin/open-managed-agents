@@ -30,7 +30,7 @@ export interface McpFixture {
 
 export async function startMcpFixture(
   tools: readonly McpFixtureTool[],
-  opts: { path?: string; port?: number; requireBearer?: string } = {},
+  opts: { path?: string; port?: number; requireBearer?: string | (() => string) } = {},
 ): Promise<McpFixture> {
   const path = opts.path ?? "/mcp";
   const toolCalls: McpFixture["toolCalls"] = [];
@@ -66,7 +66,7 @@ export async function startMcpFixture(
     });
     if (
       opts.requireBearer !== undefined &&
-      req.headers.authorization !== `Bearer ${opts.requireBearer}`
+      req.headers.authorization !== `Bearer ${typeof opts.requireBearer === "function" ? opts.requireBearer() : opts.requireBearer}`
     ) {
       res.writeHead(401, { "content-type": "text/plain" });
       res.end("unauthorized");

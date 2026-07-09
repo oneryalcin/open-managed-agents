@@ -8,10 +8,13 @@ import type {
   CreateVaultRecord,
   ListVaultCredentialsOptions,
   ListVaultsOptions,
+  PersistAuthHintInput,
+  PersistAuthHintResult,
   PersistOauthRefreshFailureInput,
   PersistOauthRefreshResult,
   PersistOauthRefreshSuccessInput,
   VaultCredentialResolution,
+  VaultCredentialRuntimeMetadata,
   VaultCredentialAuth,
   VaultOauthRefreshState,
   VaultCredentialRow,
@@ -104,6 +107,25 @@ interface VaultCredentialDbRow {
   archived_at: string | null;
 }
 
+interface RuntimeMetadataDbRow {
+  id: string;
+  vault_id: string;
+  auth_type: "static_bearer" | "mcp_oauth";
+  token_endpoint: string | null;
+  client_id: string | null;
+  token_endpoint_auth_type:
+    | "none"
+    | "client_secret_basic"
+    | "client_secret_post"
+    | null;
+  auth_version: number;
+  expires_at: string | null;
+  refresh_status: "ok" | "invalid" | "transient" | null;
+  refresh_attempts: number;
+  next_refresh_at: string | null;
+  auth_hint_at: string | null;
+}
+
 interface OauthSecretPayload {
   access_token?: unknown;
   refresh_token?: unknown;
@@ -127,6 +149,8 @@ export class SqliteVaultStore implements VaultStore {
   private readonly deleteCredentialStmt: StatementSync;
   private readonly countActiveCredentialsStmt: StatementSync;
   private readonly resolveCredentialStmt: StatementSync;
+  private readonly readCredentialRuntimeMetadataStmt: StatementSync;
+  private readonly persistAuthHintStmt: StatementSync;
   private readonly persistOauthRefreshSuccessStmt: StatementSync;
   private readonly persistOauthRefreshFailureStmt: StatementSync;
   private readonly listVaultStmts = new Map<string, StatementSync>();
@@ -187,6 +211,10 @@ export class SqliteVaultStore implements VaultStore {
     this.updateCredentialMetadataStmt = this.db.prepare(
       `UPDATE vault_credentials
        SET display_name = ?, metadata = ?, expires_at = ?, auth_version = ?,
+           refresh_status = CASE WHEN ? THEN NULL ELSE refresh_status END,
+           refresh_attempts = CASE WHEN ? THEN 0 ELSE refresh_attempts END,
+           next_refresh_at = CASE WHEN ? THEN NULL ELSE next_refresh_at END,
+           auth_hint_at = CASE WHEN ? THEN NULL ELSE auth_hint_at END,
            updated_at = ?
        WHERE workspace_id = ? AND vault_id = ? AND id = ? AND archived_at IS NULL`,
     );
@@ -209,6 +237,21 @@ export class SqliteVaultStore implements VaultStore {
        WHERE workspace_id = ? AND vault_id = ? AND mcp_server_url = ? AND archived_at IS NULL
        ORDER BY id ASC
        LIMIT 1`,
+    );
+    this.readCredentialRuntimeMetadataStmt = this.db.prepare(
+      `SELECT id, vault_id, auth_type, token_endpoint, client_id,
+              token_endpoint_auth_type, auth_version, expires_at, refresh_status,
+              auth_hint_at, next_refresh_at, refresh_attempts
+       FROM vault_credentials
+       WHERE workspace_id = ? AND vault_id = ? AND id = ? AND archived_at IS NULL`,
+    );
+    this.persistAuthHintStmt = this.db.prepare(
+      `UPDATE vault_credentials
+       SET auth_hint_at = ?
+       WHERE workspace_id = ? AND vault_id = ? AND id = ?
+         AND auth_type = 'mcp_oauth'
+         AND auth_version = ?
+         AND archived_at IS NULL`,
     );
     this.persistOauthRefreshSuccessStmt = this.db.prepare(
       `UPDATE vault_credentials
@@ -465,6 +508,10 @@ export class SqliteVaultStore implements VaultStore {
         JSON.stringify(updates.metadata ?? existing.metadata),
         nextExpiresAt,
         nextAuthVersion,
+        updates.auth === undefined ? 0 : 1,
+        updates.auth === undefined ? 0 : 1,
+        updates.auth === undefined ? 0 : 1,
+        updates.auth === undefined ? 0 : 1,
         updatedAt,
         workspaceId,
         vaultId,
@@ -531,12 +578,49 @@ export class SqliteVaultStore implements VaultStore {
         row.auth_type === "mcp_oauth" ? oauthAccessToken(token) : token;
       if (accessToken === undefined) return undefined;
       return {
+        vaultId,
         credentialId: row.id,
+        authType: row.auth_type,
+        authVersion: row.auth_version,
+        ...(row.expires_at === null ? {} : { expiresAt: row.expires_at }),
+        refreshStatus: row.refresh_status,
+        authHintAt: row.auth_hint_at,
         updatedAt: row.updated_at,
         token: accessToken,
       };
     }
     return undefined;
+  }
+
+  readCredentialRuntimeMetadata(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultCredentialRuntimeMetadata | undefined {
+    const row = this.readCredentialRuntimeMetadataStmt.get(
+      workspaceId,
+      vaultId,
+      credentialId,
+    ) as unknown as RuntimeMetadataDbRow | undefined;
+    return row === undefined ? undefined : runtimeMetadata(row);
+  }
+
+  persistAuthHint(input: PersistAuthHintInput): PersistAuthHintResult {
+    const result = this.persistAuthHintStmt.run(
+      input.authHintAt,
+      input.workspaceId,
+      input.vaultId,
+      input.credentialId,
+      input.expectedAuthVersion,
+    ) as { changes: number };
+    const metadata = this.readCredentialRuntimeMetadata(
+      input.workspaceId,
+      input.vaultId,
+      input.credentialId,
+    );
+    return result.changes === 1
+      ? { status: "updated", metadata: metadata! }
+      : { status: "stale", metadata };
   }
 
   readOauthRefreshState(
@@ -865,6 +949,27 @@ function deserializeCredentialAuth(row: VaultCredentialDbRow): VaultCredentialAu
             token_endpoint_auth: { type: row.token_endpoint_auth_type },
           },
         }),
+  };
+}
+
+function runtimeMetadata(
+  row: RuntimeMetadataDbRow,
+): VaultCredentialRuntimeMetadata {
+  return {
+    vaultId: row.vault_id,
+    credentialId: row.id,
+    authType: row.auth_type,
+    hasRefresh:
+      row.auth_type === "mcp_oauth" &&
+      row.token_endpoint !== null &&
+      row.client_id !== null &&
+      row.token_endpoint_auth_type !== null,
+    authVersion: row.auth_version,
+    ...(row.expires_at === null ? {} : { expiresAt: row.expires_at }),
+    refreshStatus: row.refresh_status,
+    authHintAt: row.auth_hint_at,
+    nextRefreshAt: row.next_refresh_at,
+    refreshAttempts: row.refresh_attempts,
   };
 }
 

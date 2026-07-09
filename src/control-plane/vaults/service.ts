@@ -10,6 +10,7 @@ import type {
   ManagedVault,
   ManagedVaultCredential,
   VaultCredentialResolution,
+  VaultCredentialRuntimeMetadata,
   VaultCredentialAuth,
   VaultCredentialRow,
   VaultRow,
@@ -261,6 +262,18 @@ export class DefaultVaultService implements VaultService {
     serverUrl: string,
   ): VaultCredentialResolution | undefined {
     return this.store.resolveCredential(workspaceId, vaultIds, serverUrl);
+  }
+
+  readCredentialRuntimeMetadata(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultCredentialRuntimeMetadata | undefined {
+    return this.store.readCredentialRuntimeMetadata(
+      workspaceId,
+      vaultId,
+      credentialId,
+    );
   }
 
   private assertVaultExists(workspaceId: WorkspaceId, vaultId: string): VaultRow {

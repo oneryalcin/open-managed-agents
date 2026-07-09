@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteSecretsStore } from "../../secrets/store.ts";
 import { SqliteVaultStore, vaultSecretName } from "../store.ts";
 import type { VaultCredentialRow, VaultRow } from "../types.ts";
@@ -32,7 +32,12 @@ describe("SqliteVaultStore", () => {
     createCredential(store, "vlt_second", "vcrd_second", URL, "SECOND_TOKEN");
 
     expect(store.resolveCredential(WRK, ["vlt_second", "vlt_first"], URL)).toEqual({
+      vaultId: "vlt_second",
       credentialId: "vcrd_second",
+      authType: "static_bearer",
+      authVersion: 1,
+      refreshStatus: null,
+      authHintAt: null,
       updatedAt: "2026-07-08T00:00:00.000Z",
       token: "SECOND_TOKEN",
     });
@@ -55,7 +60,12 @@ describe("SqliteVaultStore", () => {
     );
 
     expect(store.resolveCredential(WRK, ["vlt_second", "vlt_first"], URL)).toEqual({
+      vaultId: "vlt_first",
       credentialId: "vcrd_first",
+      authType: "static_bearer",
+      authVersion: 1,
+      refreshStatus: null,
+      authHintAt: null,
       updatedAt: "2026-07-08T00:00:00.000Z",
       token: "FIRST_TOKEN",
     });
@@ -89,7 +99,12 @@ describe("SqliteVaultStore", () => {
     const reopenedVaults = new SqliteVaultStore(db, reopenedSecrets);
 
     expect(reopenedVaults.resolveCredential(WRK, ["vlt_first"], URL)).toEqual({
+      vaultId: "vlt_first",
       credentialId: "vcrd_first",
+      authType: "static_bearer",
+      authVersion: 1,
+      refreshStatus: null,
+      authHintAt: null,
       updatedAt: "2026-07-08T00:00:00.000Z",
       token: "ROTATED_TOKEN",
     });
@@ -148,9 +163,120 @@ describe("SqliteVaultStore", () => {
       client_secret: "CLIENT_SECRET",
     });
     expect(store.resolveCredential(WRK, ["vlt_first"], URL)).toEqual({
+      vaultId: "vlt_first",
       credentialId: "vcrd_oauth",
+      authType: "mcp_oauth",
+      authVersion: 1,
+      expiresAt: "2099-12-31T23:59:59Z",
+      refreshStatus: null,
+      authHintAt: null,
       updatedAt: "2026-07-08T00:00:00.000Z",
       token: "ACCESS_TOKEN",
+    });
+  });
+
+  it("reads exact active credential runtime metadata without revealing secrets", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+    const reveal = vi.spyOn(secrets, "reveal");
+
+    expect(
+      store.readCredentialRuntimeMetadata(WRK, "vlt_first", "vcrd_oauth"),
+    ).toEqual({
+      vaultId: "vlt_first",
+      credentialId: "vcrd_oauth",
+      authType: "mcp_oauth",
+      hasRefresh: true,
+      authVersion: 1,
+      expiresAt: "2099-12-31T23:59:59Z",
+      refreshStatus: null,
+      authHintAt: null,
+      nextRefreshAt: null,
+      refreshAttempts: 0,
+    });
+    expect(reveal).not.toHaveBeenCalled();
+    expect(
+      store.readCredentialRuntimeMetadata(WRK, "vlt_other", "vcrd_oauth"),
+    ).toBeUndefined();
+  });
+
+  it("reports fixed-token OAuth credentials as structurally non-refreshable", () => {
+    createVault(store, "vlt_first");
+    store.createCredential({
+      row: {
+        id: "vcrd_fixed",
+        workspace_id: WRK,
+        vault_id: "vlt_first",
+        type: "vault_credential",
+        display_name: null,
+        metadata: {},
+        auth: {
+          type: "mcp_oauth",
+          mcp_server_url: URL,
+          expires_at: "2026-07-08T00:00:00.000Z",
+        },
+        auth_version: 1,
+        created_at: "2026-07-08T00:00:00.000Z",
+        updated_at: "2026-07-08T00:00:00.000Z",
+        archived_at: null,
+      },
+      token: JSON.stringify({ access_token: "FIXED_ACCESS" }),
+    });
+    const reveal = vi.spyOn(secrets, "reveal");
+
+    expect(
+      store.readCredentialRuntimeMetadata(WRK, "vlt_first", "vcrd_fixed"),
+    ).toMatchObject({
+      authType: "mcp_oauth",
+      hasRefresh: false,
+      expiresAt: "2026-07-08T00:00:00.000Z",
+    });
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it("persists auth hints only when the auth version fence still matches", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+
+    expect(
+      store.persistAuthHint({
+        workspaceId: WRK,
+        vaultId: "vlt_first",
+        credentialId: "vcrd_oauth",
+        expectedAuthVersion: 1,
+        authHintAt: "2026-07-08T00:00:01.000Z",
+      }),
+    ).toMatchObject({
+      status: "updated",
+      metadata: { authVersion: 1, authHintAt: "2026-07-08T00:00:01.000Z" },
+    });
+
+    store.updateCredential(
+      WRK,
+      "vlt_first",
+      "vcrd_oauth",
+      { auth: { type: "mcp_oauth", accessToken: "ROTATED_ACCESS" } },
+      "2026-07-08T00:00:02.000Z",
+    );
+    expect(
+      store.persistAuthHint({
+        workspaceId: WRK,
+        vaultId: "vlt_first",
+        credentialId: "vcrd_oauth",
+        expectedAuthVersion: 1,
+        authHintAt: "2026-07-08T00:00:03.000Z",
+      }),
+    ).toMatchObject({
+      status: "stale",
+      metadata: { authVersion: 2, authHintAt: null },
     });
   });
 
