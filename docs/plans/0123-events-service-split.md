@@ -14,6 +14,14 @@ the three behavioral couplings are reviewed *before* `service.ts` is touched,
 per the issue's own instruction ("needs its own slice with careful review, not
 a pure move").
 
+**Reviewed 2026-07-09** by Codex (native + adversarial), Opus (adversarial),
+and Sonnet (correctness) — four independent passes. Verdict: seam is right,
+proceed with named changes. All findings folded in below; disposition log §9.
+The load-bearing correction: the doc had its **risk profile inverted** — C1
+(§3) is provably the *safest* coupling; §5.1 is the actual hard problem, and
+the collaborator contract was missing two dependencies the persist paths rely
+on (lifecycle guards, durable release-close). Fixed in §4–§5.
+
 ---
 
 ## 1. Why this slice exists / definition of done
@@ -78,6 +86,15 @@ contract. Guard: *"re-emits requires_action with all pending IDs when a second
 tool wait arrives later"*, *"does not keep stale requires_action IDs after a
 runtime-side tool failure"*.
 
+> **Risk note (review correction).** There is **no single shared timer** today:
+> each `addPending*` (2779, 2833) owns an independent timer on its own map
+> entry, both pointing at `flushPendingActions`; whichever fires first clears
+> **both** timers (2933-2940) and drains both maps in one synchronous call.
+> The proposed design (per-store timer handle + service-owned flush thunk)
+> preserves this exactly, and the drain-then-delete makes any re-entry a safe
+> no-op. C1 is the **safest** coupling, not the riskiest — adversarial review
+> could construct no double-publish or lost flush. The real hazard is §5.1.
+
 **C2 — confirmation→MCP terminalization coupling.**
 `lostToolConfirmationResultDraft` (2703) branches on `isMcpToolUseEventId`
 (2720, a paged full-history scan of `agent.mcp_tool_use`) to pick
@@ -126,9 +143,9 @@ export class PendingActionStore {
   // append id; on first id for a key, schedule the (cross-store) flush thunk.
   add(key: string, workspaceId: WorkspaceId, id: string, scheduleFlush: () => void): void;
   remove(key: string, id: string): void;      // filter ids; delete iff empty AND timer===undefined (2793)
-  clear(key: string): string[];               // clearTimeout + delete; return drained ids (2798)
+  clear(key: string): string[];               // ALWAYS clearTimeout + delete; return drained ids (2798)
   has(key: string): boolean;                  // ids.length > 0 (2810)
-  drainForFlush(key: string): string[];       // null the timer, return ids, delete iff empty (2945)
+  drainForFlush(key: string): string[];       // clearTimeout + set timer=undefined, return ids, delete iff empty (2933-2947)
 }
 ```
 
@@ -137,11 +154,49 @@ this.flushPendingActions(ws, sid)`) because the flush is cross-store (C1). The
 store owns only the map mechanics + timer handle. Two instances replace the two
 inline maps + the eight quartet methods.
 
-**Delete-condition fidelity (the one subtle bit):** `remove`/`clear` delete
-only when `ids.length === 0 && timer === undefined` (2793, 2847); `drainForFlush`
-deletes on `ids.length === 0` alone — but only *after* it has forced `timer =
-undefined` (2933-2940). Preserve both exactly; this governs when a session key
-leaves the map and must not shift.
+**Delete-condition fidelity (the three paths differ — port each verbatim):**
+- `remove` (2784, 2838): after filtering ids, delete **iff `ids.length === 0
+  && timer === undefined`** — a live timer keeps the entry alive.
+- `clear` (2798, 2852): **unconditional** — always `clearTimeout` + `delete`,
+  return the drained ids regardless of whether ids/timer were set. This is the
+  interrupt/archive/delete cleanup path; it must drop live pending IDs. *(The
+  earlier draft wrongly said `clear` shared `remove`'s guard — it does not;
+  copying that would leave stale entries and re-emit `requires_action` for
+  interrupted/deleted waits.)*
+- `drainForFlush` (models 2933-2947): force `clearTimeout` + `timer = undefined`,
+  then delete **iff `ids.length === 0`** (guard already satisfied). Not a bare
+  `= undefined` — the `clearTimeout` matters.
+
+These three governs when a session key leaves the map and must not shift. A
+focused `PendingActionStore` unit test for *clear-with-active-timer* and
+*clear-with-nonempty-ids* is warranted (the one place a unit test earns its
+keep here).
+
+**Shared collaborator dependencies (both files) — the contract the first draft
+under-specified.** Beyond `events`/`broadcaster`, every persist path depends on
+three things review flagged as missing:
+
+1. **Lifecycle guard.** `persistCustomToolUse` (1883-1884) and every other
+   persist method open with `if (closedSessions.has(key)) return; if
+   (deletedSessions.has(key)) return;`. Those Sets are service-owned. Inject
+   `isClosedOrDeleted(ws, sid): boolean` into both collaborators (or keep the
+   guarded entrypoints in `service.ts` and have it call the collaborator only
+   past the guard). **Without this, a late runtime emission persists into an
+   archived/deleted session and resurrects it.** New verification: late
+   custom-tool / builtin-tool / MCP emission after archive+delete is dropped.
+2. **Durable release-close.** The release callback bound in `bindCustomToolUseId`
+   (1901-1911) does **two** things: `closeReleasedRuntimeAction` (1844 — writes
+   a durable `closedActions` via `events.appendBatchWithRuntimeChanges`) **and**
+   `removePendingCustomToolAction`. Carrying only the pending removal into the
+   collaborator leaves the runtime action `pending` → recovery treats the turn
+   as paused-with-pending-action and can wedge. `closeReleasedRuntimeAction`
+   needs only `events`, so a collaborator can own it — but it must be moved/called,
+   not dropped. New verification: released custom / builtin / MCP actions are
+   closed durably, not merely un-pended.
+3. **`runtimeRunner` reference, not just a method.** `claimCustomToolResults`
+   branches on `this.runtimeRunner?.claimCustomToolResult` *existence* (2405);
+   the collaborator needs the optional runner object, and must tolerate it being
+   `undefined` (no-runtime construction the tests exercise).
 
 ### 4.2 `events/custom-tool-actions.ts` — `CustomToolActions` collaborator (Slice 2)
 
@@ -150,7 +205,7 @@ Methods moved in: `persistCustomToolUse` (1875), `claimCustomToolResults`
 (2311), `rejectAmbiguousCustomToolResultDuplicates` (2441),
 `findPersistedCustomToolResult` (2459), `listCustomToolHistory` (2479),
 `customToolTerminalizationRows` (648), `blockInterrupted`. Injected deps:
-`events`, `broadcaster`, `runtimeRunner`.
+`events`, `broadcaster`, `runtimeRunner`, `isClosedOrDeleted` (see above).
 
 ### 4.3 `events/tool-confirmations.ts` — `ToolConfirmations` collaborator (Slice 2)
 
@@ -165,7 +220,29 @@ moved in: `persistToolPermissionUse` (1942), `…WithModelEnd` (1987),
 (698), `clearCompleted`, `recordCompleted` (replaces the raw `.set` at 490),
 `blockInterrupted`. **C2 stays entirely inside this file** — MCP is a
 confirmation variant. Injected deps: `events`, `broadcaster`, `runtimeRunner`,
-`runtimeTranslator`.
+`runtimeTranslator`, `isClosedOrDeleted`.
+
+> **Cohesion caveat (review):** `persistMcpToolResult` (2247) and
+> `persistMcpConnectionFailed` (2279) carry **no** confirmation/pending state
+> (turnState `running` only) — they are MCP *transcript persisters*, not
+> confirmations. Parking them in `ToolConfirmations` is a naming smell, not a
+> correctness issue; acknowledge it or split them into an `mcp-transcript.ts`
+> if the file earns it. Does not affect the seam.
+
+### 4.4 Atomic cross-concern persist — a hard constraint, not an option
+
+`sendInternal` composes **one** batch across *both* concerns:
+`customToolTerminalizationRows` (394) and `toolConfirmationTerminalizationRows`
+(401) mutate the **same** `runtimeChanges` object by reference; live custom
+acknowledgedActions are pushed at 408-416; then a **single**
+`persistRuntimeChangesCompleteIdempotencyAndPublish` (424-435) commits
+everything **and** completes the idempotency key atomically (ADR-0015, comment
+at 258-259). Therefore the terminalization row-builders MUST remain
+**fragment-producers** — return rows + mutate a shared `runtimeChanges` — and
+must **not** persist on their own. An implementer who reads "collaborator owns
+persist" and lets each collaborator commit its own terminalization **splits the
+atomic batch and breaks `sendIdempotent` atomicity**. This is a constraint, not
+a design choice.
 
 ---
 
@@ -195,48 +272,84 @@ Actions` simply has no completed cache.
 Pending(key)`; `sendInternal`'s `completedToolConfirmations.set(...)` (490) →
 `this.confirmations.recordCompleted(...)`.
 
-### 5.1 Open seam to resolve during Slice 2 (flagged, not yet decided)
+### 5.1 The real hard problem — turn-lifecycle entanglement in the claim methods
 
-The claim paths call **turn-lifecycle helpers that are shared with the recovery
-path** and therefore must NOT move into a collaborator:
-`claimTurnForTerminalization` (1041), `claimAcceptedTurn` (1025),
-`promptsFromAcceptedTurn` (1057) are also used by
-`terminalizeAbandonedRuntimeTurn` (1084) / `scheduleAcceptedTurnRecovery` (991).
-Two candidate boundaries:
+**This is the riskiest part of the refactor and the first draft under-analyzed
+it.** The claim methods are *not* "persistence + decision only" — they perform
+load-bearing **mutations mid-scan** that the decision itself depends on:
 
-- **(a)** Collaborators' `claim*` return pure *decision* objects
-  (`CustomToolResultClaim[]` / confirmation claims — the discriminated unions at
-  ~152-166 already exist); the **service** applies terminalization using the
-  shared turn helpers. Keeps turn-lifecycle central; collaborators stay
-  persistence+decision only. **Preferred.**
-- **(b)** Extract the turn helpers into a fourth shared module injected into both
-  collaborators. More moving parts; risks widening scope.
+- `claimCustomToolResults` calls `claimTurnForTerminalization(action.turn)`
+  inline at **2371** and **2413**; a failed claim throws `runtimeTurnStillOwned`
+  (2373/2414) and a successful claim is *what authorizes* the `kind:"terminalize"`
+  claim it returns. The decision depends on having already mutated the turn store.
+- `claimToolConfirmations` is worse: at **2589** it calls
+  `terminalizeLostToolConfirmation` → `persistRuntimeDrafts`, which **writes
+  events and publishes, inline, during the claim scan** — a full persist mid-
+  decision. It also calls `claimTurnForTerminalization` at **2576** and **2604**.
 
-Recommend (a). Decide before writing Slice 2.
+So "return a pure decision, let the service terminalize later" (the first
+draft's preferred option a) is **not feasible as stated** — you cannot cleanly
+lift the decision out of its side effects.
+
+The **one** genuinely shared helper is `claimTurnForTerminalization` (1041),
+also called by the recovery path (`recoverAbandonedRuntimeTurns`, 972 — *not*
+`terminalizeAbandonedRuntimeTurn`/`scheduleAcceptedTurnRecovery`, which the
+first draft misattributed; and `claimAcceptedTurn`/`promptsFromAcceptedTurn` are
+recovery-only, never called by the claim paths). So the real choice is:
+
+- **(b) inject `claimTurnForTerminalization` into both collaborators.** Honest,
+  smallest surgery: the shared helper stays defined in `service.ts` (still used
+  by recovery) and is passed in. Collaborators keep their claim logic intact,
+  side effects and all. **Recommended.**
+- **(c) scan/apply split.** Split each claim method into a pure *scan* (reads +
+  throws only) and a separate *apply* the service drives. This is real surgery
+  on 2311-2439 and 2498-2625 — a rewrite, not a move — and would also have to
+  relocate the inline `terminalizeLostToolConfirmation` persist (2589) out of the
+  scan. Higher risk; only worth it if the scan/apply seam pays off elsewhere.
+
+**Decision required before Slice 2 (this is the §5.1 sign-off gate).** Default
+to (b) unless there's appetite for (c)'s rewrite. Re-cost Slice 2 for whichever:
+it is not the "clean either/or" the first draft implied.
 
 ---
 
 ## 6. Verification
 
-Baseline (at `40917ed`, this worktree): **80 tests green in 2.0s, no docker**,
-across `custom-tools-api`, `tool-confirmation-api`, `mcp-events-api`,
-`session-events-api`, `session-events-idempotency-api`, `runtime-events-api`.
+Baseline (at `40917ed`, this worktree): **80 tests green in ~2s, no docker**,
+across the six *machine* suites `custom-tools-api`, `tool-confirmation-api`,
+`mcp-events-api`, `session-events-api`, `session-events-idempotency-api`,
+`runtime-events-api`. **But three of the external-caller guards below live
+OUTSIDE those six** — the run set for Slice 2 MUST additionally include
+`session-interrupt-api` and `session-lifecycle-api` (review correction; the
+"80/six suites" figure alone does not cover the archive/delete/interrupt
+cleanup paths §3 calls out).
 
-Map of coupling → guarding test (must stay green, unchanged assertions):
+Map of coupling → guarding test → suite (must stay green, unchanged assertions):
 - C1 → *"re-emits requires_action with all pending IDs when a second tool wait
   arrives later"*; *"does not keep stale requires_action IDs after a
-  runtime-side tool failure"*.
-- C2 → *"terminalizes a custom tool result when runtime state is lost"*; *"ask
-  flow: requires_action lists the mcp use id, allow resumes, replay is
-  idempotent"*.
+  runtime-side tool failure"* → `mcp-events-api` / `custom-tools-api`.
+- C2 (confirmation/MCP terminalization — the correct guards) → the
+  `tool-confirmation-api` lost-runtime tests exercising `lostToolConfirmation­
+  ResultDraft` and the builtin/MCP result-family split, **and** *"ask flow:
+  requires_action lists the mcp use id, allow resumes, replay is idempotent"*
+  (`mcp-events-api`). *(The first draft mis-led with a custom-tool terminalize
+  test, which never touches `lostToolConfirmationResultDraft`.)*
+- lifecycle guard / release-close (§4.2-4.3 new deps) → add new regressions:
+  late tool-use/result after archive+delete is dropped; released actions closed
+  durably not just un-pended. *(No existing test isolates these — write them.)*
 - external callers → *"rejects custom_tool_result after interrupt retires the
-  pending custom tool"*; *"archives a session paused on custom-tool
-  requires_action"*; *"deletes a session paused on custom-tool requires_action
-  without accepting stale results"*.
+  pending custom tool"* (`session-interrupt-api:153`); *"archives a session
+  paused on custom-tool requires_action"* (`session-lifecycle-api:301`);
+  *"deletes a session paused… without accepting stale results"*
+  (`session-lifecycle-api:338`).
 
 Rule: **no test assertion is edited.** If a test needs changing, the refactor
-changed behavior — stop and reassess. Typecheck (`src/` clean today; the 11
-`scratch/*` errors are pre-existing and unrelated).
+changed behavior — stop and reassess. **Constructor signature must stay
+byte-identical** — `custom-tools-api`, `tool-confirmation-api`,
+`session-events-idempotency-api`, and `runtime-events-api` `new
+DefaultSessionEventsService(...)` directly, so "no public API change" extends to
+the constructor (incl. the optional-runtime shape at 212-239). Typecheck
+(`src/` clean today; the 11 `scratch/*` errors are pre-existing and unrelated).
 
 ---
 
@@ -245,22 +358,30 @@ changed behavior — stop and reassess. Typecheck (`src/` clean today; the 11
 - **Slice 1 — `PendingActionStore`.** Extract substrate; instantiate twice;
   `flushPendingActions` reads both instances. ~110 dup lines → ~70-line class.
   Low risk, fully guarded by C1 + external-caller tests. Ships as its own PR.
-- **Slice 2 — `CustomToolActions` + `ToolConfirmations`.** The god-class break.
-  Depends on Slice 1. Resolve §5.1 first. Ships as its own PR (or two stacked:
-  custom, then confirmations+MCP).
+- **Slice 2 — `CustomToolActions` + `ToolConfirmations`, extracted TOGETHER.**
+  The god-class break. Depends on Slice 1. Resolve §5.1 (b vs c) first; wire the
+  §4.2-4.3 lifecycle-guard + release-close deps and the §4.4 atomic-persist
+  constraint. **Do NOT land the custom-only sub-slice on its own** (review):
+  if `CustomToolActions` extracts while confirmations stay inline,
+  `flushPendingActions`/C1 straddles a collaborator boundary on one side and a
+  raw map on the other — the cross-store atomic drain spans two abstraction
+  levels, an intermediate arguably *worse* than either endpoint. Extract both,
+  or keep flush coordination trivially symmetric across the transition.
 
-Slice 1 is the shared foundation Slice 2 composes, so it is the correct first
-step regardless of whether Slice 2 lands immediately after.
+Slice 1 is a strict improvement on its own — if Slice 2 never lands you have
+~70 lines of dedup and nothing broken (not a worse half-refactored state). It
+is the shared foundation Slice 2 composes.
 
 ---
 
 ## 8. Risks
 
-- **Timer/delete-timing drift (C1 substrate).** The `timer === undefined` guard
-  divergence between `remove` and `drainForFlush` (§4.1) is easy to flatten by
-  accident and would change when keys leave the map. Port verbatim; the
-  requires_action tests catch gross breakage but a leaked empty entry is
-  silent — eyeball it.
+- **Delete-timing drift (C1 substrate).** Three different delete conditions
+  across `remove` (guarded), `clear` (unconditional), `drainForFlush` (empty-only
+  post-timer-clear) — see corrected §4.1. Easy to flatten by accident; a leaked
+  empty entry is silent (the requires_action tests catch gross breakage, not a
+  stale entry). Port each verbatim; add the `PendingActionStore` clear-with-timer
+  unit test.
 - **`recordCompleted` timing (490).** The completed cache is written *after*
   commit in `sendInternal`. Moving it behind `confirmations.recordCompleted`
   must keep that ordering (post-commit) or replay/idempotency shifts.
@@ -272,4 +393,32 @@ step regardless of whether Slice 2 lands immediately after.
 
 ## 9. Disposition log
 
-_(empty — to be filled after review, before implementation.)_
+Four independent review passes, 2026-07-09: Codex native, Codex adversarial,
+Opus (adversarial), Sonnet (correctness). Consensus verdict: **seam is right,
+proceed with named changes.** MCP-rides-confirmations, `PendingActionStore`, C1,
+and C3 all verified against code; "no assertion edited" achievable. Findings and
+dispositions:
+
+| # | Finding | Raised by | Severity | Disposition |
+|---|---|---|---|---|
+| 1 | §5.1 option (a) infeasible — claim methods mutate turn state (2371/2413/2576/2604) & persist inline (2589) mid-scan | Opus | HIGH | **Accepted.** §5.1 rewritten: (a) dropped; choose (b) inject `claimTurnForTerminalization` [recommended] or (c) scan/apply rewrite. Sign-off gate before Slice 2. |
+| 2 | Collaborator contract omits archive/delete lifecycle guard (`closedSessions`/`deletedSessions`, 1883-1884) | Codex adv | HIGH | **Accepted.** §4.2-4.3 add injected `isClosedOrDeleted`; new post-archive/delete regressions. Verified in code. |
+| 3 | Contract omits durable release-close (`closeReleasedRuntimeAction`, 1844, bound at 1901-1911 alongside pending-remove) | Codex adv | HIGH | **Accepted.** §4.2-4.3 added; new released-action-closed regression. Verified in code. |
+| 4 | Atomic idempotency-completing persist (424-435) unmodeled; row-builders must stay fragment-producers | Opus | MED-HIGH | **Accepted.** New §4.4 states it as a hard constraint. |
+| 5 | `clear` deletes unconditionally; only `remove` is guarded (§4.1 prose contradicted its own stub) | all four | MED | **Accepted.** §4.1 corrected to three distinct delete conditions + unit test. |
+| 6 | Baseline omits `session-interrupt-api` + `session-lifecycle-api` where 3 cited guards live | Codex native, Opus, Sonnet | MED | **Accepted.** §6 run set extended; guards mapped to real suites/lines. |
+| 7 | Custom-only sub-split of Slice 2 straddles flush across a collaborator + raw map | Opus | MED | **Accepted.** §7 hard-gates it: extract both collaborators together. |
+| 8 | C2 guard mis-mapped to a custom-tool terminalize test (never hits `lostToolConfirmationResultDraft`) | Codex native | P3 | **Accepted.** §6 C2 remapped to `tool-confirmation-api` lost-runtime tests. |
+| 9 | §5.1 caller attribution over-broad (only `claimTurnForTerminalization` shared; caller is `recoverAbandonedRuntimeTurns` 972/925, not the two named) | Sonnet | low | **Accepted.** §5.1 narrowed. |
+| 10 | `drainForFlush` spec "null the timer" too loose — needs `clearTimeout` + `= undefined` | Opus | low | **Accepted.** §4.1 spec tightened. |
+| 11 | Constructor must stay byte-identical (4 suites construct directly) | Opus | low | **Accepted.** §6 requires constructor byte-stability. |
+| 12 | `runtimeRunner` needed as a *reference* — claim branches on `?.claimCustomToolResult` existence (2405) | Opus | low | **Accepted.** §4 dep note added. |
+| 13 | `persistMcpToolResult`/`ConnectionFailed` carry no confirmation state — cohesion smell under `ToolConfirmations` | Opus | nit | **Noted.** §4.3 caveat; optional `mcp-transcript.ts` split. No correctness impact. |
+| 14 | C1 is the *safest* coupling, not the riskiest — no double/lost flush constructible; doc's risk profile was inverted | Opus | (reframe) | **Accepted.** §3 risk note added; worry re-pointed at §5.1. |
+| — | MCP-rides-confirmations thesis; C3 asymmetry; all §2/§3/§4 line numbers; two pending-store shapes byte-identical; `hasToolResultForToolUseId` MCP match; 80-test baseline | Opus, Sonnet | — | **Confirmed accurate** against code — no change. |
+
+**Net effect on the plan:** seam unchanged; collaborator *contract* gained two
+dependencies (lifecycle guard, release-close) + one hard constraint (atomic
+persist); §5.1 re-scoped from "easy either/or" to the genuine sign-off gate;
+verification set widened by two suites + three new regressions. Slice 1
+unaffected and still safe to build first.
