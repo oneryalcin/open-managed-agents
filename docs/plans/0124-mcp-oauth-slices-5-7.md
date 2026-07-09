@@ -37,9 +37,32 @@ routes.ts:73). Synchronous handler per §7B.3:
    (body streamed to the 4KB cap, never fully buffered) or
    `{ reached: false }`; transport/reader always cleaned up. The
    HANDLER exclusively owns the refresh decision and the single
-   re-probe. Probe body passes through `scrubKnownSecrets` with the
-   credential's live secret values (access token, refresh token,
-   client secret).
+   re-probe. Probe body passes through `scrubKnownSecrets` with ALL
+   secret values live during the validate call — including BOTH the
+   pre-refresh and post-refresh (rotated) tokens on the re-probe path
+   (review round 3 F1).
+
+   **Wire details (round 3 F1 — SSE is the trap: a VALID
+   streamable-HTTP server may answer initialize with
+   `text/event-stream` and hold the stream open; a read-to-EOF bounded
+   reader hangs to timeout and misclassifies a valid credential as
+   unknown — SDK evidence `streamableHttp.js:386`):**
+   - Request: POST, `Content-Type: application/json`,
+     `Accept: application/json, text/event-stream` (BOTH — a
+     spec-compliant server may 406 a JSON-only Accept), body a JSON-RPC
+     `initialize` request with fixed id `1`, `protocolVersion` =
+     the SDK's `LATEST_PROTOCOL_VERSION`, minimal
+     `clientInfo`/`capabilities` mirroring what the SDK client sends.
+   - Response `content-type: application/json` → read body to cap.
+   - Response `content-type: text/event-stream` → parse SSE events
+     incrementally; STOP and cancel the reader at the first event
+     carrying the JSON-RPC response for id `1` (that event's data is
+     the captured `body`), or at the 4KB cap, whichever first. NEVER
+     wait for stream end.
+   - "Initialize succeeds" (the `valid` row) = 2xx AND a parseable
+     JSON-RPC **result** (not error object) for the request id. 2xx
+     with an unparseable body or a JSON-RPC error → the
+     reached-non-auth `unknown` row.
 4. On 401/403 with a refresh block: refresh THROUGH
    `RefreshCoordinator.refreshCredential` with `trigger: "validate"`
    (below) and `expectedAuthVersion` = the probed version, then
@@ -51,15 +74,26 @@ routes.ts:73). Synchronous handler per §7B.3:
 5. Map to `valid | invalid | unknown` — the FULL table (pre-impl review
    F5; only the auth chain may conclude `invalid`):
 
-   | probe / refresh outcome | `status` | `mcp_probe.http_response` |
-   |---|---|---|
-   | initialize succeeds | `valid` | the captured response |
-   | HTTP reached, non-401/403 (400/404/5xx/…) | `unknown` | the captured response |
-   | transport failure (network/DNS/timeout/`redirect_blocked`/SSRF) | `unknown` | `null` |
-   | 401/403 → refresh outcome `invalid` | `invalid` | first probe's response |
-   | 401/403 → refresh `transient_error` or floor/skip | `unknown` | first probe's response |
-   | 401/403 → refresh ok → re-probe succeeds | `valid` | re-probe response |
-   | 401/403 → refresh ok → re-probe 401/403 again | `invalid` | re-probe response |
+   | probe / refresh outcome | `status` | `mcp_probe.http_response` | `refresh.status` |
+   |---|---|---|---|
+   | initialize succeeds | `valid` | the captured response | `not_attempted` |
+   | HTTP reached, non-401/403 (400/404/5xx/…) | `unknown` | the captured response | `not_attempted` |
+   | transport failure (network/DNS/timeout/`redirect_blocked`/SSRF) | `unknown` | `null` | `not_attempted` |
+   | 401/403, NO refresh block on the credential | `invalid` | first probe's response | `no_refresh_token` (probe-52 exact: `52-…-probe.json:302`) |
+   | 401/403 → refresh outcome `invalid` | `invalid` | first probe's response | `failed` |
+   | 401/403 → refresh `transient_error` | `unknown` | first probe's response | `failed` |
+   | 401/403 → refresh skipped `validate_floor` | `unknown` | first probe's response | `skipped` |
+   | 401/403 → refresh skipped (`missing_client_secret` / `no_refresh_metadata` / `missing`) | `unknown` | first probe's response | `skipped` |
+   | 401/403 → refresh ok (incl. `persisted: "stale"` — CAS loss means someone else refreshed; re-probe with the CURRENT store token) → re-probe succeeds | `valid` | re-probe response | `refreshed` |
+   | 401/403 → refresh ok → re-probe 401/403 again | `invalid` | re-probe response | `refreshed` |
+   | 401/403 → refresh ok → re-probe non-auth HTTP failure (5xx/4xx) | `unknown` | re-probe response | `refreshed` |
+   | 401/403 → refresh ok → re-probe transport failure | `unknown` | `null` | `refreshed` |
+
+   `refresh.status` vocabulary: probe 52 pins only `no_refresh_token`;
+   the remaining values (`not_attempted`, `refreshed`, `failed`,
+   `skipped`) are OMA's — revisit against hosted if a later probe
+   captures a refresh-attempted validate (round 3 F2). Every row above
+   gets a full-response-equality test.
 
    `refresh.status` populated per §7B.2 (`no_refresh_token` when
    absent). **`refresh.http_response` NEVER carries a token-bearing
@@ -154,14 +188,33 @@ path.
   ticker correctly blind to them). Tests: create-without-dial gets
   scheduled; rotation reschedules; restart picks both up;
   refresh-less credential stays unscheduled.
-- **Ticker run**: for each claimed row call `refreshCredential({...})`
+- **Ticker run**: for each listed row call `refreshCredential({...})`
   WITHOUT `force` and WITHOUT `trigger` — the lazy trigger; joins any
   in-flight runtime refresh via single-flight. **`run()` AWAITS all
-  claimed refreshes before resolving** (pre-impl review F6): the loop
-  re-queries `nextWakeAt` only after the persists have advanced
-  `next_refresh_at`; fire-and-forget would re-select the still-due rows
-  and hot-spin at the 30s floor. Failed refreshes self-reschedule via
+  listed refreshes before resolving** (pre-impl review F6), processed
+  with a SMALL concurrency bound `OAUTH_TICKER_CONCURRENCY = 5`
+  (round 3: sequential = 25 min for 50 timed-out endpoints; unbounded
+  `Promise.all` = a 50-request burst). The loop re-queries `nextWakeAt`
+  only after the persists have advanced `next_refresh_at`;
+  fire-and-forget would re-select the still-due rows and hot-spin at
+  the 30s floor. Failed refreshes self-reschedule via
   `transientBackoffMs` persists — the loop adds no backoff of its own.
+- **Wake signal (round 3 F3 — without it a sleeping loop misses newly
+  scheduled work: no due rows → loop sleeps 15 min → operator creates a
+  2-min-TTL credential → its ~1-min-away due time passes 14 minutes
+  before the loop looks again)**: `createWakeLoop` exposes `wake()` —
+  cancel the pending timer, re-run the `nextWakeAt`/`run` cycle now;
+  no-op while `run()` is already executing (the loop re-queries on
+  completion anyway); safe after `close()` (no-op). Two producers, both
+  wired by the app to `loop.wake()`:
+  (a) `onSchedulingChanged` on the vault service — after mcp_oauth
+  credential CREATE and AUTH ROTATION (the two seed sites);
+  (b) `onScheduled` on the coordinator — after ANY successful refresh
+  persist, because a lazy session-dial refresh of a short-TTL
+  credential can schedule a due time EARLIER than whatever the loop is
+  currently sleeping toward (validate success is covered by this same
+  hook). Ticker-triggered refreshes calling `wake()` mid-`run()` hit
+  the no-op branch — no recursion.
 - **Sleep bounds**: `maxSleepMs` 15 min / `minSleepMs` 30s are NEW
   `createWakeLoop` parameters (pre-impl review F9 — the exported
   `nextRefreshAt`/`transientBackoffMs` schedule ROWS; these clamp the
@@ -174,23 +227,29 @@ path.
   which is the test-override seam gating `createDefaultMcpRuntime`
   creation (app.ts:537-538). A ticker gated on the latter would start
   with MCP off, violating §7B.3's zero-egress posture.
-- **Ownership + shutdown (pre-impl review F2 — the app.ts:435-485
-  `stores.close()` sites are boot-error guards that run BEFORE the loop
-  exists; do not wire there)**: `createDeploymentControlPlane` must
-  expose the loop's close in its return shape (today `{ app, stores,
-  authMode }`, app.ts:727). The REAL teardown is `src/main.ts`: the
-  returned `close` (`await closeServer(server); stores.close()`,
-  main.ts:127-131) gains `await loop.close()` between the two, and the
-  startup-failure catch (main.ts:133-141) closes the loop before
-  `stores.close()` too. `close()` cancels the timer and awaits any
-  in-flight `run()` — so an in-flight refresh completes its persist
-  before the DB closes. **Review round 2 F4 additions**: the
-  deployment-level `close()` is idempotent (double-close is a no-op,
-  not a throw); and `createDeploymentControlPlaneApp` (app.ts:391),
-  which returns `.app` and DISCARDS stores, must NOT start the ticker —
-  it passes an internal no-background-workers option, since a ticker it
-  starts can never be closed. Tests: close during in-flight refresh,
-  double-close, bind failure, app-only construction starts no timer.
+- **Ownership + shutdown — ONE contract (pre-impl review F2, round 2
+  F4, settled by round 3 F4; the app.ts:435-485 `stores.close()` sites
+  are boot-error guards inside construction and stay as-is)**:
+  - `DeploymentControlPlane` (app.ts:385) gains `close(): Promise<void>`
+    and it is THE teardown owner: `await loop.close()` (cancel timer,
+    await in-flight `run()` — so an in-flight refresh completes its
+    persist before the DB closes) THEN `stores.close()`. Idempotent —
+    double-close is a no-op, not a throw.
+  - `main.ts` (`startAppliance`) owns only the server: its returned
+    `close` becomes `await closeServer(server); await plane.close()`
+    (:127-131), and the startup-failure catch (:133-141) calls
+    `plane.close()` instead of `stores.close()`.
+  - Ownership rule, documented on the type: callers use `plane.close()`
+    for teardown; `stores` stays exposed for data access but callers
+    must not close it directly once a plane owns it (existing tests
+    that close stores directly predate the loop and may keep doing so
+    only where no ticker was started).
+  - `createDeploymentControlPlaneApp` (app.ts:391), which returns
+    `.app` and DISCARDS the plane, must NOT start the ticker — it
+    passes an internal no-background-workers option, since a ticker it
+    starts can never be closed.
+  - Tests: close during in-flight refresh, double-close, bind failure
+    calls `plane.close()`, app-only construction starts no timer.
 - Metrics (if trivial): reuse the existing refresh outcome metric; no
   new instrumentation surface in M3.
 
@@ -283,6 +342,23 @@ From review round 2:
   reader cleanup on timeout/abort, cap streaming.
 - Custom-runner deployment: validate and ticker still function
   (round 2 F5).
+
+From review round 3:
+
+- SSE probe: fixture answers initialize as `text/event-stream` with the
+  response event then HOLDS the stream open → probe returns promptly
+  with the captured result (no timeout), reader cancelled; and the
+  valid credential classifies `valid`.
+- 2xx with JSON-RPC error object → `unknown`, not `valid`.
+- Re-probe scrubbing: hostile server echoes the ROTATED token after a
+  validate refresh → scrubbed from `mcp_probe.http_response.body`.
+- Wake signal: loop sleeping toward a far deadline; create a
+  short-TTL credential → `wake()` fires and the refresh happens at its
+  ~1-min due time, not at the 15-min cap. Same via a lazy session-dial
+  refresh success on a short-TTL credential (coordinator `onScheduled`).
+- `wake()` mid-`run()` is a no-op; `wake()` after `close()` is a no-op.
+- Ticker batch concurrency: 50 due rows with slow endpoints → at most
+  `OAUTH_TICKER_CONCURRENCY` in flight.
 
 ## Current source anchors (re-confirm before editing)
 
