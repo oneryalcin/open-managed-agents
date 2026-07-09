@@ -16,6 +16,7 @@ import type {
 import type { ManagedAgentsContentBlock } from "../../../../types/events.ts";
 import type { JsonObject } from "../../../../types/json.ts";
 import type { AgentStore } from "../../../agents/types.ts";
+import { scrubKnownSecrets } from "../../../logging.ts";
 import type {
   RuntimeMcpToolResultEvent,
   RuntimeMcpToolUseEvent,
@@ -80,6 +81,16 @@ export interface McpToolDefinitionOptions {
   onToolCall?: (outcome: McpToolCallOutcomeLabel) => void;
   /** Transport-level callTool rejection: connection-class failure (§4.6). */
   onTransportFailure?: (mcpServerName: string, error: Error) => void;
+  /**
+   * Live secret values injected into this connection's dials (the bearer
+   * header + bare token). A hostile server can echo them back in a tool
+   * result or an error body embedded in the SDK's rejection message; both
+   * paths persist to events AND return to the model — the latter would
+   * hand the agent a credential it must not be able to read (plan 0122
+   * §7B.9 slice 0). Every server-controlled string is scrubbed with these
+   * before leaving executeMcpTool.
+   */
+  knownSecrets?: readonly string[];
 }
 
 /**
@@ -218,15 +229,23 @@ async function executeMcpTool(args: {
       opts.onTransportFailure?.(opts.connection.serverName, err);
     }
     const timedOut = (error as { code?: unknown }).code === -32001; // McpError RequestTimeout
+    // The SDK embeds server response bodies in rejection messages (probe
+    // 49's captured message contains the fixture's 401 body verbatim), so
+    // this string is server-controlled: scrub before it persists/throws.
     failWith(
-      `MCP tool ${bareName} failed: ${err.message}`,
+      scrub(`MCP tool ${bareName} failed: ${err.message}`, opts.knownSecrets),
       aborted ? "aborted" : timedOut ? "timeout" : "error",
     );
     throw err; // unreachable
   }
 
-  // 5: terminal result — capped over ALL normalized blocks (review C).
-  const blocks = capContent(normalizeMcpContent(outcome.content), capBytes);
+  // 5: terminal result — scrubbed (server-controlled content) then capped
+  // over ALL normalized blocks (review C). Scrub BEFORE the cap: truncation
+  // could split a token and leave an unmatchable prefix behind.
+  const blocks = capContent(
+    scrubContentBlocks(normalizeMcpContent(outcome.content), opts.knownSecrets),
+    capBytes,
+  );
   emitResult(blocks, outcome.isError);
   if (outcome.isError) {
     opts.onToolCall?.("error");
@@ -260,6 +279,26 @@ export function normalizeMcpContent(
     }
     return { type: "text", text: JSON.stringify(block) };
   });
+}
+
+function scrub(text: string, knownSecrets: readonly string[] | undefined): string {
+  return knownSecrets === undefined || knownSecrets.length === 0
+    ? text
+    : scrubKnownSecrets(text, knownSecrets);
+}
+
+/** Normalization flattens every block to text, so scrubbing `.text` covers
+ * the whole result surface (incl. stringified non-text blocks). */
+function scrubContentBlocks(
+  blocks: ManagedAgentsContentBlock[],
+  knownSecrets: readonly string[] | undefined,
+): ManagedAgentsContentBlock[] {
+  if (knownSecrets === undefined || knownSecrets.length === 0) return blocks;
+  return blocks.map((block) =>
+    block.type === "text" && typeof block.text === "string"
+      ? { type: "text", text: scrubKnownSecrets(block.text, knownSecrets) }
+      : block,
+  );
 }
 
 /**

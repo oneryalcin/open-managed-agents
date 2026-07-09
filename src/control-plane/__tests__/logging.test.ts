@@ -7,6 +7,7 @@ import {
   createLogger,
   log,
   parseLogConfig,
+  scrubKnownSecrets,
   scrubSecrets,
   type LogLevel,
 } from "../logging.ts";
@@ -104,6 +105,30 @@ describe("logger output shape", () => {
       event: "admin_audit",
       action: "mint_key",
     });
+  });
+});
+
+describe("scrubKnownSecrets (exact-value, plan 0122 §7B.9 slice 0)", () => {
+  it("replaces every occurrence of each known value", () => {
+    expect(
+      scrubKnownSecrets("a vault-token-echo b vault-token-echo", ["vault-token-echo"]),
+    ).toBe("a [redacted] b [redacted]");
+  });
+
+  it("scrubs the containing value intact when values nest (header vs bare token)", () => {
+    const out = scrubKnownSecrets("hdr=Bearer tok-12345678; raw=tok-12345678", [
+      "tok-12345678",
+      "Bearer tok-12345678",
+    ]);
+    expect(out).toBe("hdr=[redacted]; raw=[redacted]");
+  });
+
+  it("ignores values under 8 chars so a pathological secret cannot shred output", () => {
+    expect(scrubKnownSecrets("abc abc abc", ["abc", ""])).toBe("abc abc abc");
+  });
+
+  it("is a no-op with no values", () => {
+    expect(scrubKnownSecrets("untouched", [])).toBe("untouched");
   });
 });
 
