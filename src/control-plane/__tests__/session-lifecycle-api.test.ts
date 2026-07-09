@@ -522,7 +522,7 @@ describe("session lifecycle API", () => {
     const runner = new ClaimingRunner();
     const { broadcaster, eventStore, service, sessionId, store } =
       createArchiveGuardHarness({ runner });
-    guardState(service).pendingCustomToolActions.set(sessionScopeKey("wrk_default", sessionId), {
+    guardState(service).pendingCustomToolActions.entries.set(sessionScopeKey("wrk_default", sessionId), {
       ids: ["sevt_pending_tool"],
       timer: undefined,
     });
@@ -550,7 +550,7 @@ describe("session lifecycle API", () => {
         ),
       ).toBe(false);
       expect(
-        guardState(service).pendingCustomToolActions.get(
+        guardState(service).pendingCustomToolActions.entries.get(
           sessionScopeKey("wrk_default", sessionId),
         )?.ids,
       ).toEqual(["sevt_pending_tool"]);
@@ -673,13 +673,15 @@ interface GuardState {
   closedSessions: Set<string>;
   deletedSessions: Set<string>;
   activeRuntimeTasks: Map<string, number>;
-  pendingCustomToolActions: Map<
-    string,
-    {
-      ids: string[];
-      timer: ReturnType<typeof setTimeout> | undefined;
-    }
-  >;
+  pendingCustomToolActions: {
+    entries: Map<
+      string,
+      {
+        ids: string[];
+        timer: ReturnType<typeof setTimeout> | undefined;
+      }
+    >;
+  };
 }
 
 function createGuardHarness(
