@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { isBlockedAddress } from "../egress/ssrf.ts";
 import { newVaultCredentialId, newVaultId } from "../ids.ts";
 import { conflict, invalidRequest, notFound } from "../errors.ts";
 import type { WorkspaceId } from "../workspace.ts";
@@ -554,36 +555,8 @@ function clientSecretAbsent(obj: Record<string, unknown>): undefined {
 function isBlockedIpLiteral(hostname: string): boolean {
   const normalized = hostname.replace(/^\[|\]$/g, "");
   const family = isIP(normalized);
-  if (family === 4) return isBlockedIpv4(normalized);
-  if (family === 6) return isBlockedIpv6(normalized);
+  if (family !== 0) return isBlockedAddress(normalized, family);
   return false;
-}
-
-function isBlockedIpv4(value: string): boolean {
-  const parts = value.split(".").map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
-    return true;
-  }
-  const [a, b] = parts;
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
-  );
-}
-
-function isBlockedIpv6(value: string): boolean {
-  const lower = value.toLowerCase();
-  return (
-    lower === "::1" ||
-    lower === "::" ||
-    lower.startsWith("fe80:") ||
-    lower.startsWith("fc") ||
-    lower.startsWith("fd")
-  );
 }
 
 function expiresAtField(input: unknown): string | undefined {

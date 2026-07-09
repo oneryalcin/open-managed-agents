@@ -109,6 +109,7 @@ export interface VaultOauthRefreshState {
   refreshStatus: VaultOauthRefreshStatus | null;
   refreshAttempts: number;
   nextRefreshAt: string | null;
+  authHintAt: string | null;
 }
 
 export interface PersistOauthRefreshSuccessInput {

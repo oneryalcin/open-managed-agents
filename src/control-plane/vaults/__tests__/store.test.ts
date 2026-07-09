@@ -95,6 +95,31 @@ describe("SqliteVaultStore", () => {
     });
   });
 
+  it("master-key rotation rewraps mcp_oauth JSON secret rows", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+
+    const next = randomBytes(32);
+    expect(secrets.rotateMasterKey(next)).toBe(1);
+    const reopenedSecrets = new SqliteSecretsStore(db, next);
+    const reopenedVaults = new SqliteVaultStore(db, reopenedSecrets);
+
+    expect(reopenedVaults.readOauthRefreshState(WRK, "vlt_first", "vcrd_oauth")).toMatchObject({
+      secrets: {
+        accessToken: "ACCESS_TOKEN",
+        refreshToken: "REFRESH_TOKEN",
+        clientSecret: "CLIENT_SECRET",
+      },
+    });
+    expect(reopenedVaults.resolveCredential(WRK, ["vlt_first"], URL)?.token).toBe(
+      "ACCESS_TOKEN",
+    );
+  });
+
   it("stores mcp_oauth secrets as JSON and resolves only the access token", () => {
     createVault(store, "vlt_first");
     createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
@@ -126,6 +151,21 @@ describe("SqliteVaultStore", () => {
       credentialId: "vcrd_oauth",
       updatedAt: "2026-07-08T00:00:00.000Z",
       token: "ACCESS_TOKEN",
+    });
+  });
+
+  it("degrades malformed mcp_oauth JSON secrets to missing credentials", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+    secrets.put(WRK, vaultSecretName("vlt_first", "vcrd_oauth"), "{not json");
+
+    expect(store.resolveCredential(WRK, ["vlt_first"], URL)).toBeUndefined();
+    expect(store.readOauthRefreshState(WRK, "vlt_first", "vcrd_oauth")).toMatchObject({
+      secrets: {},
     });
   });
 
@@ -314,6 +354,89 @@ describe("SqliteVaultStore", () => {
 
     expect(result).toEqual({ status: "stale", state: undefined });
     expect(secrets.reveal(WRK, vaultSecretName("vlt_first", "vcrd_oauth"))).toBeUndefined();
+  });
+
+  it("does not orphan a secret after hard delete wins the CAS race", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+    const staleState = store.readOauthRefreshState(WRK, "vlt_first", "vcrd_oauth")!;
+    store.deleteCredential(WRK, "vlt_first", "vcrd_oauth");
+
+    const result = store.persistOauthRefreshSuccess({
+      workspaceId: WRK,
+      vaultId: "vlt_first",
+      credentialId: "vcrd_oauth",
+      expectedAuthVersion: staleState.authVersion,
+      accessToken: "STALE_ACCESS",
+      refreshToken: "STALE_REFRESH",
+      updatedAt: "2026-07-08T00:00:02.000Z",
+    });
+
+    expect(result).toEqual({ status: "stale", state: undefined });
+    expect(secrets.reveal(WRK, vaultSecretName("vlt_first", "vcrd_oauth"))).toBeUndefined();
+  });
+
+  it("migrates pre-M3 credential tables with refresh state columns", () => {
+    const oldDb = new DatabaseSync(":memory:");
+    const oldSecrets = new SqliteSecretsStore(oldDb, randomBytes(32));
+    oldDb.exec(`
+      CREATE TABLE vaults (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        display_name TEXT NOT NULL, metadata TEXT NOT NULL, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, archived_at TEXT
+      );
+      CREATE TABLE vault_credentials (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, vault_id TEXT NOT NULL,
+        type TEXT NOT NULL, display_name TEXT, metadata TEXT NOT NULL,
+        auth_type TEXT NOT NULL, mcp_server_url TEXT NOT NULL,
+        token_endpoint TEXT, client_id TEXT, scope TEXT, token_endpoint_auth_type TEXT,
+        expires_at TEXT, auth_version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT
+      );
+    `);
+    const migrated = new SqliteVaultStore(oldDb, oldSecrets);
+    migrated.createVault({
+      row: {
+        id: "vlt_migrated",
+        workspace_id: WRK,
+        type: "vault",
+        display_name: "migrated",
+        metadata: {},
+        created_at: "2026-07-08T00:00:00.000Z",
+        updated_at: "2026-07-08T00:00:00.000Z",
+        archived_at: null,
+      },
+    });
+    createOauthCredential(migrated, "vlt_migrated", "vcrd_migrated", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+
+    expect(
+      migrated.persistOauthRefreshFailure({
+        workspaceId: WRK,
+        vaultId: "vlt_migrated",
+        credentialId: "vcrd_migrated",
+        expectedAuthVersion: 1,
+        status: "transient",
+        refreshAttempts: 1,
+        nextRefreshAt: "2026-07-08T00:01:00.000Z",
+      }),
+    ).toMatchObject({ status: "updated" });
+    expect(
+      migrated.readOauthRefreshState(WRK, "vlt_migrated", "vcrd_migrated"),
+    ).toMatchObject({
+      refreshStatus: "transient",
+      refreshAttempts: 1,
+      nextRefreshAt: "2026-07-08T00:01:00.000Z",
+      authHintAt: null,
+    });
+    oldDb.close();
   });
 });
 

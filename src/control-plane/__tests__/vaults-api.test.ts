@@ -187,6 +187,9 @@ describe("vaults API", () => {
       ["https://user:pass@oauth.example.com/token", "userinfo"],
       ["https://oauth.example.com/token#frag", "userinfo or fragments"],
       ["https://169.254.169.254/token", "not allowed"],
+      ["https://100.64.0.1/token", "not allowed"],
+      ["https://224.0.0.1/token", "not allowed"],
+      ["https://[::ffff:127.0.0.1]/token", "not allowed"],
     ] as const) {
       const res = await createOauthCredential(fixture.app, key, vault.id, {
         serverUrl: `${SERVER_URL}/${encodeURIComponent(tokenEndpoint)}`,

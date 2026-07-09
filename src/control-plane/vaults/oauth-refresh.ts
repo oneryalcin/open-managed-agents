@@ -11,6 +11,7 @@ export const OAUTH_REFRESH_MAX_BODY_BYTES = 64 * 1024;
 export const OAUTH_REFRESH_LEAD_MS = 5 * 60_000;
 export const OAUTH_REFRESH_FLOOR_MS = 30_000;
 export const OAUTH_REFRESH_MAX_BACKOFF_MS = 15 * 60_000;
+export const OAUTH_REFRESH_LONG_LIVED_RECHECK_MS = 15 * 60_000;
 
 const PERMANENT_OAUTH_ERRORS = new Set([
   "invalid_grant",
@@ -25,46 +26,70 @@ type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 export interface RefreshCoordinatorOptions {
   store: VaultStore;
-  fetch?: FetchLike;
+  fetch: FetchLike;
   now?: () => Date;
   timeoutMs?: number;
   maxBodyBytes?: number;
+  random?: () => number;
 }
 
 export interface RefreshCredentialInput {
   workspaceId: WorkspaceId;
   vaultId: string;
   credentialId: string;
+  force?: boolean;
+}
+
+export interface RefreshCredentialState {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  authVersion: number;
+  mcpServerUrl: string;
+  expiresAt?: string;
+  refreshStatus: VaultOauthRefreshState["refreshStatus"];
+  refreshAttempts: number;
+  nextRefreshAt: string | null;
+  authHintAt: string | null;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  hasClientSecret: boolean;
 }
 
 export type RefreshCredentialResult =
   | {
       outcome: "ok";
-      state: VaultOauthRefreshState;
+      state: RefreshCredentialState;
       persisted: PersistOauthRefreshResult["status"];
     }
   | {
       outcome: "invalid";
       reason: string;
-      state: VaultOauthRefreshState | undefined;
+      state: RefreshCredentialState | undefined;
       persisted: PersistOauthRefreshResult["status"];
     }
   | {
       outcome: "transient_error";
       reason: string;
-      state: VaultOauthRefreshState | undefined;
+      state: RefreshCredentialState | undefined;
       persisted: PersistOauthRefreshResult["status"];
     }
   | {
       outcome: "skipped";
-      reason: "missing" | "no_refresh_metadata" | "no_refresh_token" | "missing_client_secret";
-      state: VaultOauthRefreshState | undefined;
+      reason:
+        | "missing"
+        | "unsupported_credential_type"
+        | "invalid_status"
+        | "no_refresh_metadata"
+        | "no_refresh_token"
+        | "missing_client_secret";
+      state: RefreshCredentialState | undefined;
     };
 
 interface TokenRefreshSuccess {
   accessToken: string;
   refreshToken?: string;
-  expiresAt?: string | null;
+  expiresAt: string | null;
   scope?: string | null;
 }
 
@@ -80,12 +105,14 @@ export class RefreshCoordinator {
   private readonly now: () => Date;
   private readonly timeoutMs: number;
   private readonly maxBodyBytes: number;
+  private readonly random: () => number;
 
   constructor(private readonly opts: RefreshCoordinatorOptions) {
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.fetchImpl = opts.fetch;
     this.now = opts.now ?? (() => new Date());
     this.timeoutMs = opts.timeoutMs ?? OAUTH_REFRESH_TIMEOUT_MS;
     this.maxBodyBytes = opts.maxBodyBytes ?? OAUTH_REFRESH_MAX_BODY_BYTES;
+    this.random = opts.random ?? Math.random;
   }
 
   refreshCredential(input: RefreshCredentialInput): Promise<RefreshCredentialResult> {
@@ -108,19 +135,50 @@ export class RefreshCoordinator {
       input.credentialId,
     );
     if (state === undefined) {
+      const row = this.opts.store.retrieveCredential(
+        input.workspaceId,
+        input.vaultId,
+        input.credentialId,
+      );
+      if (row?.auth.type === "static_bearer") {
+        return {
+          outcome: "skipped",
+          reason: "unsupported_credential_type",
+          state: undefined,
+        };
+      }
       return { outcome: "skipped", reason: "missing", state };
     }
+    if (state.refreshStatus === "invalid" && input.force !== true) {
+      return {
+        outcome: "skipped",
+        reason: "invalid_status",
+        state: publicState(state),
+      };
+    }
     if (state.refresh === undefined) {
-      return { outcome: "skipped", reason: "no_refresh_metadata", state };
+      return {
+        outcome: "skipped",
+        reason: "no_refresh_metadata",
+        state: publicState(state),
+      };
     }
     if (state.secrets.refreshToken === undefined) {
-      return { outcome: "skipped", reason: "no_refresh_token", state };
+      return {
+        outcome: "skipped",
+        reason: "no_refresh_token",
+        state: publicState(state),
+      };
     }
     if (
       state.refresh.tokenEndpointAuth.type !== "none" &&
       state.secrets.clientSecret === undefined
     ) {
-      return { outcome: "skipped", reason: "missing_client_secret", state };
+      return {
+        outcome: "skipped",
+        reason: "missing_client_secret",
+        state: publicState(state),
+      };
     }
 
     const refreshed = await this.performTokenRefresh(state);
@@ -135,19 +193,19 @@ export class RefreshCoordinator {
         ...(refreshed.refreshToken === undefined
           ? {}
           : { refreshToken: refreshed.refreshToken }),
-        ...(refreshed.expiresAt === undefined
-          ? {}
-          : { expiresAt: refreshed.expiresAt }),
+        expiresAt: refreshed.expiresAt,
         ...(refreshed.scope === undefined ? {} : { scope: refreshed.scope }),
         nextRefreshAt:
-          refreshed.expiresAt === undefined || refreshed.expiresAt === null
-            ? null
+          refreshed.expiresAt === null
+            ? new Date(
+                now.getTime() + OAUTH_REFRESH_LONG_LIVED_RECHECK_MS,
+              ).toISOString()
             : nextRefreshAt(now, new Date(refreshed.expiresAt)).toISOString(),
         updatedAt: now.toISOString(),
       });
       return {
         outcome: "ok",
-        state: persisted.state ?? state,
+        state: publicState(persisted.state ?? state),
         persisted: persisted.status,
       };
     }
@@ -167,13 +225,13 @@ export class RefreshCoordinator {
           ? null
           : new Date(
               now.getTime() +
-                (refreshed.retryAfterMs ?? transientBackoffMs(attempts)),
+                (refreshed.retryAfterMs ?? transientBackoffMs(attempts, this.random())),
             ).toISOString(),
     });
     return {
       outcome: refreshed.outcome,
       reason: refreshed.reason,
-      state: persisted.state,
+      state: persisted.state === undefined ? undefined : publicState(persisted.state),
       persisted: persisted.status,
     };
   }
@@ -203,7 +261,10 @@ export class RefreshCoordinator {
       if (error instanceof ResponseBodyTooLargeError) {
         return { outcome: "transient_error", reason: "response_body_too_large" };
       }
-      return { outcome: "transient_error", reason: "request_failed" };
+      return {
+        outcome: "transient_error",
+        reason: isRedirectError(error) ? "redirect_blocked" : "request_failed",
+      };
     } finally {
       clearTimeout(timeout);
     }
@@ -221,8 +282,13 @@ export function nextRefreshAt(now: Date, expiresAt: Date): Date {
   return new Date(expiresAt.getTime() - OAUTH_REFRESH_LEAD_MS);
 }
 
-function transientBackoffMs(attempts: number): number {
-  return Math.min(OAUTH_REFRESH_MAX_BACKOFF_MS, 60_000 * 2 ** Math.max(0, attempts - 1));
+function transientBackoffMs(attempts: number, random: number): number {
+  const base = Math.min(
+    OAUTH_REFRESH_MAX_BACKOFF_MS,
+    60_000 * 2 ** Math.max(0, attempts - 1),
+  );
+  const jitter = 0.9 + Math.min(1, Math.max(0, random)) * 0.2;
+  return Math.min(OAUTH_REFRESH_MAX_BACKOFF_MS, Math.round(base * jitter));
 }
 
 function buildRefreshRequest(state: VaultOauthRefreshState, signal: AbortSignal): RequestInit {
@@ -276,7 +342,7 @@ function classifyTokenResponse(
         ? "invalid"
         : "transient_error",
       reason: oauthError ?? `http_${response.status}`,
-      retryAfterMs: retryAfterMs(response),
+      retryAfterMs: retryAfterMs(response, now.getTime()),
     };
   }
   if (
@@ -288,7 +354,7 @@ function classifyTokenResponse(
     return {
       outcome: PERMANENT_OAUTH_ERRORS.has(error) ? "invalid" : "transient_error",
       reason: error,
-      retryAfterMs: retryAfterMs(response),
+      retryAfterMs: retryAfterMs(response, now.getTime()),
     };
   }
   if (typeof value.access_token !== "string" || value.access_token.length === 0) {
@@ -306,7 +372,7 @@ function classifyTokenResponse(
     ...(typeof value.refresh_token === "string" && value.refresh_token.length > 0
       ? { refreshToken: value.refresh_token }
       : {}),
-    ...(expiresAt === undefined ? {} : { expiresAt }),
+    expiresAt,
     ...(typeof value.scope === "string" ? { scope: value.scope } : {}),
   };
 }
@@ -320,14 +386,14 @@ function oauthErrorCode(value: Record<string, unknown>): string | undefined {
 function expiresAtFromResponse(
   value: Record<string, unknown>,
   now: Date,
-): string | undefined {
+): string | null {
   if (typeof value.expires_in !== "number" || !Number.isFinite(value.expires_in)) {
-    return undefined;
+    return null;
   }
   return new Date(now.getTime() + Math.max(0, value.expires_in) * 1000).toISOString();
 }
 
-function retryAfterMs(response: Response): number | undefined {
+function retryAfterMs(response: Response, now = Date.now()): number | undefined {
   const value = response.headers.get("retry-after");
   if (value === null) return undefined;
   const seconds = Number(value);
@@ -338,7 +404,7 @@ function retryAfterMs(response: Response): number | undefined {
   if (Number.isNaN(date)) return undefined;
   return Math.min(
     OAUTH_REFRESH_MAX_BACKOFF_MS,
-    Math.max(0, date - Date.now()),
+    Math.max(0, date - now),
   );
 }
 
@@ -382,6 +448,40 @@ function parseJsonObject(text: string): { ok: true; value: Record<string, unknow
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isRedirectError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let i = 0; i < 4 && current !== undefined; i++) {
+    if (
+      current instanceof Error &&
+      /redirect/i.test(`${current.name} ${current.message}`)
+    ) {
+      return true;
+    }
+    current = typeof current === "object" && current !== null && "cause" in current
+      ? (current as { cause?: unknown }).cause
+      : undefined;
+  }
+  return false;
+}
+
+function publicState(state: VaultOauthRefreshState): RefreshCredentialState {
+  return {
+    workspaceId: state.workspaceId,
+    vaultId: state.vaultId,
+    credentialId: state.credentialId,
+    authVersion: state.authVersion,
+    mcpServerUrl: state.mcpServerUrl,
+    ...(state.expiresAt === undefined ? {} : { expiresAt: state.expiresAt }),
+    refreshStatus: state.refreshStatus,
+    refreshAttempts: state.refreshAttempts,
+    nextRefreshAt: state.nextRefreshAt,
+    authHintAt: state.authHintAt,
+    hasAccessToken: state.secrets.accessToken !== undefined,
+    hasRefreshToken: state.secrets.refreshToken !== undefined,
+    hasClientSecret: state.secrets.clientSecret !== undefined,
+  };
 }
 
 class ResponseBodyTooLargeError extends Error {}

@@ -214,7 +214,7 @@ export class SqliteVaultStore implements VaultStore {
       `UPDATE vault_credentials
        SET expires_at = ?, scope = ?, auth_version = auth_version + 1,
            refresh_status = 'ok', refresh_attempts = 0, next_refresh_at = ?,
-           updated_at = ?
+           auth_hint_at = NULL, updated_at = ?
        WHERE workspace_id = ? AND vault_id = ? AND id = ?
          AND auth_type = 'mcp_oauth'
          AND auth_version = ?
@@ -734,6 +734,7 @@ export class SqliteVaultStore implements VaultStore {
       refreshStatus: row.refresh_status,
       refreshAttempts: row.refresh_attempts,
       nextRefreshAt: row.next_refresh_at,
+      authHintAt: row.auth_hint_at,
     };
   }
 

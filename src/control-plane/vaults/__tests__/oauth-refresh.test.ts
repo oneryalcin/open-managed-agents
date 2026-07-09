@@ -49,6 +49,15 @@ describe("RefreshCoordinator", () => {
     });
 
     expect(result).toMatchObject({ outcome: "ok", persisted: "updated" });
+    expect(result).toMatchObject({
+      state: {
+        hasAccessToken: true,
+        hasRefreshToken: true,
+        hasClientSecret: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("NEXT_REFRESH");
+    expect(JSON.stringify(result)).not.toContain("CLIENT_SECRET");
     expect(fetch.calls).toHaveLength(1);
     expect(fetch.calls[0]).toMatchObject({
       url: TOKEN_ENDPOINT,
@@ -161,13 +170,33 @@ describe("RefreshCoordinator", () => {
       reason: "invalid_refresh_token",
       persisted: "updated",
     });
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "skipped",
+      reason: "invalid_status",
+      state: { refreshStatus: "invalid" },
+    });
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+        force: true,
+      }),
+    ).resolves.toMatchObject({ outcome: "invalid" });
     expect(store.readOauthRefreshState(WRK, VAULT, CREDENTIAL)).toMatchObject({
       authVersion: 1,
       refreshStatus: "invalid",
-      refreshAttempts: 1,
+      refreshAttempts: 2,
       nextRefreshAt: null,
       secrets: { accessToken: "ACCESS_TOKEN", refreshToken: "REFRESH_TOKEN" },
     });
+    expect(fetch.calls).toHaveLength(2);
   });
 
   it("persists transient retry-after failures without bumping auth_version", async () => {
@@ -177,7 +206,12 @@ describe("RefreshCoordinator", () => {
       headers: { "retry-after": "120" },
       response: { error: "temporarily_unavailable" },
     });
-    const coordinator = new RefreshCoordinator({ store, fetch, now: () => NOW });
+    const coordinator = new RefreshCoordinator({
+      store,
+      fetch,
+      now: () => NOW,
+      random: () => 0,
+    });
 
     const result = await coordinator.refreshCredential({
       workspaceId: WRK,
@@ -228,8 +262,9 @@ describe("RefreshCoordinator", () => {
     expect(result).toMatchObject({
       outcome: "ok",
       persisted: "stale",
-      state: { secrets: { accessToken: "OPERATOR_ACCESS" } },
+      state: { hasAccessToken: true, hasRefreshToken: true },
     });
+    expect(JSON.stringify(result)).not.toContain("OPERATOR_REFRESH");
     expect(store.readOauthRefreshState(WRK, VAULT, CREDENTIAL)).toMatchObject({
       authVersion: 2,
       secrets: { refreshToken: "OPERATOR_REFRESH" },
@@ -274,6 +309,112 @@ describe("RefreshCoordinator", () => {
       authVersion: 2,
       refreshStatus: null,
       secrets: { accessToken: "OPERATOR_ACCESS", refreshToken: "OPERATOR_REFRESH" },
+    });
+  });
+
+  it("clears stale expires_at when refresh omits expires_in", async () => {
+    createOauthCredential(store, "client_secret_post");
+    const fetch = tokenEndpointFixture({
+      response: { access_token: "LONG_LIVED_ACCESS" },
+    });
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => NOW });
+
+    const result = await coordinator.refreshCredential({
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "ok",
+      state: { nextRefreshAt: "2026-07-09T12:15:00.000Z" },
+    });
+    if (result.outcome === "ok") expect("expiresAt" in result.state).toBe(false);
+    const state = store.readOauthRefreshState(WRK, VAULT, CREDENTIAL);
+    expect(state).toMatchObject({
+      nextRefreshAt: "2026-07-09T12:15:00.000Z",
+      secrets: { accessToken: "LONG_LIVED_ACCESS", refreshToken: "REFRESH_TOKEN" },
+    });
+    expect("expiresAt" in state!).toBe(false);
+  });
+
+  it("uses a distinct redirect reason for token endpoint redirect failures", async () => {
+    createOauthCredential(store, "client_secret_post");
+    const coordinator = new RefreshCoordinator({
+      store,
+      fetch: async () => {
+        throw new TypeError("fetch failed", {
+          cause: new Error("unexpected redirect"),
+        });
+      },
+      now: () => NOW,
+      random: () => 0,
+    });
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "transient_error",
+      reason: "redirect_blocked",
+      state: { refreshStatus: "transient" },
+    });
+  });
+
+  it("rejects unexpected token_type as permanent invalid", async () => {
+    createOauthCredential(store, "client_secret_post");
+    const fetch = tokenEndpointFixture({
+      response: { access_token: "NEXT_ACCESS", token_type: "mac" },
+    });
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => NOW });
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "invalid",
+      reason: "unsupported_token_type",
+    });
+  });
+
+  it("reports static bearer credentials distinctly from missing credentials", async () => {
+    store.createCredential({
+      row: {
+        id: CREDENTIAL,
+        workspace_id: WRK,
+        vault_id: VAULT,
+        type: "vault_credential",
+        display_name: null,
+        metadata: {},
+        auth: { type: "static_bearer", mcp_server_url: MCP_URL },
+        auth_version: 1,
+        created_at: "2026-07-09T00:00:00.000Z",
+        updated_at: "2026-07-09T00:00:00.000Z",
+        archived_at: null,
+      },
+      token: "STATIC_TOKEN",
+    });
+    const coordinator = new RefreshCoordinator({
+      store,
+      fetch: tokenEndpointFixture({ response: { access_token: "unused" } }),
+      now: () => NOW,
+    });
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "skipped",
+      reason: "unsupported_credential_type",
     });
   });
 

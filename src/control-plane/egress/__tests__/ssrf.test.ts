@@ -25,6 +25,7 @@ describe("isBlockedAddress", () => {
       ["fc00::1", 6], // ULA
       ["fe80::1", 6], // link-local
       ["::ffff:127.0.0.1", 6], // ipv4-mapped loopback
+      ["::ffff:7f00:1", 6], // ipv4-mapped loopback after URL normalization
       ["::ffff:10.0.0.1", 6], // ipv4-mapped private
       ["64:ff9b::7f00:1", 6], // NAT64-embedded 127.0.0.1
       ["64:ff9b::a00:1", 6], // NAT64-embedded 10.0.0.1

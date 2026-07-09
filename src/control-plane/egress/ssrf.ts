@@ -70,8 +70,15 @@ const BLOCK_LIST = buildBlockList();
 // through an IPv6 literal; check the embedded IPv4 against the IPv4 rules so a
 // mapped private address can't slip past the IPv6 checks.
 function mappedIpv4(address: string): string | undefined {
-  const m = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(address);
-  return m ? m[1] : undefined;
+  const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(
+    address,
+  );
+  if (dotted) return dotted[1];
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(address);
+  if (!hex) return undefined;
+  const hi = Number.parseInt(hex[1], 16);
+  const lo = Number.parseInt(hex[2], 16);
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
 }
 
 export function isBlockedAddress(address: string, family: number): boolean {
