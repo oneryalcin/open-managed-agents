@@ -30,7 +30,7 @@ modeled on the **tool-permission** bridge, not the custom-tool bridge.
   `mcp_authentication_failed_error`. Closes the exit criterion. **Full spec:
   §7A (amendment, 2026-07-08).**
 - **M3** — `mcp_oauth` credential type + refresh worker +
-  `mcp_oauth_validate`.
+  `mcp_oauth_validate`. **Full spec: §7B (amendment, 2026-07-09).**
 
 ---
 
@@ -616,17 +616,8 @@ Suite discipline: `pkill -f vitest` first, foreground
 
 - **M2 — vaults + `static_bearer`.** ~~Sketch~~ — **superseded by the full
   amendment in §7A (2026-07-08).**
-- **M3 — `mcp_oauth` + refresh.** Credential type with `refresh` block
-  (`token_endpoint`, `client_id`, `scope`, `refresh_token`,
-  `token_endpoint_auth: none|client_secret_basic|client_secret_post`);
-  refresh on expiry (re-encrypt + persist, ADR 0016), retry/backoff;
-  `mcp_oauth_validate` endpoint (`valid|invalid|unknown` semantics);
-  re-resolution propagating to running sessions. Evaluate SDK
-  `authProvider` vs. plain header + own refresh loop at M3 planning time
-  (buy-vs-build note points at MCP SDK / openid-client mechanics). **No
-  OAuth authorization flow ever** — upstream's product boundary (the API
-  consumer runs the dance; the platform stores/injects/refreshes) is ours
-  too.
+- **M3 — `mcp_oauth` + refresh.** ~~Sketch~~ — **superseded by the full
+  amendment in §7B (2026-07-09).**
 
 ---
 
@@ -963,6 +954,300 @@ hook extend accordingly. No new instrument.
 5. Raw pagination shape — probe 50: list responses include `next_page` only
    when another page exists; terminal one-page responses omit it rather than
    returning `null`.
+
+---
+
+## 7B. M3 plan amendment (2026-07-09): `mcp_oauth` + refresh + `mcp_oauth_validate`
+
+Amends the §7 M3 sketch into a full slice spec. `file:line` against `main`
+at `40917ed` (M2 merged as `cf8cc4f`). Design decided with the user
+2026-07-09: OAuth-server support is practically required (Linear, Slack,
+Notion ship OAuth-first MCP servers), and the appliance constraint is
+binding — one `npm run` / one `docker compose`, no new processes, no queue
+infrastructure, no k8s.
+
+### 7B.1 Definition of done (M3)
+
+- Credential type `mcp_oauth` accepted on vault credential create/update
+  (wire shapes §7B.2), with `access_token`/`refresh_token`/`client_secret`
+  write-only and `mcp_server_url`/`token_endpoint`/`client_id` structurally
+  immutable (archive-and-recreate).
+- An agent session dials an OAuth-protected MCP server with a stored
+  access token; when the token expires, OMA refreshes it via the stored
+  `refresh` block and the session keeps working **without a restart and
+  without operator action** — proven by a live-style smoke against a
+  hermetic OAuth token-endpoint + bearer-checking MCP fixture pair.
+- `POST /v1/vaults/{v}/credentials/{c}/mcp_oauth_validate` returns the
+  `vault_credential_validation` object with `valid|invalid|unknown`
+  semantics.
+- Zero new deployment surface: no new process, no new required env vars,
+  the refresh loop lives in the existing control-plane process and the DB
+  remains the only state.
+- **No OAuth authorization flow, ever** (standing §8 non-goal): the API
+  consumer runs the dance and stores the resulting tokens; OMA stores,
+  injects, refreshes.
+
+### 7B.2 Wire contract (evidence: vaults.md crawl 2026-07-06 + SDK types; probe 52 to close the response subset)
+
+**Credential create (`auth.type: "mcp_oauth"`):**
+
+```json
+{
+  "display_name": "Alice's Slack",
+  "auth": {
+    "type": "mcp_oauth",
+    "mcp_server_url": "https://mcp.slack.com/mcp",
+    "access_token": "xoxp-…",
+    "expires_at": "2099-12-31T23:59:59Z",
+    "refresh": {
+      "token_endpoint": "https://slack.com/api/oauth.v2.access",
+      "client_id": "1234…",
+      "scope": "channels:read chat:write",
+      "refresh_token": "xoxe-1-…",
+      "token_endpoint_auth": {"type": "client_secret_post", "client_secret": "…"}
+    }
+  }
+}
+```
+
+- `token_endpoint_auth.type`: `none` | `client_secret_basic` |
+  `client_secret_post` (docs-enumerated).
+- `refresh` optional — without it the credential is a fixed OAuth access
+  token that simply starts failing at expiry (auth-failed events; `validate`
+  reports `no_refresh_token`).
+- **Update/rotate** merges: docs show `auth: {type, access_token,
+  expires_at, refresh: {refresh_token}}` rotating tokens while leaving
+  `token_endpoint`/`client_id`/`scope` untouched. Structural fields in an
+  update → 400 (M2 precedent, hosted-probed for `mcp_server_url`).
+- **Readable response subset** for `auth` is NOT probed (probe 50 covered
+  static_bearer only). Expected: `{type, mcp_server_url, expires_at,
+  refresh: {token_endpoint, client_id, scope, token_endpoint_auth: {type}}}`
+  minus all secret fields — **probe 52 captures the exact key set** before
+  implementation; write-only enforcement asserts on serialized JSON as in
+  M2.
+
+**`mcp_oauth_validate`** (docs `vaults.md:1080-1104`, literal response):
+
+```json
+{
+  "type": "vault_credential_validation",
+  "credential_id": "vcrd_…", "vault_id": "vlt_…",
+  "validated_at": "…", "has_refresh_token": false,
+  "status": "invalid",
+  "mcp_probe": {"method": "initialize",
+    "http_response": {"status_code": 401, "content_type": "…",
+      "body": "…", "body_truncated": false}},
+  "refresh": {"status": "no_refresh_token", "http_response": null}
+}
+```
+
+Status semantics (docs): `valid` = token works, no action; `invalid` =
+grant gone / OAuth server rejected refresh with 4xx → re-authorize;
+`unknown` = transient (5xx/429/network) → retry later. The endpoint applies
+to `mcp_oauth` credentials; behavior when called on a `static_bearer`
+credential is unprobed → probe 52 (expected 400).
+
+**Refresh grant itself** (standard RFC 6749 §6, hand-rolled — see §7B.3
+buy-vs-build): `POST token_endpoint` form-encoded
+`grant_type=refresh_token&refresh_token=…&client_id=…[&scope=…]`, client
+authentication per `token_endpoint_auth` (`none` → client_id in body only;
+`client_secret_basic` → `Authorization: Basic`; `client_secret_post` →
+`client_secret` in body). Response `{access_token, expires_in?,
+refresh_token?}` — a returned `refresh_token` ROTATES the stored one
+(providers like Slack rotate on every refresh); absent `expires_in` →
+treat as long-lived (re-check at the max ticker interval).
+
+### 7B.3 Design — lazy-first refresh, one in-process wake loop
+
+The load-bearing decision (user-ratified): **refresh needs no worker to be
+correct, only to be fresh.** Upstream's own lifecycle doc says
+re-resolution "also refreshes the access token if it has expired" — the
+trigger is expiry-at-resolution. So M3 is two layers, where the loop is an
+optimization that can die without breaking anything:
+
+**Layer 1 — lazy refresh at resolution (correctness).**
+`resolveCredential` (store, `vaults/store.ts:430`) already runs on every
+dial. For an `mcp_oauth` row with `expires_at - SKEW <= now` (SKEW 60s,
+constant with a loud comment), refresh synchronously in the dial path:
+token-endpoint POST **through the SSRF-guarded fetch** (`mcp/fetch.ts:27`
+— token endpoints are operator-supplied URLs, exactly the same threat
+class as server URLs), persist, then inject the fresh token. Persisting
+bumps `updated_at` → the M2 fingerprint machinery propagates rotation for
+free (budget reset, next-handle pickup). Cost: one ~300ms round-trip on
+the first dial after expiry — noise next to sandbox+model latency. Ships
+first; everything else layers on.
+
+**Layer 2 — one in-process ticker (freshness).** A single `setTimeout`
+loop in the existing control-plane process. **No job table — the
+credential row IS the job row**: new columns `next_refresh_at`,
+`refresh_attempts`, `refresh_status` (`ok|invalid|transient`) on
+`vault_credentials` (ALTER TABLE via the `ensureVaultIdsColumn` pattern,
+`sessions/store.ts:606`). Loop: `MIN(next_refresh_at)` over active
+mcp_oauth rows → sleep until then, capped at 15 min → refresh due rows
+with jitter. Restart recovery is "recompute next wake from SQLite" —
+nothing to replay. Scheduling policy: on create/rotate,
+`next_refresh_at = expires_at - LEAD` (LEAD 5 min); transient failure →
+exponential backoff capped at 15 min, jittered; permanent failure (4xx
+from the token endpoint) → `refresh_status = invalid`,
+`next_refresh_at = NULL` (proactive stops; a later credential update
+clears the status and re-schedules).
+
+**Reusable primitive, deliberately tiny.** `createWakeLoop({ nextWakeAt,
+run, maxSleepMs, onError })` (~60 lines, new
+`src/control-plane/wake-loop.ts`): no persistence of its own — state lives
+in domain tables; `close()` clears the timer. The sessions service's two
+snapshot-sweep retry machines could adopt it later — named follow-up, NOT
+migrated in M3 (scope discipline). This is the whole "background
+infrastructure class": one file, one timer, zero processes.
+
+**Single-flight + the multi-node seam.** Both layers share an in-process
+`Map<credentialId, Promise<RefreshOutcome>>` — a lazy dial and the ticker
+never double-refresh; concurrent dials for the same credential await one
+refresh. Correct under the documented single-node deployment contract
+(same basis as admission counters, 0113 D9). The store grows
+`claimDueRefreshes(now, limit)` — in the Postgres era that becomes an
+`UPDATE … RETURNING` claim and nothing above the store changes (the same
+deliberate-seam pattern as sqlite→postgres itself).
+
+**Secret storage.** `mcp_oauth` secret material is ONE `SecretsStore` row
+(same `vault/{v}/{c}` name) holding JSON `{access_token, refresh_token?,
+client_secret?}` — one seal path, and a refresh rotates access+refresh
+tokens **atomically** in the existing shared-transaction write
+(`store.ts:284` pattern). `static_bearer` rows stay raw strings (no
+migration; `auth_type` column discriminates — asymmetry documented in the
+store).
+
+**Failure semantics (no webhooks — standing gap).** Token-endpoint 4xx →
+`refresh_status = invalid`; resolution still injects the stale token so
+the MCP server's 401 produces the existing `mcp_authentication_failed_error`
+signal users already handle — and lazy refresh SKIPS further attempts
+while `invalid` (else every dial hammers a dead token endpoint).
+5xx/429/network → `transient`, backoff, stale token still injected
+meanwhile. One new metric:
+`oma_vault_credential_refreshes_total{outcome: ok|invalid|transient_error}`
++ audit log line (redaction chokepoint already covers headers; add the
+form-encoded `refresh_token`/`client_secret` body params to the
+`QUERY_CREDENTIAL`-style scrub patterns — same shape, different location).
+
+**Egress posture.** Proactive ticker starts only when `OMA_ENABLE_MCP` is
+on — a deployment with MCP disabled must not originate token-endpoint
+dials (lazy refresh is inherently gated: it only runs on dials, which the
+gate already stops). Vault CRUD stays ungated (M2 posture).
+
+**`mcp_oauth_validate` (synchronous, no background involvement).**
+Handler: (1) `mcp_probe` — initialize-dial the credential's
+`mcp_server_url` via `McpConnection` + guarded fetch with the current
+access token, capture status/content-type/body (truncated, capped — the
+body is server-controlled text landing in an API response: cap at 4KB,
+`body_truncated` flag; it does NOT flow through session events so the M2
+token-leak class doesn't apply, but scrub it anyway); (2) if the probe
+401/403s and a refresh block exists → attempt a real refresh → re-probe;
+(3) map to `valid|invalid|unknown` per the docs semantics + populate
+`refresh.status` (`no_refresh_token` when absent — docs-literal). Probe 52
+pins the exact field set and the static_bearer-called-on behavior.
+
+**Buy-vs-build (closes §7 M3's open note):** hand-roll the refresh POST
+(~30 lines, RFC 6749 §6 with three auth modes) rather than depend on
+`openid-client` — that library's value is discovery/DPoP/PKCE/authz flows,
+all of which are non-goals; a dependency with an auth-flow surface we must
+not expose is negative value here.
+
+### 7B.4 Probes (before implementation)
+
+- **Probe 52 (hosted, live)** — `scratch/52-mcp-oauth-hosted-probe`:
+  mcp_oauth credential CRUD wire shapes (readable `auth` subset on
+  create/get/list — the M3 blind spot; update-merge semantics on the
+  `refresh` block; structural immutability of `token_endpoint`/`client_id`
+  → expected 400); `mcp_oauth_validate` response field set for a bogus
+  credential (captures `invalid`/`unknown` + `mcp_probe`/`refresh` shapes
+  live; `has_refresh_token` both ways; the `?beta=true` query quirk from
+  the docs curl example); validate called on a `static_bearer` credential.
+  A `valid` capture needs a real OAuth grant — best-effort (skip if no
+  grant is at hand; the shape evidence is the requirement).
+- **No SDK probe needed** — M3 adds no new SDK surface (probe 49 already
+  pinned `requestInit` headers + rejection codes). The OAuth token-endpoint
+  fixture is a test fixture, not a probe: hermetic HTTP server implementing
+  the refresh grant for all three `token_endpoint_auth` modes, token
+  rotation, `expires_in`, `invalid_grant` 400, and 500/timeout modes.
+
+### 7B.5 Testing (M3)
+
+- **Refresh unit matrix** (token-endpoint fixture): all three auth modes
+  (Basic header vs body secret vs none), refresh-token rotation persisted
+  atomically with the new access token (assert one transaction: inject a
+  metadata failure → old tokens still resolve), `expires_in` → computed
+  `expires_at`, missing `expires_in` → long-lived policy, `invalid_grant`
+  → `refresh_status=invalid` + lazy-skip behavior, 500 → transient +
+  backoff schedule written.
+- **Lazy layer**: expired credential + dial → refresh happens in-path →
+  connect fixture observes the NEW token; single-flight (two concurrent
+  dials, fixture sees exactly one refresh POST); `invalid` status →
+  no refresh attempt, stale token injected, auth-failed event flows
+  (existing M2 machinery).
+- **Ticker layer**: due row refreshed without any dial; backoff on 5xx
+  (next_refresh_at advances, attempts increments); invalid → proactive
+  stops; credential update clears status + reschedules; restart recompute
+  (new store instance → correct next wake with no event replay);
+  `OMA_ENABLE_MCP` off → loop never starts (no token-endpoint egress);
+  wake-loop unit tests (next-wake ordering, close() cancels, onError
+  doesn't kill the loop).
+- **Fingerprint propagation**: refresh bumps `updated_at` → exhausted
+  budget resets and the next operation redials with the refreshed token
+  (M2's rotation test extended to refresh-driven rotation).
+- **Wire matrix** (vaults-api): mcp_oauth create/rotate round-trips;
+  write-only fields (`access_token`, `refresh_token`, `client_secret`)
+  never in any serialized response; structural immutability
+  (`token_endpoint`, `client_id`, `mcp_server_url`) → 400; refresh-block
+  merge update; validate endpoint statuses (valid via fixture, invalid,
+  unknown, no_refresh_token, static_bearer-called → probe-52-pinned
+  shape); `rotateMasterKey` rewraps the JSON secret row.
+- **Leak sweep**: refresh_token/client_secret absent from all persisted
+  events, API responses, and captured logs across a refresh cycle
+  (extends the M2 echoing-401 regression to the token-endpoint legs:
+  fixture echoes the refresh_token in an error body → asserted absent
+  from the persisted validation/error surfaces).
+- **Live-style smoke** (`scratch/53-mcp-oauth-live-smoke.ts`, smoke-51
+  recipe): full stack, real model turn — OAuth token-endpoint fixture +
+  bearer-checking MCP fixture; session dials with a pre-expired access
+  token → lazy refresh → tool call succeeds → sweep proves no secret
+  material in events; then rotate at the fixture and prove the next
+  operation uses the rotated token.
+
+### 7B.6 Docs (M3)
+
+- `dev-deployment.md`: mcp_oauth walkthrough (consumer runs the OAuth
+  dance; store tokens; refresh is automatic), validate endpoint, the
+  refresh_status/next_refresh_at semantics, no-webhooks note.
+- `threat-model.md`: token-endpoint dials as a control-plane egress class
+  (same SSRF guard), refresh secrets at rest (one sealed JSON row).
+- Parity ledger: webhooks (`vault_credential.refresh_failed`) still a
+  named gap — `refresh_status` + metric is the OMA-native signal;
+  credential-delete body still unprobed (7A disposition stands).
+- Roadmap 0114: capability item 3 fully DONE on merge.
+
+### 7B.7 M3 non-goals
+
+- OAuth authorization flow / consent / DCR / PKCE — standing product
+  boundary (§8).
+- Webhooks — no webhook surface; `refresh_status` + metrics instead.
+- `openid-client` (or any OAuth library) dependency — hand-rolled RFC 6749
+  §6 refresh only (§7B.3 buy-vs-build).
+- Multi-node refresh claims — `claimDueRefreshes` seam only; single-node
+  single-flight is the deployment contract.
+- Migrating the sessions snapshot-sweep retry machines onto
+  `createWakeLoop` — named follow-up issue after M3.
+- `environment_variable` credentials — unchanged non-goal (§8).
+
+### 7B.8 Open questions (probe 52 / review)
+
+1. Readable `auth` subset for mcp_oauth credential responses — probe 52.
+2. `mcp_oauth_validate` on a `static_bearer` credential — probe 52
+   (interim: 400).
+3. Whether hosted requires `expires_at` on create when a `refresh` block
+   is present (docs example always includes it) — probe 52; interim:
+   required with `refresh`, optional without (treat absent as long-lived).
+4. `validated_at`/probe ordering fields in the validation object under a
+   `valid` outcome — probe 52 best-effort (needs a live grant).
 
 ---
 
