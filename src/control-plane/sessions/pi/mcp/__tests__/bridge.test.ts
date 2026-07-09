@@ -20,6 +20,11 @@ import {
   type McpEmitter,
   type McpCredentialBinding,
 } from "../bridge.ts";
+import {
+  attachMcpAuthSnapshot,
+  recordRejectedMcpAuthorization,
+  runMcpAuthOperation,
+} from "../credential.ts";
 import { echoTool, startMcpFixture, type McpFixture } from "./fixture.ts";
 
 const seamFetch = createGuardedMcpFetch({ allowAddress: () => true });
@@ -158,6 +163,67 @@ describe("MCP tool bridge (plan 0122 §4.4)", () => {
       expect(forceRefresh).toHaveBeenCalledTimes(1);
       expect(onTransportFailure).not.toHaveBeenCalled();
       expectTerminalPair(recorded);
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("classifies a non-auth retry failure from the final status", async () => {
+    const fixture = await startMcpFixture([echoTool()]);
+    const binding: McpCredentialBinding = {
+      fingerprint: "vcrd_1:1",
+      identity: {
+        workspaceId: "wrk_default",
+        vaultId: "vlt_1",
+        credentialId: "vcrd_1",
+        authVersion: 1,
+        authType: "mcp_oauth",
+      },
+      authorize: async () => ({
+        authorization: "Bearer TOKEN_A",
+        identity: binding.identity,
+      }),
+      forceRefresh: async () => ({
+        status: "ready",
+        authorization: {
+          authorization: "Bearer TOKEN_B",
+          identity: { ...binding.identity, authVersion: 2 },
+        },
+      }),
+      knownSecrets: () => ["TOKEN_A", "Bearer TOKEN_A", "TOKEN_B", "Bearer TOKEN_B"],
+    };
+    try {
+      const onTransportFailure = vi.fn();
+      const { tools, connection } = await bridgeFixture({
+        fixture,
+        credential: binding,
+        onTransportFailure,
+      });
+      const rejected = await runMcpAuthOperation(async () => {
+        recordRejectedMcpAuthorization({
+          authorization: "Bearer TOKEN_A",
+          identity: binding.identity,
+        });
+        return attachMcpAuthSnapshot(
+          Object.assign(new Error("Unauthorized"), { code: 401 }),
+        );
+      });
+      const finalError = Object.assign(new Error("Upstream failed"), { code: 500 });
+      vi.spyOn(connection, "callTool")
+        .mockRejectedValueOnce(rejected)
+        .mockRejectedValueOnce(finalError);
+
+      await expect(
+        tools[0].execute(
+          "toolu_final_status",
+          { text: "hi" } as never,
+          undefined,
+          undefined,
+          undefined as never,
+        ),
+      ).rejects.toThrow("Upstream failed");
+      expect(onTransportFailure).toHaveBeenCalledExactlyOnceWith("srv", finalError);
       await connection.close();
     } finally {
       await fixture.close();
@@ -1090,11 +1156,32 @@ describe("createStoreBackedMcpCredentialResolver (plan 0122 M2)", () => {
     await binding?.authorize();
     expect(refreshCredential).toHaveBeenLastCalledWith(expect.not.objectContaining({ force: true }));
 
+    refreshCredential.mockClear();
+    metadata = {
+      ...metadata,
+      expiresAt: undefined as never,
+      authHintAt: NOW.toISOString(),
+      refreshStatus: "invalid",
+    };
+    await binding?.authorize();
+    expect(refreshCredential).not.toHaveBeenCalled();
+
+    metadata = { ...metadata, refreshStatus: "ok" };
     metadata = { ...metadata, expiresAt: undefined as never, authHintAt: NOW.toISOString() };
     await binding?.authorize();
     expect(refreshCredential).toHaveBeenLastCalledWith(expect.objectContaining({ force: true }));
 
     refreshCredential.mockClear();
+    metadata = {
+      ...metadata,
+      expiresAt: new Date(NOW.getTime() + 30_000).toISOString(),
+      authHintAt: null,
+      refreshStatus: "ok",
+      nextRefreshAt: new Date(NOW.getTime() + 60_000).toISOString(),
+    };
+    await binding?.authorize();
+    expect(refreshCredential).not.toHaveBeenCalled();
+
     metadata = {
       ...metadata,
       expiresAt: new Date(NOW.getTime() - 1).toISOString(),

@@ -265,7 +265,8 @@ export class SqliteVaultStore implements VaultStore {
     );
     this.persistOauthRefreshFailureStmt = this.db.prepare(
       `UPDATE vault_credentials
-       SET refresh_status = ?, refresh_attempts = ?, next_refresh_at = ?
+       SET refresh_status = ?, refresh_attempts = ?, next_refresh_at = ?,
+           auth_hint_at = NULL
        WHERE workspace_id = ? AND vault_id = ? AND id = ?
          AND auth_type = 'mcp_oauth'
          AND auth_version = ?
@@ -606,21 +607,23 @@ export class SqliteVaultStore implements VaultStore {
   }
 
   persistAuthHint(input: PersistAuthHintInput): PersistAuthHintResult {
-    const result = this.persistAuthHintStmt.run(
-      input.authHintAt,
-      input.workspaceId,
-      input.vaultId,
-      input.credentialId,
-      input.expectedAuthVersion,
-    ) as { changes: number };
-    const metadata = this.readCredentialRuntimeMetadata(
-      input.workspaceId,
-      input.vaultId,
-      input.credentialId,
-    );
-    return result.changes === 1
-      ? { status: "updated", metadata: metadata! }
-      : { status: "stale", metadata };
+    return withSqliteTransaction(this.db, () => {
+      const result = this.persistAuthHintStmt.run(
+        input.authHintAt,
+        input.workspaceId,
+        input.vaultId,
+        input.credentialId,
+        input.expectedAuthVersion,
+      ) as { changes: number };
+      const metadata = this.readCredentialRuntimeMetadata(
+        input.workspaceId,
+        input.vaultId,
+        input.credentialId,
+      );
+      return result.changes === 1 && metadata !== undefined
+        ? { status: "updated", metadata }
+        : { status: "stale", metadata };
+    });
   }
 
   readOauthRefreshState(

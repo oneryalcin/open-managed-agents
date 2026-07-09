@@ -205,6 +205,49 @@ describe("RefreshCoordinator", () => {
     expect(fetch.calls).toHaveLength(1);
   });
 
+  it("does not carry a forced-refresh floor across auth-version rotation", async () => {
+    createOauthCredential(store, "client_secret_post");
+    let now = NOW;
+    const fetch = tokenEndpointFixture({ response: { access_token: "NEXT_ACCESS" } });
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => now });
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+        force: true,
+        expectedAuthVersion: 1,
+      }),
+    ).resolves.toMatchObject({ outcome: "ok" });
+    store.updateCredential(
+      WRK,
+      VAULT,
+      CREDENTIAL,
+      {
+        auth: {
+          type: "mcp_oauth",
+          accessToken: "OPERATOR_ACCESS",
+          refreshToken: "OPERATOR_REFRESH",
+        },
+      },
+      new Date(NOW.getTime() + 1).toISOString(),
+    );
+    const rotated = store.readOauthRefreshState(WRK, VAULT, CREDENTIAL)!;
+    now = new Date(NOW.getTime() + 10_000);
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+        force: true,
+        expectedAuthVersion: rotated.authVersion,
+      }),
+    ).resolves.toMatchObject({ outcome: "ok" });
+    expect(fetch.calls).toHaveLength(2);
+  });
+
   it("records auth hints through the coordinator with an auth-version fence", () => {
     createOauthCredential(store, "client_secret_post");
     const coordinator = new RefreshCoordinator({
@@ -285,6 +328,13 @@ describe("RefreshCoordinator", () => {
 
   it("persists transient retry-after failures without bumping auth_version", async () => {
     createOauthCredential(store, "client_secret_post");
+    store.persistAuthHint({
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+      expectedAuthVersion: 1,
+      authHintAt: NOW.toISOString(),
+    });
     const fetch = tokenEndpointFixture({
       status: 429,
       headers: { "retry-after": "120" },

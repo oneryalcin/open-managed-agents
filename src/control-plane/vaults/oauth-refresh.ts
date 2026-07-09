@@ -41,6 +41,8 @@ export interface RefreshCredentialInput {
   vaultId: string;
   credentialId: string;
   force?: boolean;
+  /** Auth material rejected by the caller; scopes the forced-admission floor. */
+  expectedAuthVersion?: number;
 }
 
 export interface RefreshCredentialState {
@@ -126,7 +128,13 @@ export class RefreshCoordinator {
     if (existing) return existing;
     if (input.force === true) {
       const admittedAt = this.now().getTime();
-      const previousAdmission = this.forcedAdmissions.get(key);
+      for (const [admissionKey, timestamp] of this.forcedAdmissions) {
+        if (admittedAt - timestamp >= OAUTH_FORCED_REFRESH_FLOOR_MS) {
+          this.forcedAdmissions.delete(admissionKey);
+        }
+      }
+      const forcedKey = `${key}\0${input.expectedAuthVersion ?? "unversioned"}`;
+      const previousAdmission = this.forcedAdmissions.get(forcedKey);
       if (
         previousAdmission !== undefined &&
         admittedAt - previousAdmission < OAUTH_FORCED_REFRESH_FLOOR_MS
@@ -137,7 +145,7 @@ export class RefreshCoordinator {
           state: undefined,
         });
       }
-      this.forcedAdmissions.set(key, admittedAt);
+      this.forcedAdmissions.set(forcedKey, admittedAt);
     }
     const promise = this.refreshCredentialOnce(input).finally(() => {
       this.inflight.delete(key);

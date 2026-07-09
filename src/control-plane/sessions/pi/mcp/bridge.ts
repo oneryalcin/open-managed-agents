@@ -575,6 +575,7 @@ function createRuntimeCredentialBinding(args: {
   };
   const refreshAndResolve = async (
     force: boolean,
+    expectedAuthVersion?: number,
   ): Promise<RefreshCredentialResult | undefined> => {
     if (args.refresh === undefined || current.authType !== "mcp_oauth") return undefined;
     try {
@@ -583,6 +584,7 @@ function createRuntimeCredentialBinding(args: {
         vaultId: current.vaultId,
         credentialId: current.credentialId,
         ...(force ? { force: true } : {}),
+        ...(expectedAuthVersion === undefined ? {} : { expectedAuthVersion }),
       });
       return result;
     } catch {
@@ -599,22 +601,7 @@ function createRuntimeCredentialBinding(args: {
     },
     async authorize() {
       if (closed) throw new Error("MCP credential is no longer active");
-      const metadata = args.vaults.readCredentialRuntimeMetadata(
-        args.workspaceId,
-        current.vaultId,
-        current.credentialId,
-      );
-      if (metadata === undefined) {
-        closed = true;
-        throw new Error("MCP credential is no longer active");
-      }
-      if (metadata.authVersion !== current.authVersion) {
-        if (resolveCurrent() === undefined) {
-          closed = true;
-          throw new Error("MCP credential is no longer active");
-        }
-      }
-      const latest = args.vaults.readCredentialRuntimeMetadata(
+      let latest = args.vaults.readCredentialRuntimeMetadata(
         args.workspaceId,
         current.vaultId,
         current.credentialId,
@@ -623,9 +610,27 @@ function createRuntimeCredentialBinding(args: {
         closed = true;
         throw new Error("MCP credential is no longer active");
       }
+      if (latest.authVersion !== current.authVersion) {
+        if (resolveCurrent() === undefined) {
+          closed = true;
+          throw new Error("MCP credential is no longer active");
+        }
+        latest = args.vaults.readCredentialRuntimeMetadata(
+          args.workspaceId,
+          current.vaultId,
+          current.credentialId,
+        );
+        if (latest === undefined) {
+          closed = true;
+          throw new Error("MCP credential is no longer active");
+        }
+      }
       const refreshMode = admittedRefreshMode(latest, args.now());
       if (refreshMode !== undefined && args.refresh !== undefined) {
-        const refreshResult = await refreshAndResolve(refreshMode === "forced");
+        const refreshResult = await refreshAndResolve(
+          refreshMode === "forced",
+          refreshMode === "forced" ? latest.authVersion : undefined,
+        );
         if (
           refreshResult?.outcome === "skipped" &&
           refreshResult.reason === "forced_refresh_floor"
@@ -663,7 +668,7 @@ function createRuntimeCredentialBinding(args: {
       if (changedFrom(current, rejected)) {
         return { status: "ready", authorization: snapshot() };
       }
-      const result = await refreshAndResolve(true);
+      const result = await refreshAndResolve(true, rejected.identity.authVersion);
       if (result?.outcome === "skipped" && result.reason === "forced_refresh_floor") {
         if (resolveCurrent() === undefined) {
           closed = true;
@@ -726,10 +731,9 @@ function admittedRefreshMode(
   if (metadata.authType !== "mcp_oauth" || !metadata.hasRefresh) {
     return undefined;
   }
-  if (metadata.authHintAt !== null) return "forced";
   if (metadata.refreshStatus === "invalid") return undefined;
+  if (metadata.authHintAt !== null) return "forced";
   if (
-    metadata.refreshStatus === "transient" &&
     metadata.nextRefreshAt !== null &&
     new Date(metadata.nextRefreshAt).getTime() > now.getTime()
   ) {
