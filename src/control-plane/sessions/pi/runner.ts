@@ -825,7 +825,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
               ? {}
               : { operationTimeoutMs: mcpOpts.operationTimeoutMs }),
           });
-          return { server, fingerprint, count, connection };
+          return { server, credential, fingerprint, count, connection };
         } catch (error) {
           return {
             server,
@@ -876,6 +876,18 @@ export class PiSessionRunner implements RuntimeEventRunner {
         ...(mcpOpts.onToolCall === undefined
           ? {}
           : { onToolCall: mcpOpts.onToolCall }),
+        // A hostile server can echo the injected credential back in tool
+        // results or error bodies; the bridge scrubs every server-controlled
+        // string with the live values (plan 0122 §7B.9 slice 0). Both forms:
+        // the full header value and the bare token.
+        ...(outcome.credential === undefined
+          ? {}
+          : {
+              knownSecrets: [
+                outcome.credential.authorization,
+                outcome.credential.authorization.replace(/^Bearer /, ""),
+              ],
+            }),
         // Mid-call transport failure is connection-class (review 0122-M1,
         // Codex-adv): count it against the retry budget, surface the
         // structured mcp_connection_failed_error (once per server per

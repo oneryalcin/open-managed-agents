@@ -19,6 +19,11 @@ const MAX_METADATA_PAIRS = 16;
 const MAX_METADATA_KEY_LENGTH = 64;
 const MAX_METADATA_VALUE_LENGTH = 512;
 const MAX_CREDENTIALS_PER_VAULT = 20;
+// Floor matches scrubKnownSecrets' MIN_KNOWN_SECRET_LENGTH (logging.ts):
+// a token the scrubber cannot safely redact must not be storable, or a
+// hostile server echoing the bare token would bypass the #170 scrub
+// (review #170, Codex). OMA tightening; real bearer tokens are far longer.
+const MIN_TOKEN_LENGTH = 8;
 
 export class DefaultVaultService implements VaultService {
   constructor(private readonly store: VaultStore) {}
@@ -294,7 +299,7 @@ function parseCredentialCreate(input: unknown): {
         : nullableDisplayNameField(obj, "display_name"),
     metadata: metadataField(obj.metadata),
     mcpServerUrl: mcpServerUrlField(auth, "mcp_server_url", { required: true }),
-    token: stringField(auth, "token", { required: true }),
+    token: tokenField(auth),
   };
 }
 
@@ -320,9 +325,19 @@ function parseCredentialUpdate(input: unknown): {
     if (auth.mcp_server_url !== undefined) {
       throw invalidRequest("`auth.mcp_server_url` is immutable");
     }
-    updates.token = stringField(auth, "token", { required: true });
+    updates.token = tokenField(auth);
   }
   return updates;
+}
+
+function tokenField(auth: Record<string, unknown>): string {
+  const value = stringField(auth, "token", { required: true });
+  if (value.length < MIN_TOKEN_LENGTH) {
+    throw invalidRequest(
+      `\`auth.token\` must be at least ${MIN_TOKEN_LENGTH} characters`,
+    );
+  }
+  return value;
 }
 
 function authObject(input: unknown): Record<string, unknown> {
