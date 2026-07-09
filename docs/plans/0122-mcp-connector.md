@@ -1510,6 +1510,26 @@ surface is the flow we must never expose is negative value.
   `createWakeLoop` — named follow-up issue after M3.
 - `environment_variable` credentials — unchanged non-goal (§8).
 
+### 7B.9 Implementation order (agreed 2026-07-09)
+
+M3 lands as disciplined slices, each leaving the system consistent —
+review round 2 piled up mechanics (CAS, floors, retry-once, scrub
+threading, lifecycle) and a single pass is how one gets silently dropped:
+
+0. **Tool-result known-secret scrub** — standalone PR against `main`
+   BEFORE the M3 branch: it closes a live M2 gap (bearer echo into tool
+   results reaches events + the model) and lands `scrubKnownSecrets` as a
+   tested primitive the later slices reuse.
+1. Probes 52/53; fold wire-shape corrections only.
+2. Storage/schema/parser/API surface for `mcp_oauth` — no refresh yet
+   (credential behaves as a static bearer until expiry; coherent).
+3. `RefreshCoordinator` + token-endpoint fixture + CAS/fencing tests.
+4. Fetch-layer token provider wired into bridge/runner (mid-turn
+   freshness, 401-hint, retry-once).
+5. `mcp_oauth_validate`.
+6. Wake loop/ticker + deployment shutdown wiring.
+7. Live-style smoke + full leak sweep.
+
 ### 7B.8 Open questions (probes 52/53 / review)
 
 1. Readable `auth` subset for mcp_oauth credential responses — probe 52.
