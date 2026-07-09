@@ -98,7 +98,7 @@ implementing any row** (house discipline; the 0113 probes are the model).
 | Capability | Hosted | OMA today | Note |
 | --- | --- | --- | --- |
 | Skills | Loaded into session container | **Wire-accepted, runtime-inert** (`skills` parsed/stored/echoed; nothing in `sessions/pi/` consumes it) | Fundamentally files + instructions into the sandbox; no heavy dependency. **Now unblocked** (egress done) |
-| MCP servers | Sessions connect, auth handled | **Execution DONE (0122 M1, 2026-07-07)**; auth (vaults) pending M2 | Unauthenticated servers work end-to-end behind `OMA_ENABLE_MCP` |
+| MCP servers | Sessions connect, auth handled | **Execution DONE (0122 M1); vault auth DONE (M2, 2026-07-09)** — `mcp_oauth` refresh pending M3 | Servers work end-to-end behind `OMA_ENABLE_MCP`, `static_bearer` credentials the agent cannot read |
 | Sandbox networking | `environment.config.networking: {type: "limited", allowed_hosts}` | **DONE (2026-07-06)** — `networking.allow`/`credentials` parsed into a per-session egress policy; docker-local sidecar honors it, else `--network none` (0117c–e) | The enabling gap — now closed; skills, MCP, web tools, repo mounts unblocked |
 | Secret handling | Vault + boundary injection; secrets never in sandbox | **DONE (2026-07-06)** — envelope-encrypted `SqliteSecretsStore`, sentinels in the sandbox, real values injected only at the TLS-terminated proxy leg (0117c/d, 0118) | Same egress boundary does allowlist + injection; #130 closed |
 | Session usage | Cumulative token usage per session | `usage: null` | Wire schema + span-level usage already captured in [observability schema findings](../references/managed-agents-observability-schema-findings.md); metering = aggregation |
@@ -175,9 +175,12 @@ reach the network or use skills demos poorly):
    unblocked** — the next capability step when the product-layer pass pauses.
 3. 🟨 MCP server connections — **M1 execution shipped 2026-07-07** (plan 0122:
    control-plane `@modelcontextprotocol/sdk` client, streamable HTTP,
-   SSRF-guarded, `always_ask` default, gated by `OMA_ENABLE_MCP`). M2 vaults +
-   `static_bearer` and M3 `mcp_oauth` refresh remain (tokens via
-   `SecretsStore`, injected control-plane-side).
+   SSRF-guarded, `always_ask` default, gated by `OMA_ENABLE_MCP`).
+   **M2 vaults + `static_bearer` shipped 2026-07-09** (#167: `/v1/vaults` +
+   credentials CRUD, byte-exact URL resolution, control-plane-only bearer
+   injection, `mcp_authentication_failed_error`; tokens in `SecretsStore`,
+   live-smoke-proven never to reach the sandbox or event stream — the exit
+   criterion's MCP half is DONE). M3 `mcp_oauth` refresh remains.
 
 ## Deferred, with seams kept clean
 
