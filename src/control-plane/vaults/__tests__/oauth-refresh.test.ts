@@ -133,6 +133,39 @@ describe("RefreshCoordinator", () => {
     expect(JSON.stringify(result)).not.toContain(authorization);
   });
 
+  it("returns only a bare media type from token endpoint response metadata", async () => {
+    createOauthCredential(store, "client_secret_post");
+    const freshAccess = "FRESH_ACCESS_TOKEN";
+    const freshRefresh = "FRESH_REFRESH_TOKEN";
+    const coordinator = new RefreshCoordinator({
+      store,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ access_token: freshAccess, refresh_token: freshRefresh }),
+          {
+            status: 200,
+            headers: {
+              "content-type": `application/json; echoed=${freshAccess}; refresh=${freshRefresh}`,
+            },
+          },
+        ),
+      now: () => NOW,
+    });
+
+    const result = await coordinator.refreshCredential({
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+    });
+
+    expect(result.tokenEndpointResponse).toEqual({
+      statusCode: 200,
+      contentType: "application/json",
+    });
+    expect(JSON.stringify(result)).not.toContain(freshAccess);
+    expect(JSON.stringify(result)).not.toContain(freshRefresh);
+  });
+
   it("uses body client_id without client_secret for none auth", async () => {
     createOauthCredential(store, "none", { clientSecret: undefined });
     const fetch = tokenEndpointFixture({ response: { access_token: "NEXT" } });
@@ -773,6 +806,68 @@ describe("RefreshCoordinator", () => {
         contentType: "application/json",
       },
     });
+  });
+
+  it("cancels non-JSON token endpoint bodies without reading them", async () => {
+    createOauthCredential(store, "client_secret_post");
+    let cancelled = false;
+    const coordinator = new RefreshCoordinator({
+      store,
+      fetch: async () => new Response(
+        new ReadableStream({
+          cancel: () => {
+            cancelled = true;
+          },
+        }),
+        { status: 502, headers: { "content-type": "text/plain" } },
+      ),
+      now: () => NOW,
+    });
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "transient_error",
+      reason: "non_json_response",
+    });
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels and unlocks oversized JSON token endpoint bodies", async () => {
+    createOauthCredential(store, "client_secret_post");
+    let cancelled = false;
+    const coordinator = new RefreshCoordinator({
+      store,
+      fetch: async () => new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"access_token":"too-large"}'));
+          },
+          cancel: () => {
+            cancelled = true;
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      now: () => NOW,
+      maxBodyBytes: 8,
+    });
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "transient_error",
+      reason: "response_body_too_large",
+    });
+    expect(cancelled).toBe(true);
   });
 });
 

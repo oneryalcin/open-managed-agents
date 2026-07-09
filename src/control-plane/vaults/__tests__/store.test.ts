@@ -565,7 +565,7 @@ describe("SqliteVaultStore", () => {
     oldDb.close();
   });
 
-  it("lists only active due OAuth refresh rows in deterministic order", () => {
+  it("lists only active, non-invalid due OAuth refresh rows in deterministic order", () => {
     const vaultId = "vlt_due";
     createVault(store, vaultId);
     createOauthCredential(store, vaultId, "vcrd_due", `${URL}/due`, {
@@ -580,7 +580,24 @@ describe("SqliteVaultStore", () => {
       clientSecret: "SECRET_FUTURE",
       nextRefreshAt: "2026-07-08T01:00:00.000Z",
     });
+    createOauthCredential(store, vaultId, "vcrd_invalid", `${URL}/invalid`, {
+      accessToken: "ACCESS_INVALID",
+      refreshToken: "REFRESH_INVALID",
+      clientSecret: "SECRET_INVALID",
+      nextRefreshAt: "2026-07-08T00:00:30.000Z",
+    });
     createCredential(store, vaultId, "vcrd_static", `${URL}/static`, "STATIC_TOKEN");
+
+    store.persistOauthRefreshFailure({
+      workspaceId: WRK,
+      vaultId,
+      credentialId: "vcrd_invalid",
+      expectedAuthVersion: 1,
+      status: "invalid",
+      refreshAttempts: 1,
+      // Invalid rows are excluded even if legacy or manually-edited state has a due value.
+      nextRefreshAt: "2026-07-08T00:00:30.000Z",
+    });
 
     expect(store.listDueRefreshes("2026-07-08T00:30:00.000Z")).toEqual([
       {
@@ -594,6 +611,28 @@ describe("SqliteVaultStore", () => {
     expect(store.nextDueRefreshAt("2026-07-08T00:30:00.000Z")).toBe(
       "2026-07-08T00:01:00.000Z",
     );
+  });
+
+  it("applies the due-refresh limit after deterministic ordering", () => {
+    const vaultId = "vlt_due_limit";
+    createVault(store, vaultId);
+    for (const [id, nextRefreshAt] of [
+      ["vcrd_c", "2026-07-08T00:03:00.000Z"],
+      ["vcrd_a", "2026-07-08T00:01:00.000Z"],
+      ["vcrd_b", "2026-07-08T00:01:00.000Z"],
+    ] as const) {
+      createOauthCredential(store, vaultId, id, `${URL}/${id}`, {
+        accessToken: `ACCESS_${id}`,
+        refreshToken: `REFRESH_${id}`,
+        clientSecret: `SECRET_${id}`,
+        nextRefreshAt,
+      });
+    }
+
+    expect(store.listDueRefreshes("2026-07-08T01:00:00.000Z", 2)).toEqual([
+      expect.objectContaining({ credentialId: "vcrd_a" }),
+      expect.objectContaining({ credentialId: "vcrd_b" }),
+    ]);
   });
 });
 

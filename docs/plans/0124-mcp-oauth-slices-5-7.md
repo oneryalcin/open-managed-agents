@@ -82,6 +82,7 @@ routes.ts:73). Synchronous handler per §7B.3:
    | 401/403, NO refresh block on the credential | `invalid` | first probe's response | `no_refresh_token` (probe-52 exact: `52-…-probe.json:302`) |
    | 401/403 → refresh outcome `invalid` | `invalid` | first probe's response | `failed` |
    | 401/403 → refresh `transient_error` | `unknown` | first probe's response | `failed` |
+   | 401/403 → refresh failure persists `"stale"` because a concurrent writer rotated the credential → current-token re-probe succeeds | `valid` | re-probe response | `failed` |
    | 401/403 → refresh skipped `validate_floor` | `unknown` | first probe's response | `skipped` |
    | 401/403 → refresh skipped (`missing_client_secret` / `no_refresh_metadata` / `missing`) | `unknown` | first probe's response | `skipped` |
    | 401/403 → refresh ok (incl. `persisted: "stale"` — CAS loss means someone else refreshed; re-probe with the CURRENT store token) → re-probe succeeds | `valid` | re-probe response | `refreshed` |
@@ -94,6 +95,11 @@ routes.ts:73). Synchronous handler per §7B.3:
    `skipped`) are OMA's — revisit against hosted if a later probe
    captures a refresh-attempted validate (round 3 F2). Every row above
    gets a full-response-equality test.
+
+   A stale failure is intentionally distinct from a successful refresh: the
+   failed token-endpoint attempt belongs to the old auth version, while the
+   current-store re-probe reports whether the winning material works now. The
+   response therefore may be `status: "valid"` with `refresh.status: "failed"`.
 
    `refresh.status` populated per §7B.2 (`no_refresh_token` when
    absent). **`refresh.http_response` NEVER carries a token-bearing

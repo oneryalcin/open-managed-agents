@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { scrubKnownSecrets } from "../logging.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import type {
   PersistAuthHintInput,
@@ -333,16 +332,12 @@ export class RefreshCoordinator {
     try {
       const init = buildRefreshRequest(state, controller.signal);
       const response = await this.fetchImpl(state.refresh!.tokenEndpoint, init);
-      const outboundAuthorization = new Headers(init.headers).get("authorization");
       tokenEndpointResponse = {
         statusCode: response.status,
-        contentType: scrubKnownSecrets(
-          response.headers.get("content-type") ?? "",
-          [
-            ...secretValues(state),
-            ...(outboundAuthorization === null ? [] : [outboundAuthorization]),
-          ],
-        ),
+        // This crosses the control-plane response boundary. Keep only a validated
+        // media type: token endpoint headers are server controlled and may echo a
+        // freshly issued grant which is not in the pre-refresh scrub set yet.
+        contentType: safeMediaType(response.headers.get("content-type")),
       };
       const body = await readLimitedText(response, this.maxBodyBytes);
       const parsed = parseJsonObject(body);
@@ -524,27 +519,42 @@ function retryAfterMs(response: Response, now = Date.now()): number | undefined 
 async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.toLowerCase().includes("json")) {
+    await response.body?.cancel().catch(() => undefined);
     return "";
   }
   if (response.body === null) return "";
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    if (value === undefined) continue;
-    total += value.byteLength;
-    if (total > maxBytes) throw new ResponseBodyTooLargeError();
-    chunks.push(value);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value === undefined) continue;
+      total += value.byteLength;
+      if (total > maxBytes) throw new ResponseBodyTooLargeError();
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(bytes);
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(bytes);
+}
+
+const MEDIA_TYPE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+function safeMediaType(value: string | null): string {
+  const mediaType = (value ?? "").split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return MEDIA_TYPE.test(mediaType) ? mediaType : "application/octet-stream";
 }
 
 function parseJsonObject(text: string): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
@@ -607,12 +617,4 @@ function pruneAdmissions(
   for (const [key, timestamp] of admissions) {
     if (now - timestamp >= floorMs) admissions.delete(key);
   }
-}
-
-function secretValues(state: VaultOauthRefreshState): string[] {
-  return [
-    state.secrets.accessToken,
-    state.secrets.refreshToken,
-    state.secrets.clientSecret,
-  ].filter((value): value is string => value !== undefined);
 }
