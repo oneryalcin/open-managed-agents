@@ -26,15 +26,28 @@ routes.ts:73). Synchronous handler per §7B.3:
    lookup or network call — locked by a zero-network-call test.
 2. Active credential lookup: archived → 400 "Credential is archived."
    (probe 52, NOT 404); `static_bearer` → 400 (probe 52).
-3. `mcp_probe`: initialize-dial `mcp_server_url` via `McpConnection` +
-   the deployment's guarded fetch with the CURRENT access token. Capture
-   `{status_code, content_type, body (4KB cap), body_truncated}`; body
-   passes through `scrubKnownSecrets` with the credential's live secret
-   values (access token, refresh token, client secret).
+3. `mcp_probe`: **NOT via `McpConnection`** (review round 2 F1 —
+   slice 4 gave `connect()` its own internal 401→refresh→redial and it
+   exposes tools, never the HTTP response). New dedicated
+   `probeMcpInitialize(url, authorization, fetch, { capBytes: 4096,
+   timeoutMs })` in `mcp/`: ONE raw JSON-RPC `initialize` POST through
+   the guarded fetch with a FROZEN token — no binding, no automatic
+   recovery, no discovery. Returns
+   `{ reached: true, statusCode, contentType, body, bodyTruncated }`
+   (body streamed to the 4KB cap, never fully buffered) or
+   `{ reached: false }`; transport/reader always cleaned up. The
+   HANDLER exclusively owns the refresh decision and the single
+   re-probe. Probe body passes through `scrubKnownSecrets` with the
+   credential's live secret values (access token, refresh token,
+   client secret).
 4. On 401/403 with a refresh block: refresh THROUGH
    `RefreshCoordinator.refreshCredential` with `trigger: "validate"`
-   (below) and `expectedAuthVersion` = the probed version, then re-probe
-   once.
+   (below) and `expectedAuthVersion` = the probed version, then
+   re-probe once. **Coordinator result change**: outcomes gain
+   `tokenEndpointResponse?: { statusCode, contentType }` — safe
+   metadata only, NEVER a body (review round 2 F1:
+   `RefreshCredentialResult` currently carries nothing to populate
+   `refresh.http_response` from).
 5. Map to `valid | invalid | unknown` — the FULL table (pre-impl review
    F5; only the auth chain may conclude `invalid`):
 
@@ -71,15 +84,35 @@ is validate's purpose. Joins single-flight like every trigger. Success
 already clears `invalid` + `auth_hint_at` and reschedules via
 `persistOauthRefreshSuccess` (`store.ts:256-264`) — no new store work.
 
-**Dependency seam (pre-impl review F3).** `vaultsRoutes(service)`
-(`routes.ts:6`) has no access to the guarded fetch or coordinator;
-`createDefaultMcpRuntime`'s products currently flow only to the runner
-(`app.ts:578-589`). Thread a new optional dependency into
-`vaultsRoutes`: `mcp?: { fetch: McpFetch; refresh: RefreshCoordinator }`,
-wired from the deployment's single runtime in `app.ts`. When the
-deployment has MCP off (`runtimeConfig.mcp === undefined`) OR the seam
-is absent (test override), validate returns the gate-off 400 — same
-response, one code path.
+**(d) — and its OWN floor (review round 2 F2: "operator calls are
+inherently rate-limited" was wrong — `admission.ts` covers
+sessions/turns/uploads/streams, not this route, so sequential validate
+spam would mean one token-endpoint POST per request).** A separate
+`validateAdmissions` map, keyed `${workspaceId\0vaultId\0credentialId}\0${authVersion}`,
+floor `OAUTH_VALIDATE_REFRESH_FLOOR_MS = 10_000` — long enough that a
+scripted caller cannot hammer a third-party IdP, short enough that an
+operator retrying after fixing their IdP config is never blocked
+meaningfully. Floored → `skipped`/`validate_floor` → validate `status:
+"unknown"` (the probe still ran and is reported). The single-flight
+join still precedes this floor. The probe POST itself (to the MCP
+server) stays unthrottled — same egress class as a session-create dial,
+already accepted posture.
+
+**Dependency seam (pre-impl review F3, sharpened by round 2 F5).**
+`vaultsRoutes(service)` (`routes.ts:6`) has no access to the guarded
+fetch or coordinator, and `createDefaultMcpRuntime` is today created
+only when `opts.runner?.mcp === undefined` (app.ts:537) — so a custom
+runner override would silently disable operator validation and the
+ticker. Restructure: ONE deployment-owned MCP control-plane runtime
+`{ fetch, refreshCoordinator, ticker }`, created iff
+`runtimeConfig.mcp !== undefined` (the egress gate), INDEPENDENT of
+the runner-override seam. The default runner consumes it when no
+override is supplied; validate and the ticker consume it ALWAYS (a
+custom runner changes how sessions dial, not whether operators can
+validate credentials or scheduled refresh runs). `vaultsRoutes` gains
+`mcp?: { fetch: McpFetch; refresh: RefreshCoordinator }` from it. MCP
+off → runtime absent → validate returns the gate-off 400 — one code
+path.
 
 ## Slice 6 — wake-loop ticker + shutdown
 
@@ -89,17 +122,38 @@ response, one code path.
   timer AND awaits any in-flight `run()` (§7B.3; this codebase's known
   teardown bug class). Sessions snapshot-sweep adoption is a named
   follow-up, NOT in M3.
-- **Store seam**: `claimDueRefreshes(now, limit)` on `VaultStore` — the
-  credential row IS the job row. Plain SELECT (safe: in-process
-  single-flight is the concurrency control; the Postgres-era
-  `UPDATE … RETURNING` claim fits behind the same signature — 0113 D9)
-  of active `auth_type = 'mcp_oauth'` rows with `next_refresh_at <=
-  now`, EXCLUDING `refresh_status = 'invalid'` (invalid waits for
-  validate; §7B invalid-skip — and invalid rows carry
-  `next_refresh_at = NULL`, so they're doubly excluded). Separately,
-  `nextDueRefreshAt(now)` — a standalone store query the loop invokes
-  as its `nextWakeAt` callback each iteration (pre-impl review F7: NOT
-  a value plumbed out of `run()`).
+- **Store seam**: `listDueRefreshes(now, limit)` on `VaultStore`
+  (review round 2 F3: renamed from `claimDueRefreshes` — the parent
+  plan scopes multi-node claiming as a non-goal (0122:1500), and
+  calling a plain SELECT a "claim" implies lease semantics nobody
+  designed; the Postgres-era claim becomes a NEW method when leases
+  are real). Contract: plain SELECT of active `auth_type = 'mcp_oauth'`
+  rows with `next_refresh_at <= now`, EXCLUDING `refresh_status =
+  'invalid'` (invalid waits for validate; §7B invalid-skip — and
+  invalid rows carry `next_refresh_at = NULL`, so they're doubly
+  excluded), ORDER BY `next_refresh_at ASC`, LIMIT `limit` (default
+  batch 50). Backlog larger than a batch drains across iterations: the
+  overdue remainder keeps `nextWakeAt` in the past, so the loop re-runs
+  at the 30s `minSleepMs` pace until caught up — no draining loop
+  inside `run()`. In-process single-flight is the concurrency control
+  (0113 D9 single-node contract). Separately, `nextDueRefreshAt(now)` —
+  a standalone store query the loop invokes as its `nextWakeAt`
+  callback each iteration (pre-impl review F7: NOT a value plumbed out
+  of `run()`).
+- **Scheduling seed (review round 2 F3 — without this the ticker never
+  sees most rows)**: today `insertCredentialStmt` leaves
+  `next_refresh_at` NULL (`store.ts:196-202`) and auth rotation resets
+  it to NULL (`store.ts:211-216`), so a never-dialed credential and
+  every operator-rotated credential are invisible to the wake loop and
+  fall back to lazy-only. Fix at both write sites, for `mcp_oauth`
+  rows with complete refresh metadata: compute `next_refresh_at` with
+  the EXISTING exported policy (`nextRefreshAt`: TTL ≥ LEAD →
+  `expires_at − LEAD`; TTL < LEAD → `now + max(TTL/2, FLOOR)`;
+  `expires_at` absent → `now + OAUTH_REFRESH_LONG_LIVED_RECHECK_MS`).
+  Rows WITHOUT a refresh token/metadata stay NULL (nothing to refresh —
+  ticker correctly blind to them). Tests: create-without-dial gets
+  scheduled; rotation reschedules; restart picks both up;
+  refresh-less credential stays unscheduled.
 - **Ticker run**: for each claimed row call `refreshCredential({...})`
   WITHOUT `force` and WITHOUT `trigger` — the lazy trigger; joins any
   in-flight runtime refresh via single-flight. **`run()` AWAITS all
@@ -130,7 +184,13 @@ response, one code path.
   startup-failure catch (main.ts:133-141) closes the loop before
   `stores.close()` too. `close()` cancels the timer and awaits any
   in-flight `run()` — so an in-flight refresh completes its persist
-  before the DB closes.
+  before the DB closes. **Review round 2 F4 additions**: the
+  deployment-level `close()` is idempotent (double-close is a no-op,
+  not a throw); and `createDeploymentControlPlaneApp` (app.ts:391),
+  which returns `.app` and DISCARDS stores, must NOT start the ticker —
+  it passes an internal no-background-workers option, since a ticker it
+  starts can never be closed. Tests: close during in-flight refresh,
+  double-close, bind failure, app-only construction starts no timer.
 - Metrics (if trivial): reuse the existing refresh outcome metric; no
   new instrumentation surface in M3.
 
@@ -140,18 +200,32 @@ response, one code path.
 (boot real deployment, real agent turn, assert on the events store):
 
 - mcp_oauth credential against a local MCP fixture + local token
-  endpoint (via the `allowInsecureTokenEndpoint` seam); short TTL so a
-  refresh happens mid-session; assert the fixture sees the ROTATED
+  endpoint. **The `allowInsecureTokenEndpoint` seam does not exist yet
+  and must be BUILT in this slice** (review round 2 F6: §7B.3 names it
+  but service.ts:529 rejects http unconditionally, guarded fetch blocks
+  loopback, and deployment assembly has no fetch override): a test-only
+  option threaded through service create-validation AND deployment
+  assembly, patterned on the runner's `allowAddress` SSRF seam
+  (runner.ts:107) — never reachable from production wiring. Short TTL
+  so a refresh happens mid-session; assert the fixture sees the ROTATED
   token on the next tool call without reconnect.
 - 401 path: fixture revokes the token → hint → forced refresh → retry
   → tool call succeeds; assert exactly one token-endpoint POST.
 - Redirect: point a refresh at an endpoint that 302s → assert
   `redirect_blocked` (real undici already verified standalone
   2026-07-09; this pins it in the smoke).
-- **Leak sweep** (the M3 DoD): dump ALL events + session responses +
-  logs from the run and grep for the access token, refresh token, and
-  client secret in raw, `Bearer `-prefixed, and JSON-embedded forms —
-  `token_in_events: false` as smoke 51 established for static_bearer.
+- **Leak sweep** (the M3 DoD, hardened per review round 2 F6): use
+  CANARY secrets containing characters that change under encoding
+  (e.g. `+/=&?%` in the token); exhaust event pagination via
+  `next_page` (not one page); capture BOTH stdout and stderr; include
+  a hostile MCP fixture response echoing the CURRENT and a ROTATED
+  token; search raw, `Bearer `-prefixed, JSON-embedded, JSON-escaped,
+  percent-encoded, and base64/Basic-auth representations of every
+  canary — `token_in_events: false` as smoke 51 established for
+  static_bearer, now falsifiable.
+- 4KB probe cap exercised with a multi-chunk response split
+  mid-UTF-8-codepoint; assert truncation without buffering the hostile
+  body (review round 2 F6).
 - `mcp_oauth_validate` called live against the fixture in valid,
   invalid (dead grant), and unknown (5xx) states.
 
@@ -195,6 +269,21 @@ From the pre-impl review (F8 — §7B.5 rows the first draft omitted):
   refresh RUNS (floor bypassed); a hint-triggered call immediately after
   a failed validate-refresh at the same authVersion → floored.
 
+From review round 2:
+
+- Sequential validate spam: second validate inside 10s → refresh
+  skipped `validate_floor`, exactly ONE token-endpoint POST, response
+  `status: "unknown"`.
+- Deliberate re-validate of an `invalid` credential → refresh RUNS
+  (trigger bypasses the invalid-skip) and clears `invalid` on success.
+- Full response-shape equality pinned for every mapping-table branch,
+  including refresh-success-then-401 re-probe, transport failure, and
+  the floored branch.
+- `probeMcpInitialize`: frozen token (no binding), no internal retry,
+  reader cleanup on timeout/abort, cap streaming.
+- Custom-runner deployment: validate and ticker still function
+  (round 2 F5).
+
 ## Current source anchors (re-confirm before editing)
 
 - `src/control-plane/vaults/oauth-refresh.ts`: `RefreshCredentialInput`
@@ -219,3 +308,13 @@ From the pre-impl review (F8 — §7B.5 rows the first draft omitted):
   (`closeServer` → `stores.close()`) and the startup-failure catch at
   :133-141. Loop close inserts between server close and store close in
   BOTH.
+- `src/control-plane/sessions/pi/mcp/client.ts:70`:
+  `McpConnection.connect` auto-refreshes/redials on 401 and exposes no
+  HTTP response — unusable as the validate probe (round 2 F1);
+  `probeMcpInitialize` is new.
+- `src/control-plane/vaults/store.ts:196-202` (insert leaves
+  `next_refresh_at` NULL) and `:211-216` (rotation resets it NULL) —
+  the two scheduling-seed write sites.
+- `src/control-plane/admission.ts`: workspace admission limits do not
+  cover the validate route — the validate refresh floor is the
+  coordinator's own (round 2 F2).
