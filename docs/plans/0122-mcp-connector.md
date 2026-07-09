@@ -974,11 +974,14 @@ infrastructure, no k8s.
   immutable (archive-and-recreate).
 - An agent session dials an OAuth-protected MCP server with a stored
   access token; when the token expires — **including mid-turn on a warm
-  connection** (review round 1: the call-time provider, §7B.3) — OMA
-  refreshes it via the stored `refresh` block and the session keeps
-  working **without a restart, without a reconnect, and without operator
-  action** — proven by a live-style smoke against a hermetic OAuth
-  token-endpoint + bearer-checking MCP fixture pair. Named residual
+  connection** (round 1: the call-time provider) and **including early
+  revocation the clock cannot see** (round 2: 401-hint + one-shot retry
+  of the failed request after a successful forced refresh — safe because
+  auth rejection precedes tool execution) — OMA refreshes via the stored
+  `refresh` block and the session keeps working **without a restart,
+  without a reconnect, without a user-visible failed call, and without
+  operator action** — proven by a live-style smoke against a hermetic
+  OAuth token-endpoint + bearer-checking MCP fixture pair. Named residual
   (§7B.3): a process crash inside the milliseconds between the provider
   rotating a refresh token and OMA's persist can burn the grant —
   surfaces as `invalid`, recovers via consumer re-auth.
@@ -1053,14 +1056,20 @@ to `mcp_oauth` credentials; behavior when called on a `static_bearer`
 credential is unprobed → probe 52 (expected 400).
 
 **Refresh grant itself** (standard RFC 6749 §6, hand-rolled — see §7B.3
-buy-vs-build): `POST token_endpoint` form-encoded
-`grant_type=refresh_token&refresh_token=…&client_id=…[&scope=…]`, client
-authentication per `token_endpoint_auth` (`none` → client_id in body only;
-`client_secret_basic` → `Authorization: Basic`; `client_secret_post` →
-`client_secret` in body). Response `{access_token, expires_in?,
-refresh_token?}` — a returned `refresh_token` ROTATES the stored one
-(providers like Slack rotate on every refresh); absent `expires_in` →
-treat as long-lived (re-check at the max ticker interval).
+buy-vs-build): `POST token_endpoint` form-encoded. The COMMON body is
+`grant_type=refresh_token&refresh_token=…[&scope=…]`; client
+authentication then adds, PER MODE and never combined (review round 2,
+independent P2 — the earlier draft of this paragraph contradicted §7B.3):
+`none` → `client_id` in the body; `client_secret_post` → `client_id` +
+`client_secret` in the body; `client_secret_basic` → `Authorization:
+Basic base64(urlencode(client_id):urlencode(client_secret))` header with
+NO `client_id` in the body. Response `{access_token, expires_in?,
+refresh_token?, scope?}` — a returned `refresh_token` ROTATES the stored
+one (providers like Slack rotate on every refresh); a returned `scope`
+narrows the stored one (note the asymmetry: `scope` is API-immutable on
+update, but the IdP may shrink it — an operator cannot widen it back
+without archive-and-recreate); absent `expires_in` → treat as long-lived
+(re-check at the max ticker interval).
 
 ### 7B.3 Design — call-time token provider, lazy-first refresh, one in-process wake loop
 
@@ -1090,16 +1099,50 @@ source moves from a frozen option to a live closure. Consequences:
 - This ANSWERS §3.4's open `authProvider` note: the SDK's OAuth
   `authProvider` seam is rejected — our fetch wrapper achieves per-request
   freshness without adopting an SDK surface designed around the
-  authorization flows we must never expose.
+  authorization flows we must never expose. (Round-2 Opus seam-verified
+  this against the SDK source: `_commonHeaders()` recomputes per send,
+  emits no `Authorization` without `authProvider`/`requestInit` auth, and
+  the wrapper receives a live `Headers` object — per-request injection is
+  authoritative and unclobbered.)
+- **The provider NEVER throws (round 2, Opus F3):** on ANY refresh
+  failure — transient or permanent — it injects the best-available
+  (stale) token and lets the server's 401 classify through the existing
+  machinery. A throwing provider would reject `callTool` and tear down
+  the handle as a transport failure; inject-stale keeps the graceful
+  auth-failed path.
+- **The provider caches (round 2, Opus F8):** the connection closure
+  holds `{accessToken, expiresAt, authVersion}` in memory; the hot
+  tool-call path re-enters the coordinator (and the store/`reveal()`
+  decrypt) ONLY when the cache is stale, hinted, or the version bumped —
+  never a per-request unseal.
+- **Per-request means per-HTTP-request (round 2, Opus F7, SDK-verified):**
+  a streaming response carries its open-time token, bounded by the
+  operation timeout; the SDK's standalone SSE channel opens on reconnect,
+  which re-runs the wrapper and picks up a fresh token. Not a freshness
+  hole; stated so nobody mistakes it for one.
 
-**401-hinted refresh (review: Opus F7).** Expiry-clock-only refresh misses
-early revocation and consumer-supplied wrong `expires_at`. When a dial or
-call fails with the auth classification (§M2 `mcpConnectErrorType`), the
-failure path marks the credential `auth_hint_at = now`; the provider/
-resolver attempts ONE forced refresh (single-flighted, subject to the
-backoff floor) on the next resolution for that credential even if the
-clock says valid. Bounded: the floor prevents 401-storm token-endpoint
-hammering.
+**401-hinted refresh (review: Opus F7; revised round 2).** Expiry-clock-
+only refresh misses early revocation and consumer-supplied wrong
+`expires_at`. Identity plumbing is explicit (round 2, independent P2):
+each authenticated `McpConnection` carries `{credentialId, authVersion}`;
+`onTransportFailure` threads it through, and unauthenticated/
+`static_bearer` connections carry none (hint is a no-op). On an
+auth-classified failure the failure path stamps `auth_hint_at = now` on
+the credential; the provider attempts ONE forced refresh (single-flighted)
+even if the clock says valid, and — because an auth rejection happens
+BEFORE the tool executes, so no idempotency hazard exists — the bridge
+retries the failed MCP request EXACTLY ONCE after a successful forced
+refresh (round 2, Codex-adv: without this, the first call that discovers
+a revoked token is a user-visible failure and the DoD's "keeps working"
+overclaims). Bounding is a **forced-refresh minimum interval**
+(`FORCED_REFRESH_MIN_INTERVAL`, 60s per credential) DECOUPLED from
+`refresh_attempts` (round 2, Opus F1: the attempts counter resets on
+every successful refresh, so a server that 401s unconditionally while the
+IdP keeps issuing valid tokens would otherwise drive 1:1
+request→token-endpoint amplification — the interval floor, not the
+backoff, is what bounds that storm; within the interval, hints are
+ignored, the stale/valid-per-clock token is injected, and the auth-failed
+signal flows).
 
 **Refresh execution: `RefreshCoordinator` (new, control-plane service
 above the store — review: Opus F5 layering, independent-analysis async
@@ -1129,8 +1172,12 @@ finding).** The store stays synchronous SQLite. The coordinator owns:
   redirect rejection is classified `transient` with a distinct, named log
   reason so a canonical-domain IdP misconfiguration is diagnosable, not a
   silent perpetual backoff (review: Sonnet 13).
-- Failure classification (review: Opus F6): permanence keys on the OAuth
-  error CODE — `invalid_grant` → `refresh_status = invalid`,
+- Failure classification (review: Opus F6; permanent set widened round 2,
+  Codex + Opus F5): permanence keys on the OAuth error CODE — the
+  PERMANENT set is `invalid_grant`, `invalid_client`,
+  `unauthorized_client`, `invalid_scope`, `unsupported_grant_type` (all
+  are operator/consumer misconfiguration or dead grants that retries
+  cannot fix) → `refresh_status = invalid`,
   `next_refresh_at = NULL`, lazy/hinted refresh SKIPS (stale token still
   injected → the existing auth-failed signal; only a credential update or
   a successful validate-refresh clears it). ALL other failures — other
@@ -1138,15 +1185,33 @@ finding).** The store stays synchronous SQLite. The coordinator owns:
   exponential backoff, jittered, capped at 15 min, honoring `Retry-After`
   when present (also capped). `refresh_attempts` RESETS to 0 on success.
 
-**Refresh persistence: compare-and-swap, fenced (review: independent H4,
-Sonnet 3, Opus F1).** The coordinator persists via a new store method that
-executes ONE shared transaction: `UPDATE vault_credentials SET … WHERE id
-= ? AND updated_at = <version read before the POST> AND archived_at IS
-NULL` — and ONLY if that row-update took effect does the secret row get
-written. Stale version (operator rotated meanwhile) → the refresh outcome
-is DISCARDED, never clobbering the operator's newer tokens; archived or
-deleted meanwhile → discarded, never resurrecting a purged secret
-(preserves M2's revocation guarantee — review: Sonnet 3's sharpest case).
+**Refresh persistence: compare-and-swap on a MONOTONIC version, fenced
+(review: independent H4, Sonnet 3, Opus F1; fence corrected round 2 —
+Codex, Opus F4, Codex-adv all hit it).** `vault_credentials` gains an
+`auth_version` INTEGER column: a monotonic counter incremented by every
+path that touches auth material — credential token update, refresh
+persist, archive, delete. It replaces two things the round-1 draft
+overloaded onto wallclock `updated_at`: (1) the CAS fence — `UPDATE
+vault_credentials SET … auth_version = auth_version + 1 WHERE id = ? AND
+auth_version = <version read before the POST> AND archived_at IS NULL`,
+immune to same-millisecond collisions and, deliberately, NOT bumped by
+cosmetic edits (`display_name`/metadata), so a metadata edit racing a
+rotating refresh no longer burns the grant (round-2 Codex's sharpest
+case); and (2) the M2 fingerprint component — `credentialId:authVersion`
+— which as a side effect stops cosmetic edits from resetting the M2
+failure budget (a small M2 correctness improvement for free). ONLY if the
+row-update takes effect does the secret row get written, in the same
+transaction. Stale version → the refresh outcome is DISCARDED; archived
+or deleted meanwhile → discarded, never resurrecting a purged secret
+(M2's revocation guarantee — Sonnet 3's sharpest round-1 case).
+**Discard semantics for the caller (round 2, Opus F2 + Sonnet):** after a
+discard the coordinator RE-READS the row and returns the currently
+persisted token to the in-flight dial and every single-flight awaiter
+(the operator's newer token, normally); if the re-read token is itself
+stale/missing, it returns the best available stale token and lets the
+auth-failed signal flow — a discarded refresh NEVER retries and never
+loops back into single-flight. The validate handler re-probes with the
+same re-read token.
 The **burned-token crash window** cannot be closed locally: between the
 provider rotating the refresh token server-side and our commit, a process
 crash loses the new tokens and the stored refresh token is dead (Opus F1
@@ -1173,9 +1238,11 @@ loop; **the credential row IS the job row**: columns `next_refresh_at`,
 `MIN(next_refresh_at)` over active mcp_oauth rows → sleep until then,
 capped at 15 min AND floored at 30s (review: Sonnet 4 — a token with TTL
 < LEAD would otherwise compute a permanently-past `next_refresh_at` and
-thrash; policy: `next_refresh_at = max(expires_at - LEAD, now + FLOOR)`
-with LEAD 5 min, FLOOR 30s; TTL < LEAD → refresh at `expires_at/2`
-elapsed, floored). Restart recovery: recompute next wake from SQLite.
+thrash; policy made branch-explicit in round 2 (Codex): TTL ≥ LEAD →
+`next_refresh_at = expires_at - LEAD`; TTL < LEAD → `next_refresh_at =
+now + max(TTL/2, FLOOR)` — a 2-minute token refreshes at ~60s, not at
+the 30s floor; LEAD 5 min, FLOOR 30s). Restart recovery: recompute next
+wake from SQLite.
 **Ownership (review: independent M7)**: the loop is created by
 `createDeploymentControlPlane`, and the deployment close path closes it
 BEFORE stores close — `createWakeLoop`'s `close()` cancels the timer and
@@ -1225,8 +1292,20 @@ live secret values (the coordinator holds tokens pre/post rotation; the
 validate handler holds the credential's secrets) and scrubs its own
 output before anything is returned, persisted, or logged. Applied to:
 `mcp_probe.http_response.body`, token-endpoint error details in audit
-logs, and refresh failure messages (which remain fixed strings per M2 —
-belt and braces). Additionally the form-body params `refresh_token` /
+logs, refresh failure messages (which remain fixed strings per M2 — belt
+and braces), and — round 2, Codex-adv HIGH — **ordinary MCP tool-result
+content in the bridge**: a hostile server can echo the injected bearer
+into a tool result, which persists to `agent.mcp_tool_result` AND returns
+to the model — the latter directly violates "credentials the agent cannot
+read". The bridge's result normalization gains the active connection's
+known-secret values and scrubs content before persist/return. This
+retroactively covers M2 `static_bearer` tokens too (the gap exists on
+main today; M3 closes it for both credential types). **Stated
+limitation:** exact-value scrubbing catches verbatim echoes only —
+base64/URL-encoded/split reflections pass (the server already holds the
+plaintext, so this is defense-in-depth for log/event readers, not an
+exfil barrier); values shorter than 8 chars are not scrubbed
+(pathological replacement guard). Additionally the form-body params `refresh_token` /
 `client_secret` join a body-param scrub pattern (first-param form
 included — `QUERY_CREDENTIAL` requires a `[?&]` prefix and would miss it;
 review: Opus F11).
@@ -1319,18 +1398,36 @@ surface is the flow we must never expose is negative value.
   `Retry-After` honored (capped); timeout aborts at the deadline; `scope`
   narrowing persisted and used on the next refresh; unexpected
   `token_type` → invalid-class; `refresh_attempts` resets on success.
-- **CAS/fencing matrix** (review round 1's race theme): refresh completes
-  after an operator rotation → outcome discarded, operator tokens stand;
-  after archive → discarded, purged secret NOT resurrected (`reveal` still
-  undefined); after hard delete → no orphan secret row; validate-refresh
-  racing the ticker → single-flight, fixture sees exactly one POST.
+- **CAS/fencing matrix** (round 1's race theme + round-2 fence fix):
+  refresh completes after an operator rotation → outcome discarded,
+  operator tokens stand, AND the caller receives the re-read operator
+  token (caller-visible semantics locked, not just DB state); after
+  archive → discarded, purged secret NOT resurrected (`reveal` still
+  undefined); after hard delete → no orphan secret row; **fixed-clock
+  same-millisecond regression**: operator rotation stamped in the same ms
+  as the coordinator's pre-POST read cannot be clobbered (`auth_version`
+  fence, round-2 Codex/Opus/Codex-adv); cosmetic `display_name`/metadata
+  edit racing a rotating refresh does NOT discard it (auth_version
+  unbumped) and does NOT reset the M2 failure budget; validate-refresh
+  racing the ticker → single-flight, fixture sees exactly one POST;
+  401-hint racing a lazy resolution and racing the ticker → single POST
+  each (the two untested pairwise races from round 2).
 - **Lazy layer**: expired credential + dial → refresh in-path → connect
   fixture observes the NEW token; **mid-turn**: a warm connection's next
   request after expiry carries the refreshed token with NO reconnect
   (fetch-layer provider — the round-1 headline fix, asserted at the
-  fixture); 401-hint → one forced refresh despite a valid clock, floor
-  prevents a second; concurrent dials single-flight; `invalid` status →
-  no refresh attempt, stale token injected, auth-failed event flows.
+  fixture); **401-hint end-to-end** (round 2): warm connection + early
+  revocation (fixture rejects a clock-valid token) → forced refresh → the
+  SAME failed request retried exactly once → succeeds, user-visible
+  failure count zero; a second 401 inside `FORCED_REFRESH_MIN_INTERVAL` →
+  no token-endpoint POST (the storm bound — fixture counts POSTs under a
+  hostile always-401 server); provider transient-refresh-failure →
+  injects stale, NO throw, auth-failed classification (not handle
+  teardown); provider cache: N tool calls on a fresh token → zero
+  additional store reads/decrypts; concurrent dials single-flight;
+  `invalid` status → no refresh attempt, stale token injected,
+  auth-failed event flows; fixed-token credential (no `refresh` block)
+  past expiry → no refresh attempt, auth-failed event on dial.
 - **Ticker layer**: due row refreshed without any dial; backoff on 5xx;
   invalid → proactive stops; credential update clears status +
   reschedules; successful validate-refresh clears invalid + reschedules;
@@ -1359,15 +1456,28 @@ surface is the flow we must never expose is negative value.
   optional without) locked; refresh-block merge update; validate endpoint
   statuses (valid via fixture, invalid, unknown, no_refresh_token,
   static_bearer-called, archived → 404, gate-off → 400 with ZERO network
-  calls); `mcp_probe` oversized-body → 4KB truncation + flag;
+  calls); **blocked-range literal-IP token_endpoint**
+  (`https://169.254.169.254/token`) → 400 (round-2 Sonnet — the SSRF
+  check itself, not just syntax); **`allowInsecureTokenEndpoint`
+  mutation pair** (seam absent → http fixture unreachable; seam set →
+  reachable; production wiring never sets it — M1 `allowAddress`
+  discipline, round-2 Sonnet HIGH); redirect rejection carries its
+  DISTINCT named log reason (diagnosability lock, not just the transient
+  outcome); scope-absent refresh response preserves the stored scope;
+  `mcp_probe` oversized-body → 4KB truncation + flag;
   `refresh.http_response` carries no body on the valid path.
 - **Leak sweep**: access_token AND refresh_token AND client_secret absent
   from all persisted events, API responses, and captured logs across a
   full refresh cycle and a validate call — including a hostile MCP server
   echoing the access token into its 401 body (`scrubKnownSecrets` at the
-  validate surface) and a token endpoint echoing the refresh_token into
-  an error body; `scrubKnownSecrets` unit tests; form-body param scrub
-  incl. first-param position.
+  validate surface), **a tool whose RESULT echoes the current and the
+  rotated access token → scrubbed from `agent.mcp_tool_result`, the API/
+  event stream, AND the model-visible return** (round-2 Codex-adv HIGH;
+  fixture-driven, covers static_bearer retroactively), and a token
+  endpoint echoing the refresh_token into an error body;
+  `scrubKnownSecrets` unit tests incl. pathological values (empty/short
+  secrets not scrubbed per the stated ≥8-char guard, no corruption of
+  unrelated output); form-body param scrub incl. first-param position.
 - **Live-style smoke** (`scratch/54-mcp-oauth-live-smoke.ts`, smoke-51
   recipe): full stack, real model turn — OAuth token-endpoint fixture +
   bearer-checking MCP fixture; session dials with a pre-expired access
@@ -1603,3 +1713,28 @@ Endorsed unchanged by reviewers: the lazy-first + ticker skeleton,
 credential-row-as-job-row with recompute-from-SQLite recovery,
 `createWakeLoop` minimalism, the `openid-client` buy-vs-build rejection,
 and the fingerprint machinery reuse (Opus verified the seam).
+
+**M3 amendment review round 2 (2026-07-09)** — same panel against
+`4cd4abc`, briefed as a verification pass. Unanimous: the round-1
+architecture holds (Opus seam-verified the fetch-layer injection against
+the SDK source — per-send header recompute, no clobber; the independent
+pass judged all round-1 majors "actually folded, not papered over").
+12 findings, all precision pins, all folded:
+
+| Item | Findings | Disposition |
+|---|---|---|
+| `auth_version` fence | Codex P2, Opus F4, Codex-adv HIGH (3 independent hits) | CAS moves off wallclock `updated_at` onto a monotonic auth-material counter; cosmetic edits no longer burn racing refreshes NOR reset the M2 failure budget (free M2 improvement); fixed-clock same-ms regression test. |
+| Tool-result scrub | Codex-adv HIGH | `scrubKnownSecrets` threaded into bridge result normalization — a server echoing the bearer into a tool result reached persisted events AND the model (violating "credentials the agent cannot read"); gap exists on main for M2 static_bearer, M3 closes both; echo-fixture test incl. model-visible return. |
+| One-shot 401 retry | Codex-adv MED | The failed request that discovers a revoked token is retried exactly once after a successful forced refresh (auth rejection precedes tool execution — no idempotency hazard); DoD upgraded to "no user-visible failed call". |
+| Forced-refresh interval floor | Opus F1 | The round-1 "bounded" claim was false for the success-401 path (`refresh_attempts` resets on success); a per-credential 60s forced-refresh minimum interval bounds hostile-server amplification. |
+| CAS-discard caller semantics | Opus F2, Sonnet F3 | Re-read row → return persisted token to the dial and all single-flight awaiters; still-stale → best-available stale; never retry-loop. |
+| Provider never throws / caches | Opus F3+F8 | Inject-stale-on-any-refresh-failure (throw = spurious handle teardown); connection closure caches `{token, expiresAt, authVersion}` — no per-request unseal. |
+| Permanent-4xx set | Codex P2, Opus F5 | `invalid_client`, `unauthorized_client`, `invalid_scope`, `unsupported_grant_type` join `invalid_grant`. |
+| Half-life branch | Codex P2 | Formula made branch-explicit (2-min token → ~60s, not the 30s floor). |
+| §7B.2 Basic consistency | independent P2 | Wire-contract paragraph rewritten per-mode; scope API-immutable vs IdP-narrowable asymmetry noted. |
+| 401-hint identity | independent P2 | Connections carry `{credentialId, authVersion}`; `onTransportFailure` threads it; unauth/static → no-op. |
+| SSE bound stated | Opus F7, Sonnet F7 | SDK-verified benign (standalone SSE opens on reconnect → fresh token); stated so it isn't mistaken for a freshness hole. |
+| Test locks | Sonnet F1+F2+F4+F5+F6+F10 | Seam mutation pair, blocked-range literal-IP, 401-hint pairwise races, redirect log-reason lock, scrub pathological values (≥8-char guard), fixed-token expiry path. |
+
+Verdict after fold: §7B implementation-ready pending probes 52/53
+(both explicitly endorsed as the remaining gates by the round-2 panel).
