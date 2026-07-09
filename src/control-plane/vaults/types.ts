@@ -19,14 +19,34 @@ export interface VaultCredentialRow {
   type: "vault_credential";
   display_name: string | null;
   metadata: Record<string, string>;
-  auth: {
-    type: "static_bearer";
-    mcp_server_url: string;
-  };
+  auth: VaultCredentialAuth;
+  auth_version: number;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
 }
+
+export type VaultCredentialAuth =
+  | {
+      type: "static_bearer";
+      mcp_server_url: string;
+    }
+  | {
+      type: "mcp_oauth";
+      mcp_server_url: string;
+      expires_at?: string;
+      refresh?: {
+        token_endpoint: string;
+        client_id: string;
+        scope?: string;
+        token_endpoint_auth: {
+          type:
+            | "none"
+            | "client_secret_basic"
+            | "client_secret_post";
+        };
+      };
+    };
 
 export interface ManagedVault {
   id: string;
@@ -44,10 +64,7 @@ export interface ManagedVaultCredential {
   vault_id: string;
   display_name?: string | null;
   metadata: Record<string, string>;
-  auth: {
-    type: "static_bearer";
-    mcp_server_url: string;
-  };
+  auth: VaultCredentialAuth;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -134,7 +151,14 @@ export interface VaultStore {
     updates: {
       displayName?: string | null;
       metadata?: Record<string, string>;
-      token?: string;
+      auth?:
+        | { type: "static_bearer"; token: string }
+        | {
+            type: "mcp_oauth";
+            expiresAt?: string | null;
+            accessToken?: string;
+            refreshToken?: string;
+          };
     },
     updatedAt: string,
   ): VaultCredentialRow | undefined;

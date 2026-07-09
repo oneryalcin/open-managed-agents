@@ -21,6 +21,9 @@ import type { ManagedAgentsSession } from "../../types/sessions.ts";
 import { createRawControlPlaneApp, MANAGED_AGENTS_BETA } from "./helpers.ts";
 
 const TOKEN = "vault-token-0122";
+const OAUTH_ACCESS = "oauth-access-0122";
+const OAUTH_REFRESH = "oauth-refresh-0122";
+const OAUTH_CLIENT_SECRET = "oauth-client-secret-0122";
 const SERVER_URL = "https://mcp.example.com/mcp";
 
 describe("vaults API", () => {
@@ -89,6 +92,190 @@ describe("vaults API", () => {
       body: { name: "vault/user-visible", value: "nope" },
     });
     expect(reserved.status).toBe(400);
+    fixture.close();
+  });
+
+  it("creates mcp_oauth credentials without returning secret values", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+
+    const created = await createOauthCredential(fixture.app, key, vault.id);
+    expect(created.status).toBe(200);
+    const text = await created.text();
+    for (const secret of [OAUTH_ACCESS, OAUTH_REFRESH, OAUTH_CLIENT_SECRET]) {
+      expect(text).not.toContain(secret);
+    }
+    const credential = JSON.parse(text) as {
+      id: string;
+      auth: {
+        type: string;
+        mcp_server_url: string;
+        expires_at?: string;
+        refresh?: {
+          token_endpoint: string;
+          client_id: string;
+          scope: string;
+          token_endpoint_auth: { type: string; client_secret?: string };
+        };
+        access_token?: string;
+        refresh_token?: string;
+      };
+    };
+    expect(credential).toMatchObject({
+      type: "vault_credential",
+      vault_id: vault.id,
+      auth: {
+        type: "mcp_oauth",
+        mcp_server_url: SERVER_URL,
+        expires_at: "2099-12-31T23:59:59Z",
+        refresh: {
+          token_endpoint: "https://oauth.example.com/token",
+          client_id: "client-id",
+          scope: "read write",
+          token_endpoint_auth: { type: "client_secret_post" },
+        },
+      },
+    });
+    expect(credential.auth.access_token).toBeUndefined();
+    expect(credential.auth.refresh_token).toBeUndefined();
+    expect(credential.auth.refresh?.token_endpoint_auth.client_secret).toBeUndefined();
+    expect(
+      JSON.parse(
+        fixture.secrets?.reveal(
+          "wrk_default",
+          vaultSecretName(vault.id, credential.id),
+        ) ?? "{}",
+      ),
+    ).toEqual({
+      access_token: OAUTH_ACCESS,
+      refresh_token: OAUTH_REFRESH,
+      client_secret: OAUTH_CLIENT_SECRET,
+    });
+    fixture.close();
+  });
+
+  it("accepts missing mcp_oauth expires_at but rejects past expires_at", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+
+    const missing = await createOauthCredential(fixture.app, key, vault.id, {
+      expiresAt: null,
+      serverUrl: `${SERVER_URL}/no-expiry`,
+    });
+    expect(missing.status).toBe(200);
+    const missingBody = await missing.json() as { auth: { expires_at?: string } };
+    expect(missingBody.auth.expires_at).toBeUndefined();
+
+    const past = await createOauthCredential(fixture.app, key, vault.id, {
+      expiresAt: "2000-01-01T00:00:00Z",
+      serverUrl: `${SERVER_URL}/past-expiry`,
+    });
+    expect(past.status).toBe(400);
+    expect(await past.text()).toContain("expires_at must be in the future");
+    fixture.close();
+  });
+
+  it("rejects unsafe mcp_oauth token endpoints", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+
+    for (const [tokenEndpoint, expected] of [
+      ["http://oauth.example.com/token", "https URL"],
+      ["https://user:pass@oauth.example.com/token", "userinfo"],
+      ["https://oauth.example.com/token#frag", "userinfo or fragments"],
+      ["https://169.254.169.254/token", "not allowed"],
+    ] as const) {
+      const res = await createOauthCredential(fixture.app, key, vault.id, {
+        serverUrl: `${SERVER_URL}/${encodeURIComponent(tokenEndpoint)}`,
+        tokenEndpoint,
+      });
+      expect(res.status, tokenEndpoint).toBe(400);
+      expect(await res.text()).toContain(expected);
+    }
+    fixture.close();
+  });
+
+  it("rotates mcp_oauth tokens while preserving structural fields", async () => {
+    const fixture = makeVaultsFixture();
+    const key = fixture.mintKey("wrk_default");
+    const vault = await createVault(fixture.app, key);
+    const created = await createOauthCredential(fixture.app, key, vault.id);
+    const credential = await created.json() as { id: string };
+
+    const rotated = await request(
+      fixture.app,
+      `/v1/vaults/${vault.id}/credentials/${credential.id}`,
+      {
+        method: "POST",
+        key,
+        body: {
+          auth: {
+            type: "mcp_oauth",
+            access_token: "oauth-access-rotated",
+            expires_at: "2099-12-31T23:59:59Z",
+            refresh: { refresh_token: "oauth-refresh-rotated" },
+          },
+        },
+      },
+    );
+    expect(rotated.status).toBe(200);
+    expect(await rotated.json()).toMatchObject({
+      auth: {
+        type: "mcp_oauth",
+        mcp_server_url: SERVER_URL,
+        expires_at: "2099-12-31T23:59:59Z",
+        refresh: {
+          token_endpoint: "https://oauth.example.com/token",
+          client_id: "client-id",
+          scope: "read write",
+          token_endpoint_auth: { type: "client_secret_post" },
+        },
+      },
+    });
+    expect(
+      JSON.parse(
+        fixture.secrets?.reveal(
+          "wrk_default",
+          vaultSecretName(vault.id, credential.id),
+        ) ?? "{}",
+      ),
+    ).toEqual({
+      access_token: "oauth-access-rotated",
+      refresh_token: "oauth-refresh-rotated",
+      client_secret: OAUTH_CLIENT_SECRET,
+    });
+
+    for (const body of [
+      {
+        auth: {
+          type: "mcp_oauth",
+          refresh: {
+            token_endpoint: "https://oauth.changed.example/token",
+            refresh_token: "oauth-refresh-rotated-2",
+          },
+        },
+      },
+      {
+        auth: {
+          type: "mcp_oauth",
+          refresh: {
+            client_id: "changed-client",
+            refresh_token: "oauth-refresh-rotated-2",
+          },
+        },
+      },
+    ]) {
+      const res = await request(
+        fixture.app,
+        `/v1/vaults/${vault.id}/credentials/${credential.id}`,
+        { method: "POST", key, body },
+      );
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("immutable");
+    }
     fixture.close();
   });
 
@@ -493,6 +680,43 @@ function createCredential(
         type: "static_bearer",
         mcp_server_url: opts.serverUrl ?? SERVER_URL,
         token: opts.token,
+      },
+    },
+  });
+}
+
+function createOauthCredential(
+  app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> },
+  key: string,
+  vaultId: string,
+  opts: {
+    serverUrl?: string;
+    expiresAt?: string | null;
+    tokenEndpoint?: string;
+  } = {},
+): Promise<Response> {
+  const expiresAt =
+    opts.expiresAt === undefined ? "2099-12-31T23:59:59Z" : opts.expiresAt;
+  return request(app, `/v1/vaults/${vaultId}/credentials`, {
+    method: "POST",
+    key,
+    body: {
+      display_name: "OAuth credential",
+      auth: {
+        type: "mcp_oauth",
+        mcp_server_url: opts.serverUrl ?? SERVER_URL,
+        access_token: OAUTH_ACCESS,
+        ...(expiresAt === null ? {} : { expires_at: expiresAt }),
+        refresh: {
+          token_endpoint: opts.tokenEndpoint ?? "https://oauth.example.com/token",
+          client_id: "client-id",
+          scope: "read write",
+          refresh_token: OAUTH_REFRESH,
+          token_endpoint_auth: {
+            type: "client_secret_post",
+            client_secret: OAUTH_CLIENT_SECRET,
+          },
+        },
       },
     },
   });

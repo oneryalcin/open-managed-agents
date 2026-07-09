@@ -9,6 +9,7 @@ import type {
   ListVaultCredentialsOptions,
   ListVaultsOptions,
   VaultCredentialResolution,
+  VaultCredentialAuth,
   VaultCredentialRow,
   VaultRow,
   VaultStore,
@@ -39,6 +40,12 @@ CREATE TABLE IF NOT EXISTS vault_credentials (
   metadata        TEXT NOT NULL,
   auth_type       TEXT NOT NULL,
   mcp_server_url  TEXT NOT NULL,
+  token_endpoint  TEXT,
+  client_id       TEXT,
+  scope           TEXT,
+  token_endpoint_auth_type TEXT,
+  expires_at      TEXT,
+  auth_version    INTEGER NOT NULL DEFAULT 1,
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,
   archived_at     TEXT
@@ -68,11 +75,27 @@ interface VaultCredentialDbRow {
   type: "vault_credential";
   display_name: string | null;
   metadata: string;
-  auth_type: "static_bearer";
+  auth_type: "static_bearer" | "mcp_oauth";
   mcp_server_url: string;
+  token_endpoint: string | null;
+  client_id: string | null;
+  scope: string | null;
+  token_endpoint_auth_type:
+    | "none"
+    | "client_secret_basic"
+    | "client_secret_post"
+    | null;
+  expires_at: string | null;
+  auth_version: number;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+}
+
+interface OauthSecretPayload {
+  access_token?: unknown;
+  refresh_token?: unknown;
+  client_secret?: unknown;
 }
 
 export class SqliteVaultStore implements VaultStore {
@@ -100,6 +123,7 @@ export class SqliteVaultStore implements VaultStore {
     private readonly secrets?: SecretsStore,
   ) {
     this.db.exec(SCHEMA);
+    ensureVaultCredentialColumns(this.db);
     this.insertVaultStmt = this.db.prepare(
       `INSERT INTO vaults (
         id, workspace_id, type, display_name, metadata, created_at, updated_at, archived_at
@@ -134,8 +158,9 @@ export class SqliteVaultStore implements VaultStore {
     this.insertCredentialStmt = this.db.prepare(
       `INSERT INTO vault_credentials (
         id, workspace_id, vault_id, type, display_name, metadata, auth_type,
-        mcp_server_url, created_at, updated_at, archived_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        mcp_server_url, token_endpoint, client_id, scope, token_endpoint_auth_type,
+        expires_at, auth_version, created_at, updated_at, archived_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.retrieveCredentialActiveStmt = this.db.prepare(
       `SELECT * FROM vault_credentials
@@ -147,12 +172,14 @@ export class SqliteVaultStore implements VaultStore {
     );
     this.updateCredentialMetadataStmt = this.db.prepare(
       `UPDATE vault_credentials
-       SET display_name = ?, metadata = ?, updated_at = ?
+       SET display_name = ?, metadata = ?, expires_at = ?, auth_version = ?,
+           updated_at = ?
        WHERE workspace_id = ? AND vault_id = ? AND id = ? AND archived_at IS NULL`,
     );
     this.archiveCredentialStmt = this.db.prepare(
       `UPDATE vault_credentials
-       SET archived_at = COALESCE(archived_at, ?), updated_at = ?
+       SET archived_at = COALESCE(archived_at, ?), auth_version = auth_version + 1,
+           updated_at = ?
        WHERE workspace_id = ? AND vault_id = ? AND id = ?`,
     );
     this.deleteCredentialStmt = this.db.prepare(
@@ -298,6 +325,14 @@ export class SqliteVaultStore implements VaultStore {
         JSON.stringify(c.metadata),
         c.auth.type,
         c.auth.mcp_server_url,
+        c.auth.type === "mcp_oauth" ? c.auth.refresh?.token_endpoint ?? null : null,
+        c.auth.type === "mcp_oauth" ? c.auth.refresh?.client_id ?? null : null,
+        c.auth.type === "mcp_oauth" ? c.auth.refresh?.scope ?? null : null,
+        c.auth.type === "mcp_oauth"
+          ? c.auth.refresh?.token_endpoint_auth.type ?? null
+          : null,
+        c.auth.type === "mcp_oauth" ? c.auth.expires_at ?? null : null,
+        c.auth_version,
         c.created_at,
         c.updated_at,
         c.archived_at,
@@ -360,25 +395,44 @@ export class SqliteVaultStore implements VaultStore {
     updates: {
       displayName?: string | null;
       metadata?: Record<string, string>;
-      token?: string;
+      auth?:
+        | { type: "static_bearer"; token: string }
+        | {
+            type: "mcp_oauth";
+            expiresAt?: string | null;
+            accessToken?: string;
+            refreshToken?: string;
+          };
     },
     updatedAt: string,
   ): VaultCredentialRow | undefined {
     const existing = this.retrieveCredential(workspaceId, vaultId, credentialId);
     if (!existing) return undefined;
     return withSqliteTransaction(this.db, () => {
-      if (updates.token !== undefined) {
-        this.requireSecrets().put(
+      if (updates.auth !== undefined) {
+        this.putUpdatedSecret(
           workspaceId,
-          secretName(vaultId, credentialId),
-          updates.token,
+          vaultId,
+          credentialId,
+          existing,
+          updates.auth,
         );
       }
+      const nextAuthVersion =
+        updates.auth === undefined ? existing.auth_version : existing.auth_version + 1;
+      const nextExpiresAt =
+        updates.auth?.type === "mcp_oauth" && updates.auth.expiresAt !== undefined
+          ? updates.auth.expiresAt
+          : existing.auth.type === "mcp_oauth"
+            ? existing.auth.expires_at ?? null
+            : null;
       this.updateCredentialMetadataStmt.run(
         updates.displayName === undefined
           ? existing.display_name
           : updates.displayName,
         JSON.stringify(updates.metadata ?? existing.metadata),
+        nextExpiresAt,
+        nextAuthVersion,
         updatedAt,
         workspaceId,
         vaultId,
@@ -441,10 +495,13 @@ export class SqliteVaultStore implements VaultStore {
       if (!row) continue;
       const token = this.secrets?.reveal(workspaceId, secretName(vaultId, row.id));
       if (token === undefined) return undefined;
+      const accessToken =
+        row.auth_type === "mcp_oauth" ? oauthAccessToken(token) : token;
+      if (accessToken === undefined) return undefined;
       return {
         credentialId: row.id,
         updatedAt: row.updated_at,
-        token,
+        token: accessToken,
       };
     }
     return undefined;
@@ -461,6 +518,33 @@ export class SqliteVaultStore implements VaultStore {
       );
     }
     return this.secrets;
+  }
+
+  private putUpdatedSecret(
+    workspaceId: string,
+    vaultId: string,
+    credentialId: string,
+    existing: VaultCredentialRow,
+    auth: NonNullable<Parameters<VaultStore["updateCredential"]>[3]["auth"]>,
+  ): void {
+    if (auth.type !== existing.auth.type) {
+      throw new Error("Credential auth type cannot be changed");
+    }
+    const name = secretName(vaultId, credentialId);
+    if (auth.type === "static_bearer") {
+      this.requireSecrets().put(workspaceId, name, auth.token);
+      return;
+    }
+    const current = this.requireSecrets().reveal(workspaceId, name);
+    const parsed = current === undefined ? {} : parseOauthSecret(current);
+    const next = {
+      ...parsed,
+      ...(auth.accessToken === undefined ? {} : { access_token: auth.accessToken }),
+      ...(auth.refreshToken === undefined
+        ? {}
+        : { refresh_token: auth.refreshToken }),
+    };
+    this.requireSecrets().put(workspaceId, name, JSON.stringify(next));
   }
 
   private credentialsForVault(
@@ -561,6 +645,7 @@ function deserializeVault(row: VaultDbRow): VaultRow {
 }
 
 function deserializeCredential(row: VaultCredentialDbRow): VaultCredentialRow {
+  const auth = deserializeCredentialAuth(row);
   return {
     id: row.id,
     workspace_id: row.workspace_id,
@@ -568,12 +653,73 @@ function deserializeCredential(row: VaultCredentialDbRow): VaultCredentialRow {
     type: "vault_credential",
     display_name: row.display_name,
     metadata: JSON.parse(row.metadata) as Record<string, string>,
-    auth: {
-      type: "static_bearer",
-      mcp_server_url: row.mcp_server_url,
-    },
+    auth,
+    auth_version: row.auth_version,
     created_at: row.created_at,
     updated_at: row.updated_at,
     archived_at: row.archived_at,
   };
+}
+
+function deserializeCredentialAuth(row: VaultCredentialDbRow): VaultCredentialAuth {
+  if (row.auth_type === "static_bearer") {
+    return {
+      type: "static_bearer",
+      mcp_server_url: row.mcp_server_url,
+    };
+  }
+  return {
+    type: "mcp_oauth",
+    mcp_server_url: row.mcp_server_url,
+    ...(row.expires_at === null ? {} : { expires_at: row.expires_at }),
+    ...(row.token_endpoint === null ||
+    row.client_id === null ||
+    row.token_endpoint_auth_type === null
+      ? {}
+      : {
+          refresh: {
+            token_endpoint: row.token_endpoint,
+            client_id: row.client_id,
+            ...(row.scope === null ? {} : { scope: row.scope }),
+            token_endpoint_auth: { type: row.token_endpoint_auth_type },
+          },
+        }),
+  };
+}
+
+function ensureVaultCredentialColumns(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(vault_credentials)").all() as Array<{
+    name: string;
+  }>;
+  const names = new Set(columns.map((column) => column.name));
+  for (const [name, definition] of [
+    ["token_endpoint", "TEXT"],
+    ["client_id", "TEXT"],
+    ["scope", "TEXT"],
+    ["token_endpoint_auth_type", "TEXT"],
+    ["expires_at", "TEXT"],
+    ["auth_version", "INTEGER NOT NULL DEFAULT 1"],
+  ] as const) {
+    if (!names.has(name)) {
+      db.exec(`ALTER TABLE vault_credentials ADD COLUMN ${name} ${definition}`);
+    }
+  }
+}
+
+function oauthAccessToken(value: string): string | undefined {
+  const parsed = parseOauthSecret(value);
+  return typeof parsed.access_token === "string" && parsed.access_token.length > 0
+    ? parsed.access_token
+    : undefined;
+}
+
+function parseOauthSecret(value: string): OauthSecretPayload {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as OauthSecretPayload)
+      : {};
+  } catch {
+    return {};
+  }
 }
