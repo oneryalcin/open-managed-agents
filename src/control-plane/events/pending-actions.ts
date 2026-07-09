@@ -9,7 +9,7 @@ import { sessionScopeKey } from "./session-guards.ts";
  *
  * The flush is intentionally cross-store: one coalesced `requires_action`
  * event spans BOTH stores, so the flush callback is injected and stays in the
- * service (see `flushPendingActions` / `drainForFlush`). This class owns only
+ * service (see `flushPendingActions` / `snapshotForFlush`). This class owns only
  * one store's map mechanics and per-session timer handle.
  */
 export class PendingActionStore {
@@ -74,12 +74,13 @@ export class PendingActionStore {
   }
 
   /**
-   * Cross-store flush helper: force-clear the timer, return the pending ids,
-   * and drop the entry if it is now empty. The service merges the returned ids
-   * from both stores into one coalesced `requires_action` event, preserving the
-   * original single-event contract.
+   * Cross-store flush helper: force-clear the timer, return a COPY of the
+   * pending ids, and drop the entry only if it is now empty. It does NOT
+   * consume the ids — they persist until resolved via `remove`, so a later
+   * flush re-emits the full remaining pending set. The service merges the
+   * returned ids from both stores into one coalesced `requires_action` event.
    */
-  drainForFlush(workspaceId: WorkspaceId, sessionId: string): string[] {
+  snapshotForFlush(workspaceId: WorkspaceId, sessionId: string): string[] {
     const key = sessionScopeKey(workspaceId, sessionId);
     const pending = this.entries.get(key);
     if (!pending) return [];
