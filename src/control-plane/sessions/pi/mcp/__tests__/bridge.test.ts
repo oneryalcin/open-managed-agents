@@ -18,7 +18,13 @@ import {
   createStoreBackedMcpToolAccessResolver,
   normalizeMcpContent,
   type McpEmitter,
+  type McpCredentialBinding,
 } from "../bridge.ts";
+import {
+  attachMcpAuthSnapshot,
+  recordRejectedMcpAuthorization,
+  runMcpAuthOperation,
+} from "../credential.ts";
 import { echoTool, startMcpFixture, type McpFixture } from "./fixture.ts";
 
 const seamFetch = createGuardedMcpFetch({ allowAddress: () => true });
@@ -55,6 +61,7 @@ async function bridgeFixture(opts: {
   onToolCall?: (outcome: string) => void;
   onTransportFailure?: (server: string, error: Error) => void;
   knownSecrets?: readonly string[];
+  credential?: McpCredentialBinding;
 }) {
   const permissionBridge = new PiToolPermissionBridge({
     timeoutMs: opts.confirmationTimeoutMs ?? 5_000,
@@ -63,6 +70,7 @@ async function bridgeFixture(opts: {
     { name: "srv", url: opts.fixture.url },
     {
       fetch: seamFetch,
+      ...(opts.credential === undefined ? {} : { credential: opts.credential }),
       ...(opts.operationTimeoutMs === undefined
         ? {}
         : { operationTimeoutMs: opts.operationTimeoutMs }),
@@ -100,6 +108,263 @@ function expectTerminalPair(recorded: Recorded): void {
 }
 
 describe("MCP tool bridge (plan 0122 §4.4)", () => {
+  it("force-refreshes and retries one auth rejection without surfacing the first failure", async () => {
+    let acceptedToken = "TOKEN_A";
+    const fixture = await startMcpFixture([echoTool()], {
+      requireBearer: () => acceptedToken,
+    });
+    let currentToken = "TOKEN_A";
+    let authVersion = 1;
+    const forceRefresh = vi.fn(async () => {
+      currentToken = "TOKEN_B";
+      authVersion = 2;
+      return {
+        status: "ready" as const,
+        authorization: {
+          authorization: "Bearer TOKEN_B",
+          identity: binding.identity,
+        },
+      };
+    });
+    const binding: McpCredentialBinding = {
+      get fingerprint() { return `vcrd_1:${authVersion}`; },
+      get identity() {
+        return {
+          workspaceId: "wrk_default",
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authVersion,
+          authType: "mcp_oauth" as const,
+        };
+      },
+      authorize: async () => ({
+        authorization: `Bearer ${currentToken}`,
+        identity: binding.identity,
+      }),
+      forceRefresh,
+      knownSecrets: () => [currentToken, `Bearer ${currentToken}`],
+    };
+    try {
+      const onTransportFailure = vi.fn();
+      const { tools, recorded, connection } = await bridgeFixture({
+        fixture,
+        credential: binding,
+        onTransportFailure,
+      });
+      acceptedToken = "TOKEN_B";
+      const result = await tools[0].execute(
+        "toolu_1",
+        { text: "hi" } as never,
+        undefined,
+        undefined,
+        undefined as never,
+      );
+      expect(result.content).toEqual([{ type: "text", text: "echo: hi" }]);
+      expect(forceRefresh).toHaveBeenCalledTimes(1);
+      expect(onTransportFailure).not.toHaveBeenCalled();
+      expectTerminalPair(recorded);
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("classifies a non-auth retry failure from the final status", async () => {
+    const fixture = await startMcpFixture([echoTool()]);
+    const binding: McpCredentialBinding = {
+      fingerprint: "vcrd_1:1",
+      identity: {
+        workspaceId: "wrk_default",
+        vaultId: "vlt_1",
+        credentialId: "vcrd_1",
+        authVersion: 1,
+        authType: "mcp_oauth",
+      },
+      authorize: async () => ({
+        authorization: "Bearer TOKEN_A",
+        identity: binding.identity,
+      }),
+      forceRefresh: async () => ({
+        status: "ready",
+        authorization: {
+          authorization: "Bearer TOKEN_B",
+          identity: { ...binding.identity, authVersion: 2 },
+        },
+      }),
+      knownSecrets: () => ["TOKEN_A", "Bearer TOKEN_A", "TOKEN_B", "Bearer TOKEN_B"],
+    };
+    try {
+      const onTransportFailure = vi.fn();
+      const { tools, connection } = await bridgeFixture({
+        fixture,
+        credential: binding,
+        onTransportFailure,
+      });
+      const rejected = await runMcpAuthOperation(async () => {
+        recordRejectedMcpAuthorization({
+          authorization: "Bearer TOKEN_A",
+          identity: binding.identity,
+        });
+        return attachMcpAuthSnapshot(
+          Object.assign(new Error("Unauthorized"), { code: 401 }),
+        );
+      });
+      const finalError = Object.assign(new Error("Upstream failed"), { code: 500 });
+      vi.spyOn(connection, "callTool")
+        .mockRejectedValueOnce(rejected)
+        .mockRejectedValueOnce(finalError);
+
+      await expect(
+        tools[0].execute(
+          "toolu_final_status",
+          { text: "hi" } as never,
+          undefined,
+          undefined,
+          undefined as never,
+        ),
+      ).rejects.toThrow("Upstream failed");
+      expect(onTransportFailure).toHaveBeenCalledExactlyOnceWith("srv", finalError);
+      await connection.close();
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("terminalizes abort during forced refresh without launching the retry", async () => {
+    let acceptedToken = "TOKEN_A";
+    const fixture = await startMcpFixture([echoTool()], {
+      requireBearer: () => acceptedToken,
+    });
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    let token = "TOKEN_A";
+    let authVersion = 1;
+    const forceRefresh = vi.fn(async () => {
+      await refreshGate;
+      token = "TOKEN_B";
+      authVersion = 2;
+      return {
+        status: "ready" as const,
+        authorization: {
+          authorization: "Bearer TOKEN_B",
+          identity: binding.identity,
+        },
+      };
+    });
+    const binding: McpCredentialBinding = {
+      get fingerprint() {
+        return `vcrd_1:${authVersion}`;
+      },
+      get identity() {
+        return {
+          workspaceId: "wrk_default",
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authVersion,
+          authType: "mcp_oauth" as const,
+        };
+      },
+      authorize: async () => ({
+        authorization: `Bearer ${token}`,
+        identity: binding.identity,
+      }),
+      forceRefresh,
+      knownSecrets: () => [token, `Bearer ${token}`],
+    };
+    try {
+      const onTransportFailure = vi.fn();
+      const onToolCall = vi.fn();
+      const { tools, recorded, connection } = await bridgeFixture({
+        fixture,
+        credential: binding,
+        onTransportFailure,
+        onToolCall,
+      });
+      acceptedToken = "TOKEN_B";
+      const controller = new AbortController();
+      const execution = tools[0].execute(
+        "toolu_abort_refresh",
+        { text: "hi" } as never,
+        controller.signal,
+        undefined,
+        undefined as never,
+      );
+      await vi.waitFor(() => expect(forceRefresh).toHaveBeenCalledTimes(1));
+      controller.abort();
+      releaseRefresh();
+
+      await expect(execution).rejects.toThrow("aborted");
+      expect(onTransportFailure).not.toHaveBeenCalled();
+      expect(onToolCall).toHaveBeenCalledExactlyOnceWith("aborted");
+      expect(fixture.authorizations.some((entry) => entry.authorization === "Bearer TOKEN_B")).toBe(
+        false,
+      );
+      expectTerminalPair(recorded);
+      await connection.close();
+    } finally {
+      releaseRefresh?.();
+      await fixture.close();
+    }
+  });
+
+  it("keeps parallel auth-rejection snapshots fenced to each operation", async () => {
+    let acceptedToken = "TOKEN_A";
+    const fixture = await startMcpFixture([echoTool()], {
+      requireBearer: () => acceptedToken,
+    });
+    let currentToken = "TOKEN_A";
+    let authVersion = 1;
+    const rejected: Array<{ version: number; resolve: () => void }> = [];
+    const binding: McpCredentialBinding = {
+      get fingerprint() { return `vcrd_1:${authVersion}`; },
+      get identity() {
+        return {
+          workspaceId: "wrk_default",
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authVersion,
+          authType: "mcp_oauth" as const,
+        };
+      },
+      authorize: async () => ({
+        authorization: `Bearer ${currentToken}`,
+        identity: binding.identity,
+      }),
+      forceRefresh: (snapshot) => new Promise((resolve) => {
+        rejected.push({
+          version: snapshot.identity.authVersion,
+          resolve: () => resolve({ status: "failed" }),
+        });
+      }),
+      knownSecrets: () => [currentToken, `Bearer ${currentToken}`],
+    };
+    try {
+      const { tools, connection } = await bridgeFixture({ fixture, credential: binding });
+      acceptedToken = "NEITHER_TOKEN";
+      const callA = tools[0].execute(
+        "toolu_a", { text: "a" } as never, undefined, undefined, undefined as never,
+      );
+      await vi.waitFor(() => expect(rejected).toHaveLength(1));
+      currentToken = "TOKEN_B";
+      authVersion = 2;
+      const callB = tools[0].execute(
+        "toolu_b", { text: "b" } as never, undefined, undefined, undefined as never,
+      );
+      await vi.waitFor(() => expect(rejected).toHaveLength(2));
+      expect(rejected.map((entry) => entry.version)).toEqual([1, 2]);
+      for (const entry of rejected) entry.resolve();
+      await expect(callA).rejects.toThrow();
+      await expect(callB).rejects.toThrow();
+      await connection.close();
+    } finally {
+      for (const entry of rejected) entry.resolve();
+      await fixture.close();
+    }
+  });
+
+
   it("success: use event binds before the call, result references it", async () => {
     const fixture = await startMcpFixture([echoTool()]);
     try {
@@ -154,6 +419,61 @@ describe("MCP tool bridge (plan 0122 §4.4)", () => {
       ]);
       await connection.close();
     } finally {
+      await fixture.close();
+    }
+  });
+
+  it("retains token A for scrubbing while an in-flight call crosses A to B to C", async () => {
+    let releaseA!: () => void;
+    const blockedA = new Promise<void>((resolve) => { releaseA = resolve; });
+    const fixture = await startMcpFixture([
+      {
+        name: "echo",
+        handler: async (args) => {
+          if (args.text === "TOKEN_A_LONG_SECRET") await blockedA;
+          return { content: [{ type: "text", text: String(args.text) }] };
+        },
+      },
+    ]);
+    let token = "TOKEN_A_LONG_SECRET";
+    const retained = new Set<string>();
+    const binding: McpCredentialBinding = {
+      fingerprint: "vcrd_1:1",
+      identity: {
+        workspaceId: "wrk_default",
+        vaultId: "vlt_1",
+        credentialId: "vcrd_1",
+        authVersion: 1,
+        authType: "mcp_oauth",
+      },
+      authorize: async () => {
+        retained.add(token);
+        retained.add(`Bearer ${token}`);
+        return { authorization: `Bearer ${token}`, identity: binding.identity };
+      },
+      forceRefresh: async () => ({ status: "failed" }),
+      knownSecrets: () => [...retained],
+    };
+    try {
+      const { tools, recorded, connection } = await bridgeFixture({ fixture, credential: binding });
+      const callA = tools[0].execute(
+        "toolu_a", { text: "TOKEN_A_LONG_SECRET" } as never, undefined, undefined, undefined as never,
+      );
+      await vi.waitFor(() => expect(fixture.toolCalls).toHaveLength(1));
+      token = "TOKEN_B_LONG_SECRET";
+      await connection.callTool("echo", { text: "b" });
+      token = "TOKEN_C_LONG_SECRET";
+      await connection.callTool("echo", { text: "c" });
+      releaseA();
+      const result = await callA;
+      expect(result.content).toEqual([{ type: "text", text: "[redacted]" }]);
+      expect(JSON.stringify(recorded.results)).not.toContain("TOKEN_A_LONG_SECRET");
+      expect(binding.knownSecrets()).toEqual(expect.arrayContaining([
+        "TOKEN_A_LONG_SECRET", "TOKEN_B_LONG_SECRET", "TOKEN_C_LONG_SECRET",
+      ]));
+      await connection.close();
+    } finally {
+      releaseA();
       await fixture.close();
     }
   });
@@ -586,7 +906,427 @@ describe("createStoreBackedMcpToolAccessResolver (plan 0122 §4.4)", () => {
 });
 
 describe("createStoreBackedMcpCredentialResolver (plan 0122 M2)", () => {
-  it("uses session vault_ids order and exact server URL matching", () => {
+  it("observes warm static rotation, then fails closed after disappearance", async () => {
+    let active = true;
+    let authVersion = 1;
+    let token = "STATIC_TOKEN_LONG";
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: { retrieveAny: () => ({ vault_ids: ["vlt_1"] }) as never },
+      vaults: {
+        resolveCredential: () =>
+          active
+            ? {
+                vaultId: "vlt_1",
+                credentialId: "vcrd_1",
+                authType: "static_bearer" as const,
+                authVersion,
+                refreshStatus: null,
+                authHintAt: null,
+                updatedAt: "2026-07-09T12:00:00.000Z",
+                token,
+              }
+            : undefined,
+        readCredentialRuntimeMetadata: () =>
+          active
+            ? {
+                vaultId: "vlt_1",
+                credentialId: "vcrd_1",
+                authType: "static_bearer" as const,
+                hasRefresh: false,
+                authVersion,
+                refreshStatus: null,
+                authHintAt: null,
+                nextRefreshAt: null,
+                refreshAttempts: 0,
+              }
+            : undefined,
+      },
+    });
+    const binding = await resolve("wrk_default", "sesn_1", "https://mcp.example/mcp");
+    expect(await binding?.authorize()).toMatchObject({
+      authorization: "Bearer STATIC_TOKEN_LONG",
+    });
+
+    authVersion = 2;
+    token = "ROTATED_TOKEN_LONG";
+    expect(await binding?.authorize()).toMatchObject({
+      authorization: "Bearer ROTATED_TOKEN_LONG",
+      identity: { authVersion: 2 },
+    });
+
+    active = false;
+    await expect(binding?.authorize()).rejects.toThrow("no longer active");
+    await expect(binding?.authorize()).rejects.toThrow("no longer active");
+  });
+
+  it("does not reuse a cached token when archive wins a lazy-refresh race", async () => {
+    const NOW = new Date("2026-07-09T12:00:00.000Z");
+    let active = true;
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: { retrieveAny: () => ({ vault_ids: ["vlt_1"] }) as never },
+      vaults: {
+        resolveCredential: () =>
+          active
+            ? {
+                vaultId: "vlt_1",
+                credentialId: "vcrd_1",
+                authType: "mcp_oauth" as const,
+                authVersion: 1,
+                expiresAt: NOW.toISOString(),
+                refreshStatus: null,
+                authHintAt: null,
+                updatedAt: NOW.toISOString(),
+                token: "STALE_TOKEN_LONG",
+              }
+            : undefined,
+        readCredentialRuntimeMetadata: () =>
+          active
+            ? {
+                vaultId: "vlt_1",
+                credentialId: "vcrd_1",
+                authType: "mcp_oauth" as const,
+                hasRefresh: true,
+                authVersion: 1,
+                expiresAt: NOW.toISOString(),
+                refreshStatus: null,
+                authHintAt: null,
+                nextRefreshAt: null,
+                refreshAttempts: 0,
+              }
+            : undefined,
+      },
+      refresh: {
+        refreshCredential: async () => {
+          active = false;
+          return { outcome: "skipped", reason: "missing", state: undefined };
+        },
+        recordAuthHint: () => ({ status: "stale", metadata: undefined }),
+      },
+      now: () => NOW,
+    });
+    const binding = await resolve("wrk_default", "sesn_1", "https://mcp.example/mcp");
+
+    await expect(binding?.authorize()).rejects.toThrow("no longer active");
+    await expect(binding?.authorize()).rejects.toThrow("no longer active");
+  });
+
+  it("cannot reauthorize or retain secrets after close wins a refresh race", async () => {
+    const NOW = new Date("2026-07-09T12:00:00.000Z");
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const refreshCredential = vi.fn(async () => {
+      await refreshGate;
+      return { outcome: "skipped" as const, reason: "no_refresh_token" as const, state: undefined };
+    });
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: { retrieveAny: () => ({ vault_ids: ["vlt_1"] }) as never },
+      vaults: {
+        resolveCredential: () => ({
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authType: "mcp_oauth" as const,
+          authVersion: 1,
+          expiresAt: NOW.toISOString(),
+          refreshStatus: null,
+          authHintAt: null,
+          updatedAt: NOW.toISOString(),
+          token: "TOKEN_A_LONG",
+        }),
+        readCredentialRuntimeMetadata: () => ({
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authType: "mcp_oauth" as const,
+          hasRefresh: true,
+          authVersion: 1,
+          expiresAt: NOW.toISOString(),
+          refreshStatus: null,
+          authHintAt: null,
+          nextRefreshAt: null,
+          refreshAttempts: 0,
+        }),
+      },
+      refresh: {
+        refreshCredential,
+        recordAuthHint: () => ({ status: "stale", metadata: undefined }),
+      },
+      now: () => NOW,
+    });
+    const binding = await resolve("wrk_default", "sesn_1", "https://mcp.example/mcp");
+    const authorization = binding!.authorize();
+    await vi.waitFor(() => expect(refreshCredential).toHaveBeenCalledTimes(1));
+    binding?.close?.();
+    releaseRefresh();
+
+    await expect(authorization).rejects.toThrow("no longer active");
+    expect(binding?.knownSecrets()).toEqual([]);
+  });
+
+  it("does not unseal again when a hinted refresh is inside the forced floor", async () => {
+    const NOW = new Date("2026-07-09T12:00:00.000Z");
+    const resolveCredential = vi.fn(() => ({
+      vaultId: "vlt_1",
+      credentialId: "vcrd_1",
+      authType: "mcp_oauth" as const,
+      authVersion: 1,
+      expiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
+      refreshStatus: "ok" as "ok" | "invalid" | "transient" | null,
+      authHintAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+      token: "CACHED_TOKEN_LONG",
+    }));
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: { retrieveAny: () => ({ vault_ids: ["vlt_1"] }) as never },
+      vaults: {
+        resolveCredential,
+        readCredentialRuntimeMetadata: () => ({
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authType: "mcp_oauth" as const,
+          hasRefresh: true,
+          authVersion: 1,
+          expiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
+          refreshStatus: "ok" as const,
+          authHintAt: NOW.toISOString(),
+          nextRefreshAt: null,
+          refreshAttempts: 0,
+        }),
+      },
+      refresh: {
+        refreshCredential: async () => ({
+          outcome: "skipped",
+          reason: "forced_refresh_floor",
+          state: undefined,
+        }),
+        recordAuthHint: () => ({ status: "stale", metadata: undefined }),
+      },
+      now: () => NOW,
+    });
+    const binding = await resolve("wrk_default", "sesn_1", "https://mcp.example/mcp");
+
+    expect(await binding?.authorize()).toMatchObject({
+      authorization: "Bearer CACHED_TOKEN_LONG",
+    });
+    expect(resolveCredential).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses expiry skew lazily, auth hints forcibly, and skips fixed OAuth tokens", async () => {
+    const NOW = new Date("2026-07-09T12:00:00.000Z");
+    let metadata = {
+      vaultId: "vlt_oauth",
+      credentialId: "vcrd_oauth",
+      authType: "mcp_oauth" as const,
+      authVersion: 1,
+      expiresAt: new Date(NOW.getTime() + 30_000).toISOString(),
+      refreshStatus: "ok" as "ok" | "invalid" | "transient" | null,
+      authHintAt: null as string | null,
+      nextRefreshAt: null as string | null,
+      refreshAttempts: 0,
+      hasRefresh: true,
+    };
+    const refreshCredential = vi.fn(async () => ({
+      outcome: "skipped" as const,
+      reason: "no_refresh_token" as const,
+      state: undefined,
+    }));
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: { retrieveAny: () => ({ vault_ids: ["vlt_oauth"] }) as never },
+      vaults: {
+        resolveCredential: () => ({
+          vaultId: "vlt_oauth",
+          credentialId: "vcrd_oauth",
+          authType: "mcp_oauth",
+          authVersion: 1,
+          expiresAt: metadata.expiresAt,
+          refreshStatus: metadata.refreshStatus,
+          authHintAt: metadata.authHintAt,
+          updatedAt: NOW.toISOString(),
+          token: "ACCESS_TOKEN_LONG",
+        }),
+        readCredentialRuntimeMetadata: () => metadata,
+      },
+      refresh: {
+        refreshCredential,
+        recordAuthHint: () => ({ status: "stale", metadata }),
+      },
+      now: () => NOW,
+    });
+    const binding = await resolve("wrk_default", "sesn_1", "https://mcp.example/mcp");
+    await binding?.authorize();
+    expect(refreshCredential).toHaveBeenLastCalledWith(expect.not.objectContaining({ force: true }));
+
+    refreshCredential.mockClear();
+    metadata = {
+      ...metadata,
+      expiresAt: undefined as never,
+      authHintAt: NOW.toISOString(),
+      refreshStatus: "invalid",
+    };
+    await binding?.authorize();
+    expect(refreshCredential).not.toHaveBeenCalled();
+
+    metadata = { ...metadata, refreshStatus: "ok" };
+    metadata = { ...metadata, expiresAt: undefined as never, authHintAt: NOW.toISOString() };
+    await binding?.authorize();
+    expect(refreshCredential).toHaveBeenLastCalledWith(expect.objectContaining({ force: true }));
+
+    refreshCredential.mockClear();
+    metadata = {
+      ...metadata,
+      expiresAt: new Date(NOW.getTime() + 30_000).toISOString(),
+      authHintAt: null,
+      refreshStatus: "ok",
+      nextRefreshAt: new Date(NOW.getTime() + 60_000).toISOString(),
+    };
+    await binding?.authorize();
+    expect(refreshCredential).not.toHaveBeenCalled();
+
+    metadata = {
+      ...metadata,
+      expiresAt: new Date(NOW.getTime() - 1).toISOString(),
+      authHintAt: null,
+      refreshStatus: "transient",
+      nextRefreshAt: new Date(NOW.getTime() + 60_000).toISOString(),
+    };
+    await binding?.authorize();
+    expect(refreshCredential).not.toHaveBeenCalled();
+
+    metadata = { ...metadata, authHintAt: null, hasRefresh: false };
+    await binding?.authorize();
+    expect(refreshCredential).not.toHaveBeenCalled();
+  });
+
+  it("re-resolves the operator token when forced refresh loses its CAS", async () => {
+    const NOW = new Date("2026-07-09T12:00:00.000Z");
+    let token = "TOKEN_A_LONG";
+    let authVersion = 1;
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: { retrieveAny: () => ({ vault_ids: ["vlt_1"] }) as never },
+      vaults: {
+        resolveCredential: () => ({
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authType: "mcp_oauth" as const,
+          authVersion,
+          expiresAt: new Date(NOW.getTime() + 3_600_000).toISOString(),
+          refreshStatus: "ok" as const,
+          authHintAt: null,
+          updatedAt: NOW.toISOString(),
+          token,
+        }),
+        readCredentialRuntimeMetadata: () => ({
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authType: "mcp_oauth" as const,
+          hasRefresh: true,
+          authVersion,
+          expiresAt: new Date(NOW.getTime() + 3_600_000).toISOString(),
+          refreshStatus: "ok" as const,
+          authHintAt: null,
+          nextRefreshAt: null,
+          refreshAttempts: 0,
+        }),
+      },
+      refresh: {
+        refreshCredential: async () => {
+          token = "OPERATOR_TOKEN_LONG";
+          authVersion = 2;
+          return {
+            outcome: "ok",
+            persisted: "stale",
+            state: {
+              workspaceId: "wrk_default",
+              vaultId: "vlt_1",
+              credentialId: "vcrd_1",
+              authVersion,
+              mcpServerUrl: "https://mcp.example/mcp",
+              refreshStatus: "ok",
+              refreshAttempts: 0,
+              nextRefreshAt: null,
+              authHintAt: null,
+              hasAccessToken: true,
+              hasRefreshToken: true,
+              hasClientSecret: false,
+            },
+          };
+        },
+        recordAuthHint: () => ({ status: "stale", metadata: undefined }),
+      },
+      now: () => NOW,
+    });
+    const binding = await resolve("wrk_default", "sesn_1", "https://mcp.example/mcp");
+    const rejected = await binding!.authorize();
+    const refreshed = await binding!.forceRefresh(rejected!);
+
+    expect(refreshed).toMatchObject({
+      status: "ready",
+      authorization: {
+        authorization: "Bearer OPERATOR_TOKEN_LONG",
+        identity: { authVersion: 2 },
+      },
+    });
+    expect(binding?.fingerprint).toBe("vcrd_1:2");
+  });
+
+  it("observes operator rotation that races a forced-floor skip", async () => {
+    const NOW = new Date("2026-07-09T12:00:00.000Z");
+    let token = "TOKEN_A_LONG";
+    let authVersion = 1;
+    const resolve = createStoreBackedMcpCredentialResolver({
+      sessions: { retrieveAny: () => ({ vault_ids: ["vlt_1"] }) as never },
+      vaults: {
+        resolveCredential: () => ({
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authType: "mcp_oauth" as const,
+          authVersion,
+          expiresAt: new Date(NOW.getTime() + 3_600_000).toISOString(),
+          refreshStatus: "ok" as const,
+          authHintAt: null,
+          updatedAt: NOW.toISOString(),
+          token,
+        }),
+        readCredentialRuntimeMetadata: () => ({
+          vaultId: "vlt_1",
+          credentialId: "vcrd_1",
+          authType: "mcp_oauth" as const,
+          hasRefresh: true,
+          authVersion,
+          expiresAt: new Date(NOW.getTime() + 3_600_000).toISOString(),
+          refreshStatus: "ok" as const,
+          authHintAt: null,
+          nextRefreshAt: null,
+          refreshAttempts: 0,
+        }),
+      },
+      refresh: {
+        refreshCredential: async () => {
+          token = "OPERATOR_TOKEN_LONG";
+          authVersion = 2;
+          return {
+            outcome: "skipped",
+            reason: "forced_refresh_floor",
+            state: undefined,
+          };
+        },
+        recordAuthHint: () => ({ status: "stale", metadata: undefined }),
+      },
+      now: () => NOW,
+    });
+    const binding = await resolve("wrk_default", "sesn_1", "https://mcp.example/mcp");
+    const rejected = await binding!.authorize();
+
+    await expect(binding!.forceRefresh(rejected!)).resolves.toMatchObject({
+      status: "ready",
+      authorization: {
+        authorization: "Bearer OPERATOR_TOKEN_LONG",
+        identity: { authVersion: 2 },
+      },
+    });
+  });
+
+  it("uses session vault_ids order and exact server URL matching", async () => {
     const resolve = createStoreBackedMcpCredentialResolver({
       sessions: {
         retrieveAny: () =>
@@ -599,26 +1339,37 @@ describe("createStoreBackedMcpCredentialResolver (plan 0122 M2)", () => {
           expect(vaultIds).toEqual(["vlt_first", "vlt_second"]);
           if (serverUrl !== "https://mcp.example.com/mcp") return undefined;
           return {
+            vaultId: "vlt_first",
             credentialId: "vcrd_first",
+            authType: "static_bearer",
+            authVersion: 3,
+            refreshStatus: null,
+            authHintAt: null,
             updatedAt: "2026-07-08T00:00:00.000Z",
             token: "REAL_TOKEN",
           };
         },
+        readCredentialRuntimeMetadata: () => ({
+          vaultId: "vlt_first",
+          credentialId: "vcrd_first",
+          authType: "static_bearer",
+          hasRefresh: false,
+          authVersion: 3,
+          refreshStatus: null,
+          authHintAt: null,
+          nextRefreshAt: null,
+          refreshAttempts: 0,
+        }),
       },
     });
 
-    expect(
-      resolve("wrk_default", "sesn_1", "https://mcp.example.com/mcp"),
-    ).toEqual({
-      authorization: "Bearer REAL_TOKEN",
-      fingerprint: "vcrd_first:2026-07-08T00:00:00.000Z",
-    });
-    expect(
-      resolve("wrk_default", "sesn_1", "https://mcp.example.com/mcp/"),
-    ).toBeUndefined();
+    const binding = await resolve("wrk_default", "sesn_1", "https://mcp.example.com/mcp");
+    expect(binding?.fingerprint).toBe("vcrd_first:3");
+    expect(await binding?.authorize()).toMatchObject({ authorization: "Bearer REAL_TOKEN" });
+    expect(await resolve("wrk_default", "sesn_1", "https://mcp.example.com/mcp/")).toBeUndefined();
   });
 
-  it("uses creation-time vault_ids when pre-commit session row is not visible", () => {
+  it("uses creation-time vault_ids when pre-commit session row is not visible", async () => {
     const resolve = createStoreBackedMcpCredentialResolver({
       sessions: {
         retrieveAny: () => undefined,
@@ -628,22 +1379,38 @@ describe("createStoreBackedMcpCredentialResolver (plan 0122 M2)", () => {
           expect(vaultIds).toEqual(["vlt_precommit"]);
           expect(serverUrl).toBe("https://mcp.example.com/mcp");
           return {
+            vaultId: "vlt_precommit",
             credentialId: "vcrd_precommit",
+            authType: "static_bearer",
+            authVersion: 2,
+            refreshStatus: null,
+            authHintAt: null,
             updatedAt: "2026-07-08T00:00:00.000Z",
             token: "PRECOMMIT_TOKEN",
           };
         },
+        readCredentialRuntimeMetadata: () => ({
+          vaultId: "vlt_precommit",
+          credentialId: "vcrd_precommit",
+          authType: "static_bearer",
+          hasRefresh: false,
+          authVersion: 2,
+          refreshStatus: null,
+          authHintAt: null,
+          nextRefreshAt: null,
+          refreshAttempts: 0,
+        }),
       },
     });
 
-    expect(
-      resolve("wrk_default", "sesn_precommit", "https://mcp.example.com/mcp", {
-        vaultIds: ["vlt_precommit"],
-      }),
-    ).toEqual({
-      authorization: "Bearer PRECOMMIT_TOKEN",
-      fingerprint: "vcrd_precommit:2026-07-08T00:00:00.000Z",
-    });
+    const binding = await resolve(
+      "wrk_default",
+      "sesn_precommit",
+      "https://mcp.example.com/mcp",
+      { vaultIds: ["vlt_precommit"] },
+    );
+    expect(binding?.fingerprint).toBe("vcrd_precommit:2");
+    expect(await binding?.authorize()).toMatchObject({ authorization: "Bearer PRECOMMIT_TOKEN" });
   });
 });
 

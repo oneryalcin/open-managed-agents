@@ -7,6 +7,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { isJsonObject, type JsonObject } from "../../../../types/json.ts";
 import type { McpFetch } from "./fetch.ts";
+import {
+  attachMcpAuthSnapshot,
+  getMcpAuthSnapshot,
+  recordRejectedMcpAuthorization,
+  runMcpAuthOperation,
+  type McpCredentialBinding,
+} from "./credential.ts";
 
 const DEFAULT_OPERATION_TIMEOUT_MS = 60_000;
 
@@ -28,7 +35,7 @@ export interface McpServerDeclaration {
 
 export interface McpConnectionOptions {
   fetch: McpFetch;
-  authorization?: string;
+  credential?: McpCredentialBinding;
   /** Per-operation timeout (connect, listTools, callTool). */
   operationTimeoutMs?: number;
 }
@@ -57,6 +64,7 @@ export class McpConnection {
     readonly tools: readonly McpDiscoveredTool[],
     private readonly client: Client,
     private readonly timeoutMs: number,
+    readonly credential?: McpCredentialBinding,
   ) {}
 
   /** Connect + discover in one step; both share the operation timeout. */
@@ -65,26 +73,51 @@ export class McpConnection {
     opts: McpConnectionOptions,
   ): Promise<McpConnection> {
     const timeoutMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
-    const client = new Client({ name: "open-managed-agents", version: "0" });
-    const requestInit =
-      opts.authorization === undefined
-        ? undefined
-        : { headers: { Authorization: opts.authorization } };
-    const transport = new StreamableHTTPClientTransport(
-      new URL(declaration.url),
-      {
-        fetch: opts.fetch,
-        ...(requestInit === undefined ? {} : { requestInit }),
-      },
-    );
-    try {
-      await client.connect(transport, { timeout: timeoutMs });
-      const tools = await discoverTools(client, declaration.name, timeoutMs);
-      return new McpConnection(declaration.name, tools, client, timeoutMs);
-    } catch (error) {
-      await client.close().catch(() => undefined);
-      throw error;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const client = new Client({ name: "open-managed-agents", version: "0" });
+      const transport = new StreamableHTTPClientTransport(
+        new URL(declaration.url),
+        { fetch: credentialFetch(opts.fetch, opts.credential) },
+      );
+      try {
+        const tools = await runMcpAuthOperation(async () => {
+          try {
+            await client.connect(transport, { timeout: timeoutMs });
+            return await discoverTools(client, declaration.name, timeoutMs);
+          } catch (error) {
+            throw attachMcpAuthSnapshot(error);
+          }
+        });
+        return new McpConnection(
+          declaration.name,
+          tools,
+          client,
+          timeoutMs,
+          opts.credential,
+        );
+      } catch (error) {
+        const annotated = attachMcpAuthSnapshot(error);
+        await client.close().catch(() => undefined);
+        const rejectedSnapshot = getMcpAuthSnapshot(annotated);
+        if (
+          attempt === 0 &&
+          opts.credential !== undefined &&
+          rejectedSnapshot !== undefined &&
+          isMcpAuthError(annotated)
+        ) {
+          try {
+            const refreshed = await opts.credential.forceRefresh(rejectedSnapshot);
+            if (refreshed.status === "ready") continue;
+          } catch {
+            // Adapter failure does not replace the reached server's structured
+            // auth rejection; the caller classifies the original final error.
+          }
+        }
+        opts.credential?.close?.();
+        throw annotated;
+      }
     }
+    throw new Error("MCP connection retry exhausted");
   }
 
   async callTool(
@@ -92,14 +125,20 @@ export class McpConnection {
     args: JsonObject,
     signal?: AbortSignal,
   ): Promise<McpToolCallOutcome> {
-    const result = await this.client.callTool(
-      { name, arguments: args },
-      undefined,
-      {
-        timeout: this.timeoutMs,
-        ...(signal === undefined ? {} : { signal }),
-      },
-    );
+    const result = await runMcpAuthOperation(async () => {
+      try {
+        return await this.client.callTool(
+          { name, arguments: args },
+          undefined,
+          {
+            timeout: this.timeoutMs,
+            ...(signal === undefined ? {} : { signal }),
+          },
+        );
+      } catch (error) {
+        throw attachMcpAuthSnapshot(error);
+      }
+    });
     return {
       content: Array.isArray(result.content) ? result.content : [],
       isError: result.isError === true,
@@ -108,7 +147,31 @@ export class McpConnection {
 
   async close(): Promise<void> {
     await this.client.close().catch(() => undefined);
+    this.credential?.close?.();
   }
+}
+
+function credentialFetch(
+  fetch: McpFetch,
+  credential: McpCredentialBinding | undefined,
+): McpFetch {
+  if (credential === undefined) return fetch;
+  return async (url, init) => {
+    const snapshot = await credential.authorize();
+    const headers = new Headers(init?.headers);
+    if (snapshot === undefined) headers.delete("authorization");
+    else headers.set("authorization", snapshot.authorization);
+    const response = await fetch(url, { ...init, headers });
+    if (snapshot !== undefined && (response.status === 401 || response.status === 403)) {
+      recordRejectedMcpAuthorization(snapshot);
+    }
+    return response;
+  };
+}
+
+export function isMcpAuthError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  return code === 401 || code === 403;
 }
 
 /** Paginated discovery (review: nextCursor was silently dropped) + bounds. */

@@ -23,12 +23,37 @@ import type {
 } from "../../../events/types.ts";
 import type { SessionStore } from "../../types.ts";
 import type { WorkspaceId } from "../../../workspace.ts";
-import type { VaultService } from "../../../vaults/types.ts";
+import type {
+  PersistAuthHintInput,
+  PersistAuthHintResult,
+  VaultCredentialResolution,
+  VaultCredentialRuntimeMetadata,
+} from "../../../vaults/types.ts";
+import type {
+  RefreshCredentialInput,
+  RefreshCredentialResult,
+} from "../../../vaults/oauth-refresh.ts";
 import type {
   BuiltinToolPermission,
   PiToolPermissionBridge,
 } from "../tool-permissions.ts";
-import type { McpConnection } from "./client.ts";
+import { isMcpAuthError, type McpConnection } from "./client.ts";
+import {
+  getMcpAuthSnapshot,
+  type McpAuthorizationSnapshot,
+  type McpCredentialBinding,
+  type McpCredentialIdentity,
+  type McpCredentialResolver,
+  type McpForceRefreshResult,
+} from "./credential.ts";
+
+export type {
+  McpAuthorizationSnapshot,
+  McpCredentialBinding,
+  McpCredentialIdentity,
+  McpCredentialResolver,
+  McpForceRefreshResult,
+} from "./credential.ts";
 
 export const DEFAULT_MCP_OUTPUT_CAP_BYTES = 400 * 1024;
 
@@ -97,7 +122,7 @@ export interface McpToolDefinitionOptions {
    * §7B.9 slice 0). Every server-controlled string is scrubbed with these
    * before leaving executeMcpTool.
    */
-  knownSecrets?: readonly string[];
+  knownSecrets?: readonly string[] | (() => readonly string[]);
 }
 
 /**
@@ -117,7 +142,7 @@ export function createMcpToolDefinitions(
     // call. Descriptions are free text → scrubbed. A NAME carrying the
     // credential cannot be scrubbed without breaking call routing — it is
     // an exfil attempt, not a tool: refuse to register it.
-    if (scrub(tool.name, opts.knownSecrets) !== tool.name) continue;
+    if (scrub(tool.name, knownSecrets(opts)) !== tool.name) continue;
     const access =
       opts.access?.(
         opts.workspaceId,
@@ -132,7 +157,7 @@ export function createMcpToolDefinitions(
       ...defineTool({
         name: piName,
         label: piName,
-        description: scrub(tool.description ?? tool.name, opts.knownSecrets),
+        description: scrub(tool.description ?? tool.name, knownSecrets(opts)),
         // Arbitrary third-party JSON Schema; Pi validates with TypeBox.
         // Servers re-validate in-band anyway (probe 46), so a permissive
         // fallback at execute time keeps a hostile schema from wedging the
@@ -237,27 +262,58 @@ async function executeMcpTool(args: {
   try {
     outcome = await opts.connection.callTool(bareName, input, signal);
   } catch (error) {
-    const err = toError(error);
-    const aborted = signal?.aborted === true || err.name === "AbortError";
-    if (!aborted) {
-      opts.onTransportFailure?.(opts.connection.serverName, err);
+    let err = toError(error);
+    const rejected = getMcpAuthSnapshot(err);
+    if (
+      rejected?.identity.authType === "mcp_oauth" &&
+      opts.connection.credential !== undefined &&
+      isMcpAuthError(err)
+    ) {
+      let refreshed: McpForceRefreshResult;
+      try {
+        refreshed = await opts.connection.credential.forceRefresh(rejected);
+      } catch {
+        refreshed = { status: "failed", reason: "refresh_adapter_error" };
+      }
+      if (refreshed.status === "ready") {
+        if (signal?.aborted === true) {
+          err = Object.assign(new Error(`MCP tool ${bareName} aborted`), {
+            name: "AbortError",
+          });
+        } else {
+          try {
+            outcome = await opts.connection.callTool(bareName, input, signal);
+          } catch (retryError) {
+            err = toError(retryError);
+          }
+        }
+      }
     }
-    const timedOut = (error as { code?: unknown }).code === -32001; // McpError RequestTimeout
-    // The SDK embeds server response bodies in rejection messages (probe
-    // 49's captured message contains the fixture's 401 body verbatim), so
-    // this string is server-controlled: scrub before it persists/throws.
-    failWith(
-      scrub(`MCP tool ${bareName} failed: ${err.message}`, opts.knownSecrets),
-      aborted ? "aborted" : timedOut ? "timeout" : "error",
-    );
-    throw err; // unreachable
+    if (outcome !== undefined) {
+      // Continue through the normal success/in-band-error path below. The
+      // first auth rejection is deliberately invisible to failure accounting.
+    } else {
+      const aborted = signal?.aborted === true || err.name === "AbortError";
+      if (!aborted) {
+        opts.onTransportFailure?.(opts.connection.serverName, err);
+      }
+      const timedOut = (err as { code?: unknown }).code === -32001; // McpError RequestTimeout
+      // The SDK embeds server response bodies in rejection messages (probe
+      // 49's captured message contains the fixture's 401 body verbatim), so
+      // this string is server-controlled: scrub before it persists/throws.
+      failWith(
+        scrub(`MCP tool ${bareName} failed: ${err.message}`, knownSecrets(opts)),
+        aborted ? "aborted" : timedOut ? "timeout" : "error",
+      );
+      throw err; // unreachable
+    }
   }
 
   // 5: terminal result — scrubbed (server-controlled content) then capped
   // over ALL normalized blocks (review C). Scrub BEFORE the cap: truncation
   // could split a token and leave an unmatchable prefix behind.
   const blocks = capContent(
-    scrubContentBlocks(normalizeMcpContent(outcome.content), opts.knownSecrets),
+    scrubContentBlocks(normalizeMcpContent(outcome.content), knownSecrets(opts)),
     capBytes,
   );
   emitResult(blocks, outcome.isError);
@@ -413,18 +469,6 @@ export type McpServersProvider = (
   context?: { agentId?: string },
 ) => readonly { name: string; url: string }[];
 
-export interface McpResolvedCredential {
-  authorization: string;
-  fingerprint: string;
-}
-
-export type McpCredentialResolver = (
-  workspaceId: WorkspaceId,
-  sessionId: string,
-  serverUrl: string,
-  context?: { vaultIds?: readonly string[] },
-) => McpResolvedCredential | undefined;
-
 export function createStoreBackedMcpServersProvider(opts: {
   sessions: Pick<SessionStore, "retrieveAny">;
   agents: Pick<AgentStore, "retrieveAny">;
@@ -453,9 +497,25 @@ export function createStoreBackedMcpServersProvider(opts: {
 
 export function createStoreBackedMcpCredentialResolver(opts: {
   sessions: Pick<SessionStore, "retrieveAny">;
-  vaults: Pick<VaultService, "resolveCredential">;
+  vaults: {
+    resolveCredential(
+      workspaceId: WorkspaceId,
+      vaultIds: readonly string[],
+      serverUrl: string,
+    ): VaultCredentialResolution | undefined;
+    readCredentialRuntimeMetadata(
+      workspaceId: WorkspaceId,
+      vaultId: string,
+      credentialId: string,
+    ): VaultCredentialRuntimeMetadata | undefined;
+  };
+  refresh?: {
+    refreshCredential(input: RefreshCredentialInput): Promise<RefreshCredentialResult>;
+    recordAuthHint(input: PersistAuthHintInput): PersistAuthHintResult;
+  };
+  now?: () => Date;
 }): McpCredentialResolver {
-  return (workspaceId, sessionId, serverUrl, context) => {
+  return async (workspaceId, sessionId, serverUrl, context) => {
     const session = opts.sessions.retrieveAny(workspaceId, sessionId);
     const vaultIds = session?.vault_ids ?? context?.vaultIds ?? [];
     if (vaultIds.length === 0) return undefined;
@@ -465,11 +525,232 @@ export function createStoreBackedMcpCredentialResolver(opts: {
       serverUrl,
     );
     if (!resolved) return undefined;
-    return {
-      authorization: `Bearer ${resolved.token}`,
-      fingerprint: `${resolved.credentialId}:${resolved.updatedAt}`,
-    };
+    return createRuntimeCredentialBinding({
+      workspaceId,
+      vaultIds,
+      serverUrl,
+      initial: resolved,
+      vaults: opts.vaults,
+      ...(opts.refresh === undefined ? {} : { refresh: opts.refresh }),
+      now: opts.now ?? (() => new Date()),
+    });
   };
+}
+
+function createRuntimeCredentialBinding(args: {
+  workspaceId: WorkspaceId;
+  vaultIds: readonly string[];
+  serverUrl: string;
+  initial: VaultCredentialResolution;
+  vaults: Parameters<typeof createStoreBackedMcpCredentialResolver>[0]["vaults"];
+  refresh?: NonNullable<Parameters<typeof createStoreBackedMcpCredentialResolver>[0]["refresh"]>;
+  now: () => Date;
+}): McpCredentialBinding {
+  let current = args.initial;
+  let closed = false;
+  const retained = new Set<string>();
+
+  const snapshot = (): McpAuthorizationSnapshot => {
+    if (closed) throw new Error("MCP credential is no longer active");
+    const authorization = `Bearer ${current.token}`;
+    retained.add(authorization);
+    retained.add(current.token);
+    return { authorization, identity: identityOf(args.workspaceId, current) };
+  };
+  const resolveCurrent = (): VaultCredentialResolution | undefined => {
+    const resolved = args.vaults.resolveCredential(
+      args.workspaceId,
+      args.vaultIds,
+      args.serverUrl,
+    );
+    if (
+      resolved !== undefined &&
+      (resolved.vaultId !== current.vaultId ||
+        resolved.credentialId !== current.credentialId)
+    ) {
+      return undefined;
+    }
+    if (resolved !== undefined) current = resolved;
+    return resolved;
+  };
+  const refreshAndResolve = async (
+    force: boolean,
+    expectedAuthVersion?: number,
+  ): Promise<RefreshCredentialResult | undefined> => {
+    if (args.refresh === undefined || current.authType !== "mcp_oauth") return undefined;
+    try {
+      const result = await args.refresh.refreshCredential({
+        workspaceId: args.workspaceId,
+        vaultId: current.vaultId,
+        credentialId: current.credentialId,
+        ...(force ? { force: true } : {}),
+        ...(expectedAuthVersion === undefined ? {} : { expectedAuthVersion }),
+      });
+      return result;
+    } catch {
+      return undefined;
+    }
+  };
+
+  return {
+    get fingerprint() {
+      return `${current.credentialId}:${current.authVersion}`;
+    },
+    get identity() {
+      return identityOf(args.workspaceId, current);
+    },
+    async authorize() {
+      if (closed) throw new Error("MCP credential is no longer active");
+      let latest = args.vaults.readCredentialRuntimeMetadata(
+        args.workspaceId,
+        current.vaultId,
+        current.credentialId,
+      );
+      if (latest === undefined) {
+        closed = true;
+        throw new Error("MCP credential is no longer active");
+      }
+      if (latest.authVersion !== current.authVersion) {
+        if (resolveCurrent() === undefined) {
+          closed = true;
+          throw new Error("MCP credential is no longer active");
+        }
+        latest = args.vaults.readCredentialRuntimeMetadata(
+          args.workspaceId,
+          current.vaultId,
+          current.credentialId,
+        );
+        if (latest === undefined) {
+          closed = true;
+          throw new Error("MCP credential is no longer active");
+        }
+      }
+      const refreshMode = admittedRefreshMode(latest, args.now());
+      if (refreshMode !== undefined && args.refresh !== undefined) {
+        const refreshResult = await refreshAndResolve(
+          refreshMode === "forced",
+          refreshMode === "forced" ? latest.authVersion : undefined,
+        );
+        if (
+          refreshResult?.outcome === "skipped" &&
+          refreshResult.reason === "forced_refresh_floor"
+        ) {
+          return snapshot();
+        }
+        if (refreshResult === undefined) return snapshot();
+        if (resolveCurrent() === undefined) {
+          closed = true;
+          throw new Error("MCP credential is no longer active");
+        }
+      }
+      return snapshot();
+    },
+    async forceRefresh(rejected): Promise<McpForceRefreshResult> {
+      if (closed || current.authType !== "mcp_oauth" || args.refresh === undefined) {
+        return { status: "failed", reason: "not_refreshable" };
+      }
+      const hintAt = args.now().toISOString();
+      try {
+        args.refresh.recordAuthHint({
+          workspaceId: rejected.identity.workspaceId,
+          vaultId: rejected.identity.vaultId,
+          credentialId: rejected.identity.credentialId,
+          expectedAuthVersion: rejected.identity.authVersion,
+          authHintAt: hintAt,
+        });
+      } catch {
+        return { status: "failed", reason: "hint_adapter_error" };
+      }
+      if (resolveCurrent() === undefined) {
+        closed = true;
+        return { status: "failed", reason: "missing" };
+      }
+      if (changedFrom(current, rejected)) {
+        return { status: "ready", authorization: snapshot() };
+      }
+      const result = await refreshAndResolve(true, rejected.identity.authVersion);
+      if (result?.outcome === "skipped" && result.reason === "forced_refresh_floor") {
+        if (resolveCurrent() === undefined) {
+          closed = true;
+          return { status: "failed", reason: "missing" };
+        }
+        if (changedFrom(current, rejected)) {
+          return { status: "ready", authorization: snapshot() };
+        }
+        return { status: "skipped_floor" };
+      }
+      if (result === undefined || resolveCurrent() === undefined) {
+        return { status: "failed", reason: "missing" };
+      }
+      if (changedFrom(current, rejected)) {
+        return { status: "ready", authorization: snapshot() };
+      }
+      return {
+        status: "failed",
+        ...(result.outcome === "ok" ? {} : { reason: result.reason }),
+      };
+    },
+    knownSecrets: () => [...retained],
+    close: () => {
+      closed = true;
+      retained.clear();
+    },
+  };
+}
+
+function identityOf(
+  workspaceId: WorkspaceId,
+  resolved: VaultCredentialResolution,
+): McpCredentialIdentity {
+  return {
+    workspaceId,
+    vaultId: resolved.vaultId,
+    credentialId: resolved.credentialId,
+    authVersion: resolved.authVersion,
+    authType: resolved.authType,
+  };
+}
+
+function changedFrom(
+  resolved: VaultCredentialResolution,
+  rejected: McpAuthorizationSnapshot,
+): boolean {
+  return (
+    resolved.credentialId !== rejected.identity.credentialId ||
+    resolved.authVersion !== rejected.identity.authVersion ||
+    `Bearer ${resolved.token}` !== rejected.authorization
+  );
+}
+
+const OAUTH_RUNTIME_EXPIRY_SKEW_MS = 60_000;
+
+function admittedRefreshMode(
+  metadata: VaultCredentialRuntimeMetadata,
+  now: Date,
+): "lazy" | "forced" | undefined {
+  if (metadata.authType !== "mcp_oauth" || !metadata.hasRefresh) {
+    return undefined;
+  }
+  if (metadata.refreshStatus === "invalid") return undefined;
+  if (metadata.authHintAt !== null) return "forced";
+  if (
+    metadata.nextRefreshAt !== null &&
+    new Date(metadata.nextRefreshAt).getTime() > now.getTime()
+  ) {
+    return undefined;
+  }
+  return metadata.expiresAt !== undefined &&
+    new Date(metadata.expiresAt).getTime() <=
+      now.getTime() + OAUTH_RUNTIME_EXPIRY_SKEW_MS
+    ? "lazy"
+    : undefined;
+}
+
+function knownSecrets(opts: McpToolDefinitionOptions): readonly string[] | undefined {
+  const configured = opts.knownSecrets;
+  if (typeof configured === "function") return configured();
+  if (configured !== undefined) return configured;
+  return opts.connection.credential?.knownSecrets();
 }
 
 function isRecord(value: unknown): value is JsonObject {

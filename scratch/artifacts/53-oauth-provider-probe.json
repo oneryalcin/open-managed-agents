@@ -1,0 +1,113 @@
+{
+  "cases": {
+    "linear_form_basic": {
+      "doc_note": "Endpoint from Linear OAuth convention; live result is the evidence.",
+      "encoding": "form",
+      "mode": "client_secret_basic",
+      "provider": "linear",
+      "result": {
+        "body": {
+          "error": "invalid_client",
+          "error_description": "Invalid client: client is invalid"
+        },
+        "content_type": "application/json; charset=utf-8",
+        "elapsed_ms": 204,
+        "error": null,
+        "retry_after": null,
+        "status": 401
+      },
+      "url": "https://api.linear.app/oauth/token"
+    },
+    "linear_form_post": {
+      "doc_note": "Checks body client auth acceptance.",
+      "encoding": "form",
+      "mode": "client_secret_post",
+      "provider": "linear",
+      "result": {
+        "body": {
+          "error": "invalid_client",
+          "error_description": "Invalid client: client is invalid"
+        },
+        "content_type": "application/json; charset=utf-8",
+        "elapsed_ms": 199,
+        "error": null,
+        "retry_after": null,
+        "status": 400
+      },
+      "url": "https://api.linear.app/oauth/token"
+    },
+    "notion_form_basic": {
+      "doc_note": "Checks whether OMA's planned form encoding would fail for Notion.",
+      "encoding": "form",
+      "mode": "client_secret_basic",
+      "provider": "notion",
+      "result": {
+        "body": {
+          "error": "invalid_client",
+          "request_id": "ad0a219e-4f09-484e-89d8-38295d355061"
+        },
+        "content_type": "application/json; charset=utf-8",
+        "elapsed_ms": 208,
+        "error": null,
+        "retry_after": null,
+        "status": 401
+      },
+      "url": "https://api.notion.com/v1/oauth/token"
+    },
+    "notion_json_basic": {
+      "doc_note": "Notion docs show JSON body + Basic auth for refresh_token.",
+      "encoding": "json",
+      "mode": "client_secret_basic",
+      "provider": "notion",
+      "result": {
+        "body": {
+          "error": "invalid_client",
+          "request_id": "d6e2e08c-37be-4f7e-b7c4-2455428a4585"
+        },
+        "content_type": "application/json; charset=utf-8",
+        "elapsed_ms": 218,
+        "error": null,
+        "retry_after": null,
+        "status": 401
+      },
+      "url": "https://api.notion.com/v1/oauth/token"
+    },
+    "slack_form_basic": {
+      "doc_note": "Slack docs list form/json content types, recommend Basic auth, and document grant_type=refresh_token.",
+      "encoding": "form",
+      "mode": "client_secret_basic",
+      "provider": "slack",
+      "result": {
+        "body": {
+          "error": "invalid_refresh_token",
+          "ok": false
+        },
+        "content_type": "application/json; charset=utf-8",
+        "elapsed_ms": 214,
+        "error": null,
+        "retry_after": null,
+        "status": 200
+      },
+      "url": "https://slack.com/api/oauth.v2.access"
+    },
+    "slack_form_post": {
+      "doc_note": "Checks whether body client auth is accepted enough to return an OAuth-shaped error.",
+      "encoding": "form",
+      "mode": "client_secret_post",
+      "provider": "slack",
+      "result": {
+        "body": {
+          "error": "invalid_refresh_token",
+          "ok": false
+        },
+        "content_type": "application/json; charset=utf-8",
+        "elapsed_ms": 123,
+        "error": null,
+        "retry_after": null,
+        "status": 200
+      },
+      "url": "https://slack.com/api/oauth.v2.access"
+    }
+  },
+  "run_id": "32d20ee6a1"
+}

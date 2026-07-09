@@ -95,6 +95,7 @@ import {
   createStoreBackedMcpServersProvider,
   createStoreBackedMcpToolAccessResolver,
 } from "./sessions/pi/mcp/bridge.ts";
+import { createDefaultMcpRuntime } from "./sessions/pi/mcp/runtime.ts";
 import { translatePiEvent } from "./sessions/pi/translator.ts";
 
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
@@ -532,6 +533,10 @@ export function createDeploymentControlPlane(
     );
     setLogEventHook((level) => metrics.logEvents.inc({ level }));
   }
+  const defaultMcpRuntime =
+    opts.runner?.mcp === undefined
+      ? createDefaultMcpRuntime(stores.vaults)
+      : undefined;
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
     ...(metrics === undefined
@@ -572,6 +577,7 @@ export function createDeploymentControlPlane(
     // exhausted session.error), dialing gated by OMA_ENABLE_MCP.
     mcp: opts.runner?.mcp ?? {
       enabled: runtimeConfig.mcp !== undefined,
+      fetch: defaultMcpRuntime!.fetch,
       servers: createStoreBackedMcpServersProvider({
         sessions: stores.sessions,
         agents: stores.agents,
@@ -579,6 +585,7 @@ export function createDeploymentControlPlane(
       credentials: createStoreBackedMcpCredentialResolver({
         sessions: stores.sessions,
         vaults: vaultService,
+        refresh: defaultMcpRuntime!.refreshCoordinator,
       }),
       access: createStoreBackedMcpToolAccessResolver({
         sessions: stores.sessions,

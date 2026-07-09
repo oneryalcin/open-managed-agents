@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+import { isBlockedAddress } from "../egress/ssrf.ts";
 import { newVaultCredentialId, newVaultId } from "../ids.ts";
 import { conflict, invalidRequest, notFound } from "../errors.ts";
 import type { WorkspaceId } from "../workspace.ts";
@@ -8,6 +10,8 @@ import type {
   ManagedVault,
   ManagedVaultCredential,
   VaultCredentialResolution,
+  VaultCredentialRuntimeMetadata,
+  VaultCredentialAuth,
   VaultCredentialRow,
   VaultRow,
   VaultService,
@@ -19,11 +23,16 @@ const MAX_METADATA_PAIRS = 16;
 const MAX_METADATA_KEY_LENGTH = 64;
 const MAX_METADATA_VALUE_LENGTH = 512;
 const MAX_CREDENTIALS_PER_VAULT = 20;
+const MAX_TOKEN_ENDPOINT_LENGTH = 2048;
 // Floor matches scrubKnownSecrets' MIN_KNOWN_SECRET_LENGTH (logging.ts):
 // a token the scrubber cannot safely redact must not be storable, or a
 // hostile server echoing the bare token would bypass the #170 scrub
 // (review #170, Codex). OMA tightening; real bearer tokens are far longer.
 const MIN_TOKEN_LENGTH = 8;
+
+type CredentialAuthInput = Record<string, unknown> & {
+  type: "static_bearer" | "mcp_oauth";
+};
 
 export class DefaultVaultService implements VaultService {
   constructor(private readonly store: VaultStore) {}
@@ -122,15 +131,13 @@ export class DefaultVaultService implements VaultService {
             type: "vault_credential",
             display_name: req.displayName,
             metadata: req.metadata,
-            auth: {
-              type: "static_bearer",
-              mcp_server_url: req.mcpServerUrl,
-            },
+            auth: req.auth,
+            auth_version: 1,
             created_at: now,
             updated_at: now,
             archived_at: null,
           },
-          token: req.token,
+          token: req.secretValue,
         }),
       );
     } catch (error) {
@@ -182,7 +189,13 @@ export class DefaultVaultService implements VaultService {
     input: unknown,
   ): ManagedVaultCredential {
     this.assertVaultExists(workspaceId, vaultId);
-    const req = parseCredentialUpdate(input);
+    const existing = this.store.retrieveCredential(
+      workspaceId,
+      vaultId,
+      credentialId,
+    );
+    if (!existing) throw notFound(`Vault credential ${credentialId} not found`);
+    const req = parseCredentialUpdate(input, existing);
     try {
       const row = this.store.updateCredential(
         workspaceId,
@@ -251,6 +264,18 @@ export class DefaultVaultService implements VaultService {
     return this.store.resolveCredential(workspaceId, vaultIds, serverUrl);
   }
 
+  readCredentialRuntimeMetadata(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultCredentialRuntimeMetadata | undefined {
+    return this.store.readCredentialRuntimeMetadata(
+      workspaceId,
+      vaultId,
+      credentialId,
+    );
+  }
+
   private assertVaultExists(workspaceId: WorkspaceId, vaultId: string): VaultRow {
     const row = this.store.retrieveVaultAny(workspaceId, vaultId);
     if (!row) throw notFound(`Vault ${vaultId} not found`);
@@ -287,32 +312,49 @@ function parseVaultUpdate(input: unknown): {
 function parseCredentialCreate(input: unknown): {
   displayName: string | null;
   metadata: Record<string, string>;
-  mcpServerUrl: string;
-  token: string;
+  auth: VaultCredentialRow["auth"];
+  secretValue: string;
 } {
   const obj = objectInput(input);
-  const auth = authObject(obj.auth);
+  const parsed = parseCredentialAuthCreate(obj.auth);
   return {
     displayName:
       obj.display_name === undefined
         ? null
         : nullableDisplayNameField(obj, "display_name"),
     metadata: metadataField(obj.metadata),
-    mcpServerUrl: mcpServerUrlField(auth, "mcp_server_url", { required: true }),
-    token: tokenField(auth),
+    auth: parsed.auth,
+    secretValue: parsed.secretValue,
   };
 }
 
-function parseCredentialUpdate(input: unknown): {
+function parseCredentialUpdate(
+  input: unknown,
+  existing: VaultCredentialRow,
+): {
   displayName?: string | null;
   metadata?: Record<string, string>;
-  token?: string;
+  auth?:
+    | { type: "static_bearer"; token: string }
+    | {
+        type: "mcp_oauth";
+        expiresAt?: string | null;
+        accessToken?: string;
+        refreshToken?: string;
+      };
 } {
   const obj = objectInput(input);
   const updates: {
     displayName?: string | null;
     metadata?: Record<string, string>;
-    token?: string;
+    auth?:
+      | { type: "static_bearer"; token: string }
+      | {
+          type: "mcp_oauth";
+          expiresAt?: string | null;
+          accessToken?: string;
+          refreshToken?: string;
+        };
   } = {};
   if (obj.display_name !== undefined) {
     updates.displayName = nullableDisplayNameField(obj, "display_name");
@@ -321,32 +363,248 @@ function parseCredentialUpdate(input: unknown): {
     updates.metadata = metadataField(obj.metadata);
   }
   if (obj.auth !== undefined) {
-    const auth = authObject(obj.auth);
-    if (auth.mcp_server_url !== undefined) {
-      throw invalidRequest("`auth.mcp_server_url` is immutable");
-    }
-    updates.token = tokenField(auth);
+    updates.auth = parseCredentialAuthUpdate(obj.auth, existing);
   }
   return updates;
 }
 
-function tokenField(auth: Record<string, unknown>): string {
-  const value = stringField(auth, "token", { required: true });
+function parseCredentialAuthCreate(input: unknown): {
+  auth: VaultCredentialRow["auth"];
+  secretValue: string;
+} {
+  const auth = authObject(input);
+  const type = auth.type;
+  if (type === "static_bearer") {
+    return {
+      auth: {
+        type,
+        mcp_server_url: mcpServerUrlField(auth, "mcp_server_url", {
+          required: true,
+        }),
+      },
+      secretValue: staticBearerTokenField(auth),
+    };
+  }
+  const refresh = oauthRefreshCreate(auth.refresh);
+  const accessToken = secretField(auth, "access_token", { required: true });
+  const expiresAt = expiresAtField(auth.expires_at);
+  return {
+    auth: {
+      type,
+      mcp_server_url: mcpServerUrlField(auth, "mcp_server_url", {
+        required: true,
+      }),
+      ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
+      ...(refresh === undefined ? {} : { refresh: refresh.metadata }),
+    },
+    secretValue: JSON.stringify({
+      access_token: accessToken,
+      ...(refresh?.refreshToken === undefined
+        ? {}
+        : { refresh_token: refresh.refreshToken }),
+      ...(refresh?.clientSecret === undefined
+        ? {}
+        : { client_secret: refresh.clientSecret }),
+    }),
+  };
+}
+
+function parseCredentialAuthUpdate(
+  input: unknown,
+  existing: VaultCredentialRow,
+): NonNullable<ReturnType<typeof parseCredentialUpdate>["auth"]> {
+  const auth = authObject(input);
+  if (auth.type !== existing.auth.type) {
+    throw invalidRequest("`auth.type` is immutable");
+  }
+  if (auth.mcp_server_url !== undefined) {
+    throw invalidRequest("`auth.mcp_server_url` is immutable");
+  }
+  if (auth.type === "static_bearer") {
+    return { type: auth.type, token: staticBearerTokenField(auth) };
+  }
+  if (auth.token_endpoint !== undefined) {
+    throw invalidRequest("`auth.token_endpoint` is immutable");
+  }
+  if (auth.client_id !== undefined) {
+    throw invalidRequest("`auth.client_id` is immutable");
+  }
+  const out: {
+    type: "mcp_oauth";
+    expiresAt?: string | null;
+    accessToken?: string;
+    refreshToken?: string;
+  } = { type: "mcp_oauth" };
+  if (auth.access_token !== undefined) {
+    out.accessToken = secretField(auth, "access_token", { required: true });
+  }
+  if (auth.expires_at !== undefined) {
+    out.expiresAt = expiresAtField(auth.expires_at) ?? null;
+  }
+  if (auth.refresh !== undefined) {
+    const refresh = objectField(auth, "refresh");
+    for (const field of [
+      "token_endpoint",
+      "client_id",
+      "scope",
+      "token_endpoint_auth",
+    ]) {
+      if (refresh[field] !== undefined) {
+        throw invalidRequest(`\`auth.refresh.${field}\` is immutable`);
+      }
+    }
+    out.refreshToken = secretField(refresh, "refresh_token", { required: true });
+  }
+  if (
+    out.accessToken === undefined &&
+    out.expiresAt === undefined &&
+    out.refreshToken === undefined
+  ) {
+    throw invalidRequest("`auth` must include an updateable field");
+  }
+  return out;
+}
+
+function staticBearerTokenField(auth: Record<string, unknown>): string {
+  return secretField(auth, "token", { required: true });
+}
+
+function secretField(
+  obj: Record<string, unknown>,
+  field: string,
+  opts: { required?: boolean } = {},
+): string {
+  const value = stringField(obj, field, opts);
   if (value.length < MIN_TOKEN_LENGTH) {
     throw invalidRequest(
-      `\`auth.token\` must be at least ${MIN_TOKEN_LENGTH} characters`,
+      `\`${field}\` must be at least ${MIN_TOKEN_LENGTH} characters`,
     );
   }
   return value;
 }
 
-function authObject(input: unknown): Record<string, unknown> {
-  if (!isObject(input)) throw invalidRequest("`auth` must be a JSON object");
-  const type = stringField(input, "type", { required: true });
-  if (type !== "static_bearer") {
-    throw invalidRequest("Only `static_bearer` credentials are supported");
+function oauthRefreshCreate(input: unknown):
+  | {
+      metadata: NonNullable<Extract<VaultCredentialAuth, { type: "mcp_oauth" }>["refresh"]>;
+      refreshToken: string;
+      clientSecret?: string;
+    }
+  | undefined {
+  if (input === undefined) return undefined;
+  const refresh = objectField({ refresh: input }, "refresh");
+  const tokenEndpoint = tokenEndpointField(refresh, "token_endpoint");
+  const clientId = stringField(refresh, "client_id", { required: true });
+  const scope =
+    refresh.scope === undefined
+      ? undefined
+      : stringField(refresh, "scope", { required: true });
+  const tokenEndpointAuth = objectField(refresh, "token_endpoint_auth");
+  const authType = stringField(tokenEndpointAuth, "type", { required: true });
+  if (
+    authType !== "none" &&
+    authType !== "client_secret_basic" &&
+    authType !== "client_secret_post"
+  ) {
+    throw invalidRequest(
+      "`auth.refresh.token_endpoint_auth.type` must be one of `none`, `client_secret_basic`, or `client_secret_post`",
+    );
+  }
+  const refreshToken = secretField(refresh, "refresh_token", { required: true });
+  const clientSecret =
+    authType === "none"
+      ? clientSecretAbsent(tokenEndpointAuth)
+      : secretField(tokenEndpointAuth, "client_secret", { required: true });
+  return {
+    metadata: {
+      token_endpoint: tokenEndpoint,
+      client_id: clientId,
+      ...(scope === undefined ? {} : { scope }),
+      token_endpoint_auth: { type: authType },
+    },
+    refreshToken,
+    ...(clientSecret === undefined ? {} : { clientSecret }),
+  };
+}
+
+function tokenEndpointField(
+  obj: Record<string, unknown>,
+  field: string,
+): string {
+  const value = stringField(obj, field, { required: true });
+  if (value.length > MAX_TOKEN_ENDPOINT_LENGTH) {
+    throw invalidRequest(
+      `\`${field}\` must be at most ${MAX_TOKEN_ENDPOINT_LENGTH} characters`,
+    );
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") {
+      throw invalidRequest(`\`${field}\` must be an https URL`);
+    }
+    if (url.username || url.password || url.hash) {
+      throw invalidRequest(
+        `\`${field}\` must not include userinfo or fragments`,
+      );
+    }
+    if (isBlockedIpLiteral(url.hostname)) {
+      throw invalidRequest(`\`${field}\` host is not allowed`);
+    }
+    return value;
+  } catch (error) {
+    if (error instanceof Error && error.name === "ApiError") throw error;
+    throw invalidRequest(`\`${field}\` must be an https URL`);
+  }
+}
+
+function clientSecretAbsent(obj: Record<string, unknown>): undefined {
+  if (obj.client_secret !== undefined) {
+    throw invalidRequest(
+      "`auth.refresh.token_endpoint_auth.client_secret` is not allowed when type is `none`",
+    );
+  }
+  return undefined;
+}
+
+function isBlockedIpLiteral(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, "");
+  const family = isIP(normalized);
+  if (family !== 0) return isBlockedAddress(normalized, family);
+  return false;
+}
+
+function expiresAtField(input: unknown): string | undefined {
+  if (input === undefined) return undefined;
+  if (typeof input !== "string" || input.length === 0) {
+    throw invalidRequest("`auth.expires_at` must be a non-empty string");
+  }
+  const time = Date.parse(input);
+  if (!Number.isFinite(time)) {
+    throw invalidRequest("`auth.expires_at` must be an ISO-8601 timestamp");
+  }
+  if (time <= Date.now()) {
+    throw invalidRequest("auth.expires_at must be in the future.");
   }
   return input;
+}
+
+function objectField(
+  obj: Record<string, unknown>,
+  field: string,
+): Record<string, unknown> {
+  const value = obj[field];
+  if (!isObject(value)) throw invalidRequest(`\`${field}\` must be a JSON object`);
+  return value;
+}
+
+function authObject(input: unknown): CredentialAuthInput {
+  if (!isObject(input)) throw invalidRequest("`auth` must be a JSON object");
+  const type = stringField(input, "type", { required: true });
+  if (type !== "static_bearer" && type !== "mcp_oauth") {
+    throw invalidRequest(
+      "Only `static_bearer` and `mcp_oauth` credentials are supported",
+    );
+  }
+  return { ...input, type };
 }
 
 function objectInput(input: unknown): Record<string, unknown> {

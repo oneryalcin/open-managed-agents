@@ -19,14 +19,34 @@ export interface VaultCredentialRow {
   type: "vault_credential";
   display_name: string | null;
   metadata: Record<string, string>;
-  auth: {
-    type: "static_bearer";
-    mcp_server_url: string;
-  };
+  auth: VaultCredentialAuth;
+  auth_version: number;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
 }
+
+export type VaultCredentialAuth =
+  | {
+      type: "static_bearer";
+      mcp_server_url: string;
+    }
+  | {
+      type: "mcp_oauth";
+      mcp_server_url: string;
+      expires_at?: string;
+      refresh?: {
+        token_endpoint: string;
+        client_id: string;
+        scope?: string;
+        token_endpoint_auth: {
+          type:
+            | "none"
+            | "client_secret_basic"
+            | "client_secret_post";
+        };
+      };
+    };
 
 export interface ManagedVault {
   id: string;
@@ -44,10 +64,7 @@ export interface ManagedVaultCredential {
   vault_id: string;
   display_name?: string | null;
   metadata: Record<string, string>;
-  auth: {
-    type: "static_bearer";
-    mcp_server_url: string;
-  };
+  auth: VaultCredentialAuth;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -59,10 +76,99 @@ export interface ManagedDeletedVault {
 }
 
 export interface VaultCredentialResolution {
+  vaultId: string;
   credentialId: string;
+  authType: VaultCredentialAuth["type"];
+  authVersion: number;
+  expiresAt?: string;
+  refreshStatus: VaultOauthRefreshStatus | null;
+  authHintAt: string | null;
   updatedAt: string;
   token: string;
 }
+
+export type VaultOauthRefreshStatus = "ok" | "invalid" | "transient";
+
+export interface VaultCredentialRuntimeMetadata {
+  vaultId: string;
+  credentialId: string;
+  authType: VaultCredentialAuth["type"];
+  hasRefresh: boolean;
+  authVersion: number;
+  expiresAt?: string;
+  refreshStatus: VaultOauthRefreshStatus | null;
+  authHintAt: string | null;
+  nextRefreshAt: string | null;
+  refreshAttempts: number;
+}
+
+export interface PersistAuthHintInput {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  expectedAuthVersion: number;
+  authHintAt: string;
+}
+
+export type PersistAuthHintResult =
+  | { status: "updated"; metadata: VaultCredentialRuntimeMetadata }
+  | { status: "stale"; metadata: VaultCredentialRuntimeMetadata | undefined };
+
+export interface VaultOauthRefreshState {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  authVersion: number;
+  mcpServerUrl: string;
+  expiresAt?: string;
+  refresh?: {
+    tokenEndpoint: string;
+    clientId: string;
+    scope?: string;
+    tokenEndpointAuth: {
+      type:
+        | "none"
+        | "client_secret_basic"
+        | "client_secret_post";
+    };
+  };
+  secrets: {
+    accessToken?: string;
+    refreshToken?: string;
+    clientSecret?: string;
+  };
+  refreshStatus: VaultOauthRefreshStatus | null;
+  refreshAttempts: number;
+  nextRefreshAt: string | null;
+  authHintAt: string | null;
+}
+
+export interface PersistOauthRefreshSuccessInput {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  expectedAuthVersion: number;
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: string | null;
+  scope?: string | null;
+  nextRefreshAt?: string | null;
+  updatedAt: string;
+}
+
+export interface PersistOauthRefreshFailureInput {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  expectedAuthVersion: number;
+  status: Exclude<VaultOauthRefreshStatus, "ok">;
+  refreshAttempts: number;
+  nextRefreshAt: string | null;
+}
+
+export type PersistOauthRefreshResult =
+  | { status: "updated"; state: VaultOauthRefreshState }
+  | { status: "stale"; state: VaultOauthRefreshState | undefined };
 
 export interface ListVaultsOptions {
   page?: string;
@@ -134,7 +240,14 @@ export interface VaultStore {
     updates: {
       displayName?: string | null;
       metadata?: Record<string, string>;
-      token?: string;
+      auth?:
+        | { type: "static_bearer"; token: string }
+        | {
+            type: "mcp_oauth";
+            expiresAt?: string | null;
+            accessToken?: string;
+            refreshToken?: string;
+          };
     },
     updatedAt: string,
   ): VaultCredentialRow | undefined;
@@ -155,6 +268,23 @@ export interface VaultStore {
     vaultIds: readonly string[],
     serverUrl: string,
   ): VaultCredentialResolution | undefined;
+  readCredentialRuntimeMetadata(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultCredentialRuntimeMetadata | undefined;
+  persistAuthHint(input: PersistAuthHintInput): PersistAuthHintResult;
+  readOauthRefreshState(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultOauthRefreshState | undefined;
+  persistOauthRefreshSuccess(
+    input: PersistOauthRefreshSuccessInput,
+  ): PersistOauthRefreshResult;
+  persistOauthRefreshFailure(
+    input: PersistOauthRefreshFailureInput,
+  ): PersistOauthRefreshResult;
   close?(): void;
 }
 
@@ -209,4 +339,9 @@ export interface VaultService {
     vaultIds: readonly string[],
     serverUrl: string,
   ): VaultCredentialResolution | undefined;
+  readCredentialRuntimeMetadata(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultCredentialRuntimeMetadata | undefined;
 }
