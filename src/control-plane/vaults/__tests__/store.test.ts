@@ -165,6 +165,156 @@ describe("SqliteVaultStore", () => {
       "NEXT_ACCESS",
     );
   });
+
+  it("persists oauth refresh success with an auth_version CAS fence", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+    const state = store.readOauthRefreshState(WRK, "vlt_first", "vcrd_oauth");
+
+    const result = store.persistOauthRefreshSuccess({
+      workspaceId: WRK,
+      vaultId: "vlt_first",
+      credentialId: "vcrd_oauth",
+      expectedAuthVersion: state!.authVersion,
+      accessToken: "FRESH_ACCESS",
+      refreshToken: "FRESH_REFRESH",
+      expiresAt: "2099-12-31T23:59:59Z",
+      scope: "read",
+      nextRefreshAt: "2099-12-31T23:54:59.000Z",
+      updatedAt: "2026-07-08T00:00:02.000Z",
+    });
+
+    expect(result.status).toBe("updated");
+    expect(result.state).toMatchObject({
+      authVersion: 2,
+      expiresAt: "2099-12-31T23:59:59Z",
+      refresh: { scope: "read" },
+      refreshStatus: "ok",
+      refreshAttempts: 0,
+      nextRefreshAt: "2099-12-31T23:54:59.000Z",
+      secrets: {
+        accessToken: "FRESH_ACCESS",
+        refreshToken: "FRESH_REFRESH",
+        clientSecret: "CLIENT_SECRET",
+      },
+    });
+    expect(JSON.parse(secrets.reveal(WRK, vaultSecretName("vlt_first", "vcrd_oauth")) ?? "{}")).toEqual({
+      access_token: "FRESH_ACCESS",
+      refresh_token: "FRESH_REFRESH",
+      client_secret: "CLIENT_SECRET",
+    });
+  });
+
+  it("does not discard a provider-rotated token for a cosmetic metadata race", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+    const state = store.readOauthRefreshState(WRK, "vlt_first", "vcrd_oauth")!;
+
+    store.updateCredential(
+      WRK,
+      "vlt_first",
+      "vcrd_oauth",
+      { metadata: { owner: "ops" } },
+      "2026-07-08T00:00:01.000Z",
+    );
+    const result = store.persistOauthRefreshSuccess({
+      workspaceId: WRK,
+      vaultId: "vlt_first",
+      credentialId: "vcrd_oauth",
+      expectedAuthVersion: state.authVersion,
+      accessToken: "FRESH_ACCESS",
+      refreshToken: "FRESH_REFRESH",
+      updatedAt: "2026-07-08T00:00:02.000Z",
+    });
+
+    expect(result.status).toBe("updated");
+    expect(store.readOauthRefreshState(WRK, "vlt_first", "vcrd_oauth")).toMatchObject({
+      authVersion: 2,
+      secrets: { accessToken: "FRESH_ACCESS", refreshToken: "FRESH_REFRESH" },
+    });
+  });
+
+  it("discards stale oauth refresh writes after operator auth rotation", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+    const staleState = store.readOauthRefreshState(WRK, "vlt_first", "vcrd_oauth")!;
+    store.updateCredential(
+      WRK,
+      "vlt_first",
+      "vcrd_oauth",
+      {
+        auth: {
+          type: "mcp_oauth",
+          accessToken: "OPERATOR_ACCESS",
+          refreshToken: "OPERATOR_REFRESH",
+        },
+      },
+      "2026-07-08T00:00:01.000Z",
+    );
+
+    const result = store.persistOauthRefreshSuccess({
+      workspaceId: WRK,
+      vaultId: "vlt_first",
+      credentialId: "vcrd_oauth",
+      expectedAuthVersion: staleState.authVersion,
+      accessToken: "STALE_ACCESS",
+      refreshToken: "STALE_REFRESH",
+      updatedAt: "2026-07-08T00:00:02.000Z",
+    });
+
+    expect(result.status).toBe("stale");
+    expect(result.state).toMatchObject({
+      authVersion: 2,
+      secrets: { accessToken: "OPERATOR_ACCESS", refreshToken: "OPERATOR_REFRESH" },
+    });
+    expect(secrets.reveal(WRK, vaultSecretName("vlt_first", "vcrd_oauth"))).toContain(
+      "OPERATOR_REFRESH",
+    );
+    expect(secrets.reveal(WRK, vaultSecretName("vlt_first", "vcrd_oauth"))).not.toContain(
+      "STALE_REFRESH",
+    );
+  });
+
+  it("does not resurrect a purged oauth secret after archive wins the CAS race", () => {
+    createVault(store, "vlt_first");
+    createOauthCredential(store, "vlt_first", "vcrd_oauth", URL, {
+      accessToken: "ACCESS_TOKEN",
+      refreshToken: "REFRESH_TOKEN",
+      clientSecret: "CLIENT_SECRET",
+    });
+    const staleState = store.readOauthRefreshState(WRK, "vlt_first", "vcrd_oauth")!;
+    store.archiveCredential(
+      WRK,
+      "vlt_first",
+      "vcrd_oauth",
+      "2026-07-08T00:00:01.000Z",
+    );
+
+    const result = store.persistOauthRefreshSuccess({
+      workspaceId: WRK,
+      vaultId: "vlt_first",
+      credentialId: "vcrd_oauth",
+      expectedAuthVersion: staleState.authVersion,
+      accessToken: "STALE_ACCESS",
+      refreshToken: "STALE_REFRESH",
+      updatedAt: "2026-07-08T00:00:02.000Z",
+    });
+
+    expect(result).toEqual({ status: "stale", state: undefined });
+    expect(secrets.reveal(WRK, vaultSecretName("vlt_first", "vcrd_oauth"))).toBeUndefined();
+  });
 });
 
 function createVault(store: SqliteVaultStore, id: string): VaultRow {

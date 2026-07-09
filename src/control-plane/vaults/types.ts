@@ -81,6 +81,63 @@ export interface VaultCredentialResolution {
   token: string;
 }
 
+export type VaultOauthRefreshStatus = "ok" | "invalid" | "transient";
+
+export interface VaultOauthRefreshState {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  authVersion: number;
+  mcpServerUrl: string;
+  expiresAt?: string;
+  refresh?: {
+    tokenEndpoint: string;
+    clientId: string;
+    scope?: string;
+    tokenEndpointAuth: {
+      type:
+        | "none"
+        | "client_secret_basic"
+        | "client_secret_post";
+    };
+  };
+  secrets: {
+    accessToken?: string;
+    refreshToken?: string;
+    clientSecret?: string;
+  };
+  refreshStatus: VaultOauthRefreshStatus | null;
+  refreshAttempts: number;
+  nextRefreshAt: string | null;
+}
+
+export interface PersistOauthRefreshSuccessInput {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  expectedAuthVersion: number;
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: string | null;
+  scope?: string | null;
+  nextRefreshAt?: string | null;
+  updatedAt: string;
+}
+
+export interface PersistOauthRefreshFailureInput {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  expectedAuthVersion: number;
+  status: Exclude<VaultOauthRefreshStatus, "ok">;
+  refreshAttempts: number;
+  nextRefreshAt: string | null;
+}
+
+export type PersistOauthRefreshResult =
+  | { status: "updated"; state: VaultOauthRefreshState }
+  | { status: "stale"; state: VaultOauthRefreshState | undefined };
+
 export interface ListVaultsOptions {
   page?: string;
   limit?: number;
@@ -179,6 +236,17 @@ export interface VaultStore {
     vaultIds: readonly string[],
     serverUrl: string,
   ): VaultCredentialResolution | undefined;
+  readOauthRefreshState(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultOauthRefreshState | undefined;
+  persistOauthRefreshSuccess(
+    input: PersistOauthRefreshSuccessInput,
+  ): PersistOauthRefreshResult;
+  persistOauthRefreshFailure(
+    input: PersistOauthRefreshFailureInput,
+  ): PersistOauthRefreshResult;
   close?(): void;
 }
 

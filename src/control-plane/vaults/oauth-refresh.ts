@@ -1,0 +1,387 @@
+import { Buffer } from "node:buffer";
+import type { WorkspaceId } from "../workspace.ts";
+import type {
+  PersistOauthRefreshResult,
+  VaultOauthRefreshState,
+  VaultStore,
+} from "./types.ts";
+
+export const OAUTH_REFRESH_TIMEOUT_MS = 30_000;
+export const OAUTH_REFRESH_MAX_BODY_BYTES = 64 * 1024;
+export const OAUTH_REFRESH_LEAD_MS = 5 * 60_000;
+export const OAUTH_REFRESH_FLOOR_MS = 30_000;
+export const OAUTH_REFRESH_MAX_BACKOFF_MS = 15 * 60_000;
+
+const PERMANENT_OAUTH_ERRORS = new Set([
+  "invalid_grant",
+  "invalid_refresh_token",
+  "invalid_client",
+  "unauthorized_client",
+  "invalid_scope",
+  "unsupported_grant_type",
+]);
+
+type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+export interface RefreshCoordinatorOptions {
+  store: VaultStore;
+  fetch?: FetchLike;
+  now?: () => Date;
+  timeoutMs?: number;
+  maxBodyBytes?: number;
+}
+
+export interface RefreshCredentialInput {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+}
+
+export type RefreshCredentialResult =
+  | {
+      outcome: "ok";
+      state: VaultOauthRefreshState;
+      persisted: PersistOauthRefreshResult["status"];
+    }
+  | {
+      outcome: "invalid";
+      reason: string;
+      state: VaultOauthRefreshState | undefined;
+      persisted: PersistOauthRefreshResult["status"];
+    }
+  | {
+      outcome: "transient_error";
+      reason: string;
+      state: VaultOauthRefreshState | undefined;
+      persisted: PersistOauthRefreshResult["status"];
+    }
+  | {
+      outcome: "skipped";
+      reason: "missing" | "no_refresh_metadata" | "no_refresh_token" | "missing_client_secret";
+      state: VaultOauthRefreshState | undefined;
+    };
+
+interface TokenRefreshSuccess {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: string | null;
+  scope?: string | null;
+}
+
+interface TokenRefreshFailure {
+  outcome: "invalid" | "transient_error";
+  reason: string;
+  retryAfterMs?: number;
+}
+
+export class RefreshCoordinator {
+  private readonly inflight = new Map<string, Promise<RefreshCredentialResult>>();
+  private readonly fetchImpl: FetchLike;
+  private readonly now: () => Date;
+  private readonly timeoutMs: number;
+  private readonly maxBodyBytes: number;
+
+  constructor(private readonly opts: RefreshCoordinatorOptions) {
+    this.fetchImpl = opts.fetch ?? fetch;
+    this.now = opts.now ?? (() => new Date());
+    this.timeoutMs = opts.timeoutMs ?? OAUTH_REFRESH_TIMEOUT_MS;
+    this.maxBodyBytes = opts.maxBodyBytes ?? OAUTH_REFRESH_MAX_BODY_BYTES;
+  }
+
+  refreshCredential(input: RefreshCredentialInput): Promise<RefreshCredentialResult> {
+    const key = `${input.workspaceId}\0${input.vaultId}\0${input.credentialId}`;
+    const existing = this.inflight.get(key);
+    if (existing) return existing;
+    const promise = this.refreshCredentialOnce(input).finally(() => {
+      this.inflight.delete(key);
+    });
+    this.inflight.set(key, promise);
+    return promise;
+  }
+
+  private async refreshCredentialOnce(
+    input: RefreshCredentialInput,
+  ): Promise<RefreshCredentialResult> {
+    const state = this.opts.store.readOauthRefreshState(
+      input.workspaceId,
+      input.vaultId,
+      input.credentialId,
+    );
+    if (state === undefined) {
+      return { outcome: "skipped", reason: "missing", state };
+    }
+    if (state.refresh === undefined) {
+      return { outcome: "skipped", reason: "no_refresh_metadata", state };
+    }
+    if (state.secrets.refreshToken === undefined) {
+      return { outcome: "skipped", reason: "no_refresh_token", state };
+    }
+    if (
+      state.refresh.tokenEndpointAuth.type !== "none" &&
+      state.secrets.clientSecret === undefined
+    ) {
+      return { outcome: "skipped", reason: "missing_client_secret", state };
+    }
+
+    const refreshed = await this.performTokenRefresh(state);
+    if ("accessToken" in refreshed) {
+      const now = this.now();
+      const persisted = this.opts.store.persistOauthRefreshSuccess({
+        workspaceId: input.workspaceId,
+        vaultId: input.vaultId,
+        credentialId: input.credentialId,
+        expectedAuthVersion: state.authVersion,
+        accessToken: refreshed.accessToken,
+        ...(refreshed.refreshToken === undefined
+          ? {}
+          : { refreshToken: refreshed.refreshToken }),
+        ...(refreshed.expiresAt === undefined
+          ? {}
+          : { expiresAt: refreshed.expiresAt }),
+        ...(refreshed.scope === undefined ? {} : { scope: refreshed.scope }),
+        nextRefreshAt:
+          refreshed.expiresAt === undefined || refreshed.expiresAt === null
+            ? null
+            : nextRefreshAt(now, new Date(refreshed.expiresAt)).toISOString(),
+        updatedAt: now.toISOString(),
+      });
+      return {
+        outcome: "ok",
+        state: persisted.state ?? state,
+        persisted: persisted.status,
+      };
+    }
+
+    const attempts = state.refreshAttempts + 1;
+    const now = this.now();
+    const status = refreshed.outcome === "invalid" ? "invalid" : "transient";
+    const persisted = this.opts.store.persistOauthRefreshFailure({
+      workspaceId: input.workspaceId,
+      vaultId: input.vaultId,
+      credentialId: input.credentialId,
+      expectedAuthVersion: state.authVersion,
+      status,
+      refreshAttempts: attempts,
+      nextRefreshAt:
+        status === "invalid"
+          ? null
+          : new Date(
+              now.getTime() +
+                (refreshed.retryAfterMs ?? transientBackoffMs(attempts)),
+            ).toISOString(),
+    });
+    return {
+      outcome: refreshed.outcome,
+      reason: refreshed.reason,
+      state: persisted.state,
+      persisted: persisted.status,
+    };
+  }
+
+  private async performTokenRefresh(
+    state: VaultOauthRefreshState,
+  ): Promise<TokenRefreshSuccess | TokenRefreshFailure> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const init = buildRefreshRequest(state, controller.signal);
+      const response = await this.fetchImpl(state.refresh!.tokenEndpoint, init);
+      const body = await readLimitedText(response, this.maxBodyBytes);
+      const parsed = parseJsonObject(body);
+      if (!parsed.ok) {
+        return {
+          outcome: "transient_error",
+          reason: parsed.reason,
+          retryAfterMs: retryAfterMs(response),
+        };
+      }
+      return classifyTokenResponse(response, parsed.value, this.now());
+    } catch (error) {
+      if (isAbortError(error)) {
+        return { outcome: "transient_error", reason: "timeout" };
+      }
+      if (error instanceof ResponseBodyTooLargeError) {
+        return { outcome: "transient_error", reason: "response_body_too_large" };
+      }
+      return { outcome: "transient_error", reason: "request_failed" };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export function nextRefreshAt(now: Date, expiresAt: Date): Date {
+  const ttlMs = expiresAt.getTime() - now.getTime();
+  if (ttlMs <= 0) return new Date(now.getTime() + OAUTH_REFRESH_FLOOR_MS);
+  if (ttlMs < OAUTH_REFRESH_LEAD_MS) {
+    return new Date(
+      now.getTime() + Math.max(OAUTH_REFRESH_FLOOR_MS, Math.floor(ttlMs / 2)),
+    );
+  }
+  return new Date(expiresAt.getTime() - OAUTH_REFRESH_LEAD_MS);
+}
+
+function transientBackoffMs(attempts: number): number {
+  return Math.min(OAUTH_REFRESH_MAX_BACKOFF_MS, 60_000 * 2 ** Math.max(0, attempts - 1));
+}
+
+function buildRefreshRequest(state: VaultOauthRefreshState, signal: AbortSignal): RequestInit {
+  const refresh = state.refresh!;
+  const body = new URLSearchParams();
+  body.set("grant_type", "refresh_token");
+  body.set("refresh_token", state.secrets.refreshToken!);
+  if (refresh.scope !== undefined) body.set("scope", refresh.scope);
+  const headers = new Headers();
+  headers.set("content-type", "application/x-www-form-urlencoded");
+  const mode = refresh.tokenEndpointAuth.type;
+  if (mode === "none") {
+    body.set("client_id", refresh.clientId);
+  } else if (mode === "client_secret_post") {
+    body.set("client_id", refresh.clientId);
+    body.set("client_secret", state.secrets.clientSecret!);
+  } else {
+    headers.set(
+      "authorization",
+      `Basic ${Buffer.from(
+        `${formEncodeComponent(refresh.clientId)}:${formEncodeComponent(
+          state.secrets.clientSecret!,
+        )}`,
+      ).toString("base64")}`,
+    );
+  }
+  return {
+    method: "POST",
+    redirect: "error",
+    headers,
+    body,
+    signal,
+  };
+}
+
+function formEncodeComponent(value: string): string {
+  const params = new URLSearchParams();
+  params.set("x", value);
+  return params.toString().slice(2);
+}
+
+function classifyTokenResponse(
+  response: Response,
+  value: Record<string, unknown>,
+  now: Date,
+): TokenRefreshSuccess | TokenRefreshFailure {
+  const oauthError = oauthErrorCode(value);
+  if (!response.ok || oauthError !== undefined) {
+    return {
+      outcome: oauthError !== undefined && PERMANENT_OAUTH_ERRORS.has(oauthError)
+        ? "invalid"
+        : "transient_error",
+      reason: oauthError ?? `http_${response.status}`,
+      retryAfterMs: retryAfterMs(response),
+    };
+  }
+  if (
+    value.ok === false &&
+    typeof value.error === "string" &&
+    value.error.length > 0
+  ) {
+    const error = value.error;
+    return {
+      outcome: PERMANENT_OAUTH_ERRORS.has(error) ? "invalid" : "transient_error",
+      reason: error,
+      retryAfterMs: retryAfterMs(response),
+    };
+  }
+  if (typeof value.access_token !== "string" || value.access_token.length === 0) {
+    return { outcome: "transient_error", reason: "missing_access_token" };
+  }
+  if (
+    typeof value.token_type === "string" &&
+    value.token_type.toLowerCase() !== "bearer"
+  ) {
+    return { outcome: "invalid", reason: "unsupported_token_type" };
+  }
+  const expiresAt = expiresAtFromResponse(value, now);
+  return {
+    accessToken: value.access_token,
+    ...(typeof value.refresh_token === "string" && value.refresh_token.length > 0
+      ? { refreshToken: value.refresh_token }
+      : {}),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+    ...(typeof value.scope === "string" ? { scope: value.scope } : {}),
+  };
+}
+
+function oauthErrorCode(value: Record<string, unknown>): string | undefined {
+  return typeof value.error === "string" && value.error.length > 0
+    ? value.error
+    : undefined;
+}
+
+function expiresAtFromResponse(
+  value: Record<string, unknown>,
+  now: Date,
+): string | undefined {
+  if (typeof value.expires_in !== "number" || !Number.isFinite(value.expires_in)) {
+    return undefined;
+  }
+  return new Date(now.getTime() + Math.max(0, value.expires_in) * 1000).toISOString();
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get("retry-after");
+  if (value === null) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(OAUTH_REFRESH_MAX_BACKOFF_MS, seconds * 1000);
+  }
+  const date = Date.parse(value);
+  if (Number.isNaN(date)) return undefined;
+  return Math.min(
+    OAUTH_REFRESH_MAX_BACKOFF_MS,
+    Math.max(0, date - Date.now()),
+  );
+}
+
+async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("json")) {
+    return "";
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (value === undefined) continue;
+    total += value.byteLength;
+    if (total > maxBytes) throw new ResponseBodyTooLargeError();
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function parseJsonObject(text: string): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
+  if (text.length === 0) return { ok: false, reason: "non_json_response" };
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? { ok: true, value: parsed as Record<string, unknown> }
+      : { ok: false, reason: "invalid_json_response" };
+  } catch {
+    return { ok: false, reason: "invalid_json_response" };
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+class ResponseBodyTooLargeError extends Error {}

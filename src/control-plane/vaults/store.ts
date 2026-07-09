@@ -8,8 +8,12 @@ import type {
   CreateVaultRecord,
   ListVaultCredentialsOptions,
   ListVaultsOptions,
+  PersistOauthRefreshFailureInput,
+  PersistOauthRefreshResult,
+  PersistOauthRefreshSuccessInput,
   VaultCredentialResolution,
   VaultCredentialAuth,
+  VaultOauthRefreshState,
   VaultCredentialRow,
   VaultRow,
   VaultStore,
@@ -46,6 +50,10 @@ CREATE TABLE IF NOT EXISTS vault_credentials (
   token_endpoint_auth_type TEXT,
   expires_at      TEXT,
   auth_version    INTEGER NOT NULL DEFAULT 1,
+  refresh_status  TEXT,
+  refresh_attempts INTEGER NOT NULL DEFAULT 0,
+  next_refresh_at TEXT,
+  auth_hint_at    TEXT,
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,
   archived_at     TEXT
@@ -87,6 +95,10 @@ interface VaultCredentialDbRow {
     | null;
   expires_at: string | null;
   auth_version: number;
+  refresh_status: "ok" | "invalid" | "transient" | null;
+  refresh_attempts: number;
+  next_refresh_at: string | null;
+  auth_hint_at: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -115,6 +127,8 @@ export class SqliteVaultStore implements VaultStore {
   private readonly deleteCredentialStmt: StatementSync;
   private readonly countActiveCredentialsStmt: StatementSync;
   private readonly resolveCredentialStmt: StatementSync;
+  private readonly persistOauthRefreshSuccessStmt: StatementSync;
+  private readonly persistOauthRefreshFailureStmt: StatementSync;
   private readonly listVaultStmts = new Map<string, StatementSync>();
   private readonly listCredentialStmts = new Map<string, StatementSync>();
 
@@ -195,6 +209,24 @@ export class SqliteVaultStore implements VaultStore {
        WHERE workspace_id = ? AND vault_id = ? AND mcp_server_url = ? AND archived_at IS NULL
        ORDER BY id ASC
        LIMIT 1`,
+    );
+    this.persistOauthRefreshSuccessStmt = this.db.prepare(
+      `UPDATE vault_credentials
+       SET expires_at = ?, scope = ?, auth_version = auth_version + 1,
+           refresh_status = 'ok', refresh_attempts = 0, next_refresh_at = ?,
+           updated_at = ?
+       WHERE workspace_id = ? AND vault_id = ? AND id = ?
+         AND auth_type = 'mcp_oauth'
+         AND auth_version = ?
+         AND archived_at IS NULL`,
+    );
+    this.persistOauthRefreshFailureStmt = this.db.prepare(
+      `UPDATE vault_credentials
+       SET refresh_status = ?, refresh_attempts = ?, next_refresh_at = ?
+       WHERE workspace_id = ? AND vault_id = ? AND id = ?
+         AND auth_type = 'mcp_oauth'
+         AND auth_version = ?
+         AND archived_at IS NULL`,
     );
   }
 
@@ -507,6 +539,103 @@ export class SqliteVaultStore implements VaultStore {
     return undefined;
   }
 
+  readOauthRefreshState(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultOauthRefreshState | undefined {
+    return this.readOauthRefreshStateInternal(workspaceId, vaultId, credentialId);
+  }
+
+  persistOauthRefreshSuccess(
+    input: PersistOauthRefreshSuccessInput,
+  ): PersistOauthRefreshResult {
+    return withSqliteTransaction(this.db, () => {
+      const current = this.readOauthRefreshStateInternal(
+        input.workspaceId,
+        input.vaultId,
+        input.credentialId,
+      );
+      if (current === undefined) return { status: "stale", state: undefined };
+      const result = this.persistOauthRefreshSuccessStmt.run(
+        input.expiresAt === undefined ? current.expiresAt ?? null : input.expiresAt,
+        input.scope === undefined ? current.refresh?.scope ?? null : input.scope,
+        input.nextRefreshAt ?? null,
+        input.updatedAt,
+        input.workspaceId,
+        input.vaultId,
+        input.credentialId,
+        input.expectedAuthVersion,
+      ) as { changes: number };
+      if (result.changes !== 1) {
+        return {
+          status: "stale",
+          state: this.readOauthRefreshStateInternal(
+            input.workspaceId,
+            input.vaultId,
+            input.credentialId,
+          ),
+        };
+      }
+      const nextRefreshToken = input.refreshToken ?? current.secrets.refreshToken;
+      const nextSecret = {
+        access_token: input.accessToken,
+        ...(nextRefreshToken === undefined
+          ? {}
+          : { refresh_token: nextRefreshToken }),
+        ...(current.secrets.clientSecret === undefined
+          ? {}
+          : { client_secret: current.secrets.clientSecret }),
+      };
+      this.requireSecrets().put(
+        input.workspaceId,
+        secretName(input.vaultId, input.credentialId),
+        JSON.stringify(nextSecret),
+      );
+      return {
+        status: "updated",
+        state: this.readOauthRefreshStateInternal(
+          input.workspaceId,
+          input.vaultId,
+          input.credentialId,
+        )!,
+      };
+    });
+  }
+
+  persistOauthRefreshFailure(
+    input: PersistOauthRefreshFailureInput,
+  ): PersistOauthRefreshResult {
+    return withSqliteTransaction(this.db, () => {
+      const result = this.persistOauthRefreshFailureStmt.run(
+        input.status,
+        input.refreshAttempts,
+        input.nextRefreshAt,
+        input.workspaceId,
+        input.vaultId,
+        input.credentialId,
+        input.expectedAuthVersion,
+      ) as { changes: number };
+      return result.changes === 1
+        ? {
+            status: "updated",
+            state: this.readOauthRefreshStateInternal(
+              input.workspaceId,
+              input.vaultId,
+              input.credentialId,
+            )!,
+          }
+        : {
+            status: "stale",
+            state: this.readOauthRefreshStateInternal(
+              input.workspaceId,
+              input.vaultId,
+              input.credentialId,
+            ),
+          };
+    });
+  }
+
   close(): void {
     this.db.close();
   }
@@ -555,6 +684,57 @@ export class SqliteVaultStore implements VaultStore {
       workspaceId,
       vaultId,
     ) as unknown as VaultCredentialDbRow[]).map(deserializeCredential);
+  }
+
+  private readOauthRefreshStateInternal(
+    workspaceId: string,
+    vaultId: string,
+    credentialId: string,
+  ): VaultOauthRefreshState | undefined {
+    const row = this.retrieveCredentialActiveStmt.get(
+      workspaceId,
+      vaultId,
+      credentialId,
+    ) as unknown as VaultCredentialDbRow | undefined;
+    if (!row || row.auth_type !== "mcp_oauth") return undefined;
+    const raw = this.secrets?.reveal(workspaceId, secretName(vaultId, credentialId));
+    const parsed = raw === undefined ? {} : parseOauthSecret(raw);
+    const auth = deserializeCredentialAuth(row);
+    if (auth.type !== "mcp_oauth") return undefined;
+    return {
+      workspaceId,
+      vaultId,
+      credentialId,
+      authVersion: row.auth_version,
+      mcpServerUrl: row.mcp_server_url,
+      ...(row.expires_at === null ? {} : { expiresAt: row.expires_at }),
+      ...(auth.refresh === undefined
+        ? {}
+        : {
+            refresh: {
+              tokenEndpoint: auth.refresh.token_endpoint,
+              clientId: auth.refresh.client_id,
+              ...(auth.refresh.scope === undefined
+                ? {}
+                : { scope: auth.refresh.scope }),
+              tokenEndpointAuth: auth.refresh.token_endpoint_auth,
+            },
+          }),
+      secrets: {
+        ...(typeof parsed.access_token === "string"
+          ? { accessToken: parsed.access_token }
+          : {}),
+        ...(typeof parsed.refresh_token === "string"
+          ? { refreshToken: parsed.refresh_token }
+          : {}),
+        ...(typeof parsed.client_secret === "string"
+          ? { clientSecret: parsed.client_secret }
+          : {}),
+      },
+      refreshStatus: row.refresh_status,
+      refreshAttempts: row.refresh_attempts,
+      nextRefreshAt: row.next_refresh_at,
+    };
   }
 
   private listVaultStmt(opts: {
@@ -699,6 +879,10 @@ function ensureVaultCredentialColumns(db: DatabaseSync): void {
     ["token_endpoint_auth_type", "TEXT"],
     ["expires_at", "TEXT"],
     ["auth_version", "INTEGER NOT NULL DEFAULT 1"],
+    ["refresh_status", "TEXT"],
+    ["refresh_attempts", "INTEGER NOT NULL DEFAULT 0"],
+    ["next_refresh_at", "TEXT"],
+    ["auth_hint_at", "TEXT"],
   ] as const) {
     if (!names.has(name)) {
       db.exec(`ALTER TABLE vault_credentials ADD COLUMN ${name} ${definition}`);
