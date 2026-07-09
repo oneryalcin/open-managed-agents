@@ -123,6 +123,18 @@ describe("scrubKnownSecrets (exact-value, plan 0122 §7B.9 slice 0)", () => {
     expect(out).toBe("hdr=[redacted]; raw=[redacted]");
   });
 
+  it("scrubs common whole-value encodings of known secrets", () => {
+    const secret = "access+/0=&?%_CANARY";
+    const encoded = [
+      encodeURIComponent(secret),
+      JSON.stringify(secret).slice(1, -1),
+      Buffer.from(secret).toString("base64"),
+    ];
+    expect(scrubKnownSecrets(encoded.join(" "), [secret])).toBe(
+      "[redacted] [redacted] [redacted]",
+    );
+  });
+
   it("ignores values under 8 chars so a pathological secret cannot shred output", () => {
     expect(scrubKnownSecrets("abc abc abc", ["abc", ""])).toBe("abc abc abc");
   });

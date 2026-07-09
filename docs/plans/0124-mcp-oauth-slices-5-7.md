@@ -102,6 +102,29 @@ routes.ts:73). Synchronous handler per §7B.3:
 
 Response shape is the probe-52 literal in §7B.2 (`vault_credential_validation`).
 
+**Validation snapshot seam (implementation audit F1).** `VaultService`
+gains one internal exact-credential accessor for this route returning the
+active OAuth validation snapshot: `authVersion`, `mcpServerUrl`, structural
+refresh metadata, and the live `accessToken` / optional `refreshToken` /
+optional `clientSecret`. The snapshot is never serialized. It is the single
+source for `has_refresh_token`, the frozen probe authorization, and the scrub
+set; structural refresh metadata alone must not imply that the secret exists.
+After any refresh attempt the handler re-resolves this snapshot before a
+re-probe, thereby acquiring the current CAS winner's token and scrub values.
+
+**`refresh.http_response` mapping (implementation audit F2).** It is the
+coordinator outcome's `tokenEndpointResponse`, wire-mapped to
+`{ status_code, content_type }`, whenever the token endpoint returned an HTTP
+response (success, invalid, or transient). It is `null` for transport failures,
+all skipped outcomes, `not_attempted`, and `no_refresh_token`. It never contains
+a body. Full-response tests pin this field alongside every table row.
+
+**Concurrent disappearance (implementation audit F3).** `persisted: "stale"`
+only proceeds to the current-token re-probe when the active validation snapshot
+can be re-resolved. If an archive won the race, return the ordinary archived
+400; if hard delete won, return the ordinary credential 404. Add both races to
+the route tests; do not misreport either as a successful concurrent refresh.
+
 **Coordinator change — `trigger: "validate"` (settled by pre-impl
 review F1; do NOT pass `force: true`, which self-floors at
 `oauth-refresh.ts:129`).** Add `trigger?: "validate"` to
@@ -122,7 +145,9 @@ already clears `invalid` + `auth_hint_at` and reschedules via
 inherently rate-limited" was wrong — `admission.ts` covers
 sessions/turns/uploads/streams, not this route, so sequential validate
 spam would mean one token-endpoint POST per request).** A separate
-`validateAdmissions` map, keyed `${workspaceId\0vaultId\0credentialId}\0${authVersion}`,
+`validateAdmissions` map, keyed `${workspaceId\0vaultId\0credentialId}` (NOT
+`authVersion`: a successful refresh bumps that version and would otherwise
+open a fresh admission slot to every sequential validate request),
 floor `OAUTH_VALIDATE_REFRESH_FLOOR_MS = 10_000` — long enough that a
 scripted caller cannot hammer a third-party IdP, short enough that an
 operator retrying after fixing their IdP config is never blocked
@@ -144,7 +169,10 @@ the runner-override seam. The default runner consumes it when no
 override is supplied; validate and the ticker consume it ALWAYS (a
 custom runner changes how sessions dial, not whether operators can
 validate credentials or scheduled refresh runs). `vaultsRoutes` gains
-`mcp?: { fetch: McpFetch; refresh: RefreshCoordinator }` from it. MCP
+`mcp?: { fetch: McpFetch; refresh: RefreshCoordinator; operationTimeoutMs: number }`
+from it. The timeout is the deployment MCP operation timeout (the same resolved
+value used for session MCP operations, default 60s) and is passed to each
+initialize probe (implementation audit F4). MCP
 off → runtime absent → validate returns the gate-off 400 — one code
 path.
 
@@ -342,6 +370,8 @@ From review round 2:
   reader cleanup on timeout/abort, cap streaming.
 - Custom-runner deployment: validate and ticker still function
   (round 2 F5).
+- Validation snapshot, refresh-response nullability, and archive/delete races
+  are pinned exactly (implementation audit F1-F3).
 
 From review round 3:
 

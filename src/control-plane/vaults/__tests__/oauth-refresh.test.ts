@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteSecretsStore } from "../../secrets/store.ts";
 import { RefreshCoordinator, nextRefreshAt } from "../oauth-refresh.ts";
+import { createOauthRefreshTicker } from "../oauth-refresh-ticker.ts";
 import { SqliteVaultStore } from "../store.ts";
 import type { VaultCredentialRow, VaultRow } from "../types.ts";
 
@@ -26,12 +27,14 @@ describe("RefreshCoordinator", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     db.close();
   });
 
   it("refreshes client_secret_post credentials and persists rotated tokens", async () => {
     createOauthCredential(store, "client_secret_post");
     const fetch = tokenEndpointFixture({
+      headers: { "content-type": "application/json; reflected=REFRESH_TOKEN" },
       response: {
         access_token: "NEXT_ACCESS",
         refresh_token: "NEXT_REFRESH",
@@ -58,6 +61,7 @@ describe("RefreshCoordinator", () => {
     });
     expect(JSON.stringify(result)).not.toContain("NEXT_REFRESH");
     expect(JSON.stringify(result)).not.toContain("CLIENT_SECRET");
+    expect(JSON.stringify(result)).not.toContain("REFRESH_TOKEN");
     expect(fetch.calls).toHaveLength(1);
     expect(fetch.calls[0]).toMatchObject({
       url: TOKEN_ENDPOINT,
@@ -103,6 +107,30 @@ describe("RefreshCoordinator", () => {
     expect(fetch.calls[0]?.authorization).toBe(
       `Basic ${Buffer.from("client+id:secret%2Fvalue").toString("base64")}`,
     );
+  });
+
+  it("scrubs a reflected outbound Basic value from response metadata", async () => {
+    createOauthCredential(store, "client_secret_basic", {
+      clientId: "client id",
+      clientSecret: "secret/value",
+    });
+    let authorization = "";
+    const fetch = async (_input: string | URL, init?: RequestInit) => {
+      authorization = new Headers(init?.headers).get("authorization") ?? "";
+      return new Response(JSON.stringify({ access_token: "NEXT" }), {
+        status: 200,
+        headers: { "content-type": `application/json; reflected=${authorization}` },
+      });
+    };
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => NOW });
+
+    const result = await coordinator.refreshCredential({
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+    });
+    expect(authorization).toMatch(/^Basic /);
+    expect(JSON.stringify(result)).not.toContain(authorization);
   });
 
   it("uses body client_id without client_secret for none auth", async () => {
@@ -248,6 +276,110 @@ describe("RefreshCoordinator", () => {
     expect(fetch.calls).toHaveLength(2);
   });
 
+  it("does not refresh a due snapshot after auth-version rotation", async () => {
+    createOauthCredential(store, "client_secret_post");
+    store.updateCredential(
+      WRK,
+      VAULT,
+      CREDENTIAL,
+      { auth: { type: "mcp_oauth", accessToken: "ROTATED_ACCESS" } },
+      new Date(NOW.getTime() + 1).toISOString(),
+    );
+    const fetch = tokenEndpointFixture({ response: { access_token: "UNUSED" } });
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => NOW });
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+        expectedAuthVersion: 1,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "skipped",
+      reason: "stale_version",
+      state: { authVersion: 2 },
+    });
+    expect(fetch.calls).toHaveLength(0);
+  });
+
+  it("gives validate its own floor while recording the forced floor", async () => {
+    createOauthCredential(store, "client_secret_post");
+    let now = NOW;
+    const fetch = tokenEndpointFixture({ response: { access_token: "NEXT_ACCESS" } });
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => now });
+    const input = {
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+      trigger: "validate",
+      expectedAuthVersion: 1,
+    } as const;
+
+    await expect(coordinator.refreshCredential(input)).resolves.toMatchObject({
+      outcome: "ok",
+      tokenEndpointResponse: {
+        statusCode: 200,
+        contentType: "application/json",
+      },
+    });
+    now = new Date(NOW.getTime() + 9_999);
+    const currentVersion = store.readOauthRefreshState(WRK, VAULT, CREDENTIAL)!
+      .authVersion;
+    await expect(coordinator.refreshCredential({
+      ...input,
+      expectedAuthVersion: currentVersion,
+    })).resolves.toEqual({
+      outcome: "skipped",
+      reason: "validate_floor",
+      state: undefined,
+    });
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+        force: true,
+        expectedAuthVersion: 1,
+      }),
+    ).resolves.toEqual({
+      outcome: "skipped",
+      reason: "forced_refresh_floor",
+      state: undefined,
+    });
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("lets validate retry an invalid credential", async () => {
+    createOauthCredential(store, "client_secret_post");
+    store.persistOauthRefreshFailure({
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+      expectedAuthVersion: 1,
+      status: "invalid",
+      refreshAttempts: 1,
+      nextRefreshAt: null,
+    });
+    const fetch = tokenEndpointFixture({ response: { access_token: "RECOVERED" } });
+    const coordinator = new RefreshCoordinator({ store, fetch, now: () => NOW });
+
+    await expect(
+      coordinator.refreshCredential({
+        workspaceId: WRK,
+        vaultId: VAULT,
+        credentialId: CREDENTIAL,
+        trigger: "validate",
+        expectedAuthVersion: 1,
+      }),
+    ).resolves.toMatchObject({ outcome: "ok", persisted: "updated" });
+    expect(store.readOauthRefreshState(WRK, VAULT, CREDENTIAL)).toMatchObject({
+      refreshStatus: "ok",
+      refreshAttempts: 0,
+      secrets: { accessToken: "RECOVERED" },
+    });
+  });
+
   it("records auth hints through the coordinator with an auth-version fence", () => {
     createOauthCredential(store, "client_secret_post");
     const coordinator = new RefreshCoordinator({
@@ -340,11 +472,13 @@ describe("RefreshCoordinator", () => {
       headers: { "retry-after": "120" },
       response: { error: "temporarily_unavailable" },
     });
+    const onScheduled = vi.fn();
     const coordinator = new RefreshCoordinator({
       store,
       fetch,
       now: () => NOW,
       random: () => 0,
+      onScheduled,
     });
 
     const result = await coordinator.refreshCredential({
@@ -375,6 +509,46 @@ describe("RefreshCoordinator", () => {
       nextRefreshAt: "2026-07-09T12:02:00.000Z",
       authHintAt: null,
     });
+    expect(onScheduled).toHaveBeenCalledTimes(1);
+  });
+
+  it("wakes a sleeping ticker for an externally scheduled transient retry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    createOauthCredential(store, "client_secret_post");
+    const fetch = tokenEndpointFixture({
+      status: 429,
+      headers: { "retry-after": "120" },
+      response: { error: "temporarily_unavailable" },
+    });
+    let wake: () => void = () => undefined;
+    const coordinator = new RefreshCoordinator({
+      store,
+      fetch,
+      now: () => new Date(Date.now()),
+      onScheduled: () => wake(),
+    });
+    const ticker = createOauthRefreshTicker({
+      store,
+      refresh: coordinator,
+      onError: (error) => { throw error; },
+      now: () => new Date(Date.now()),
+    });
+    wake = () => ticker.wake();
+    await vi.advanceTimersByTimeAsync(0);
+
+    await coordinator.refreshCredential({
+      workspaceId: WRK,
+      vaultId: VAULT,
+      credentialId: CREDENTIAL,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(fetch.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch.calls).toHaveLength(2);
+    await ticker.close();
+    vi.useRealTimers();
   });
 
   it("returns a stale result and keeps operator tokens when CAS loses to rotation", async () => {
@@ -594,6 +768,10 @@ describe("RefreshCoordinator", () => {
     ).resolves.toMatchObject({
       outcome: "transient_error",
       reason: "response_body_too_large",
+      tokenEndpointResponse: {
+        statusCode: 200,
+        contentType: "application/json",
+      },
     });
   });
 });

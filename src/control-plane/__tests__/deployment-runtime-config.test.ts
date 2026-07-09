@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDeploymentControlPlaneApp } from "./helpers.ts";
+import { createDeploymentControlPlane } from "../app.ts";
 import {
   createDeploymentPiSessionRunner,
   parseDeploymentRuntimeConfigFromEnv,
@@ -11,6 +12,12 @@ import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
 
 describe("deployment runtime config", () => {
+  it("owns MCP background-worker teardown idempotently", async () => {
+    const plane = createDeploymentControlPlane({ OMA_ENABLE_MCP: "true" });
+    await plane.close();
+    await expect(plane.close()).resolves.toBeUndefined();
+  });
+
   it("treats absent config as no provider, not host passthrough", () => {
     const config = parseDeploymentRuntimeConfigFromEnv({});
 

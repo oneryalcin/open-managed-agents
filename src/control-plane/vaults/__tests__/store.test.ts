@@ -564,6 +564,37 @@ describe("SqliteVaultStore", () => {
     });
     oldDb.close();
   });
+
+  it("lists only active due OAuth refresh rows in deterministic order", () => {
+    const vaultId = "vlt_due";
+    createVault(store, vaultId);
+    createOauthCredential(store, vaultId, "vcrd_due", `${URL}/due`, {
+      accessToken: "ACCESS_DUE",
+      refreshToken: "REFRESH_DUE",
+      clientSecret: "SECRET_DUE",
+      nextRefreshAt: "2026-07-08T00:01:00.000Z",
+    });
+    createOauthCredential(store, vaultId, "vcrd_future", `${URL}/future`, {
+      accessToken: "ACCESS_FUTURE",
+      refreshToken: "REFRESH_FUTURE",
+      clientSecret: "SECRET_FUTURE",
+      nextRefreshAt: "2026-07-08T01:00:00.000Z",
+    });
+    createCredential(store, vaultId, "vcrd_static", `${URL}/static`, "STATIC_TOKEN");
+
+    expect(store.listDueRefreshes("2026-07-08T00:30:00.000Z")).toEqual([
+      {
+        workspaceId: WRK,
+        vaultId,
+        credentialId: "vcrd_due",
+        authVersion: 1,
+        nextRefreshAt: "2026-07-08T00:01:00.000Z",
+      },
+    ]);
+    expect(store.nextDueRefreshAt("2026-07-08T00:30:00.000Z")).toBe(
+      "2026-07-08T00:01:00.000Z",
+    );
+  });
 });
 
 function createVault(store: SqliteVaultStore, id: string): VaultRow {
@@ -615,6 +646,7 @@ function createOauthCredential(
     accessToken: string;
     refreshToken: string;
     clientSecret: string;
+    nextRefreshAt?: string;
   },
 ): VaultCredentialRow {
   return store.createCredential({
@@ -646,5 +678,8 @@ function createOauthCredential(
       refresh_token: opts.refreshToken,
       client_secret: opts.clientSecret,
     }),
+    ...(opts.nextRefreshAt === undefined
+      ? {}
+      : { nextRefreshAt: opts.nextRefreshAt }),
   });
 }

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { scrubKnownSecrets } from "../logging.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import type {
   PersistAuthHintInput,
@@ -15,6 +16,7 @@ export const OAUTH_REFRESH_FLOOR_MS = 30_000;
 export const OAUTH_REFRESH_MAX_BACKOFF_MS = 15 * 60_000;
 export const OAUTH_REFRESH_LONG_LIVED_RECHECK_MS = 15 * 60_000;
 export const OAUTH_FORCED_REFRESH_FLOOR_MS = 60_000;
+export const OAUTH_VALIDATE_REFRESH_FLOOR_MS = 10_000;
 
 const PERMANENT_OAUTH_ERRORS = new Set([
   "invalid_grant",
@@ -34,6 +36,7 @@ export interface RefreshCoordinatorOptions {
   timeoutMs?: number;
   maxBodyBytes?: number;
   random?: () => number;
+  onScheduled?: () => void;
 }
 
 export interface RefreshCredentialInput {
@@ -41,6 +44,7 @@ export interface RefreshCredentialInput {
   vaultId: string;
   credentialId: string;
   force?: boolean;
+  trigger?: "validate";
   /** Auth material rejected by the caller; scopes the forced-admission floor. */
   expectedAuthVersion?: number;
 }
@@ -61,7 +65,12 @@ export interface RefreshCredentialState {
   hasClientSecret: boolean;
 }
 
-export type RefreshCredentialResult =
+export interface TokenEndpointResponseMetadata {
+  statusCode: number;
+  contentType: string;
+}
+
+export type RefreshCredentialResult = (
   | {
       outcome: "ok";
       state: RefreshCredentialState;
@@ -88,26 +97,32 @@ export type RefreshCredentialResult =
         | "no_refresh_metadata"
         | "no_refresh_token"
         | "missing_client_secret"
-        | "forced_refresh_floor";
+        | "forced_refresh_floor"
+        | "validate_floor"
+        | "stale_version";
       state: RefreshCredentialState | undefined;
-    };
+    }
+) & { tokenEndpointResponse?: TokenEndpointResponseMetadata };
 
 interface TokenRefreshSuccess {
   accessToken: string;
   refreshToken?: string;
   expiresAt: string | null;
   scope?: string | null;
+  tokenEndpointResponse?: TokenEndpointResponseMetadata;
 }
 
 interface TokenRefreshFailure {
   outcome: "invalid" | "transient_error";
   reason: string;
   retryAfterMs?: number;
+  tokenEndpointResponse?: TokenEndpointResponseMetadata;
 }
 
 export class RefreshCoordinator {
   private readonly inflight = new Map<string, Promise<RefreshCredentialResult>>();
   private readonly forcedAdmissions = new Map<string, number>();
+  private readonly validateAdmissions = new Map<string, number>();
   private readonly fetchImpl: FetchLike;
   private readonly now: () => Date;
   private readonly timeoutMs: number;
@@ -126,14 +141,33 @@ export class RefreshCoordinator {
     const key = `${input.workspaceId}\0${input.vaultId}\0${input.credentialId}`;
     const existing = this.inflight.get(key);
     if (existing) return existing;
-    if (input.force === true) {
-      const admittedAt = this.now().getTime();
-      for (const [admissionKey, timestamp] of this.forcedAdmissions) {
-        if (admittedAt - timestamp >= OAUTH_FORCED_REFRESH_FLOOR_MS) {
-          this.forcedAdmissions.delete(admissionKey);
-        }
+    const admittedAt = this.now().getTime();
+    const forcedKey = `${key}\0${input.expectedAuthVersion ?? "unversioned"}`;
+    pruneAdmissions(
+      this.forcedAdmissions,
+      admittedAt,
+      OAUTH_FORCED_REFRESH_FLOOR_MS,
+    );
+    pruneAdmissions(
+      this.validateAdmissions,
+      admittedAt,
+      OAUTH_VALIDATE_REFRESH_FLOOR_MS,
+    );
+    if (input.trigger === "validate") {
+      const previousAdmission = this.validateAdmissions.get(key);
+      if (
+        previousAdmission !== undefined &&
+        admittedAt - previousAdmission < OAUTH_VALIDATE_REFRESH_FLOOR_MS
+      ) {
+        return Promise.resolve({
+          outcome: "skipped",
+          reason: "validate_floor",
+          state: undefined,
+        });
       }
-      const forcedKey = `${key}\0${input.expectedAuthVersion ?? "unversioned"}`;
+      this.validateAdmissions.set(key, admittedAt);
+      this.forcedAdmissions.set(forcedKey, admittedAt);
+    } else if (input.force === true) {
       const previousAdmission = this.forcedAdmissions.get(forcedKey);
       if (
         previousAdmission !== undefined &&
@@ -181,7 +215,21 @@ export class RefreshCoordinator {
       }
       return { outcome: "skipped", reason: "missing", state };
     }
-    if (state.refreshStatus === "invalid" && input.force !== true) {
+    if (
+      input.expectedAuthVersion !== undefined &&
+      state.authVersion !== input.expectedAuthVersion
+    ) {
+      return {
+        outcome: "skipped",
+        reason: "stale_version",
+        state: publicState(state),
+      };
+    }
+    if (
+      state.refreshStatus === "invalid" &&
+      input.force !== true &&
+      input.trigger !== "validate"
+    ) {
       return {
         outcome: "skipped",
         reason: "invalid_status",
@@ -235,10 +283,12 @@ export class RefreshCoordinator {
             : nextRefreshAt(now, new Date(refreshed.expiresAt)).toISOString(),
         updatedAt: now.toISOString(),
       });
+      if (persisted.status === "updated") this.opts.onScheduled?.();
       return {
         outcome: "ok",
         state: publicState(persisted.state ?? state),
         persisted: persisted.status,
+        tokenEndpointResponse: refreshed.tokenEndpointResponse!,
       };
     }
 
@@ -260,11 +310,17 @@ export class RefreshCoordinator {
                 (refreshed.retryAfterMs ?? transientBackoffMs(attempts, this.random())),
             ).toISOString(),
     });
+    if (status === "transient" && persisted.status === "updated") {
+      this.opts.onScheduled?.();
+    }
     return {
       outcome: refreshed.outcome,
       reason: refreshed.reason,
       state: persisted.state === undefined ? undefined : publicState(persisted.state),
       persisted: persisted.status,
+      ...(refreshed.tokenEndpointResponse === undefined
+        ? {}
+        : { tokenEndpointResponse: refreshed.tokenEndpointResponse }),
     };
   }
 
@@ -273,9 +329,21 @@ export class RefreshCoordinator {
   ): Promise<TokenRefreshSuccess | TokenRefreshFailure> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    let tokenEndpointResponse: TokenEndpointResponseMetadata | undefined;
     try {
       const init = buildRefreshRequest(state, controller.signal);
       const response = await this.fetchImpl(state.refresh!.tokenEndpoint, init);
+      const outboundAuthorization = new Headers(init.headers).get("authorization");
+      tokenEndpointResponse = {
+        statusCode: response.status,
+        contentType: scrubKnownSecrets(
+          response.headers.get("content-type") ?? "",
+          [
+            ...secretValues(state),
+            ...(outboundAuthorization === null ? [] : [outboundAuthorization]),
+          ],
+        ),
+      };
       const body = await readLimitedText(response, this.maxBodyBytes);
       const parsed = parseJsonObject(body);
       if (!parsed.ok) {
@@ -283,19 +351,32 @@ export class RefreshCoordinator {
           outcome: "transient_error",
           reason: parsed.reason,
           retryAfterMs: retryAfterMs(response),
+          tokenEndpointResponse,
         };
       }
-      return classifyTokenResponse(response, parsed.value, this.now());
+      return {
+        ...classifyTokenResponse(response, parsed.value, this.now()),
+        tokenEndpointResponse,
+      };
     } catch (error) {
       if (isAbortError(error)) {
-        return { outcome: "transient_error", reason: "timeout" };
+        return {
+          outcome: "transient_error",
+          reason: "timeout",
+          ...(tokenEndpointResponse === undefined ? {} : { tokenEndpointResponse }),
+        };
       }
       if (error instanceof ResponseBodyTooLargeError) {
-        return { outcome: "transient_error", reason: "response_body_too_large" };
+        return {
+          outcome: "transient_error",
+          reason: "response_body_too_large",
+          ...(tokenEndpointResponse === undefined ? {} : { tokenEndpointResponse }),
+        };
       }
       return {
         outcome: "transient_error",
         reason: isRedirectError(error) ? "redirect_blocked" : "request_failed",
+        ...(tokenEndpointResponse === undefined ? {} : { tokenEndpointResponse }),
       };
     } finally {
       clearTimeout(timeout);
@@ -517,3 +598,21 @@ function publicState(state: VaultOauthRefreshState): RefreshCredentialState {
 }
 
 class ResponseBodyTooLargeError extends Error {}
+
+function pruneAdmissions(
+  admissions: Map<string, number>,
+  now: number,
+  floorMs: number,
+): void {
+  for (const [key, timestamp] of admissions) {
+    if (now - timestamp >= floorMs) admissions.delete(key);
+  }
+}
+
+function secretValues(state: VaultOauthRefreshState): string[] {
+  return [
+    state.secrets.accessToken,
+    state.secrets.refreshToken,
+    state.secrets.clientSecret,
+  ].filter((value): value is string => value !== undefined);
+}

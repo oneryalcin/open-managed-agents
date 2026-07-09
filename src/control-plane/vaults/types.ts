@@ -166,6 +166,14 @@ export interface PersistOauthRefreshFailureInput {
   nextRefreshAt: string | null;
 }
 
+export interface OauthRefreshDueCredential {
+  workspaceId: WorkspaceId;
+  vaultId: string;
+  credentialId: string;
+  authVersion: number;
+  nextRefreshAt: string;
+}
+
 export type PersistOauthRefreshResult =
   | { status: "updated"; state: VaultOauthRefreshState }
   | { status: "stale"; state: VaultOauthRefreshState | undefined };
@@ -189,6 +197,7 @@ export interface CreateVaultRecord {
 export interface CreateVaultCredentialRecord {
   row: VaultCredentialRow;
   token: string;
+  nextRefreshAt?: string | null;
 }
 
 export interface VaultStore {
@@ -250,6 +259,7 @@ export interface VaultStore {
           };
     },
     updatedAt: string,
+    scheduling?: { nextRefreshAt: string | null },
   ): VaultCredentialRow | undefined;
   archiveCredential(
     workspaceId: WorkspaceId,
@@ -285,6 +295,8 @@ export interface VaultStore {
   persistOauthRefreshFailure(
     input: PersistOauthRefreshFailureInput,
   ): PersistOauthRefreshResult;
+  listDueRefreshes(now: string, limit?: number): OauthRefreshDueCredential[];
+  nextDueRefreshAt(now: string): string | null;
   close?(): void;
 }
 
@@ -344,4 +356,10 @@ export interface VaultService {
     vaultId: string,
     credentialId: string,
   ): VaultCredentialRuntimeMetadata | undefined;
+  /** Internal validation snapshot; contains secrets and must never be serialized. */
+  readOauthValidationSnapshot(
+    workspaceId: WorkspaceId,
+    vaultId: string,
+    credentialId: string,
+  ): VaultOauthRefreshState | undefined;
 }

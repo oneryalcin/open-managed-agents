@@ -8,6 +8,7 @@ import type {
   CreateVaultRecord,
   ListVaultCredentialsOptions,
   ListVaultsOptions,
+  OauthRefreshDueCredential,
   PersistAuthHintInput,
   PersistAuthHintResult,
   PersistOauthRefreshFailureInput,
@@ -153,6 +154,8 @@ export class SqliteVaultStore implements VaultStore {
   private readonly persistAuthHintStmt: StatementSync;
   private readonly persistOauthRefreshSuccessStmt: StatementSync;
   private readonly persistOauthRefreshFailureStmt: StatementSync;
+  private readonly listDueRefreshesStmt: StatementSync;
+  private readonly nextDueRefreshAtStmt: StatementSync;
   private readonly listVaultStmts = new Map<string, StatementSync>();
   private readonly listCredentialStmts = new Map<string, StatementSync>();
 
@@ -197,8 +200,8 @@ export class SqliteVaultStore implements VaultStore {
       `INSERT INTO vault_credentials (
         id, workspace_id, vault_id, type, display_name, metadata, auth_type,
         mcp_server_url, token_endpoint, client_id, scope, token_endpoint_auth_type,
-        expires_at, auth_version, created_at, updated_at, archived_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        expires_at, auth_version, next_refresh_at, created_at, updated_at, archived_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.retrieveCredentialActiveStmt = this.db.prepare(
       `SELECT * FROM vault_credentials
@@ -213,7 +216,7 @@ export class SqliteVaultStore implements VaultStore {
        SET display_name = ?, metadata = ?, expires_at = ?, auth_version = ?,
            refresh_status = CASE WHEN ? THEN NULL ELSE refresh_status END,
            refresh_attempts = CASE WHEN ? THEN 0 ELSE refresh_attempts END,
-           next_refresh_at = CASE WHEN ? THEN NULL ELSE next_refresh_at END,
+           next_refresh_at = CASE WHEN ? THEN ? ELSE next_refresh_at END,
            auth_hint_at = CASE WHEN ? THEN NULL ELSE auth_hint_at END,
            updated_at = ?
        WHERE workspace_id = ? AND vault_id = ? AND id = ? AND archived_at IS NULL`,
@@ -271,6 +274,25 @@ export class SqliteVaultStore implements VaultStore {
          AND auth_type = 'mcp_oauth'
          AND auth_version = ?
          AND archived_at IS NULL`,
+    );
+    this.listDueRefreshesStmt = this.db.prepare(
+      `SELECT workspace_id, vault_id, id, auth_version, next_refresh_at
+       FROM vault_credentials
+       WHERE auth_type = 'mcp_oauth'
+         AND archived_at IS NULL
+         AND next_refresh_at IS NOT NULL
+         AND next_refresh_at <= ?
+         AND COALESCE(refresh_status, '') != 'invalid'
+       ORDER BY next_refresh_at ASC, id ASC
+       LIMIT ?`,
+    );
+    this.nextDueRefreshAtStmt = this.db.prepare(
+      `SELECT MIN(next_refresh_at) AS next_refresh_at
+       FROM vault_credentials
+       WHERE auth_type = 'mcp_oauth'
+         AND archived_at IS NULL
+         AND next_refresh_at IS NOT NULL
+         AND COALESCE(refresh_status, '') != 'invalid'`,
     );
   }
 
@@ -409,6 +431,7 @@ export class SqliteVaultStore implements VaultStore {
           : null,
         c.auth.type === "mcp_oauth" ? c.auth.expires_at ?? null : null,
         c.auth_version,
+        record.nextRefreshAt ?? null,
         c.created_at,
         c.updated_at,
         c.archived_at,
@@ -481,6 +504,7 @@ export class SqliteVaultStore implements VaultStore {
           };
     },
     updatedAt: string,
+    scheduling?: { nextRefreshAt: string | null },
   ): VaultCredentialRow | undefined {
     const existing = this.retrieveCredential(workspaceId, vaultId, credentialId);
     if (!existing) return undefined;
@@ -512,6 +536,7 @@ export class SqliteVaultStore implements VaultStore {
         updates.auth === undefined ? 0 : 1,
         updates.auth === undefined ? 0 : 1,
         updates.auth === undefined ? 0 : 1,
+        scheduling?.nextRefreshAt ?? null,
         updates.auth === undefined ? 0 : 1,
         updatedAt,
         workspaceId,
@@ -721,6 +746,30 @@ export class SqliteVaultStore implements VaultStore {
             ),
           };
     });
+  }
+
+  listDueRefreshes(now: string, limit = 50): OauthRefreshDueCredential[] {
+    const rows = this.listDueRefreshesStmt.all(now, limit) as Array<{
+      workspace_id: string;
+      vault_id: string;
+      id: string;
+      auth_version: number;
+      next_refresh_at: string;
+    }>;
+    return rows.map((row) => ({
+      workspaceId: row.workspace_id,
+      vaultId: row.vault_id,
+      credentialId: row.id,
+      authVersion: row.auth_version,
+      nextRefreshAt: row.next_refresh_at,
+    }));
+  }
+
+  nextDueRefreshAt(_now: string): string | null {
+    const row = this.nextDueRefreshAtStmt.get() as
+      | { next_refresh_at: string | null }
+      | undefined;
+    return row?.next_refresh_at ?? null;
   }
 
   close(): void {
