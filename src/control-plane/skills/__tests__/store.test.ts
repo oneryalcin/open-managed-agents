@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqliteSkillsStore } from "../store.ts";
+import { InMemorySkillsStore } from "../store.ts";
 
 describe("SqliteSkillsStore", () => {
   const roots: string[] = [];
@@ -31,6 +32,16 @@ describe("SqliteSkillsStore", () => {
     const store = new SqliteSkillsStore(db, root, { maxWorkspaceBytes: 10 });
     expect(() => store.createSkill("wrk_default", "Demo", bundle("demo", "long description"))).toThrow(/quota/i);
     db.close();
+  });
+
+  it("keeps the fallback store fully memory-backed and represents zero versions explicitly", () => {
+    const store = new InMemorySkillsStore();
+    const skill = store.createSkill("wrk_default", "Memory", bundle("memory", "one"));
+    const version = skill.latest_version!;
+    expect(store.deleteVersion("wrk_default", skill.id, version)).toBe(true);
+    expect(store.getSkill("wrk_default", skill.id)?.latest_version).toBeNull();
+    expect(store.getVersion("wrk_default", skill.id, "latest")).toBeUndefined();
+    store.close();
   });
 });
 

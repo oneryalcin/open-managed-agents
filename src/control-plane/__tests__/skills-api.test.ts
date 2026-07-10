@@ -19,6 +19,11 @@ describe("skills API", () => {
     expect(await json(app.request(`/v1/skills/${created.id}/versions`))).toMatchObject({ data: [{}, {}], has_more: false, next_page: null });
     expect((await app.request(`/v1/skills/${created.id}`, { method: "DELETE" })).status).toBe(400);
     for (const version of [firstVersion.version, secondVersion.version]) expect((await app.request(`/v1/skills/${created.id}/versions/${version}`, { method: "DELETE" })).status).toBe(200);
+    expect(await json(app.request(`/v1/skills/${created.id}`))).toMatchObject({
+      id: created.id,
+      latest_version: null,
+    });
+    expect((await app.request(`/v1/skills/${created.id}/versions/latest`)).status).toBe(404);
     expect((await app.request(`/v1/skills/${created.id}`, { method: "DELETE" })).status).toBe(200);
     expect((await app.request(`/v1/skills/${created.id}`)).status).toBe(404);
   });

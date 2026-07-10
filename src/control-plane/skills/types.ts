@@ -9,7 +9,7 @@ export const DEFAULT_SKILLS_MAX_VERSIONS = 20;
 export interface SkillObject {
   id: string;
   display_title: string;
-  latest_version: string;
+  latest_version: string | null;
   source: "custom";
   type: "skill";
   created_at: string;

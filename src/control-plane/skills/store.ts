@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { invalidRequest } from "../errors.ts";
 import { newSkillContentObjectId, newSkillId, newSkillVersionId } from "../ids.ts";
@@ -20,7 +19,7 @@ import {
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS skills (
  workspace_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL,
- display_title TEXT NOT NULL, source TEXT NOT NULL, latest_version TEXT NOT NULL,
+ display_title TEXT NOT NULL, source TEXT NOT NULL, latest_version TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  PRIMARY KEY(workspace_id,id), UNIQUE(workspace_id,name), UNIQUE(workspace_id,display_title)
 );
@@ -47,7 +46,7 @@ CREATE INDEX IF NOT EXISTS skills_list ON skills(workspace_id,id);
 CREATE INDEX IF NOT EXISTS skill_versions_list ON skill_versions(workspace_id,skill_id,version);
 `;
 
-interface SkillRow { workspace_id: string; id: string; name: string; display_title: string; source: "custom"; latest_version: string; created_at: string; updated_at: string; }
+interface SkillRow { workspace_id: string; id: string; name: string; display_title: string; source: "custom"; latest_version: string | null; created_at: string; updated_at: string; }
 interface VersionRow { workspace_id: string; skill_id: string; id: string; version: string; description: string; directory: string; file_count: number; total_bytes: number; manifest_sha256: string; created_at: string; }
 
 let versionTick = 0;
@@ -58,15 +57,19 @@ function newVersion(): string {
 }
 
 export class SqliteSkillsStore implements SkillsStore {
-  private readonly objectsDir: string;
+  private readonly objectsDir: string | undefined;
+  private readonly memoryObjects: Map<string, Uint8Array> | undefined;
   private readonly maxWorkspaceBytes: number;
   private readonly maxVersions: number;
   private readonly workspaceBytesStmt: StatementSync;
 
-  constructor(private readonly db: DatabaseSync, objectRoot: string, opts: { maxWorkspaceBytes?: number; maxVersions?: number } = {}) {
-    this.objectsDir = resolve(objectRoot, "skill-objects");
-    mkdirSync(this.objectsDir, { recursive: true, mode: 0o700 });
-    chmodSync(this.objectsDir, 0o700);
+  constructor(protected readonly db: DatabaseSync, objectRoot: string | undefined, opts: { maxWorkspaceBytes?: number; maxVersions?: number } = {}) {
+    this.objectsDir = objectRoot === undefined ? undefined : resolve(objectRoot, "skill-objects");
+    this.memoryObjects = objectRoot === undefined ? new Map() : undefined;
+    if (this.objectsDir !== undefined) {
+      mkdirSync(this.objectsDir, { recursive: true, mode: 0o700 });
+      chmodSync(this.objectsDir, 0o700);
+    }
     db.exec(SCHEMA);
     this.maxWorkspaceBytes = opts.maxWorkspaceBytes ?? DEFAULT_SKILLS_WORKSPACE_MAX_BYTES;
     this.maxVersions = opts.maxVersions ?? DEFAULT_SKILLS_MAX_VERSIONS;
@@ -148,7 +151,7 @@ export class SqliteSkillsStore implements SkillsStore {
       this.db.prepare("INSERT OR IGNORE INTO pending_skill_content_deletes SELECT workspace_id,content_object_id,? FROM skill_files WHERE workspace_id=? AND skill_id=? AND version=?").run(now, workspaceId, skillId, version);
       this.db.prepare("DELETE FROM skill_versions WHERE workspace_id=? AND skill_id=? AND version=?").run(workspaceId, skillId, version);
       const latest = this.db.prepare("SELECT version FROM skill_versions WHERE workspace_id=? AND skill_id=? ORDER BY version DESC LIMIT 1").get(workspaceId, skillId) as { version: string } | undefined;
-      if (latest) this.db.prepare("UPDATE skills SET latest_version=?,updated_at=? WHERE workspace_id=? AND id=?").run(latest.version, now, workspaceId, skillId);
+      this.db.prepare("UPDATE skills SET latest_version=?,updated_at=? WHERE workspace_id=? AND id=?").run(latest?.version ?? null, now, workspaceId, skillId);
     });
     this.sweep("pending_skill_content_deletes"); return true;
   }
@@ -161,26 +164,25 @@ export class SqliteSkillsStore implements SkillsStore {
   openContent(workspaceId: WorkspaceId, skillId: string, version: string, path: string): Uint8Array | undefined {
     const row = this.db.prepare("SELECT content_object_id FROM skill_files WHERE workspace_id=? AND skill_id=? AND version=? AND path=?").get(workspaceId, skillId, version, path) as { content_object_id: string } | undefined;
     if (!row) return undefined;
+    if (this.memoryObjects !== undefined) return this.memoryObjects.get(row.content_object_id)?.slice();
     try { return new Uint8Array(readFileSync(this.objectPath(row.content_object_id))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   }
   private row(workspaceId: WorkspaceId, id: string): SkillRow | undefined { return this.db.prepare("SELECT * FROM skills WHERE workspace_id=? AND id=?").get(workspaceId, id) as unknown as SkillRow | undefined; }
-  private objectPath(id: string): string { return resolve(this.objectsDir, id.slice(0, 2), id); }
-  private writeObject(id: string, bytes: Uint8Array): void { const path = this.objectPath(id); mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); writeFileSync(path, bytes, { mode: 0o600, flag: "wx" }); }
+  private objectPath(id: string): string { if (this.objectsDir === undefined) throw new Error("Skill object path unavailable for memory store"); return resolve(this.objectsDir, id.slice(0, 2), id); }
+  private writeObject(id: string, bytes: Uint8Array): void { if (this.memoryObjects !== undefined) { if (this.memoryObjects.has(id)) throw new Error(`Skill content object ${id} already exists`); this.memoryObjects.set(id, bytes.slice()); return; } const path = this.objectPath(id); mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); writeFileSync(path, bytes, { mode: 0o600, flag: "wx" }); }
   private sweep(table: "pending_skill_content_rollbacks" | "pending_skill_content_deletes"): void {
     const rows = this.db.prepare(`SELECT content_object_id FROM ${table}`).all() as unknown as Array<{ content_object_id: string }>;
-    for (const row of rows) { try { unlinkSync(this.objectPath(row.content_object_id)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue; } this.db.prepare(`DELETE FROM ${table} WHERE content_object_id=?`).run(row.content_object_id); }
+    for (const row of rows) { if (this.memoryObjects !== undefined) this.memoryObjects.delete(row.content_object_id); else { try { unlinkSync(this.objectPath(row.content_object_id)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue; } } this.db.prepare(`DELETE FROM ${table} WHERE content_object_id=?`).run(row.content_object_id); }
   }
   close(): void {}
 }
 
 export class InMemorySkillsStore extends SqliteSkillsStore {
-  private readonly temp: string;
   constructor(opts: { maxWorkspaceBytes?: number; maxVersions?: number } = {}) {
-    const temp = resolve(tmpdir(), "oma-memory-skills", newSkillContentObjectId());
-    const db = new DatabaseSync(":memory:"); super(db, temp, opts); this.temp = temp;
+    super(new DatabaseSync(":memory:"), undefined, opts);
   }
-  override close(): void { rmSync(this.temp, { recursive: true, force: true }); }
+  override close(): void { this.db.close(); }
 }
 
 function toSkill(row: SkillRow): SkillObject { return { id: row.id, display_title: row.display_title, latest_version: row.latest_version, source: "custom", type: "skill", created_at: row.created_at, updated_at: row.updated_at }; }

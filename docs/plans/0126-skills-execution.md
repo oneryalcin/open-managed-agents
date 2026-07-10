@@ -488,9 +488,10 @@ the quota domain and the version-lifecycle edges.)
   reclaim those copies.
 - **Delete-latest-version [external F6]:** deleting the version a skill's
   `latest_version` points at **recomputes `latest_version` from the newest
-  remaining version** in the same transaction; deleting the sole version is the
-  delete-only path (version then skill). A `version:"latest"` attach resolves
-  against the recomputed pointer.
+  remaining version** in the same transaction. Deleting the sole version sets
+  `latest_version: null`, an explicit empty state that preserves the observed
+  version-first-then-skill delete sequence without leaving a dangling pointer.
+  A `version:"latest"` lookup returns not-found while the pointer is null.
 
 ## 5. Slice order (each testable in isolation)
 
