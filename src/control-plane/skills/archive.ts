@@ -103,6 +103,15 @@ function validateFiles(raw: readonly { name: string; bytes: Uint8Array }[]): Val
     if (totalBytes > MAX_SKILL_VERSION_BYTES) throw invalidRequest("Skill content exceeds the 100 MiB limit");
     files.push({ path, bytes: item.bytes, size: item.bytes.byteLength, sha256: sha256(item.bytes) });
   }
+  for (const path of seen) {
+    const segments = path.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      const prefix = segments.slice(0, index).join("/");
+      if (seen.has(prefix) || folded.has(prefix.toLocaleLowerCase("en-US"))) {
+        throw invalidRequest("Skill contains a file/directory path conflict");
+      }
+    }
+  }
   const roots = new Set(files.map((file) => file.path.split("/")[0]));
   if (roots.size !== 1 || files.some((file) => !file.path.includes("/"))) {
     throw invalidRequest("Zip must contain a top-level folder with all files inside it, including SKILL.md");
@@ -129,9 +138,9 @@ function validateFiles(raw: readonly { name: string; bytes: Uint8Array }[]): Val
 }
 
 function normalizePath(value: string): string {
-  if (value.includes("\\") || value.includes("\0") || value.startsWith("/")) throw invalidRequest("Skill contains an unsafe path");
-  const parts = value.split("/").filter((part) => part.length > 0 && part !== ".");
-  if (parts.length < 2 || parts.includes("..")) throw invalidRequest("Skill contains an unsafe path");
+  if (value.includes("\\") || value.includes("\0") || value.startsWith("/") || value.endsWith("/")) throw invalidRequest("Skill contains an unsafe path");
+  const parts = value.split("/").filter((part) => part.length > 0 && part !== ".").map((part) => part.normalize("NFC"));
+  if (parts.length === 0 || parts.includes("..")) throw invalidRequest("Skill contains an unsafe path");
   return parts.join("/");
 }
 

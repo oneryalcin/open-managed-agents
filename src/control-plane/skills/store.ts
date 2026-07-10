@@ -77,6 +77,8 @@ export class SqliteSkillsStore implements SkillsStore {
     this.maxWorkspaceBytes = opts.maxWorkspaceBytes ?? DEFAULT_SKILLS_WORKSPACE_MAX_BYTES;
     this.maxVersions = opts.maxVersions ?? DEFAULT_SKILLS_MAX_VERSIONS;
     this.workspaceBytesStmt = db.prepare("SELECT COALESCE(SUM(total_bytes),0) total FROM skill_versions WHERE workspace_id = ?");
+    // Deployment storage holds an exclusive appliance lock. Sweeping all
+    // pending intents is safe only under that documented single-process model.
     this.sweep("pending_skill_content_rollbacks");
     this.sweep("pending_skill_content_deletes");
   }
@@ -124,7 +126,7 @@ export class SqliteSkillsStore implements SkillsStore {
       });
     } catch (error) {
       this.sweep("pending_skill_content_rollbacks");
-      throw normalizeConstraint(error);
+      throw normalizeConstraint(error, input.displayTitle);
     }
   }
 
@@ -191,4 +193,4 @@ export class InMemorySkillsStore extends SqliteSkillsStore {
 function toSkill(row: SkillRow): SkillObject { return { id: row.id, display_title: row.display_title, latest_version: row.latest_version, source: "custom", type: "skill", created_at: row.created_at, updated_at: row.updated_at }; }
 function toVersion(row: VersionRow, name: string): SkillVersionObject { return { id: row.id, skill_id: row.skill_id, version: row.version, name, description: row.description, directory: row.directory, type: "skill_version", created_at: row.created_at }; }
 function page<R,T>(rows: R[], limit: number, map: (row:R)=>T, cursor:(row:R)=>string): SkillPage<T> { const dataRows=rows.slice(0,limit); return { data:dataRows.map(map), has_more:rows.length>limit, next_page:rows.length>limit ? cursor(dataRows[dataRows.length-1]!) : null }; }
-function normalizeConstraint(error: unknown): unknown { const message = error instanceof Error ? error.message : ""; if (message.includes("skills.workspace_id, skills.display_title")) return invalidRequest("Skill cannot reuse an existing display_title"); if (message.includes("skills.workspace_id, skills.name")) return invalidRequest("Skill cannot reuse an existing name"); return error; }
+function normalizeConstraint(error: unknown, displayTitle: string): unknown { const message = error instanceof Error ? error.message : ""; if (message.includes("skills.workspace_id, skills.display_title")) return invalidRequest(`Skill cannot reuse an existing display_title: ${displayTitle}`); if (message.includes("skills.workspace_id, skills.name")) return invalidRequest("Skill cannot reuse an existing name"); return error; }

@@ -40,10 +40,29 @@ describe("skills API", () => {
   it("rejects root-level and mismatched layouts", async () => {
     const app = createInMemoryControlPlaneApp();
     const root = new FormData(); root.append("files[]", new File([skillMd("root-skill", "root")], "SKILL.md", { type: "text/markdown" }));
-    expect((await app.request("/v1/skills", { method: "POST", body: root })).status).toBe(400);
+    const rootResponse = await app.request("/v1/skills", { method: "POST", body: root });
+    expect(rootResponse.status).toBe(400);
+    expect(await rootResponse.text()).toContain("Zip must contain a top-level folder");
     const mismatch = new FormData(); mismatch.append("files[]", new File([skillMd("name-a", "mismatch")], "folder-b/SKILL.md", { type: "text/markdown" }));
     const response = await app.request("/v1/skills", { method: "POST", body: mismatch });
     expect(response.status).toBe(400); expect(await response.text()).toContain("must match the skill name");
+  });
+
+  it("rejects file/directory conflicts and Unicode-equivalent duplicate paths", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const conflict = skillForm("tree-skill", "tree");
+    conflict.append("files[]", new File(["file"], "tree-skill/a"));
+    conflict.append("files[]", new File(["child"], "tree-skill/a/b"));
+    const conflictResponse = await app.request("/v1/skills", { method: "POST", body: conflict });
+    expect(conflictResponse.status).toBe(400);
+    expect(await conflictResponse.text()).toContain("file/directory path conflict");
+
+    const unicode = skillForm("unicode-skill", "unicode");
+    unicode.append("files[]", new File(["one"], "unicode-skill/caf\u00e9.txt"));
+    unicode.append("files[]", new File(["two"], "unicode-skill/cafe\u0301.txt"));
+    const unicodeResponse = await app.request("/v1/skills", { method: "POST", body: unicode });
+    expect(unicodeResponse.status).toBe(400);
+    expect(await unicodeResponse.text()).toContain("duplicate paths");
   });
 
   it("accepts a validated zip bundle", async () => {
