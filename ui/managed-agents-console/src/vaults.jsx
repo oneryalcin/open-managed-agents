@@ -38,7 +38,7 @@ function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
   selectedRef.current = selectedId;
   const open = (vault) => {
     const current = ++epoch.current;
-    selectedRef.current = vault.id; setSelected(vault); setCredentials(null); setDetailError(null); setValidation(null); setWarning(null);
+    selectedRef.current = vault.id; setSelected(vault); setCredentials(null); setDetailError(null); setValidation(null); setValidating(false); setWarning(null);
     if (mode !== 'api') { setCredentials(DEMO_CREDENTIALS.map(VaultsData.credentialRow)); return; }
     OmaConsoleApi.listVaultCredentials(vault.id).then((page) => {
       if (!VaultsData.isCurrentVaultResult(current, epoch.current, vault.id, selectedRef.current)) return;
@@ -46,13 +46,20 @@ function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
       if (page.truncated) setWarning(VaultsData.truncationWarning('credentials'));
     }).catch((err) => { if (VaultsData.isCurrentVaultResult(current, epoch.current, vault.id, selectedRef.current)) setDetailError(err); });
   };
+  const back = () => { ++epoch.current; setSelected(null); setCredentials(null); setValidation(null); setValidating(false); setWarning(null); onBackToVaults(); };
   const validate = (credential) => {
+    // Guard the result the same way the list/detail fetches are guarded: a
+    // probe can take seconds, and the operator can navigate to another vault
+    // before it resolves. Without this, A's outcome renders under vault B.
+    const startedEpoch = epoch.current;
+    const vaultId = selected.id;
+    const isCurrent = () => VaultsData.isCurrentVaultResult(startedEpoch, epoch.current, vaultId, selectedRef.current);
     setConfirm(null); setValidating(true); setValidation(null);
     if (mode === 'demo') { setValidation({ result: { status: 'valid', mcp_probe: { http_response: { status_code: 200 } } } }); setValidating(false); return; }
-    OmaConsoleApi.validateMcpOauthCredential(selected.id, credential.id, mode)
-      .then((result) => setValidation({ result }))
-      .catch((err) => setValidation({ error: err.message }))
-      .finally(() => setValidating(false));
+    OmaConsoleApi.validateMcpOauthCredential(vaultId, credential.id, mode)
+      .then((result) => { if (isCurrent()) setValidation({ result }); })
+      .catch((err) => { if (isCurrent()) setValidation({ error: err.message }); })
+      .finally(() => { if (isCurrent()) setValidating(false); });
   };
   useVaultEffect(() => {
     if (!initialVaultId || !vaults || selected) return;
@@ -62,7 +69,7 @@ function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
 
   const body = selected
     ? <VaultDetail vault={selected} credentials={credentials} error={detailError} warning={warning}
-        onBack={() => { ++epoch.current; setSelected(null); setCredentials(null); onBackToVaults(); }} onRetry={() => open(selected)}
+        onBack={back} onRetry={() => open(selected)}
         mode={mode} validating={validating} validation={validation} onValidate={(credential) => setConfirm(credential)} />
     : <div className="main-scroll scroll fade-in">
         <PageHead title="Vaults" sub="Browse workspace vaults and validate MCP OAuth credentials." />
@@ -138,7 +145,7 @@ function CredentialHealthView({ workspaceId, onBack, onReauth }) {
   }
   return <div className="main-scroll scroll fade-in"><PageHead title="Credential health" sub={`Administrative health for ${workspaceId}.`} />
     <div className="toolbar"><button className="btn" onClick={onBack}>Back to Admin</button><button className="btn" onClick={() => load(cursor)}>Refresh</button></div>
-    {page === null && !error ? <SkeletonTable rows={5} cols={[160, 'grow', 110]} />
+    {page === null && !error ? <SkeletonTable rows={5} cols={['grow', 210, 120, 130]} />
       : error ? <ErrorState resource="credential health" onRetry={() => load(cursor)} />
       : page.data.length === 0 ? <EmptyState icon="database" title="No credentials" message="This workspace has no stored vault credentials." />
       : [...groups.entries()].map(([key, rows]) => <div className="panel" key={key} style={{ marginBottom:12, opacity: rows[0].vaultArchivedAt ? 0.6 : 1 }}>

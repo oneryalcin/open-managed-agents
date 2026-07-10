@@ -75,8 +75,14 @@ describe("vault display data", () => {
     expect(truncationWarning("credentials")).toMatch(/^Credential list/);
   });
 
-  it("drops stale detail results", () => {
+  it("drops stale detail and validation results after navigation", () => {
+    // Same guard the credential-list fetch AND validate() use: a result is
+    // current only when neither the epoch nor the selected vault moved.
     expect(isCurrentVaultResult(2, 2, "vlt_a", "vlt_a")).toBe(true);
     expect(isCurrentVaultResult(1, 2, "vlt_a", "vlt_b")).toBe(false);
+    // validate on A, navigate to B (epoch bumps, selection changes) → dropped.
+    expect(isCurrentVaultResult(5, 6, "vlt_a", "vlt_b")).toBe(false);
+    // epoch bumped but somehow back on the same vault → still stale.
+    expect(isCurrentVaultResult(5, 6, "vlt_a", "vlt_a")).toBe(false);
   });
 });

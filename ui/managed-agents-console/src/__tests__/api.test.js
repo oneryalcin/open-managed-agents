@@ -121,13 +121,15 @@ describe("workspace write capability", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("does not let method casing bypass the write guard", async () => {
+  it("treats the write guard as case-insensitive on the method", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    // fetch() is case-insensitive on the method, so a lowercase verb must not
-    // slip past the deny-by-default gate.
+    // The guard is fail-closed for any casing; this pins that a lowercase or
+    // mixed-case verb stays denied and never reaches fetch (so a future edit to
+    // the capability clause can't make case load-bearing).
     await expect(__testRequest("/v1/sessions", { method: "post", body: {} })).rejects.toThrow("not permitted");
     await expect(__testRequest("/v1/vaults/a", { method: "Delete" })).rejects.toThrow("not permitted");
+    await expect(__testRequest("/v1/vaults/a/credentials/b/mcp_oauth_validate", { method: "post" })).rejects.toThrow("not permitted");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

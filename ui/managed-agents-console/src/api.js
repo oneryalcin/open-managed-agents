@@ -66,8 +66,11 @@ function isExactValidatePath(path) {
 }
 
 async function request(path, { method = "GET", body, capability } = {}) {
-  // fetch() treats the method case-insensitively, so normalize once and gate on
-  // the normalized value — otherwise `method: "post"` would slip past the guard.
+  // Normalize the verb once so the guard and fetch see the same value. The
+  // guard is already fail-closed for any casing (a lowercase "post" is
+  // non-GET, so it is denied unless it exactly matches the capability clause);
+  // normalizing just keeps the capability path from rejecting a well-intentioned
+  // lowercase caller and avoids case being load-bearing here.
   const normalizedMethod = String(method).toUpperCase();
   // Keep /v1 writes deny-by-default. New workspace-key writes need a narrowly
   // named capability rather than silently gaining access through this generic

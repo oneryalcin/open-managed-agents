@@ -57,6 +57,10 @@ describe("console source security posture", () => {
       const code = codeOnly(text);
       expect(code, name).not.toMatch(/dangerouslySetInnerHTML/);
       expect(code, name).not.toMatch(/\.innerHTML\s*=/);
+      // Ban both spellings of a dynamic href/src: the JSX attribute-expression
+      // form `href={expr}` and template/property construction `href: `${…}``.
+      // Static literals like `href="#"` (the file-download anchors) stay legal.
+      expect(code, name).not.toMatch(/(href|src)\s*=\s*\{/);
       expect(code, name).not.toMatch(/(href|src)\s*[:=]\s*[`'"]?\s*\$\{/);
     }
   });
