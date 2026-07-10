@@ -1,0 +1,90 @@
+{
+  "run": "19b27f5a",
+  "root_zip": {
+    "status": 400,
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "Zip must contain a top-level folder with all files inside it, including SKILL.md"
+      },
+      "request_id": "req_011Ccu1ArXTDHQ5Gh45Y2k6s"
+    }
+  },
+  "individual_files": {
+    "status": 200,
+    "body": {
+      "type": "skill",
+      "id": "skill_01KsVEKrpGjcBJrfz6ZryV3h",
+      "created_at": "2026-07-10T20:25:10.769522Z",
+      "updated_at": "2026-07-10T20:25:10.769522Z",
+      "display_title": "probe56b-files-19b27f5a",
+      "source": "custom",
+      "latest_version": "1783715110329822"
+    }
+  },
+  "derived_display_title": {
+    "status": 200,
+    "display_title": "probe56b-derive-19b27f5a"
+  },
+  "duplicate_display_title": {
+    "first": 200,
+    "second": 400,
+    "second_body": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "Skill cannot reuse an existing display_title: Probe 56b skill 19b27f5a"
+      },
+      "request_id": "req_011Ccu1B6CiqD4KJSybaonYX"
+    }
+  },
+  "pagination": {
+    "page1_has_more": false,
+    "page1_next": false,
+    "page2_status": null,
+    "page2_first_id": null
+  },
+  "attach_before_delete": {
+    "status": 200
+  },
+  "delete_referenced_skill": {
+    "status": 200
+  },
+  "agent_after_skill_delete": {
+    "status": 200,
+    "skills": [
+      {
+        "skill_id": "skill_011HfNpTCRG4Rc9fBAvFYvhN",
+        "type": "custom",
+        "version": "latest"
+      }
+    ]
+  },
+  "reattach_deleted_skill": {
+    "status": 400,
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "str"
+      },
+      "request_id": "req_011Ccu1BSwf5FV9bQP69BVQ3"
+    }
+  },
+  "over_30mb": {
+    "upload_bytes": 32506249,
+    "status": 413,
+    "body": {
+      "error": {
+        "type": "request_too_large",
+        "message": "Request exceeds the maximum size. The Skills API accepts requests up to 30MBs."
+      }
+    }
+  },
+  "cleanup": {
+    "agent_archive": 200,
+    "del_skill_01KsVE": 200,
+    "del_skill_0191ZY": 200
+  }
+}

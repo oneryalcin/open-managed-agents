@@ -5,8 +5,9 @@ Parent: [appliance product roadmap](0114-appliance-product-roadmap.md) —
 capability track item 2 ("skills execution"), the remaining half of the
 capability exit criterion now that MCP (0122 M1–M3) has shipped.
 Grounded in: 4 research threads (Pi runtime, hosted wire, OMA current state,
-prior art) + 2 live hosted probes (56 = `/v1/skills` wire, 57 = execution
-trace). Probe artifacts: `scratch/artifacts/56-…json`, `…57-…json`.
+prior art) + 3 live hosted probes (56 = `/v1/skills` wire, 56b = wire unknowns,
+57 = execution trace). Probe artifacts: `scratch/artifacts/56-…json`,
+`56b-…json`, `57-…json`.
 
 ## 0. What a skill is (settled)
 
@@ -56,22 +57,24 @@ probe facts.
 ### 2.1 Resource
 
 - **CreateSkill** `POST /v1/skills` — **`multipart/form-data`**, field `files[]`.
-  **[Obs]** a zip under a single top-level folder + explicit `display_title` → 200
-  `{ id: "skill_…", display_title, latest_version, source: "custom",
+  → 200 `{ id: "skill_…", display_title, latest_version, source: "custom",
   type: "skill", created_at, updated_at }`; wire discriminator is
-  **`type: "skill"`**, `source ∈ {custom, anthropic}`. **[Doc]** also accepts a
-  root-level SKILL.md zip, path-qualified individual `files[]`, and derives
-  `display_title` from SKILL.md when omitted; ≤30 MB total; `display_title`
-  unique among workspace custom skills. **[Unk]** root-zip acceptance,
-  per-file multipart, derived/uniqueness of `display_title`, the 30 MB boundary
-  — none exercised by probe 56 (§9).
+  **`type: "skill"`**, `source ∈ {custom, anthropic}` **[Obs]**. All probe-56b
+  **[Obs]**: the zip **must contain a single top-level folder** — a root-level
+  SKILL.md is **rejected 400** ("Zip must contain a top-level folder…");
+  path-qualified individual `files[]` (no zip, part name `<name>/SKILL.md`) is
+  **accepted**; omitting `display_title` **derives it from the SKILL.md `name`**;
+  a duplicate `display_title` is **400** ("Skill cannot reuse an existing
+  display_title: …"); the request-size cap is **30 MB → HTTP 413**
+  `request_too_large` ("The Skills API accepts requests up to 30MBs").
 - **Version object** **[Obs]** `{ id: "skill_version_…", skill_id, version, name,
   description, directory, type: "skill_version", created_at }`. `name`/
-  `description` parsed from SKILL.md; **`directory`** = the zip top-level folder
-  (probe 56 sent name==directory, so their independence is **[Unk]**). Custom
-  `version` = **microseconds-since-epoch string** (16 digits; e.g.
-  `1783682001075540` = 2026-07-10T11:13:21.075540Z) **[Obs]**; anthropic =
-  date string (`"20260203"`) **[Doc]**; both accept `"latest"` **[Doc]**.
+  `description` parsed from SKILL.md; **`directory` == `name`, enforced at upload**
+  (probe 56b: a folder name ≠ SKILL.md name → **400** "The folder name '…' must
+  match the skill name '…'"). So the mount root is unambiguous. Custom `version`
+  = **microseconds-since-epoch string** (16 digits; `1783682001075540` =
+  2026-07-10T11:13:21.075540Z) **[Obs]**; anthropic = date string (`"20260203"`)
+  **[Doc]**; both accept `"latest"` **[Doc]**.
 - **GetSkill** `GET /v1/skills/{id}` = the CreateSkill shape (no inline versions) **[Obs]**.
 - **ListSkills** `GET /v1/skills` → `{ data, has_more, next_page }` **[Obs]**.
   Anthropic prebuilts appear here — probe observed **`xlsx` + `pptx`** only
@@ -82,8 +85,13 @@ probe facts.
 - **Lifecycle is delete-only** (no archive) **[Obs]**: `DELETE /v1/skills/{id}`
   with any version present → 400; delete each version → 200, then the skill → 200.
   Consistent with OMA's content resources (files hard-delete; only lifecycle
-  entities — agents/sessions/envs — archive). Referenced-skill/version deletion
-  behavior is **[Unk]** (§9, probe before finalizing lifecycle).
+  entities archive). **Referenced-skill deletion [Obs, probe 56b]:** deleting a
+  skill an agent references **succeeds** (no referential protection); the agent
+  keeps a **dangling ref** (`GET agent` still echoes `{skill_id, version:"latest"}`);
+  **re-attaching a deleted `skill_id` to a new agent → 400** (existence checked at
+  attach). OMA matches this at the wire level; D4's session snapshot additionally
+  retains bytes for a *live* session (more protective than hosted, for
+  reproducibility).
 
 ### 2.2 Attachment (already modelled in OMA, needs hardening)
 
@@ -138,10 +146,9 @@ vocabulary.**
   `/workspace`) can open it. Probe 57 re-run proves this with *tool output* (not
   the model's paraphrase): a read `tool_result` returned the SKILL.md body at
   `/workspace/skills/probe57-…/SKILL.md`, and a bash `tool_result` returned that
-  same path from `find`. Because the probe used name==directory, whether the
-  mount uses frontmatter `name` or the zip `directory` is [Unk]; **OMA sidesteps
-  it by enforcing name==directory at upload (D2) and mounting at
-  `/workspace/skills/<name>/` [OMA].**
+  same path from `find`. Hosted **enforces name==directory at upload** (probe
+  56b), so `name` and `directory` are always equal and the mount root
+  `/workspace/skills/<name>/` is unambiguous — OMA mirrors the upload rule (D2).
 - **The host↔container split — RESOLVED against pinned Pi 0.75.4** (Opus + Fable
   + External + Sonnet all read the source): Pi's loop runs in the control-plane
   process; `read`/`bash` are proxied into the container guarded to `/workspace`
@@ -194,8 +201,9 @@ global-limit bypass**, or a 30 MB upload is rejected at the transport layer
 before validation runs.
 
 Upload validation, layered:
-- **Request-size parity:** reject > **30 MB** compressed request (hosted cap)
-  [Doc] BEFORE unzip.
+- **Request-size parity [Obs, probe 56b]:** reject > **30 MB** request with HTTP
+  **413** `request_too_large` and the hosted message, BEFORE unzip (this is the
+  dedicated bodyLimit above).
 - **Zip-bomb guards [OMA defaults, not carried from prior art — review: Sonnet]:**
   total-uncompressed ≤ 100 MB, per-file ≤ 25 MB, file-count ≤ 500, checked
   incrementally during unzip.
@@ -203,12 +211,15 @@ Upload validation, layered:
   reject any entry with `..`, absolute path, leading `/`, backslash, NUL,
   symlink/hardlink/device entries, duplicate normalized paths, or case-fold
   collisions. Upload-time rejection — not deferred to materialize time.
-- **Layout:** require exactly one UTF-8 `SKILL.md` at the zip root or under a
-  single top-level folder; reject multi-folder or missing.
+- **Layout [Obs, probe 56b]:** require exactly one UTF-8 `SKILL.md` under a
+  **single top-level folder** — a root-level SKILL.md is rejected (400), matching
+  hosted; reject multi-folder or missing. Also accept the path-qualified
+  individual-`files[]` form (no zip).
 - **SKILL.md naming rules:** port the `skills-ref` validator rules (`name`
   ≤64/`[a-z0-9-]`/no leading-trailing-consecutive hyphen/reserved
   `anthropic`,`claude` forbidden; `description` ≤1024). **Enforce name ==
-  directory** (spec rule) so the mount root is unambiguous (D8).
+  directory** — hosted 400s a mismatch (probe 56b) — so the mount root is
+  unambiguous (D8). `display_title` derives from `name` when omitted [Obs].
 
 ### D3 — Prebuilt (`anthropic`) skills: LICENSING BLOCKER — do not vendor
 
@@ -336,6 +347,10 @@ plus the microsandbox impl, each keyed by `kind` with a per-root assert. Also:
   store constraint (unique index), and forbid `name`/`directory` changes across
   versions of a skill. A custom name colliding with a (future) prebuilt name is
   likewise rejected. Concurrency test for same-name races.
+- **`display_title` uniqueness [Obs, probe 56b]:** distinct from name — hosted
+  400s a reused `display_title` ("Skill cannot reuse an existing display_title").
+  Enforce workspace-wide `display_title` uniqueness with the same message shape;
+  derive it from `name` when the upload omits it.
 - **Atomicity:** object-blob write and SQLite metadata commit are published
   atomically; on failure, roll back and clean orphans (no dangling blob, no
   metadata row without bytes). Delete reclaims blob bytes.
@@ -433,27 +448,27 @@ posture (they run as ordinary sandbox bash — no new exposure, no special grant
 | Session-scoped snapshot precedent | file-resource snapshotting | `sessions/service.ts` `prepareFileResources` |
 | Session agent shape (no overrides today) | `agentField` | `sessions/request.ts` (`agent: string \| {type:"agent"}`) |
 
-## 9. Open questions — [Unk], resolve before/within the noted slice
+## 9. Open questions — remaining [Unk]
 
-1. **20-cap over-cap error message** (slice 2) — probe 56's dup-test tripped the
-   duplicate rule; needs 21 *distinct* skill_ids. OMA picks its own message; a
-   parity probe is optional.
-2. **`directory` vs `name` when they differ** (slice 1/3) — probe used name==dir.
-   OMA enforces name==dir at upload (D2), sidestepping it; a probe with a
-   name≠dir zip would confirm hosted's mount choice if parity is later wanted.
-3. **Root-zip / per-file multipart / derived `display_title` / uniqueness / 30 MB
-   boundary / pagination continuation** (slice 1) — [Doc]/[Unk]; a short probe-56b
-   would settle the accept-shapes and the 30 MB error before finalizing the route.
-4. **Referenced-skill/version deletion semantics** (slice 1) — hosted behavior
-   when deleting a version an active agent/session references is [Unk]; probe
-   before finalizing lifecycle. OMA's own answer is D4 (snapshot retains bytes).
-5. **`anthropic` catalog** (deferred) — resolution/versioning only relevant once
+Probe 56b (2026-07-10) closed most of the wire unknowns — root-zip rejected,
+name==directory enforced, per-file multipart accepted, derived/duplicate
+`display_title`, the 30 MB→413 cap, and referenced-skill deletion are now
+**[Obs]** and folded above. Remaining:
+
+1. **20-cap over-cap error message** (slice 2) — needs 21 *distinct* skill_ids;
+   OMA picks its own message, parity probe optional.
+2. **ListSkills pagination semantics** (slice 1) — probe 56b anomaly: `limit=1`
+   returned `has_more=false` despite multiple skills present (probe 56's `limit=3`
+   *did* page). Hosted paging behavior here is unclear; low-stakes since OMA
+   implements its own cursor. A parity probe if wire-exact paging is wanted.
+3. **`anthropic` catalog** (deferred) — resolution/versioning only relevant once
    a redistribution arrangement unblocks D3.
 
 ## 10. Review log
 
-- **Research + probes (2026-07-10):** 4 subagent threads + 2 live hosted probes
-  (56 wire, 57 execution; 57 re-run with auditable tool-output capture).
+- **Research + probes (2026-07-10):** 4 subagent threads + 3 live hosted probes
+  (56 wire, 57 execution w/ auditable re-run, 56b wire-unknowns). Probe 56b
+  closed root-zip/name==dir/per-file/display_title/30 MB-413/referenced-deletion.
 - **Adversarial panel (2026-07-10):** Codex-adversarial, Sonnet, Opus, Fable +
   one independent external review. Folded into this revision:
   - **Blocker:** anthropic doc-skill licensing → D3 rewritten (deferred, use an
