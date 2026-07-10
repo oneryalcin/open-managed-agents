@@ -1,0 +1,58 @@
+{
+  "cleanup": {
+    "agent_archive": 200,
+    "env_delete": 200,
+    "session_archive": 200,
+    "skill_delete": 200
+  },
+  "create_agent": {
+    "id": "agent_01Fiqedixb178XY5m8sbBkPP",
+    "skills_echo": [
+      {
+        "skill_id": "skill_0138mVMJKrMLYw3mmZpjf1VD",
+        "type": "custom",
+        "version": "latest"
+      }
+    ],
+    "status": 200
+  },
+  "create_environment": {
+    "id": "env_01XcA6STHcx6Y4cJXNrQnodM",
+    "status": 200
+  },
+  "create_session": {
+    "id": "sesn_014FUqUMARAZsQPt1kTifZKL",
+    "status": 200
+  },
+  "create_skill": {
+    "id": "skill_0138mVMJKrMLYw3mmZpjf1VD",
+    "status": 200
+  },
+  "event_types_seen": {
+    "agent.message": 1,
+    "agent.thinking": 4,
+    "agent.tool_result": 4,
+    "agent.tool_use": 6,
+    "session.status_idle": 1,
+    "session.status_running": 4,
+    "session.thread_status_idle": 1,
+    "session.thread_status_running": 4,
+    "span.model_request_end": 7,
+    "span.model_request_start": 8,
+    "user.message": 4
+  },
+  "last_session_status": "idle",
+  "mount_evidence": "{\"content\": [{\"text\": \"`PROBE57_MOUNT=/workspace/skills/probe57-0a7d3b42/SKILL.md`\", \"type\": \"text\"}], \"id\": \"sevt_019Ghhkm2tFLPNPLQbJhQ7Vu\", \"processed_at\": \"2026-07-10T11:17:30.439008Z\", \"type\": \"agent.message\"}",
+  "run": "0a7d3b42",
+  "send_user_message": {
+    "status": 200
+  },
+  "session_tools_cleared_with_skills": {
+    "error": {
+      "message": "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's `agent_toolset`",
+      "type": "invalid_request_error"
+    },
+    "status": 400
+  },
+  "skill_specific_events": []
+}
