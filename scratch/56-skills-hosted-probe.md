@@ -15,9 +15,10 @@ Run: `python3 scratch/56-skills-hosted-probe.py` (key from CWC `.env`). Raw:
   zip's top-level folder name. Custom `version` = epoch-timestamp string.
 - **GetSkill** = the CreateSkill shape (no inline `versions[]`).
 - **ListSkills** (`GET /v1/skills`) → `{ data: [...], has_more: bool, next_page: string|null }`.
-  **Anthropic prebuilt skills appear in this list**: `xlsx`/`pptx`/`docx`/`pdf`
-  with `id` = the short name, `source: "anthropic"`, date-based
-  `latest_version` (e.g. `"20260203"`).
+  **Anthropic prebuilt skills appear in this list.** This `limit=3` page OBSERVED
+  only `xlsx` + `pptx` (`id` = short name, `source: "anthropic"`, date-based
+  `latest_version` e.g. `"20260203"`); `docx`/`pdf` are documented but **were not
+  in the captured page** — do not cite them as observed (review round 3).
 - **ListVersions** → same `{ data, has_more, next_page }` envelope.
 
 ## Attachment validation (agent-create)

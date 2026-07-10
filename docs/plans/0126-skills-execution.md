@@ -170,24 +170,33 @@ vocabulary.**
 
 ## 4. Design decisions
 
-### D1 — Storage: new `SkillsStore`; store the raw zip blob per version
+### D1 — Storage: explode-and-validate at upload; store per-FILE
 
 The skill *reference* (`{type, skill_id, version}`) already lives on the agent
-row (`agents/store.ts:20`). The gap is skill *content*. Add a `SkillsStore`
-(interface + sqlite/blob impl + service + routes), patterned on
-`src/control-plane/files/` for the *trio/backends shape* — **but note `files/`
-models one file per record** (`FileStorageRecord`, single `UploadedFileInput`;
-review: Sonnet), whereas a skill is N files per (skill_id, version).
+row (`agents/store.ts:20`). The gap is skill *content*.
 
-**Decision [OMA]: store the validated raw zip blob per version, unzip lazily at
-materialize time.** Rationale: (a) one blob per version keeps atomicity simple
-(one object write + one SQLite row); (b) the manifest + SKILL.md metadata are
-parsed once at upload for listing/validation and stored alongside; (c) bomb
-guards run at upload against the zip, and again defensively at unzip. Per version
-row: `skill_id, version, name, directory, display_title, description,
-byte_size, sha256(zip), file_manifest (paths+per-file size+sha256), created_at`,
-plus the blob in file storage. `openInternalSnapshotBytes`-style access reads
-the blob for materialization.
+**Decision [OMA] — explode at upload, store per-file (review round 3, external:
+the raw-zip-blob shape was undefined against the per-file pipeline).** The zip is
+**never stored as a blob.** At upload the route validates it, then **explodes it
+into individual files**, storing each through the existing per-file storage — the
+same `FileStorageRecord` shape the file-resource pipeline already uses
+(`files/types.ts`). This is the decisive realignment: because content lives as
+per-file records, the snapshot (D4), materialization (D8), and cleanup outbox all
+reuse the existing **per-file** machinery directly — no new archive-unzip path,
+no per-file-cap-vs-30 MB-archive mismatch, no bespoke tables.
+
+Two SQLite tables (the resource/version split the external review requires):
+- **`skills`** (owner): `workspace_id, skill_id, name, display_title, source,
+  latest_version, created_at`. **`name` and `display_title` UNIQUE per workspace
+  live HERE** — not on version rows, so a second version of the same skill does
+  not self-collide (review round 2: Sonnet/external F6).
+- **`skill_versions`**: `skill_id, version, description, directory, file_count,
+  total_bytes, sha256(manifest), created_at`, plus the per-file records
+  (path + size + sha256 + storage file_id) keyed by `(skill_id, version)`.
+  `name`/`description`/`directory` are parsed from SKILL.md at upload; the
+  file_manifest is the list of per-file records (loader + recovery need
+  `description` and the manifest after the source skill is deleted — hence they
+  live in the version row, not just implied).
 
 ### D2 — Custom upload = the Skills resource; body-limit + zip safety
 
@@ -210,26 +219,37 @@ auth/beta/metrics classification and behaves inconsistently with every other
 `/v1` endpoint. Slice 1 has an explicit task + tests for the classifier, the beta
 gate, the body-limit bypass, and the admission gate.
 
-Upload validation, layered:
+**Zip parser [OMA — the repo has no zip dependency today; review round 3,
+external F4]:** add **`yauzl`** (a vetted streaming zip reader that inspects
+entries WITHOUT auto-extracting — the caller controls every write, which is the
+right primitive for zip-slip defense). No zip-*builder* is needed: content is
+exploded and stored per-file, never re-zipped. Pin the version; the parser choice
+is a first-class part of slice 1.
+
+Upload → explode pipeline, layered (all at upload, streaming through yauzl —
+nothing deferred to materialize time):
 - **Request-size parity [Obs, probe 56b]:** reject > **30 MB** request with HTTP
-  **413** `request_too_large` and the hosted message, BEFORE unzip (this is the
-  dedicated bodyLimit above).
-- **Zip-bomb guards [OMA defaults, not carried from prior art — review: Sonnet]:**
-  total-uncompressed ≤ 100 MB, per-file ≤ 25 MB, file-count ≤ 500, checked
-  incrementally during unzip.
-- **Zip-slip / hostile-entry rejection (review: Fable + External + Codex-adv):**
-  reject any entry with `..`, absolute path, leading `/`, backslash, NUL,
-  symlink/hardlink/device entries, duplicate normalized paths, or case-fold
-  collisions. Upload-time rejection — not deferred to materialize time.
+  **413** `request_too_large` and the hosted message, at the dedicated bodyLimit
+  BEFORE parsing.
+- **Zip-bomb guards [OMA defaults]:** total-uncompressed ≤ 100 MB, per-file
+  ≤ 25 MB, file-count ≤ 500, enforced incrementally as yauzl streams each entry
+  (abort on breach — never inflate the whole archive first).
+- **Hostile-entry rejection (review: Fable + External + Codex-adv):** reject any
+  entry whose type is not a regular file or directory (**symlink/hardlink/device
+  → reject**), or whose name has `..`, absolute path, leading `/`, backslash,
+  NUL, duplicate-normalized, or case-fold collision. Upload-time rejection.
 - **Layout [Obs, probe 56b]:** require exactly one UTF-8 `SKILL.md` under a
-  **single top-level folder** — a root-level SKILL.md is rejected (400), matching
+  **single top-level folder** — root-level SKILL.md rejected (400), matching
   hosted; reject multi-folder or missing. Also accept the path-qualified
-  individual-`files[]` form (no zip).
+  individual-`files[]` form and normalize it to the same per-file records.
 - **SKILL.md naming rules:** port the `skills-ref` validator rules (`name`
   ≤64/`[a-z0-9-]`/no leading-trailing-consecutive hyphen/reserved
   `anthropic`,`claude` forbidden; `description` ≤1024). **Enforce name ==
   directory** — hosted 400s a mismatch (probe 56b) — so the mount root is
   unambiguous (D8). `display_title` derives from `name` when omitted [Obs].
+- **Then explode:** write each validated entry as its own `FileStorageRecord`
+  (D1); commit the `skills`/`skill_versions` rows + per-file records atomically
+  (D9). The uploaded archive is discarded after explode — nothing stores it.
 
 ### D3 — Prebuilt (`anthropic`) skills: LICENSING BLOCKER — do not vendor
 
@@ -257,28 +277,32 @@ historical agent versions, and skills are delete-only + mutable via new versions
 Resolving `agent.skills` live at runtime (or after a restart/eviction) would run
 different content than the session started with, or fail after deletion.
 
-**Decision [OMA] — COPY-snapshot, reusing the existing durable machinery
-(review round 2: Opus + Sonnet).** At session create, resolve each attached skill
-to a concrete `(skill_id, version)`, then **copy its validated zip blob into a
-session-scoped internal snapshot** — exactly what `prepareFileResources` does for
-file resources via `createInternalSnapshot` (`sessions/service.ts:849-890`). This
-is the decisive simplification: because the session owns an independent copy,
+**Decision [OMA] — COPY per-file into the session snapshot, reusing the existing
+per-file machinery (review round 2: Opus + Sonnet; round 3, external: made
+concrete).** Because D1 stores skills as per-file `FileStorageRecord`s, the
+snapshot is exactly the file-resource snapshot shape. At session create, resolve
+each attached skill to a concrete `(skill_id, version)`, then **copy each of its
+per-file records into a session-scoped internal snapshot** via
+`createInternalSnapshot` — the same call `prepareFileResources` uses
+(`sessions/service.ts:849-890`), now a genuine fit (per-file, not a 30 MB
+archive against the 20 MiB single-file cap). Consequences:
 - reproducibility holds (restart/evict-recreate materialize from the snapshot;
-  recovery already reads snapshot rows, never the agent store — confirmed:
-  `createFileMountResolver` `wiring.ts:59-94`, recovery `runner.ts:655-658`);
-- the SkillsStore blob is **freely deletable** — no refcount, no
-  "retain-blobs-referenced-by-a-live-session", no GC sweep, no session-end
-  trigger to define (this dissolves the round-2 retention-semantics gap);
-- crash-safety is inherited, not reinvented: reuse the existing durable-outbox
-  tables `pending_internal_snapshot_deletes` + `pending_internal_snapshot_create_rollbacks`
-  with startup-sweep reconciliation (`sessions/store.ts:52-96`, swept at
-  `service.ts:189,445,726-745`) so a blob-copy + SQL-commit that straddle a crash
-  reconcile correctly.
-`"latest"` is resolved **once, at session create**. The skill snapshot is a new
-row set modeled on `session_file_mount_snapshots` (add `session_skill_snapshots`:
-`session_id, skill_id, version, name, sha256, internal_snapshot_id`). Runtime
-delivery + the ResourceLoader (D5) read metadata AND bytes from **this snapshot**,
-never the live store.
+  recovery reads snapshot rows, never the agent store — `createFileMountResolver`
+  `wiring.ts:59-94`, recovery `runner.ts:655-658`);
+- the SkillsStore records are **freely deletable** — no refcount/GC/session-end
+  trigger;
+- **crash-safety + cleanup reuse the existing outbox as-is** — the
+  `pending_internal_snapshot_deletes` / `…_create_rollbacks` rows are file-shaped
+  (`resource_id, file_id, mount_path`, `sessions/store.ts:60-72`), which now
+  matches because skill snapshot entries ARE file mounts (kind `"skill"`, D8),
+  not a bespoke archive. Session deletion promotes them through the same path.
+`"latest"` is resolved **once, at session create**. A small
+`session_skill_snapshots` grouping row (`session_id, skill_id, version, name,
+description`) records the per-skill metadata the loader needs (name/description
+for the prompt), referencing the copied per-file snapshot entries by
+`(skill_id, version)`. The ResourceLoader (D5) reads name/description from this
+grouping row and points `filePath` at the materialized container path; bytes come
+from the snapshot's file entries. Nothing reads the live store at runtime.
 
 ### D5 — Advertising to Pi: custom synthetic `ResourceLoader` (RESOLVED)
 
@@ -351,21 +375,32 @@ Fable).** `RuntimeSessionFileMount` gains an **internal, non-public**
 - `skill` → `/workspace/skills` (rw,exec — required, since skill `scripts/` are
   meant to run; uploads is `noexec` AND outside `/workspace`, so it is genuinely
   unusable for skills — the generalization is mandatory, not stylistic).
-The materialize pipeline runs **once per distinct root** (review round 2: Opus —
-`materializeFileResources` is one tar→one extract→one normalize against
-`uploadsPath`, so mixed mounts become a per-`kind` loop: group by kind, tar +
-extract + normalize each root). Generalize the uploads-hardcoded steps in
-`docker.ts` (guard, extract destination, chown/normalize) and the microsandbox
-impl, each keyed by `kind`. Also:
-- **Mount `/workspace/skills` as its own `--tmpfs`** (review round 2: Opus +
-  Fable). Owning the *directory contents* root-owned is not enough: `/workspace`
-  is the sandbox user's writable tmpfs (`docker.ts:722`, uid 65534, 0700), so it
-  can `mv /workspace/skills aside` and shadow it. A dedicated tmpfs **mountpoint**
-  cannot be renamed/unlinked by the sandbox user — that is what actually delivers
-  "not writable/replaceable by the sandbox user." (§7a's claim is re-scoped to
-  this mechanism.) **Microsandbox asymmetry:** its normalize is `chmod 444` only,
-  no `chown`-to-root and no tmpfs seam (`microsandbox.ts:881`) — the tamper-proof
-  property is Docker-only in v1; note it as a per-provider limitation.
+Because D1 stores skills as per-file records, **materialization is the existing
+`materializeFileResources` per-file path** (`docker.ts:360-393`) — each skill
+file is a `RuntimeSessionFileMount` with `kind:"skill"` and `mountPath` under the
+skill root, delivered by the same tar→extract→normalize. The pipeline runs **once
+per distinct root** (Opus — group mounts by `kind`, extract + normalize each
+root: `uploadsPath` for uploads, `/workspace/skills` for skills). Generalize the
+uploads-hardcoded steps in `docker.ts` (guard, extract destination,
+chown/normalize) and the microsandbox impl, each keyed by `kind`. Also:
+- **Mount `/workspace/skills` as its own `--tmpfs`, explicitly sized** (review
+  round 2: Opus + Fable; round 3, external F3). Owning the *directory contents*
+  root-owned is not enough: `/workspace` is the sandbox user's writable tmpfs
+  (`docker.ts:722`, uid 65534, 0700), so it can `mv /workspace/skills aside`. A
+  dedicated tmpfs **mountpoint** cannot be renamed/unlinked by the sandbox user.
+  **Size it to the materialized-size budget (below)** — the default `/workspace`
+  tmpfs is only `64m` (`docker.ts:47`), far under a 20-skill attach. **Microsandbox
+  asymmetry:** its normalize is `chmod 444` only, no `chown`-to-root and no tmpfs
+  seam (`microsandbox.ts:881`) — the tamper-proof property is Docker-only in v1;
+  a noted per-provider limitation.
+- **Materialized-size admission [OMA — new, review round 3 external F3].** Upload
+  guards bound one version (≤100 MB); they do NOT bound what a *session* unpacks:
+  20 skills × 100 MB = 2 GB into a 64 MiB tmpfs. Add an **aggregate uncompressed
+  skill budget per session**, reusing the existing mounted-resource budget
+  (`MAX_SESSION_MOUNTED_BYTES = 50 MiB`, `sessions/service.ts:56`) — sum the
+  snapshotted skills' `total_bytes` at session create, reject over budget with a
+  clear error, and size the skills `--tmpfs` to that same budget. This closes the
+  disk-exhaustion path the upload caps alone leave open.
 - **Executable bit is SET by path, not "preserved"** (review round 2: Opus —
   host temp files are `0644`, there is no bit to carry). A skills-specific
   normalize sets `scripts/*` → `0755`, `SKILL.md`/refs → `0644`, contents
@@ -382,22 +417,21 @@ impl, each keyed by `kind`. Also:
 ### D9 — Name uniqueness, quota, atomicity, reclamation
 
 **New (review: External + Opus + Fable + Sonnet).**
-- **Canonical-name uniqueness [OMA]:** two distinct skill_ids (or versions) whose
-  frontmatter `name` collides would both mount at `/workspace/skills/<name>/` and
-  clobber. Enforce **workspace-wide uniqueness of the canonical `name`** as a
-  store constraint (unique index), and forbid `name`/`directory` changes across
-  versions of a skill. A custom name colliding with a (future) prebuilt name is
-  likewise rejected. Concurrency test for same-name races.
-- **`display_title` uniqueness [Obs, probe 56b]:** distinct from name — hosted
-  400s a reused `display_title` ("Skill cannot reuse an existing display_title").
-  Enforce workspace-wide `display_title` uniqueness with the same message shape;
-  derive it from `name` when the upload omits it.
-- **Atomicity:** SkillsStore object-blob write + SQLite metadata commit published
-  atomically; on failure roll back and clean orphans. Delete reclaims blob bytes
-  **immediately** — because D4 gives each live session its own copied snapshot,
-  the store blob has no live-session dependents to protect (the round-2
-  retain-by-reference/GC/session-end complexity is gone; session snapshots
-  reclaim via the existing internal-snapshot delete queue when the session ends).
+- **Name / `display_title` uniqueness on the OWNER table (review round 3,
+  external F6):** enforce workspace-wide uniqueness of canonical `name` and
+  `display_title` as unique indexes on the `skills` owner table (D1) — **not on
+  version rows**, so a second version of the same skill does not self-collide.
+  `name`==`directory` is fixed for a skill (forbid changing it across versions);
+  a custom name colliding with a (future) prebuilt name is rejected; `display_title`
+  reuse → 400 with the hosted message ("Skill cannot reuse an existing
+  display_title", [Obs] probe 56b). Concurrency test for same-name races.
+- **Atomicity of the explode (review round 3, external F1/F5):** the per-file
+  `FileStorageRecord` writes + the `skills`/`skill_versions` row commit publish
+  atomically; on any failure, roll back and clean orphans (no per-file blob
+  without a version row, no version row without its files). Delete reclaims the
+  per-file bytes **immediately** — D4 gives each live session its own copied
+  snapshot, so store records have no live-session dependents; session snapshots
+  reclaim via the existing internal-snapshot delete queue at session end.
 - **Quota [OMA defaults — name them, review round 2: Sonnet]:** per-workspace
   skill-content byte quota `OMA_SKILLS_WORKSPACE_MAX_BYTES` default **1 GiB**
   (mirrors the `MAX_WORKSPACE_FILE_BYTES` pattern, `files/store-local.ts:188`) and
@@ -409,21 +443,23 @@ impl, each keyed by `kind`. Also:
 ## 5. Slice order (each testable in isolation)
 
 0. **Probes 56/57 — DONE** (57 re-run 2026-07-10 with auditable capture).
-1. **Skills resource + store** (D1, D2, D9-atomicity/quota). `SkillsStore` (raw
-   zip blob per version + manifest), `/v1/skills` multipart upload with the
-   **route/beta classifier registration + body-limit bypass + admission gate**
-   (D2), `parseBody({all:true})`, layered size/bomb/zip-slip validation, SKILL.md
-   parse + name==dir + name/display_title-uniqueness, versioning, list/get/delete,
+1. **Skills resource + store** (D1, D2, D9). `SkillsStore` (per-file records +
+   `skills`/`skill_versions` tables), `/v1/skills` multipart upload → **yauzl
+   explode-and-validate → per-file store**, with the **route/beta classifier
+   registration + body-limit bypass + admission gate** (D2), `parseBody({all:true})`,
+   layered size/bomb/hostile-entry validation, SKILL.md parse + name==dir +
+   owner-table name/display_title uniqueness, versioning, list/get/delete,
    delete-only lifecycle, quota. **Custom-only** — independent of sessions and of
    the anthropic catalog (D3 deferred), so slice-1 parity tests do NOT assert
    prebuilts. This is the milestone path.
 2. **Attachment validation** (D7) + **session-create read-tool coupling** (D6,
    the shared pure evaluator). Root-agent scope only.
 3. **Session skill snapshot + runtime delivery** (D4 copy-snapshot + D8 + D5):
-   copy blob into a session snapshot at create → materialize at
-   `/workspace/skills/<name>/` via the discriminated
-   mount (root-owned, exec-bit-preserving, atomic/rollback) → custom
-   ResourceLoader → wire into `createPiSession` (`runner.ts:969`).
+   copy the skill's per-file records into a session snapshot at create + enforce
+   the materialized-size budget → materialize at `/workspace/skills/<name>/` via
+   the discriminated per-file mount (sized `--tmpfs`, root-owned, path-based
+   exec bits) → custom ResourceLoader → wire into `createPiSession`
+   (`runner.ts:969`).
 4. **Live smoke 58** (the exit criterion): OMA end-to-end with an **OMA-owned
    Apache example skill** — agent + attached skill → session → model `read`s
    `/workspace/skills/<name>/SKILL.md` (assert via the bash/read tool_result, per
@@ -557,11 +593,11 @@ name==directory enforced, per-file multipart accepted, derived/duplicate
     Softened the §9.2 pagination framing; relabeled the anthropic date-version to
     [Obs]; fixed anchor drifts (`baseDir` deref at `agent-session.js:853`;
     `always_deny`→`deny` at `tool-permissions.ts:527-530`).
-  - **Storage keystone:** D4/D9 → **copy-snapshot** (copy the zip blob into a
-    session-scoped internal snapshot at create), reusing the existing durable
-    retry-queue tables. Collapses the D4↔D5 source contradiction, the retention/
-    session-end semantics, crash-safe durability, and quota-reclamation into one
-    reuse of proven machinery.
+  - **Storage keystone:** D4/D9 → **copy-snapshot** (copy the skill's content into
+    a session-scoped internal snapshot at create — round 2 said "the blob"; round 3
+    below refined this to per-file), reusing the existing durable retry-queue
+    tables. Collapses the D4↔D5 source contradiction, retention/session-end
+    semantics, crash-safe durability, and quota-reclamation into proven machinery.
   - **Upload:** added the pre-`bodyLimit` **admission in-flight gate** (buffering
     DoS) and the **`/v1/skills` route/beta classifier + body-limit bypass** as an
     explicit slice-1 task (D2).
@@ -573,6 +609,27 @@ name==directory enforced, per-file multipart accepted, derived/duplicate
     /workspace/skills`** for real non-writability; microsandbox tamper-proofing a
     noted per-provider gap); D9 quota defaults named (1 GiB / 20 versions).
 
-*(The independent external review that was appended as Appendix A is folded into
-this log and the D-decisions; raw text preserved in PR 174 history at 72f2daa.)*
+- **External storage review (round 3, 2026-07-10):** a second independent lane
+  found a bounded gap cluster in the storage/materialization layer that both
+  panel rounds under-stressed — verified against code and folded (rev 4):
+  - **D1 flipped from raw-zip-blob → explode-and-validate per-file at upload.**
+    This realigns snapshot (D4), materialization (D8), and the cleanup outbox to
+    the existing **per-file** machinery, dissolving three findings at once: the
+    zip-to-directory materialization gap (no bespoke unzip path), the 20 MiB
+    internal-snapshot cap (applies per-file, not to a 30 MB archive), and the
+    file-shaped outbox tables (now a genuine fit).
+  - **Materialized-size admission (F3):** upload caps bound one version, not a
+    session's total unpack — added an aggregate uncompressed skill budget
+    (reuse `MAX_SESSION_MOUNTED_BYTES`) and sized the skills `--tmpfs` to it
+    (default `/workspace` tmpfs is 64 MiB).
+  - **Zip parser (F4):** `yauzl` chosen — streaming, no auto-extract, the right
+    primitive for hostile-entry defense (the repo had no zip dep).
+  - **Owner-vs-version schema (F6):** name/`display_title` uniqueness on the
+    `skills` owner table, not version rows (a 2nd version must not self-collide).
+  - **F7:** corrected the probe-56 `.md` docx/pdf overclaim to xlsx+pptx-observed.
+  - Endorsed sound: wire contract, licensing, read-tool coupling, custom Pi
+    loader, dedicated-mountpoint defense.
+
+*(The independent external reviews (Appendix A + this storage lane) are folded
+into this log and the D-decisions; raw text preserved in PR 174 history.)*
 
