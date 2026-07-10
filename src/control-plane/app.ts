@@ -687,7 +687,7 @@ export function createDeploymentControlPlane(
     ...(authMode === "api-key"
       ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
       : {}),
-    agents: new DefaultAgentService(stores.agents),
+    agents: new DefaultAgentService(stores.agents, stores.skills),
     environments: new DefaultEnvironmentService(stores.environments),
     files: new DefaultFileService(stores.files),
     skills: new DefaultSkillsService(stores.skills),
@@ -836,7 +836,7 @@ export function createInMemoryControlPlaneApp(
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const vaultService = new DefaultVaultService(vaultStore);
   return createControlPlaneApp({
-    agents: new DefaultAgentService(agentStore),
+    agents: new DefaultAgentService(agentStore, skillsStore),
     environments: new DefaultEnvironmentService(environmentStore),
     files: new DefaultFileService(fileStorage),
     skills: new DefaultSkillsService(skillsStore),

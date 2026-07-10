@@ -125,11 +125,77 @@ describe("skills API", () => {
     expect(response.status).toBe(400);
     expect(await response.text()).toContain("valid zip");
   });
+
+  it("validates custom skill attachments at agent creation", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const skill = await createSkill(app, "attached-skill", "attached");
+    const accepted = await createAgent(app, {
+      skills: [{ type: "custom", skill_id: skill.id, version: "latest" }],
+      tools: [],
+    });
+    expect(accepted.status).toBe(200);
+    expect(((await accepted.json()) as { skills: unknown }).skills).toEqual([
+      { type: "custom", skill_id: skill.id, version: "latest" },
+    ]);
+
+    const invalidCases = [
+      [{ type: "unknown", skill_id: skill.id }],
+      [{ type: "custom", skill_id: "skill_missing" }],
+      [{ type: "custom", skill_id: skill.id }, { type: "custom", skill_id: skill.id }],
+      [{ type: "anthropic", skill_id: "xlsx" }],
+      Array.from({ length: 21 }, (_, index) => ({ type: "custom", skill_id: `skill_${index}` })),
+    ];
+    for (const skills of invalidCases) {
+      expect((await createAgent(app, { skills })).status).toBe(400);
+    }
+  });
+
+  it("requires usable read access when creating a session with skills", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const skill = await createSkill(app, "session-skill", "session");
+    const environment = await json(app.request("/v1/environments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Skills environment", config: { type: "cloud" } }),
+    }));
+
+    for (const tools of [
+      [],
+      [{ type: "agent_toolset_20260401", configs: [{ name: "read", enabled: false }] }],
+      [{ type: "agent_toolset_20260401", configs: [{ name: "read", permission_policy: { type: "never_allow" } }] }],
+    ]) {
+      const agentResponse = await createAgent(app, {
+        skills: [{ type: "custom", skill_id: skill.id }],
+        tools,
+      });
+      const agent = await agentResponse.json() as { id: string };
+      const response = await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: agent.id, environment_id: environment.id }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain(
+        "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's agent_toolset",
+      );
+    }
+
+    const allowedAgent = await (await createAgent(app, {
+      skills: [{ type: "custom", skill_id: skill.id }],
+      tools: [{ type: "agent_toolset_20260401" }],
+    })).json() as { id: string };
+    expect((await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent: allowedAgent.id, environment_id: environment.id }),
+    })).status).toBe(200);
+  });
 });
 
 const ZIP_SKILL = "UEsDBAoAAAAAAFoD61wAAAAAAAAAAAAAAAAKABwAemlwLXNraWxsL1VUCQADu39Rart/UWp1eAsAAQT1AQAABBQAAABQSwMECgAAAAAAWgPrXAAAAAAAAAAAAAAAABIAHAB6aXAtc2tpbGwvc2NyaXB0cy9VVAkAA7t/UWq7f1FqdXgLAAEE9QEAAAQUAAAAUEsDBAoAAAAAAFoD61w0Mtc9CAAAAAgAAAAYABwAemlwLXNraWxsL3NjcmlwdHMvcnVuLnNoVVQJAAO7f1Fqu39RanV4CwABBPUBAAAEFAAAAGVjaG8gb2sKUEsDBBQAAAAIAFoD61wxje8kLAAAAC4AAAASABwAemlwLXNraWxsL1NLSUxMLm1kVVQJAAO7f1Fqu39RanV4CwABBPUBAAAEFAAAANPV1eXKS8xNtVKoyizQLc7OzMnhSkktTi7KLCjJzM8DCysUJJZkcOkCVQIAUEsBAh4DCgAAAAAAWgPrXAAAAAAAAAAAAAAAAAoAGAAAAAAAAAAQAO1BAAAAAHppcC1za2lsbC9VVAUAA7t/UWp1eAsAAQT1AQAABBQAAABQSwECHgMKAAAAAABaA+tcAAAAAAAAAAAAAAAAEgAYAAAAAAAAABAA7UFEAAAAemlwLXNraWxsL3NjcmlwdHMvVVQFAAO7f1FqdXgLAAEE9QEAAAQUAAAAUEsBAh4DCgAAAAAAWgPrXDQy1z0IAAAACAAAABgAGAAAAAAAAQAAAKSBkAAAAHppcC1za2lsbC9zY3JpcHRzL3J1bi5zaFVUBQADu39RanV4CwABBPUBAAAEFAAAAFBLAQIeAxQAAAAIAFoD61wxje8kLAAAAC4AAAASABgAAAAAAAEAAACkgeoAAAB6aXAtc2tpbGwvU0tJTEwubWRVVAUAA7t/UWp1eAsAAQT1AQAABBQAAABQSwUGAAAAAAQABABeAQAAYgEAAAAA";
 
 async function createSkill(app: ReturnType<typeof createInMemoryControlPlaneApp>, name: string, description: string) { const response=await app.request("/v1/skills",{method:"POST",body:skillForm(name,description)}); expect(response.status).toBe(200); return response.json() as Promise<any>; }
+function createAgent(app: ReturnType<typeof createInMemoryControlPlaneApp>, overrides: Record<string, unknown>): Promise<Response> { return Promise.resolve(app.request("/v1/agents", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: `Skills agent ${crypto.randomUUID()}`, model: "claude-opus-4-7", tools: [{ type: "agent_toolset_20260401" }], ...overrides }) })); }
 function skillForm(name:string,description:string):FormData{const form=new FormData();form.append("files[]",new File([skillMd(name,description)],`${name}/SKILL.md`,{type:"text/markdown"}));form.append("files[]",new File(["echo ok\n"],`${name}/scripts/run.sh`,{type:"text/plain"}));return form;}
 function skillMd(name:string,description:string):string{return `---\nname: ${name}\ndescription: ${description}\n---\nUse this skill.\n`;}
 async function json(value:Response|Promise<Response>):Promise<any>{const response=await value;expect(response.status).toBe(200);return response.json();}

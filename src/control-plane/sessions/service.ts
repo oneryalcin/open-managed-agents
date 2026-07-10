@@ -37,6 +37,7 @@ import { newFileId, newSessionId, newSessionResourceId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { parseCreateSession, parseAgentRef } from "./request.ts";
 import type { VaultService } from "../vaults/types.ts";
+import { resolveBuiltinToolAccessForAgent } from "./pi/tool-permissions.ts";
 import {
   normalizeSessionFileResources,
   type SessionFileResourceMountInput,
@@ -352,6 +353,14 @@ export class DefaultSessionService implements SessionService {
       throw invalidRequest(
         `Agent ${agentRef.id} has version ${agent.version}; requested version ${agentRef.version} not found`,
       );
+    }
+    if (agent.skills.length > 0) {
+      const read = resolveBuiltinToolAccessForAgent(agent, "read");
+      if (!read.enabled || read.permission === "deny") {
+        throw invalidRequest(
+          "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's agent_toolset",
+        );
+      }
     }
     const environment = this.environments.retrieve(workspaceId, req.environment_id);
     if (!environment) {

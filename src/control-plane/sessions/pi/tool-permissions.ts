@@ -3,7 +3,7 @@ import type {
   ManagedAgentsUserToolConfirmationEventInput,
 } from "../../../types/events.ts";
 import type { JsonObject } from "../../../types/json.ts";
-import type { AgentStore } from "../../agents/types.ts";
+import type { AgentRow, AgentStore } from "../../agents/types.ts";
 import type {
   RuntimeActionCloseReason,
   RuntimeMcpToolResultEvent,
@@ -502,23 +502,28 @@ export function createStoreBackedBuiltinToolAccessResolver(opts: {
     if (!agentId) return { enabled: false, permission: "deny" };
     const agent = opts.agents.retrieveAny(workspaceId, agentId);
     if (!agent) return { enabled: false, permission: "deny" };
-    const toolsets = agent.tools.filter(
-      (tool) => tool.type === "agent_toolset_20260401",
-    );
-    if (toolsets.length !== 1) {
-      return { enabled: false, permission: "deny" };
-    }
-    const [toolset] = toolsets;
-    const defaultConfig = toolset.default_config;
-    const config = toolset.configs?.find((item) => item.name === toolName);
-    return {
-      enabled: config?.enabled ?? defaultConfig?.enabled ?? true,
-      permission: policyToPermission(
-        config?.permission_policy?.type ??
-          defaultConfig?.permission_policy?.type ??
-          "always_allow",
-      ),
-    };
+    return resolveBuiltinToolAccessForAgent(agent, toolName);
+  };
+}
+
+export function resolveBuiltinToolAccessForAgent(
+  agent: Pick<AgentRow, "tools">,
+  toolName: SandboxedBuiltinToolName,
+): BuiltinToolAccess {
+  const toolsets = agent.tools.filter(
+    (tool) => tool.type === "agent_toolset_20260401",
+  );
+  if (toolsets.length !== 1) return { enabled: false, permission: "deny" };
+  const [toolset] = toolsets;
+  const defaultConfig = toolset.default_config;
+  const config = toolset.configs?.find((item) => item.name === toolName);
+  return {
+    enabled: config?.enabled ?? defaultConfig?.enabled ?? true,
+    permission: policyToPermission(
+      config?.permission_policy?.type ??
+        defaultConfig?.permission_policy?.type ??
+        "always_allow",
+    ),
   };
 }
 
