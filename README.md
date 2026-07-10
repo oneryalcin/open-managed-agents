@@ -109,12 +109,23 @@ What works today, at outcome level:
   credential injection — sandboxed agents reach allowlisted hosts with
   secrets they can never read
   ([ADR 0016](docs/adrs/0016-egress-proxy-and-secret-injection.md)).
+- **MCP servers with vault-backed auth**: sessions connect to MCP servers
+  behind `OMA_ENABLE_MCP` — SSRF-guarded, `always_ask` by default. Credentials
+  live in `/v1/vaults` (`static_bearer` and `mcp_oauth`); OAuth tokens refresh
+  themselves (lazy on use, a proactive in-process ticker, and a 401-driven
+  retry) and rotate warm connections without reconnecting. Access tokens,
+  refresh tokens, and client secrets are injected control-plane-side and
+  leak-swept out of tool results and events — the same "usable but never
+  readable" boundary the sandbox egress applies, now on the auth leg
+  ([plan 0122](docs/plans/0122-mcp-connector.md)).
 - **An admin API and a bundled operator console**, served by the appliance at
-  `/console`: browse agents, sessions, events, spans, and files with a
-  workspace key; create workspaces and mint/revoke API keys with the admin
-  key ([plan 0119](docs/plans/0119-admin-api.md),
-  [plan 0120](docs/plans/0120-dashboard.md)). Fully self-contained — no CDN
-  at first paint; browser keys live in page memory only.
+  `/console`: browse agents, sessions, events, spans, files, and vaults with a
+  workspace key, and validate an `mcp_oauth` credential in place; create
+  workspaces, mint/revoke API keys, and inspect per-credential refresh health
+  with the admin key ([plan 0119](docs/plans/0119-admin-api.md),
+  [plan 0120](docs/plans/0120-dashboard.md),
+  [plan 0125](docs/plans/0125-console-vaults-mcp.md)). Fully self-contained —
+  no CDN at first paint; browser keys live in page memory only.
 
 - **Observability.** `GET /health` (liveness + readiness, compose
   healthcheck), fail-closed Prometheus `/metrics`, and structured JSON logs
@@ -127,8 +138,8 @@ the authoritative sequencing:
 
 - session usage metering (`usage` is `null`);
 - skills execution (wire-accepted today but runtime-inert; unblocked by the
-  egress + secrets boundary). MCP execution shipped 2026-07-07 (0122 M1,
-  unauthenticated servers; vaults/auth follow in M2);
+  egress + secrets boundary — the remaining half of the capability exit
+  criterion now that MCP, including OAuth, has shipped end-to-end);
 - agent versioning, broader event-topology parity, file-upload idempotency,
   remote sandbox providers, RBAC within a workspace, and CI.
 
