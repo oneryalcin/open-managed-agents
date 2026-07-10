@@ -208,16 +208,26 @@ session create. Per-version total ≤ 100 MB, ≤ 500 files (D2).
 skill is a multi-object write (N content objects + N `skill_files` rows + a
 `skill_versions` row + `skills.latest_version` bump). The existing per-file
 create commits each object individually — insufficient. Design:
-1. Write all content objects to a **staged/private prefix** and record them in a
-   `pending_skill_content_rollbacks` ledger BEFORE the metadata commit.
-2. Commit `skill_versions` + all `skill_files` + the `skills` upsert in **one
-   SQLite transaction** (publish); on success, clear the rollback ledger.
-3. On crash/failure before commit, a startup sweep deletes staged objects named
-   in the ledger (mirrors the existing `pending_internal_snapshot_create_rollbacks`
-   pattern, `sessions/store.ts`). No orphan objects, no partially-published
-   version.
-Delete uses a symmetric **`pending_skill_content_deletes`** outbox: mark the
-version deleted in one txn, then reclaim objects via the swept outbox.
+1. Preallocate every content-object ID and insert its
+   `pending_skill_content_rollbacks` intent **before the corresponding external
+   object write** (batching all intents in one transaction before any writes is
+   also valid). This closes the object-written/intent-not-recorded crash window.
+2. Write the objects to the private namespace. An object-write failure leaves
+   its already-recorded intent for immediate/best-effort cleanup and the startup
+   sweep.
+3. Commit `skill_versions` + all `skill_files` + the `skills` upsert **and delete
+   the matching rollback intents in the SAME SQLite transaction**. Metadata
+   publication and intent retirement are one atomic state transition; a crash
+   can neither orphan an unpublished object nor let the sweep delete published
+   content.
+4. On failure before publish, sweep the still-present intents (mirrors the
+   existing `pending_internal_snapshot_create_rollbacks` ordering in
+   `sessions/service.ts:851-875`).
+Delete uses a symmetric **`pending_skill_content_deletes`** outbox: insert every
+object ID into the outbox in the **same transaction** that deletes the
+`skill_files`/`skill_versions` rows, recomputes `latest_version`, and (when
+applicable) deletes the owner. Object reclamation happens afterward via the
+retryable startup/runtime sweep.
 
 ### D2 — Custom upload = the Skills resource; body-limit + zip safety
 
@@ -241,7 +251,7 @@ auth/beta/metrics classification and behaves inconsistently with every other
 gate, the body-limit bypass, and the admission gate.
 
 **Zip parser [OMA — the repo has no zip dependency today; review round 3-4,
-external F4]:** add **`yauzl`** at a **pinned version**, a vetted streaming zip
+external F4]:** add **`yauzl@3.4.0`** (exact pin), a vetted streaming zip
 reader that inspects entries WITHOUT auto-extracting. Mandate its security-
 relevant usage (npmjs.com/package/yauzl): `lazyEntries: true` (process entry by
 entry, never inflate the whole archive); reject entries whose
@@ -275,9 +285,10 @@ nothing deferred to materialize time):
   `anthropic`,`claude` forbidden; `description` ≤1024). **Enforce name ==
   directory** — hosted 400s a mismatch (probe 56b) — so the mount root is
   unambiguous (D8). `display_title` derives from `name` when omitted [Obs].
-- **Then explode:** write each validated entry as its own `FileStorageRecord`
-  (D1); commit the `skills`/`skill_versions` rows + per-file records atomically
-  (D9). The uploaded archive is discarded after explode — nothing stores it.
+- **Then explode:** write each validated entry as a private
+  `SkillContentRecord` (D1); publish the owner/version/manifest through D1's
+  staged-object protocol. The uploaded archive is discarded after explode —
+  nothing stores it.
 
 ### D3 — Prebuilt (`anthropic`) skills: LICENSING BLOCKER — do not vendor
 
@@ -305,12 +316,12 @@ historical agent versions, and skills are delete-only + mutable via new versions
 Resolving `agent.skills` live at runtime (or after a restart/eviction) would run
 different content than the session started with, or fail after deletion.
 
-**Decision [OMA] — COPY per-file into the session snapshot, reusing the existing
-per-file machinery (review round 2: Opus + Sonnet; round 3, external: made
-concrete).** Because D1 stores skills as per-file `FileStorageRecord`s, the
-snapshot is exactly the file-resource snapshot shape. At session create, resolve
-each attached skill to a concrete `(skill_id, version)`, then **copy each of its
-per-file records into a session-scoped internal snapshot** via
+**Decision [OMA] — COPY per-file into the session snapshot, adapting the private
+content store to the existing snapshot machinery (review round 2: Opus + Sonnet;
+rounds 3-5, external: made concrete).** D1 exposes an internal-only byte stream
+for each `SkillContentRecord`. At session create, resolve each attached skill to
+a concrete `(skill_id, version)`, open each private record, then **copy it into a
+session-scoped internal snapshot** via
 `createInternalSnapshot` — the same call `prepareFileResources` uses
 (`sessions/service.ts:849-890`), now a genuine fit (per-file, not a 30 MB
 archive against the 20 MiB single-file cap). Consequences:
@@ -332,9 +343,16 @@ restart, recovery cannot tell a skill mount from an upload mount, nor which skil
 a file belongs to. Add:
 - a **`kind` column on the snapshot mount rows** (persisted, read by recovery so
   it re-materializes each mount to the right root — D8);
-- a **`session_skill_snapshots` join** (`session_id, skill_id, version, name,
-  description, skill_snapshot_id`) recording per-skill metadata (the loader needs
-  name/description) and grouping its file-snapshot entries by `skill_snapshot_id`.
+- a **`session_skill_snapshots` grouping row** (`workspace_id, session_id,
+  skill_snapshot_id, skill_id, version, name, description`), plus nullable
+  **`skill_snapshot_id` on every `session_file_mount_snapshots` row** belonging
+  to that skill. The grouping row owns the one-to-many association the loader
+  and recovery path need; upload mounts keep it `NULL`.
+Insert the session row, grouping rows, and all file-snapshot rows in the same
+session-create transaction. On session deletion, first promote every file row
+to `pending_internal_snapshot_deletes`, then delete file rows and grouping rows
+in that same transaction (FK from file row to grouping row; restrict during the
+promotion/delete transaction, cascade is not relied on for object cleanup).
 The ResourceLoader (D5) reads name/description from this join and points
 `filePath` at the materialized container path; bytes come from the snapshot's file
 entries. Nothing reads the live store at runtime.
@@ -423,8 +441,10 @@ chown/normalize) and the microsandbox impl, each keyed by `kind`. Also:
   root-owned is not enough: `/workspace` is the sandbox user's writable tmpfs
   (`docker.ts:722`, uid 65534, 0700), so it can `mv /workspace/skills aside`. A
   dedicated tmpfs **mountpoint** cannot be renamed/unlinked by the sandbox user.
-  **Size it to the materialized-size budget (below)** — the default `/workspace`
-  tmpfs is only `64m` (`docker.ts:47`), far under a 20-skill attach. **Microsandbox
+  Use a fixed **64 MiB skills tmpfs**: the runner creates the sandbox before it
+  resolves mounts (`runner.ts:645-658`), so per-session dynamic sizing would
+  require an unnecessary preparation-order refactor. The shared 50 MiB content
+  ceiling leaves 14 MiB for filesystem metadata/headroom. **Microsandbox
   asymmetry:** its normalize is `chmod 444` only, no `chown`-to-root and no tmpfs
   seam (`microsandbox.ts:881`) — the tamper-proof property is Docker-only in v1;
   a noted per-provider limitation.
@@ -434,8 +454,8 @@ chown/normalize) and the microsandbox impl, each keyed by `kind`. Also:
   `MAX_SESSION_MOUNTED_BYTES = 50 MiB` (`sessions/service.ts:56`) is the budget —
   but it must be **shared across uploads + skills**, not 50 MiB each: at session
   create, sum file-mount `total_bytes` + snapshotted skills' `total_bytes` and
-  reject the combined total over budget. Size the skills `--tmpfs` from the skills
-  share, and — critically — the new tmpfs is a **fourth tmpfs**, so
+  reject the combined total over budget. The fixed skills tmpfs is a **fourth
+  tmpfs**, so
   `assertTmpfsMemoryHeadroom` (`docker.ts:685`, today validates uploads + outputs
   against `--memory`) must add the skills tmpfs to its sum, or container start
   fails or over-commits memory. Extend that assert; a headroom test pins it.
@@ -461,10 +481,11 @@ the quota domain and the version-lifecycle edges.)
   **not** count toward `MAX_WORKSPACE_FILE_BYTES` (100 MiB) — a `SkillContentStorage`
   workspace-bytes accountant enforces its own `OMA_SKILLS_WORKSPACE_MAX_BYTES`
   default **1 GiB**, and a per-skill retained-version cap `OMA_SKILLS_MAX_VERSIONS`
-  default **20**. Session snapshot copies are ephemeral (reclaimed at session end)
-  and do not count against the skills quota either. (Without the separate store,
-  source content + every session copy would compete inside the 100 MiB files
-  quota — the contradiction the external review flagged.)
+  default **20**. Session snapshot copies do not count against the skills quota,
+  but they **do** use the existing FileStorage workspace quota and are reclaimed
+  on session **DELETE** (not merely idle/terminated/archive), matching current
+  file-mount snapshot semantics. Operators must delete retained sessions to
+  reclaim those copies.
 - **Delete-latest-version [external F6]:** deleting the version a skill's
   `latest_version` points at **recomputes `latest_version` from the newest
   remaining version** in the same transaction; deleting the sole version is the
@@ -512,17 +533,24 @@ the quota domain and the version-lifecycle edges.)
   **zip-slip battery** (`..`, absolute, backslash, NUL, symlink, dup-normalized,
   case-fold); missing/duplicate/non-UTF-8 SKILL.md; multi-folder; name≠dir;
   name-collision across skills/versions; concurrent same-name upload race;
-  atomicity (object write fails → no orphan row; commit fails → no orphan blob).
+  atomicity (intent exists before every object write; object-write failure →
+  swept intent; crash before publish → no orphan; crash after publish → committed
+  metadata and no rollback intent); delete-outbox insertion is atomic with
+  version deletion/latest recomputation.
 - Validation: bad type, unknown custom id, duplicate skill_id, 20-cap per agent,
   `anthropic`-attach-rejected-while-deferred, and the session-create
   read-tool-coupling 400 with the **verbatim** message (via the shared evaluator).
 - Snapshot/repro: `"latest"` resolved at create; a new version uploaded
   mid-session does not change the running session; a version deleted after
   snapshot still materializes from snapshot bytes; restart + eviction/re-create
-  materialize identical content from the manifest.
+  materialize identical content from the manifest; grouping-to-file association
+  and `kind` survive restart; session DELETE promotes every skill file to the
+  existing cleanup outbox before deleting grouping rows.
 - Runtime: discriminated mount lands skills at `/workspace/skills`, uploads at
   `/mnt/session/uploads` (mixed-mount test); `scripts/*` executable, `SKILL.md`
-  0644, root-owned; partial-materialization failure rolls back; smoke 58 proves
+  0644, root-owned; shared 50 MiB boundary fits the fixed 64 MiB skills tmpfs;
+  the fourth tmpfs participates in memory-headroom validation;
+  partial-materialization failure rolls back; smoke 58 proves
   read via tool_result; no new event types emitted.
 
 ## 7. Non-goals (v1)
@@ -690,4 +718,3 @@ name==directory enforced, per-file multipart accepted, derived/duplicate
 
 *(The independent external reviews (Appendix A + the two storage lanes) are folded
 into this log and the D-decisions; raw text preserved in PR 174 history.)*
-
