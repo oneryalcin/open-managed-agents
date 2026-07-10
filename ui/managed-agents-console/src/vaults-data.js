@@ -53,6 +53,19 @@ export function healthState(row) {
   return { label: "not attempted", tone: "neutral" };
 }
 
+// Map a semantic tone onto an existing badge class (console.css): the accent
+// wash is the amber-gold the plan calls for on transient/warn rows.
+const TONE_BADGE = { ok: "st-active", warn: "st-rescheduling", error: "st-error", neutral: "st-idle" };
+
+export function toneBadgeClass(tone) {
+  return TONE_BADGE[tone] || TONE_BADGE.neutral;
+}
+
+export function truncationWarning(kind) {
+  const noun = kind === "credentials" ? "Credential" : "Vault";
+  return `${noun} list reached the safety cap; this view may be partial.`;
+}
+
 export function validationOutcome(result) {
   if (result?.status === "valid") return { tone: "ok", message: "Credential works." };
   if (result?.status === "invalid") return { tone: "error", message: "Re-authorize with the provider and rotate the credential." };
@@ -60,6 +73,15 @@ export function validationOutcome(result) {
     return { tone: "neutral", message: "Refresh was skipped; the probe was inconclusive. The credential may have changed or been checked recently." };
   }
   return { tone: "warn", message: "Could not conclude (transient or unreachable); try again later." };
+}
+
+// Presentation details for a validation result: the probe status, plus the
+// refresh status/HTTP code the plan requires on invalid/failed outcomes.
+export function validationDetail(result) {
+  const probeStatus = result?.mcp_probe?.http_response?.status_code ?? null;
+  const refreshStatus = result?.refresh?.status ?? null;
+  const refreshHttpStatus = result?.refresh?.http_response?.status_code ?? null;
+  return { probeStatus, refreshStatus, refreshHttpStatus };
 }
 
 export function isCurrentVaultResult(epoch, currentEpoch, vaultId, currentVaultId) {

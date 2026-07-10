@@ -3,6 +3,10 @@ const { useState: useVaultState, useEffect: useVaultEffect, useRef: useVaultRef 
 const DEMO_VAULTS = [{ id: 'vlt_demo', display_name: 'Demo integrations', created_at: '2026-07-01T00:00:00Z', archived_at: null }];
 const DEMO_CREDENTIALS = [{ id: 'vcrd_demo', display_name: 'Demo MCP OAuth', archived_at: null, auth: { type: 'mcp_oauth', mcp_server_url: 'https://mcp.example.test/mcp', expires_at: '2026-12-01T00:00:00Z', refresh: { token_endpoint: 'https://auth.example.test/token', scope: 'read', token_endpoint_auth: { type: 'none' } } } }];
 
+function ToneBadge({ tone, children }) {
+  return <span className={'badge ' + VaultsData.toneBadgeClass(tone)}><i className="dot" />{children}</span>;
+}
+
 function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
   const [vaults, setVaults] = useVaultState(null);
   const [error, setError] = useVaultState(null);
@@ -23,7 +27,7 @@ function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
     OmaConsoleApi.listVaults().then((page) => {
       if (current !== epoch.current) return;
       setVaults(page.data.map(VaultsData.vaultRow));
-      if (page.truncated) setWarning('Vault list reached the safety cap; this view may be partial.');
+      if (page.truncated) setWarning(VaultsData.truncationWarning('vaults'));
     }).catch((err) => { if (current === epoch.current) setError(err); });
   };
   useVaultEffect(refresh, [mode]);
@@ -39,7 +43,7 @@ function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
     OmaConsoleApi.listVaultCredentials(vault.id).then((page) => {
       if (!VaultsData.isCurrentVaultResult(current, epoch.current, vault.id, selectedRef.current)) return;
       setCredentials(page.data.map(VaultsData.credentialRow));
-      if (page.truncated) setWarning('Credential list reached the safety cap; this view may be partial.');
+      if (page.truncated) setWarning(VaultsData.truncationWarning('credentials'));
     }).catch((err) => { if (VaultsData.isCurrentVaultResult(current, epoch.current, vault.id, selectedRef.current)) setDetailError(err); });
   };
   const validate = (credential) => {
@@ -55,21 +59,35 @@ function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
     const vault = vaults.find((item) => item.id === initialVaultId);
     if (vault) open(vault);
   }, [initialVaultId, vaults]);
-  if (selected) return <VaultDetail vault={selected} credentials={credentials} error={detailError} warning={warning}
-    onBack={() => { ++epoch.current; setSelected(null); setCredentials(null); onBackToVaults(); }} onRetry={() => open(selected)}
-    mode={mode} validating={validating} validation={validation} onValidate={(credential) => setConfirm(credential)} />;
-  return <div className="main-scroll scroll fade-in">
-    <PageHead title="Vaults" sub="Browse workspace vaults and validate MCP OAuth credentials." />
-    {warning && <div className="inline-warn"><Icon name="alert" size={14} /><span>{warning}</span></div>}
-    {vaults === null && !error ? <SkeletonTable rows={4} cols={[180, 'grow', 100]} />
-      : error ? <ErrorState resource="vaults" onRetry={refresh} />
-      : vaults.length === 0 ? <EmptyState icon="database" title="No vaults" message="This workspace has no vaults." />
-      : <div className="panel">{vaults.map((vault) => <div className="trow" key={vault.id} onClick={() => { onOpenVault(vault.id); open(vault); }}>
-        <span className="td mono" style={{ width:180, fontSize:12 }}>{vault.id}</span><span className="td grow cell-strong">{vault.displayName}</span>
-        <span className="td" style={{ width:100 }}>{vault.archivedAt ? <St k="archived" /> : <St k="active" />}</span>
-      </div>)}</div>}
-    {confirm && <ConfirmDialog icon="alert" title="Validate credential" message="Validate contacts the MCP server with this credential and may refresh the token at the provider." confirmLabel="Validate" endpoint="POST /v1/vaults/:id/credentials/:id/mcp_oauth_validate" onClose={() => setConfirm(null)} onConfirm={() => validate(confirm)} />}
-  </div>;
+
+  const body = selected
+    ? <VaultDetail vault={selected} credentials={credentials} error={detailError} warning={warning}
+        onBack={() => { ++epoch.current; setSelected(null); setCredentials(null); onBackToVaults(); }} onRetry={() => open(selected)}
+        mode={mode} validating={validating} validation={validation} onValidate={(credential) => setConfirm(credential)} />
+    : <div className="main-scroll scroll fade-in">
+        <PageHead title="Vaults" sub="Browse workspace vaults and validate MCP OAuth credentials." />
+        {warning && <div className="inline-warn"><Icon name="alert" size={14} /><span>{warning}</span></div>}
+        {vaults === null && !error ? <SkeletonTable rows={4} cols={[180, 'grow', 120, 100]} />
+          : error ? <ErrorState resource="vaults" onRetry={refresh} />
+          : vaults.length === 0 ? <EmptyState icon="database" title="No vaults" message="This workspace has no vaults." />
+          : <div className="panel">{vaults.map((vault) => <div className="trow" key={vault.id} style={{ opacity: vault.archivedAt ? 0.55 : 1 }} onClick={() => { onOpenVault(vault.id); open(vault); }}>
+            <span className="td mono" style={{ width:180, fontSize:12 }}>{vault.id}</span>
+            <span className="td grow cell-strong">{vault.displayName}</span>
+            <span className="td mono" style={{ width:120, color:'var(--faint)', fontSize:12 }}>{VaultsData.relativeTime(vault.createdAt)}</span>
+            <span className="td" style={{ width:100 }}>{vault.archivedAt ? <St k="archived" /> : <St k="active" />}</span>
+          </div>)}</div>}
+      </div>;
+
+  // The dialog lives at the component root so it renders in both the list and
+  // detail branches (an earlier revision nested it under the list only, which
+  // made Validate a no-op once a vault was open).
+  return <>
+    {body}
+    {confirm && <ConfirmDialog icon="alert" title="Validate credential"
+      message="Validate contacts the MCP server with this credential and may refresh the token at the provider."
+      confirmLabel="Validate" endpoint="POST /v1/vaults/:id/credentials/:id/mcp_oauth_validate"
+      onClose={() => setConfirm(null)} onConfirm={() => validate(confirm)} />}
+  </>;
 }
 
 function VaultDetail({ vault, credentials, error, warning, onBack, onRetry, mode, validating, validation, onValidate }) {
@@ -79,22 +97,25 @@ function VaultDetail({ vault, credentials, error, warning, onBack, onRetry, mode
     {credentials === null && !error ? <SkeletonTable rows={3} cols={[180, 'grow', 120]} />
       : error ? <ErrorState resource="credentials" onRetry={onRetry} />
       : credentials.length === 0 ? <EmptyState icon="database" title="No credentials" message="This vault has no credentials." />
-      : <div className="panel">{credentials.map((c) => <div className="trow" key={c.id} style={{ display:'block', cursor:'default', padding:'14px' }}>
-        <div style={{ display:'flex', gap:12 }}><span className="mono" style={{ color:'var(--soft)' }}>{c.id}</span><b>{c.displayName}</b><span className="pill">{c.authType}</span>{c.archivedAt && <St k="archived" />}</div>
+      : <div className="panel">{credentials.map((c) => <div className="trow" key={c.id} style={{ display:'block', cursor:'default', padding:'14px', opacity: c.archivedAt ? 0.55 : 1 }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center' }}><span className="mono" style={{ color:'var(--soft)' }}>{c.id}</span><b>{c.displayName}</b><span className="pill">{c.authType}</span>{c.archivedAt && <St k="archived" />}</div>
         <div className="field-hint" style={{ marginTop:6 }}>{c.serverUrl || 'No server URL'} · expires {VaultsData.relativeTime(c.expiresAt)}</div>
         {c.refresh && <div className="field-hint">token host {c.refresh.tokenEndpointHost} · {c.refresh.scope || 'no scope'} · {c.refresh.endpointAuth || 'no endpoint auth'}</div>}
-        {mode !== 'mock' && !c.archivedAt && c.authType === 'mcp_oauth' && <button className="btn" disabled={validating} onClick={() => onValidate(c)} style={{ marginTop:8 }}> {validating ? 'Validating…' : 'Validate'} </button>}
+        {mode !== 'mock' && !c.archivedAt && c.authType === 'mcp_oauth' && <button className="btn" disabled={validating} onClick={() => onValidate(c)} style={{ marginTop:8 }}>{validating ? 'Validating…' : 'Validate'}</button>}
       </div>)}</div>}
     {validation && <ValidationResult value={validation} />}
   </div>;
 }
 
 function ValidationResult({ value }) {
-  if (value.error) return <div className="inline-warn"><Icon name="alert" size={14} /><span>{value.error}</span></div>;
+  if (value.error) return <div className="inline-warn" style={{ marginTop:12 }}><Icon name="alert" size={14} /><span>{value.error}</span></div>;
   const outcome = VaultsData.validationOutcome(value.result);
-  return <div className="panel" style={{ marginTop:12, padding:14 }}><b>{outcome.message}</b>
-    {value.result?.mcp_probe?.http_response?.status_code && <div className="field-hint">Probe HTTP {value.result.mcp_probe.http_response.status_code}</div>}
-    <details><summary>Details</summary><pre className="code" style={{ whiteSpace:'pre-wrap' }}>{JSON.stringify(value.result?.mcp_probe ?? {}, null, 2)}</pre></details>
+  const detail = VaultsData.validationDetail(value.result);
+  return <div className="panel" style={{ marginTop:12, padding:14 }}>
+    <div style={{ display:'flex', gap:8, alignItems:'center' }}><ToneBadge tone={outcome.tone}>{value.result?.status || 'error'}</ToneBadge><b>{outcome.message}</b></div>
+    {detail.probeStatus && <div className="field-hint" style={{ marginTop:6 }}>Probe HTTP {detail.probeStatus}</div>}
+    {detail.refreshStatus && <div className="field-hint">Refresh {detail.refreshStatus}{detail.refreshHttpStatus ? ` · HTTP ${detail.refreshHttpStatus}` : ''}</div>}
+    <details style={{ marginTop:8 }}><summary>Details</summary><pre className="code" style={{ whiteSpace:'pre-wrap' }}>{JSON.stringify(value.result ?? {}, null, 2)}</pre></details>
   </div>;
 }
 
@@ -120,12 +141,17 @@ function CredentialHealthView({ workspaceId, onBack, onReauth }) {
     {page === null && !error ? <SkeletonTable rows={5} cols={[160, 'grow', 110]} />
       : error ? <ErrorState resource="credential health" onRetry={() => load(cursor)} />
       : page.data.length === 0 ? <EmptyState icon="database" title="No credentials" message="This workspace has no stored vault credentials." />
-      : [...groups.entries()].map(([key, rows]) => <div className="panel" key={key} style={{ marginBottom:12 }}>
+      : [...groups.entries()].map(([key, rows]) => <div className="panel" key={key} style={{ marginBottom:12, opacity: rows[0].vaultArchivedAt ? 0.6 : 1 }}>
         <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border)' }}><b>{rows[0].vaultDisplayName}</b>{rows[0].vaultArchivedAt && <span className="field-hint"> · archived</span>}</div>
-        {rows.map((row) => { const state = VaultsData.healthState(row); return <div className="trow" key={row.credentialId} style={{ cursor:'default' }}>
-          <span className="td grow"><b>{row.credentialDisplayName || row.credentialId}</b><span className="field-hint"> · {row.authType} · {VaultsData.urlHost(row.mcpServerUrl)}</span></span>
-          <span className="td" style={{ width:180 }}>{state.label}{state.label === 'transient' && ` · ${row.refreshAttempts} attempts`}</span>
-          <span className="td" style={{ width:130, color:'var(--faint)' }}>{row.nextRefreshAt ? VaultsData.relativeTime(row.nextRefreshAt) : '—'}</span>
+        {rows.map((row) => { const state = VaultsData.healthState(row); return <div className="trow" key={row.credentialId} style={{ cursor:'default', opacity: row.credentialArchivedAt ? 0.55 : 1 }}>
+          <span className="td grow"><b>{row.credentialDisplayName || row.credentialId}</b><span className="field-hint"> · {row.authType} · {VaultsData.urlHost(row.mcpServerUrl)}</span>{row.credentialArchivedAt && <span className="field-hint"> · archived</span>}</span>
+          <span className="td" style={{ width:210, display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+            <ToneBadge tone={state.tone}>{state.label}</ToneBadge>
+            {state.label === 'transient' && <span className="field-hint">{row.refreshAttempts} attempts</span>}
+            {row.authHintAt && <span className="badge st-action"><i className="dot" />Auth hint</span>}
+          </span>
+          <span className="td" style={{ width:120, color:'var(--faint)' }}>exp {VaultsData.relativeTime(row.expiresAt)}</span>
+          <span className="td" style={{ width:130, color:'var(--faint)' }}>next {row.nextRefreshAt ? VaultsData.relativeTime(row.nextRefreshAt) : '—'}</span>
         </div>; })}
       </div>)}
     {page?.has_more && page.next_page && <button className="btn" onClick={() => load(page.next_page)}>Next page</button>}

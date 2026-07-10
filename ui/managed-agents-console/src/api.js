@@ -66,15 +66,18 @@ function isExactValidatePath(path) {
 }
 
 async function request(path, { method = "GET", body, capability } = {}) {
+  // fetch() treats the method case-insensitively, so normalize once and gate on
+  // the normalized value — otherwise `method: "post"` would slip past the guard.
+  const normalizedMethod = String(method).toUpperCase();
   // Keep /v1 writes deny-by-default. New workspace-key writes need a narrowly
   // named capability rather than silently gaining access through this generic
   // transport helper.
-  if (method !== "GET" && path.startsWith("/v1/") &&
-      !(capability === VALIDATE_CAPABILITY && method === "POST" && isExactValidatePath(path))) {
+  if (normalizedMethod !== "GET" && path.startsWith("/v1/") &&
+      !(capability === VALIDATE_CAPABILITY && normalizedMethod === "POST" && isExactValidatePath(path))) {
     throw new Error("Console /v1 writes are not permitted");
   }
   const headers = buildRequestHeaders(path, credentials);
-  const init = { method, headers };
+  const init = { method: normalizedMethod, headers };
   if (body !== undefined) {
     headers["content-type"] = "application/json";
     init.body = JSON.stringify(body);

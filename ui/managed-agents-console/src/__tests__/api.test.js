@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testRequest, buildRequestHeaders, clearKeyForPath, mintKey, validateMcpOauthCredential } from "../api.js";
+import { __testRequest, buildRequestHeaders, clearKeyForPath, listVaultCredentials, listVaults, mintKey, validateMcpOauthCredential } from "../api.js";
 
 // The console's credential-routing contract (plan 0120 §3.3): the admin key
 // rides /admin requests only, the workspace key /v1 only. A bug that crossed
@@ -109,10 +109,25 @@ describe("workspace write capability", () => {
   it("rejects generic /v1 writes before a network call", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    await expect(__testRequest("/v1/sessions", { method: "POST", body: {} }))
-      .rejects.toThrow("not permitted");
-    await expect(__testRequest("/v1/vaults/a/credentials/b/mcp_oauth_validate", { method: "DELETE" }))
-      .rejects.toThrow("not permitted");
+    for (const attempt of [
+      { path: "/v1/sessions", method: "POST", body: {} },
+      { path: "/v1/agents", method: "POST", body: {} },
+      { path: "/v1/vaults/a", method: "DELETE" },
+      { path: "/v1/vaults/a/credentials/b/archive", method: "POST" },
+      { path: "/v1/vaults/a/credentials/b/mcp_oauth_validate", method: "DELETE" },
+    ]) {
+      await expect(__testRequest(attempt.path, attempt)).rejects.toThrow("not permitted");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let method casing bypass the write guard", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    // fetch() is case-insensitive on the method, so a lowercase verb must not
+    // slip past the deny-by-default gate.
+    await expect(__testRequest("/v1/sessions", { method: "post", body: {} })).rejects.toThrow("not permitted");
+    await expect(__testRequest("/v1/vaults/a", { method: "Delete" })).rejects.toThrow("not permitted");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -125,5 +140,18 @@ describe("workspace write capability", () => {
       expect.objectContaining({ method:"POST" }),
     );
     await expect(validateMcpOauthCredential("a", "b", "mock")).rejects.toThrow("live API mode");
+  });
+
+  it("reads vault lists with archived rows included", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok:true, status:200, text:() => Promise.resolve(JSON.stringify({ data:[], has_more:false, next_page:null })) }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", { location: { origin: "http://oma.local" } });
+    await listVaults();
+    await listVaultCredentials("vlt/1");
+    const urls = fetchMock.mock.calls.map((call) => call[0]);
+    expect(urls[0]).toContain("/v1/vaults?");
+    expect(urls[0]).toContain("include_archived=true");
+    expect(urls[1]).toContain("/v1/vaults/vlt%2F1/credentials?");
+    expect(urls[1]).toContain("include_archived=true");
   });
 });

@@ -48,6 +48,19 @@ describe("console source security posture", () => {
     }
   });
 
+  it("never renders server-controlled strings as raw HTML or navigable URLs", () => {
+    // The console renders vault/credential/probe fields that a hostile MCP
+    // server controls. React text children escape by default; the danger is a
+    // later edit reaching for innerHTML or building an href/src from that
+    // data. Ban both so server strings can only ever be inert text.
+    for (const { name, text } of sourceFiles()) {
+      const code = codeOnly(text);
+      expect(code, name).not.toMatch(/dangerouslySetInnerHTML/);
+      expect(code, name).not.toMatch(/\.innerHTML\s*=/);
+      expect(code, name).not.toMatch(/(href|src)\s*[:=]\s*[`'"]?\s*\$\{/);
+    }
+  });
+
   it("index.html references no remote scripts, styles, or fonts", () => {
     // Self-contained is a DoD requirement (0120 §1): first paint must not
     // depend on (or leak the operator's address to) any CDN.
