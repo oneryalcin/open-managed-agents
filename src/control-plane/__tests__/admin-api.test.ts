@@ -8,6 +8,7 @@ import {
   type DeploymentControlPlane,
 } from "../app.ts";
 import { generateAdminKey } from "../admin/auth.ts";
+import { generateMasterKey } from "../secrets/master-key.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import { MANAGED_AGENTS_BETA } from "./helpers.ts";
@@ -165,6 +166,43 @@ describe("admin API", () => {
       { adminKey: ADMIN_KEY },
     );
     expect(listed.status).toBe(404);
+    plane.stores.close();
+  });
+
+  it("lists token-free credential health through the paginated admin endpoint", async () => {
+    const plane = makePlane({ masterKey: true });
+    const workspace = plane.stores.workspaces.createWorkspace("tenant-health");
+    plane.stores.vaults.createVault({ row: {
+      id: "vlt_health", workspace_id: workspace.workspace_id, type: "vault",
+      display_name: "Health vault", metadata: {}, created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z", archived_at: null,
+    } });
+    plane.stores.vaults.createCredential({
+      row: {
+        id: "vcrd_health", workspace_id: workspace.workspace_id, vault_id: "vlt_health",
+        type: "vault_credential", display_name: "Health credential", metadata: {},
+        auth: { type: "static_bearer", mcp_server_url: "https://mcp.example.test/mcp" },
+        auth_version: 1, created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z", archived_at: null,
+      }, token: "admin-health-secret",
+    });
+    const path = `/admin/workspaces/${workspace.workspace_id}/mcp-credentials?limit=1`;
+    const denied = await adminRequest(plane.app, path);
+    expect(denied.status).toBe(401);
+    const ok = await adminRequest(plane.app, path, { adminKey: ADMIN_KEY });
+    expect(ok.status).toBe(200);
+    const text = await ok.text();
+    expect(text).not.toContain("admin-health-secret");
+    expect(JSON.parse(text)).toMatchObject({
+      data: [expect.objectContaining({
+        vaultId: "vlt_health", credentialId: "vcrd_health", hasRefresh: false,
+        refreshStatus: null, mcpServerUrl: "https://mcp.example.test/mcp",
+      })],
+      has_more: false,
+      next_page: null,
+    });
+    const missing = await adminRequest(plane.app, "/admin/workspaces/wrk_missing/mcp-credentials", { adminKey: ADMIN_KEY });
+    expect(missing.status).toBe(404);
     plane.stores.close();
   });
 
@@ -355,6 +393,7 @@ function makePlane(opts: {
   adminKey?: string;
   durable?: boolean;
   authMode?: "api-key" | "disabled" | undefined;
+  masterKey?: boolean;
 } = {}): DeploymentControlPlane {
   const root = mkdtempSync(join(tmpdir(), "oma-admin-api-"));
   tempRoots.push(root);
@@ -370,6 +409,7 @@ function makePlane(opts: {
       : {}),
     ...(authMode === undefined ? {} : { OMA_AUTH_MODE: authMode }),
     ...(admin ? { OMA_ADMIN_KEY: opts.adminKey ?? ADMIN_KEY } : {}),
+    ...(opts.masterKey ? { OMA_MASTER_KEY: generateMasterKey() } : {}),
   });
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildRequestHeaders, clearKeyForPath, mintKey } from "../api.js";
+import { __testRequest, buildRequestHeaders, clearKeyForPath, mintKey, validateMcpOauthCredential } from "../api.js";
 
 // The console's credential-routing contract (plan 0120 §3.3): the admin key
 // rides /admin requests only, the workspace key /v1 only. A bug that crossed
@@ -100,5 +100,30 @@ describe("clearKeyForPath", () => {
     clearKeyForPath("/v1/agents", creds);
     expect(creds.workspaceKey).toBeNull();
     expect(creds.adminKey).toBe(BOTH.adminKey);
+  });
+});
+
+describe("workspace write capability", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("rejects generic /v1 writes before a network call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(__testRequest("/v1/sessions", { method: "POST", body: {} }))
+      .rejects.toThrow("not permitted");
+    await expect(__testRequest("/v1/vaults/a/credentials/b/mcp_oauth_validate", { method: "DELETE" }))
+      .rejects.toThrow("not permitted");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("allows only the exact validation wrapper in API mode", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok:true, status:200, text:() => Promise.resolve("{}") }));
+    vi.stubGlobal("fetch", fetchMock);
+    await validateMcpOauthCredential("vault/a", "credential/b", "api");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/vaults/vault%2Fa/credentials/credential%2Fb/mcp_oauth_validate",
+      expect.objectContaining({ method:"POST" }),
+    );
+    await expect(validateMcpOauthCredential("a", "b", "mock")).rejects.toThrow("live API mode");
   });
 });

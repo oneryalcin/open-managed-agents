@@ -1,5 +1,7 @@
 import { invalidRequest, notFound } from "../errors.ts";
 import type { WorkspaceId } from "../workspace.ts";
+import type { ManagedAgentsListPage } from "../../types/common.ts";
+import type { VaultCredentialAdminMetadata, VaultStore } from "../vaults/types.ts";
 import type {
   MintedWorkspaceApiKey,
   SqliteWorkspaceStore,
@@ -34,11 +36,18 @@ export interface AdminService {
   getWorkspace(workspaceId: WorkspaceId): AdminWorkspace;
   mintKey(workspaceId: WorkspaceId, input: unknown): AdminMintedKey;
   listKeys(workspaceId: WorkspaceId): AdminKeyMetadata[];
+  listWorkspaceCredentialMetadata(
+    workspaceId: WorkspaceId,
+    opts?: { page?: string; limit?: number },
+  ): ManagedAgentsListPage<VaultCredentialAdminMetadata>;
   revokeKey(keySha256: string): AdminKeyMetadata;
 }
 
 export class DefaultAdminService implements AdminService {
-  constructor(private readonly workspaces: SqliteWorkspaceStore) {}
+  constructor(
+    private readonly workspaces: SqliteWorkspaceStore,
+    private readonly vaults?: VaultStore,
+  ) {}
 
   createWorkspace(input: unknown): AdminWorkspace {
     const { name } = parseCreateWorkspace(input);
@@ -72,6 +81,17 @@ export class DefaultAdminService implements AdminService {
       throw notFound(`Workspace not found: ${workspaceId}`);
     }
     return this.workspaces.listKeys(workspaceId).map(toAdminKeyMetadata);
+  }
+
+  listWorkspaceCredentialMetadata(
+    workspaceId: WorkspaceId,
+    opts?: { page?: string; limit?: number },
+  ): ManagedAgentsListPage<VaultCredentialAdminMetadata> {
+    if (!this.workspaces.getWorkspace(workspaceId)) {
+      throw notFound(`Workspace not found: ${workspaceId}`);
+    }
+    return this.vaults?.listWorkspaceCredentialAdminMetadata(workspaceId, opts)
+      ?? { data: [], has_more: false, next_page: null };
   }
 
   revokeKey(keySha256: string): AdminKeyMetadata {

@@ -17,10 +17,12 @@ import type {
   VaultCredentialResolution,
   VaultCredentialRuntimeMetadata,
   VaultCredentialAuth,
+  VaultCredentialAdminMetadata,
   VaultOauthRefreshState,
   VaultCredentialRow,
   VaultRow,
   VaultStore,
+  ListVaultCredentialAdminMetadataOptions,
 } from "./types.ts";
 
 export const VAULT_SECRET_PREFIX = "vault/";
@@ -127,6 +129,14 @@ interface RuntimeMetadataDbRow {
   auth_hint_at: string | null;
 }
 
+interface AdminCredentialMetadataDbRow extends RuntimeMetadataDbRow {
+  vault_display_name: string;
+  vault_archived_at: string | null;
+  credential_display_name: string | null;
+  credential_archived_at: string | null;
+  mcp_server_url: string;
+}
+
 interface OauthSecretPayload {
   access_token?: unknown;
   refresh_token?: unknown;
@@ -158,6 +168,7 @@ export class SqliteVaultStore implements VaultStore {
   private readonly nextDueRefreshAtStmt: StatementSync;
   private readonly listVaultStmts = new Map<string, StatementSync>();
   private readonly listCredentialStmts = new Map<string, StatementSync>();
+  private readonly listAdminCredentialMetadataStmts = new Map<string, StatementSync>();
 
   constructor(
     private readonly db: DatabaseSync,
@@ -346,6 +357,22 @@ export class SqliteVaultStore implements VaultStore {
       data,
       has_more: rows.length > limit,
       next_page: rows.length > limit ? data[data.length - 1]?.id ?? null : null,
+    };
+  }
+
+  listWorkspaceCredentialAdminMetadata(
+    workspaceId: string,
+    opts: ListVaultCredentialAdminMetadataOptions = {},
+  ): ManagedAgentsListPage<VaultCredentialAdminMetadata> {
+    if (opts.page === "") return { data: [], has_more: false, next_page: null };
+    const limit = normalizeLimit(opts.limit);
+    const rows = this.listAdminCredentialMetadataStmt({ hasPage: opts.page !== undefined })
+      .all(...selectListArgs(workspaceId, limit + 1, opts.page)) as unknown as AdminCredentialMetadataDbRow[];
+    const data = rows.slice(0, limit).map(adminCredentialMetadata);
+    return {
+      data,
+      has_more: rows.length > limit,
+      next_page: rows.length > limit ? data[data.length - 1]?.credentialId ?? null : null,
     };
   }
 
@@ -913,6 +940,29 @@ export class SqliteVaultStore implements VaultStore {
     this.listCredentialStmts.set(key, stmt);
     return stmt;
   }
+
+  private listAdminCredentialMetadataStmt(opts: { hasPage: boolean }): StatementSync {
+    const key = JSON.stringify(opts);
+    const existing = this.listAdminCredentialMetadataStmts.get(key);
+    if (existing) return existing;
+    const predicates = ["c.workspace_id = ?"];
+    if (opts.hasPage) predicates.push("c.id < ?");
+    const stmt = this.db.prepare(
+      `SELECT c.id, c.vault_id, c.auth_type, c.token_endpoint, c.client_id,
+              c.token_endpoint_auth_type, c.auth_version, c.expires_at,
+              c.refresh_status, c.refresh_attempts, c.next_refresh_at, c.auth_hint_at,
+              c.mcp_server_url, c.display_name AS credential_display_name,
+              c.archived_at AS credential_archived_at,
+              v.display_name AS vault_display_name, v.archived_at AS vault_archived_at
+       FROM vault_credentials c
+       INNER JOIN vaults v ON v.workspace_id = c.workspace_id AND v.id = c.vault_id
+       WHERE ${predicates.join(" AND ")}
+       ORDER BY c.id DESC
+       LIMIT ?`,
+    );
+    this.listAdminCredentialMetadataStmts.set(key, stmt);
+    return stmt;
+  }
 }
 
 export function vaultSecretName(vaultId: string, credentialId: string): string {
@@ -1022,6 +1072,17 @@ function runtimeMetadata(
     authHintAt: row.auth_hint_at,
     nextRefreshAt: row.next_refresh_at,
     refreshAttempts: row.refresh_attempts,
+  };
+}
+
+function adminCredentialMetadata(row: AdminCredentialMetadataDbRow): VaultCredentialAdminMetadata {
+  return {
+    ...runtimeMetadata(row),
+    vaultDisplayName: row.vault_display_name,
+    vaultArchivedAt: row.vault_archived_at,
+    credentialDisplayName: row.credential_display_name,
+    credentialArchivedAt: row.credential_archived_at,
+    mcpServerUrl: row.mcp_server_url,
   };
 }
 

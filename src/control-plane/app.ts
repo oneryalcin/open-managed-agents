@@ -663,7 +663,7 @@ export function createDeploymentControlPlane(
       ? {}
       : {
           admin: {
-            service: new DefaultAdminService(stores.workspaces),
+            service: new DefaultAdminService(stores.workspaces, stores.vaults),
             auth: createAdminAuth(adminKey),
           },
         }),

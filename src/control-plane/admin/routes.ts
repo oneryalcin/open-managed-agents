@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { invalidRequest } from "../errors.ts";
-import { parseJsonBody } from "../http.ts";
+import { parseJsonBody, parseLimit } from "../http.ts";
 import { log } from "../logging.ts";
 import type { ControlPlaneRouteEnv } from "../workspace.ts";
 import type { AdminService } from "./service.ts";
@@ -39,6 +39,15 @@ export function adminRoutes(service: AdminService): Hono<ControlPlaneRouteEnv> {
 
   app.get("/workspaces/:id/keys", (c) => {
     return c.json(service.listKeys(c.req.param("id")), 200);
+  });
+
+  app.get("/workspaces/:id/mcp-credentials", (c) => {
+    const limit = parseLimit(c.req.query("limit"));
+    const page = c.req.query("page") || undefined;
+    return c.json(service.listWorkspaceCredentialMetadata(c.req.param("id"), {
+      ...(limit === undefined ? {} : { limit }),
+      ...(page === undefined ? {} : { page }),
+    }), 200);
   });
 
   app.delete("/keys/:sha256", (c) => {

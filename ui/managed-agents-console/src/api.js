@@ -8,6 +8,7 @@ const BETA_HEADER = `${MANAGED_AGENTS_BETA}, ${FILES_API_BETA}`;
 const PAGE_LIMIT = 100;
 const EVENT_PAGE_LIMIT = 1000;
 const MAX_AUTO_PAGES = 100;
+const VALIDATE_CAPABILITY = Symbol("validate-mcp-oauth-credential");
 
 // Session-scoped credentials, in module memory only (plan 0120 §3.2):
 // never localStorage, sessionStorage, or a cookie — a reload means
@@ -59,7 +60,19 @@ export function clearKeyForPath(path, creds) {
   }
 }
 
-async function request(path, { method = "GET", body } = {}) {
+function isExactValidatePath(path) {
+  const pathname = new URL(path, "http://oma.local").pathname;
+  return /^\/v1\/vaults\/[^/]+\/credentials\/[^/]+\/mcp_oauth_validate$/.test(pathname);
+}
+
+async function request(path, { method = "GET", body, capability } = {}) {
+  // Keep /v1 writes deny-by-default. New workspace-key writes need a narrowly
+  // named capability rather than silently gaining access through this generic
+  // transport helper.
+  if (method !== "GET" && path.startsWith("/v1/") &&
+      !(capability === VALIDATE_CAPABILITY && method === "POST" && isExactValidatePath(path))) {
+    throw new Error("Console /v1 writes are not permitted");
+  }
   const headers = buildRequestHeaders(path, credentials);
   const init = { method, headers };
   if (body !== undefined) {
@@ -88,6 +101,10 @@ async function request(path, { method = "GET", body } = {}) {
   }
   return parsed;
 }
+
+// Deliberately not added to window.OmaConsoleApi: this exists solely for the
+// Node contract tests that prove forbidden /v1 writes fail before fetch.
+export const __testRequest = request;
 
 const fetchJson = request;
 
@@ -127,6 +144,32 @@ export function revokeKey(keySha256) {
   return request(`/admin/keys/${encodeURIComponent(keySha256)}`, {
     method: "DELETE",
   });
+}
+
+export function listVaults() {
+  return fetchCursorPages("/v1/vaults?include_archived=true");
+}
+
+export function listVaultCredentials(vaultId) {
+  return fetchCursorPages(
+    `/v1/vaults/${encodeURIComponent(vaultId)}/credentials?include_archived=true`,
+  );
+}
+
+export function listWorkspaceCredentialHealth(workspaceId, page) {
+  const url = new URL(
+    `/admin/workspaces/${encodeURIComponent(workspaceId)}/mcp-credentials`,
+    window.location.origin,
+  );
+  url.searchParams.set("limit", String(PAGE_LIMIT));
+  if (page) url.searchParams.set("page", page);
+  return request(url.pathname + url.search);
+}
+
+export function validateMcpOauthCredential(vaultId, credentialId, mode) {
+  if (mode !== "api") return Promise.reject(new Error("Validate is only available in live API mode"));
+  const path = `/v1/vaults/${encodeURIComponent(vaultId)}/credentials/${encodeURIComponent(credentialId)}/mcp_oauth_validate`;
+  return request(path, { method: "POST", capability: VALIDATE_CAPABILITY });
 }
 
 // Browser navigation on an <a href> cannot attach x-api-key, so authenticated
@@ -510,6 +553,10 @@ if (typeof window !== "undefined") {
     mintKey,
     listKeys,
     revokeKey,
+    listVaults,
+    listVaultCredentials,
+    listWorkspaceCredentialHealth,
+    validateMcpOauthCredential,
     downloadFile,
   };
 }
