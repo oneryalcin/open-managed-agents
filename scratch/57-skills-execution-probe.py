@@ -159,37 +159,45 @@ def main() -> None:
                 "text": "Run the probe skill now and report the mount path."}]}]})
         findings["send_user_message"] = {"status": st}
 
-        # Poll events until terminal or budget
-        seen_types: dict[str, int] = {}
-        mount_line = None
-        skill_events: list[str] = []
+        # Poll events until terminal or budget. Auditability (review): dedupe by
+        # event id, keep the DISTINCT type set separate from counts, and persist
+        # the actual bash tool_use/tool_result (command + output) as the mount
+        # evidence — not the model's final agent.message (which could paraphrase).
+        by_id: dict[str, dict[str, Any]] = {}
         deadline = time.monotonic() + POLL_BUDGET_S
         terminal = False
         while time.monotonic() < deadline and not terminal:
             time.sleep(4)
             st, page = request("GET", f"/v1/sessions/{session_id}/events", query={"order": "asc", "limit": 200})
-            if not isinstance(page, dict):
-                continue
-            for ev in page.get("data", []):
-                t = ev.get("type", "?")
-                seen_types[t] = seen_types.get(t, 0) + 1
-                if "skill" in t.lower():
-                    skill_events.append(t)
-                blob = json.dumps(ev)
-                if "PROBE57_MOUNT" in blob or "/skills" in blob or "SKILL.md" in blob:
-                    for frag in blob.replace("\\n", "\n").split("\n"):
-                        if "PROBE57_MOUNT" in frag or "SKILL.md" in frag:
-                            mount_line = frag[:300]
-            # terminal if the session went idle/completed
+            if isinstance(page, dict):
+                for ev in page.get("data", []):
+                    eid = ev.get("id") or json.dumps(ev)
+                    by_id[eid] = ev  # dedupe: repeated polls of the same page overwrite, never double-count
             sst, sbody = request("GET", f"/v1/sessions/{session_id}")
             status = sbody.get("status") if isinstance(sbody, dict) else None
             findings["last_session_status"] = status
             if status in ("idle", "completed", "ended", "failed", "error"):
                 terminal = True
 
-        findings["event_types_seen"] = seen_types
-        findings["skill_specific_events"] = skill_events  # expect [] -> no skill.* vocab
-        findings["mount_evidence"] = mount_line
+        events = list(by_id.values())
+        distinct_types = sorted({ev.get("type", "?") for ev in events})
+        findings["distinct_event_types"] = distinct_types  # the auditable claim
+        findings["event_count_deduped"] = len(events)
+        findings["skill_specific_events"] = [t for t in distinct_types if "skill" in t.lower()]
+        # Persist the raw bash tool_use + tool_result that name the mount path.
+        tool_records: list[dict[str, Any]] = []
+        for ev in events:
+            t = ev.get("type", "")
+            blob = json.dumps(ev)
+            if t in ("agent.tool_use", "agent.tool_result") and ("skills" in blob or "SKILL.md" in blob or "pwd" in blob or "workspace" in blob):
+                tool_records.append({"id": ev.get("id"), "type": t, "content": ev.get("content") or ev.get("input") or ev.get("output")})
+        findings["mount_evidence_tool_records"] = tool_records[:6]
+        # Also keep the model's final claim, clearly labelled as model-reported.
+        model_claim = None
+        for ev in events:
+            if ev.get("type") == "agent.message" and "PROBE57_MOUNT" in json.dumps(ev):
+                model_claim = json.dumps(ev.get("content"))[:300]
+        findings["mount_evidence_model_reported"] = model_claim
 
     finally:
         cleanup: dict[str, Any] = {}

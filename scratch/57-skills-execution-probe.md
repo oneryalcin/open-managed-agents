@@ -11,20 +11,25 @@ back from the event stream and collect the distinct event vocabulary.
    ```
    PROBE57_MOUNT=/workspace/skills/probe57-0a7d3b42/SKILL.md
    ```
-   Hosted mounts each skill at **`/workspace/skills/<directory>/`** — under the
-   **workspace root** (so the read tool, guarded to `/workspace`, can reach it),
-   where `<directory>` = the skill's frontmatter `name` / zip folder. This
-   differs from open-ma's `/home/user/.skills/`. **For byte-parity of skills
-   that reference their own bundled files, OMA must mount at
-   `/workspace/skills/<name>/`.**
+   Hosted mounts each skill at **`/workspace/skills/<dir>/`** under the workspace
+   root. Re-run 2026-07-10 makes this **AUDITABLE** — two independent tool
+   results, not the model's paraphrase: a read `tool_use` on
+   `/workspace/skills/probe57-6c7ac119/SKILL.md` returned the file body, and a
+   bash `tool_result` returned `"/\n/workspace/skills/probe57-6c7ac119/SKILL.md\n"`.
+   **HONESTY:** frontmatter `name` and zip top-folder were identical by
+   construction here, so this run does NOT distinguish mount-by-`name` from
+   mount-by-`directory` (probe 56 shows a separate `directory` field). Which one
+   the mount uses when they differ is UNPROBED — OMA sidesteps it by enforcing
+   name==dir at upload.
 
-2. **No skill-specific events.** Distinct event types over a full run:
-   `user.message`, `agent.thinking`, `agent.tool_use` (×6), `agent.tool_result`
-   (×4), `agent.message`, `session.status_running/idle`,
-   `session.thread_status_running/idle`, `span.model_request_start/end`.
-   **`skill_specific_events: []`** — a skill invocation is ordinary
-   `tool_use`/`tool_result` (bash/read) traffic. **No new event vocabulary is
-   required for OMA.**
+2. **No skill-specific events — AUDITABLE.** Deduped distinct event-type SET (11):
+   `user.message`, `agent.thinking`, `agent.tool_use`, `agent.tool_result`,
+   `agent.message`, `session.status_running/idle`,
+   `session.thread_status_running/idle`, `span.model_request_start/end`;
+   `skill_specific_events: []`, `event_count_deduped: 17`. A skill invocation is
+   ordinary `tool_use`/`tool_result` traffic — **no new event vocabulary for
+   OMA.** (The earlier run's inflated per-type counts were a polling artifact;
+   the distinct SET was always valid and this run removes the artifact.)
 
 3. **Read-tool coupling — location + exact message.** Session create with
    `agent_with_overrides` clearing `tools: []` while skills are attached → **400**:

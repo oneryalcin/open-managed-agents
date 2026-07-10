@@ -6,10 +6,10 @@
     "skill_delete": 200
   },
   "create_agent": {
-    "id": "agent_01Fiqedixb178XY5m8sbBkPP",
+    "id": "agent_015WGGaaA1MHDtdUgBXw9VFA",
     "skills_echo": [
       {
-        "skill_id": "skill_0138mVMJKrMLYw3mmZpjf1VD",
+        "skill_id": "skill_01NcpVLCaAp2yodzX8SsnXdt",
         "type": "custom",
         "version": "latest"
       }
@@ -17,33 +17,70 @@
     "status": 200
   },
   "create_environment": {
-    "id": "env_01XcA6STHcx6Y4cJXNrQnodM",
+    "id": "env_017FuNPu8cKKdFrSGZepg6im",
     "status": 200
   },
   "create_session": {
-    "id": "sesn_014FUqUMARAZsQPt1kTifZKL",
+    "id": "sesn_01Js2QW8J9xDskB4mKKeRAk3",
     "status": 200
   },
   "create_skill": {
-    "id": "skill_0138mVMJKrMLYw3mmZpjf1VD",
+    "id": "skill_01NcpVLCaAp2yodzX8SsnXdt",
     "status": 200
   },
-  "event_types_seen": {
-    "agent.message": 1,
-    "agent.thinking": 4,
-    "agent.tool_result": 4,
-    "agent.tool_use": 6,
-    "session.status_idle": 1,
-    "session.status_running": 4,
-    "session.thread_status_idle": 1,
-    "session.thread_status_running": 4,
-    "span.model_request_end": 7,
-    "span.model_request_start": 8,
-    "user.message": 4
-  },
+  "distinct_event_types": [
+    "agent.message",
+    "agent.thinking",
+    "agent.tool_result",
+    "agent.tool_use",
+    "session.status_idle",
+    "session.status_running",
+    "session.thread_status_idle",
+    "session.thread_status_running",
+    "span.model_request_end",
+    "span.model_request_start",
+    "user.message"
+  ],
+  "event_count_deduped": 17,
   "last_session_status": "idle",
-  "mount_evidence": "{\"content\": [{\"text\": \"`PROBE57_MOUNT=/workspace/skills/probe57-0a7d3b42/SKILL.md`\", \"type\": \"text\"}], \"id\": \"sevt_019Ghhkm2tFLPNPLQbJhQ7Vu\", \"processed_at\": \"2026-07-10T11:17:30.439008Z\", \"type\": \"agent.message\"}",
-  "run": "0a7d3b42",
+  "mount_evidence_model_reported": "[{\"text\": \"`PROBE57_MOUNT=/workspace/skills/probe57-6c7ac119/SKILL.md`\", \"type\": \"text\"}]",
+  "mount_evidence_tool_records": [
+    {
+      "content": {
+        "file_path": "/workspace/skills/probe57-6c7ac119/SKILL.md"
+      },
+      "id": "sevt_015xVo6awWHygqyAvx22XJFG",
+      "type": "agent.tool_use"
+    },
+    {
+      "content": [
+        {
+          "text": "1\t---\n2\tname: probe57-6c7ac119\n3\tdescription: Diagnostic probe skill. Use this whenever the user says 'run the probe skill'.\n4\t---\n5\t\n6\t# Probe skill\n7\t\n8\tWhen invoked, use the bash tool to run exactly:\n9\t\n10\t```\n11\tpwd && ls -la ~/.skills 2>/dev/null; readlink -f \"$0\" 2>/dev/null; find / -name SKILL.md 2>/dev/null | grep -i probe57 | head -1\n12\t```\n13\t\n14\tThen reply with a single line: `PROBE57_MOUNT=<the SKILL.md absolute path you found>`.\n",
+          "type": "text"
+        }
+      ],
+      "id": "sevt_014upor9gSKsXP1bVEckLwDU",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": {
+        "command": "pwd && ls -la ~/.skills 2>/dev/null; readlink -f \"$0\" 2>/dev/null; find / -name SKILL.md 2>/dev/null | grep -i probe57 | head -1"
+      },
+      "id": "sevt_01WEfMxYKQMVrBDLruKHNZJc",
+      "type": "agent.tool_use"
+    },
+    {
+      "content": [
+        {
+          "text": "/\n/workspace/skills/probe57-6c7ac119/SKILL.md\n",
+          "type": "text"
+        }
+      ],
+      "id": "sevt_011odv2aBrxgZHvT6Vya4Hqz",
+      "type": "agent.tool_result"
+    }
+  ],
+  "run": "6c7ac119",
   "send_user_message": {
     "status": 200
   },
