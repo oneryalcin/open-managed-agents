@@ -32,6 +32,18 @@ export function newSecretId(): string {
   return `sec_${uuidv7()}`;
 }
 
+export function newSkillId(): string {
+  return `skill_${uuidv7()}`;
+}
+
+export function newSkillVersionId(): string {
+  return `skill_version_${uuidv7()}`;
+}
+
+export function newSkillContentObjectId(): string {
+  return `skobj_${uuidv7()}`;
+}
+
 export function newVaultId(): string {
   return `vlt_${uuidv7()}`;
 }

@@ -39,6 +39,8 @@ import {
 import { SqliteSecretsStore } from "./secrets/store.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
 import { SqliteVaultStore } from "./vaults/store.ts";
+import { InMemorySkillsStore, SqliteSkillsStore } from "./skills/store.ts";
+import type { SkillsStore } from "./skills/types.ts";
 import { SqliteWorkspaceStore } from "./workspaces/store.ts";
 
 export interface DeploymentStorageEnv {
@@ -46,6 +48,8 @@ export interface DeploymentStorageEnv {
   OMA_FILE_STORAGE_ROOT?: string;
   OMA_MASTER_KEY?: string;
   OMA_MASTER_KEY_FILE?: string;
+  OMA_SKILLS_WORKSPACE_MAX_BYTES?: string;
+  OMA_SKILLS_MAX_VERSIONS?: string;
 }
 
 // Load the secrets master key only when the operator configured one. Returns
@@ -71,6 +75,7 @@ export interface DeploymentStores {
   sessions: SqliteSessionStore;
   events: EventStore;
   files: FileStorage;
+  skills: SkillsStore;
   // Present only when a master key is configured (OMA_MASTER_KEY[_FILE]);
   // undefined otherwise. The secrets HTTP API 4xxs when this is absent.
   secrets?: SqliteSecretsStore;
@@ -90,6 +95,23 @@ export interface SqlitePragmaSnapshot {
   synchronous: number;
 }
 
+function skillLimits(env: DeploymentStorageEnv): {
+  maxWorkspaceBytes?: number;
+  maxVersions?: number;
+} {
+  return {
+    ...positiveEnv("OMA_SKILLS_WORKSPACE_MAX_BYTES", env.OMA_SKILLS_WORKSPACE_MAX_BYTES, "maxWorkspaceBytes"),
+    ...positiveEnv("OMA_SKILLS_MAX_VERSIONS", env.OMA_SKILLS_MAX_VERSIONS, "maxVersions"),
+  };
+}
+
+function positiveEnv<K extends string>(name: string, raw: string | undefined, key: K): Partial<Record<K, number>> {
+  if (raw === undefined) return {};
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+  return { [key]: value } as Partial<Record<K, number>>;
+}
+
 export function createDeploymentStoresFromEnv(
   env: DeploymentStorageEnv,
 ): DeploymentStores {
@@ -104,16 +126,17 @@ export function createDeploymentStoresFromEnv(
   // any database.
   const masterKey = tryLoadMasterKey(env);
   if (sqlitePath === undefined || objectRoot === undefined) {
-    return createInMemoryDeploymentStores(masterKey);
+    return createInMemoryDeploymentStores(masterKey, env);
   }
   if (sqlitePath === ":memory:") {
     throw new Error("OMA_SQLITE_PATH must be a file path, not :memory:");
   }
-  return createDurableDeploymentStores(sqlitePath, objectRoot, masterKey);
+  return createDurableDeploymentStores(sqlitePath, objectRoot, masterKey, env);
 }
 
 function createInMemoryDeploymentStores(
   masterKey: Buffer | undefined,
+  env: DeploymentStorageEnv,
 ): DeploymentStores {
   const agents = SqliteAgentStore.open(":memory:");
   const environments = SqliteEnvironmentStore.open(":memory:");
@@ -128,6 +151,7 @@ function createInMemoryDeploymentStores(
     masterKey === undefined ? undefined : new SqliteSecretsStore(vaultDb, masterKey);
   const vaults = new SqliteVaultStore(vaultDb, secrets);
   const files = new InMemoryFileStorage();
+  const skills = new InMemorySkillsStore(skillLimits(env));
   const sessionCoordinator = createInMemorySessionCoordinator({
     sessions,
     events,
@@ -148,6 +172,7 @@ function createInMemoryDeploymentStores(
     sessions,
     events,
     files,
+    skills,
     secrets,
     vaults,
     mode: "memory",
@@ -162,6 +187,7 @@ function createInMemoryDeploymentStores(
       workspaces.close();
       secrets?.scrubMasterKey();
       vaults.close();
+      skills.close?.();
     },
   };
 }
@@ -170,6 +196,7 @@ function createDurableDeploymentStores(
   sqlitePath: string,
   objectRoot: string,
   masterKey: Buffer | undefined,
+  env: DeploymentStorageEnv,
 ): DeploymentStores {
   const resolvedSqlitePath = resolve(sqlitePath);
   const requestedObjectRoot = resolve(objectRoot);
@@ -195,6 +222,7 @@ function createDurableDeploymentStores(
       masterKey === undefined ? undefined : new SqliteSecretsStore(db, masterKey);
     const vaults = new SqliteVaultStore(db, secrets);
     const files = new LocalObjectFileStorage(db, resolvedObjectRoot);
+    const skills = new SqliteSkillsStore(db, resolvedObjectRoot, skillLimits(env));
     const sessionCoordinator = createSingleDatabaseSessionCoordinator({
       sessions,
       events,
@@ -216,6 +244,7 @@ function createDurableDeploymentStores(
       sessions,
       events,
       files,
+      skills,
       secrets,
       vaults,
       mode: "durable",

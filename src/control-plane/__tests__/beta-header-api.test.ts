@@ -3,6 +3,7 @@ import {
   createRawInMemoryControlPlaneApp,
   FILES_API_BETA,
   MANAGED_AGENTS_BETA,
+  SKILLS_API_BETA,
 } from "./helpers.ts";
 import type { ApiErrorBody } from "../errors.ts";
 
@@ -68,6 +69,18 @@ describe("managed agents beta header enforcement", () => {
       has_more: false,
       first_id: null,
       last_id: null,
+    });
+  });
+
+  it("allows skills routes with the skills beta", async () => {
+    const app = createRawInMemoryControlPlaneApp();
+    expect((await app.request("/v1/skills")).status).toBe(404);
+    const res = await app.request("/v1/skills", {
+      headers: { "anthropic-beta": SKILLS_API_BETA },
+    });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      data: [], has_more: false, next_page: null,
     });
   });
 

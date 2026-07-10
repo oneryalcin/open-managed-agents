@@ -237,10 +237,17 @@ startup.
 | --- | --- |
 | `OMA_MAX_ACTIVE_SESSIONS_PER_WORKSPACE` | Unarchived sessions per workspace, checked at session create. |
 | `OMA_MAX_PENDING_RUNTIME_TURNS_PER_WORKSPACE` | Pending runtime turns per workspace, checked before a `user.message` send persists anything. |
-| `OMA_MAX_CONCURRENT_UPLOADS_PER_WORKSPACE` | In-flight `POST /v1/files` per workspace, reserved before the multipart body is buffered (each upload holds up to 24 MiB in RAM). |
+| `OMA_MAX_CONCURRENT_UPLOADS_PER_WORKSPACE` | In-flight file or skill uploads per workspace, reserved before multipart buffering (up to 24 MiB for files or 30 MiB for skills). |
 | `OMA_MAX_CONCURRENT_UPLOADS` | Process-wide in-flight uploads (529). |
 | `OMA_MAX_CONCURRENT_SSE_STREAMS_PER_WORKSPACE` | Open event streams per workspace, held for the stream's lifetime. |
 | `OMA_MAX_CONCURRENT_SSE_STREAMS` | Process-wide open event streams (529). |
+
+Skill content has a separate private-storage quota domain:
+
+| Env var | Default | Bounds |
+| --- | --- | --- |
+| `OMA_SKILLS_WORKSPACE_MAX_BYTES` | 1 GiB | Positive integer bytes retained across custom skill versions in one workspace. |
+| `OMA_SKILLS_MAX_VERSIONS` | 20 | Positive integer retained-version cap per custom skill. |
 
 Notes:
 
