@@ -102,6 +102,15 @@ export interface VaultCredentialRuntimeMetadata {
   refreshAttempts: number;
 }
 
+/** Token-free credential row for the administrative operational view. */
+export interface VaultCredentialAdminMetadata extends VaultCredentialRuntimeMetadata {
+  vaultDisplayName: string;
+  vaultArchivedAt: string | null;
+  credentialDisplayName: string | null;
+  credentialArchivedAt: string | null;
+  mcpServerUrl: string;
+}
+
 export interface PersistAuthHintInput {
   workspaceId: WorkspaceId;
   vaultId: string;
@@ -190,6 +199,11 @@ export interface ListVaultCredentialsOptions {
   includeArchived?: boolean;
 }
 
+export interface ListVaultCredentialAdminMetadataOptions {
+  page?: string;
+  limit?: number;
+}
+
 export interface CreateVaultRecord {
   row: VaultRow;
 }
@@ -242,6 +256,10 @@ export interface VaultStore {
     vaultId: string,
     opts?: ListVaultCredentialsOptions,
   ): ManagedAgentsListPage<VaultCredentialRow>;
+  listWorkspaceCredentialAdminMetadata(
+    workspaceId: WorkspaceId,
+    opts?: ListVaultCredentialAdminMetadataOptions,
+  ): ManagedAgentsListPage<VaultCredentialAdminMetadata>;
   updateCredential(
     workspaceId: WorkspaceId,
     vaultId: string,

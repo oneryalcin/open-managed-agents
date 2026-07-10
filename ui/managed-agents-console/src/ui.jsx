@@ -69,6 +69,7 @@ const NAV = [
   { key:'sessions', label:'Sessions', icon:'activity' },
   { key:'agents', label:'Agents', icon:'bot' },
   { key:'files', label:'Files', icon:'folder' },
+  { key:'vaults', label:'Vaults', icon:'database' },
 ];
 
 function Sidebar({ route, go, showAdmin = false }) {

@@ -79,7 +79,7 @@ function MintedKeyModal({ minted, onClose, onBrowse }) {
   );
 }
 
-function AdminPanel({ onBrowseWorkspace, onReauth }) {
+function AdminPanel({ onBrowseWorkspace, onReauth, onCredentialHealth }) {
   const [workspaces, setWorkspaces] = useStateA(null);
   const [error, setError] = useStateA(null);
   const [name, setName] = useStateA('');
@@ -159,8 +159,9 @@ function AdminPanel({ onBrowseWorkspace, onReauth }) {
               <span className="td mono" style={{ width: 170, fontSize: 12, color: 'var(--soft)' }}>{workspace.id}</span>
               <span className="td grow ell cell-strong">{workspace.name}</span>
               <span className="td mono" style={{ width: 110, color: 'var(--faint)' }}>{shortDate(workspace.created_at)}</span>
-              <span className="td" style={{ width: 70, color: 'var(--faint)' }}>
-                {open === workspace.id ? 'close' : 'keys'}</span>
+              <span className="td" style={{ width: 150, color: 'var(--faint)' }} onClick={(e) => e.stopPropagation()}>
+                <button className="btn" onClick={() => onCredentialHealth(workspace.id)}>Health</button>
+                {' '}{open === workspace.id ? 'close' : 'keys'}</span>
             </div>
             {open === workspace.id && (
               <div style={{ padding: '10px 14px 16px', borderBottom: '1px solid var(--border)' }}>

@@ -79,6 +79,8 @@ function routeHash(route) {
   if (route.name === 'agent') return `#agent=${encodeURIComponent(route.agent.id)}`;
   if (route.name === 'agents') return '#agents';
   if (route.name === 'files') return '#files';
+  if (route.name === 'vaults') return route.vaultId ? `#vault=${encodeURIComponent(route.vaultId)}` : '#vaults';
+  if (route.name === 'credentialHealth') return `#credential-health=${encodeURIComponent(route.workspaceId)}`;
   if (route.name === 'admin') return '#admin';
   return '#sessions';
 }
@@ -109,6 +111,9 @@ function readRouteTarget(sessions, agents) {
   }
   if (rawHash === 'agents') return { name:'agents' };
   if (rawHash === 'files') return { name:'files' };
+  if (rawHash === 'vaults') return { name:'vaults' };
+  if (hashParams.get('vault')) return { name:'vaults', vaultId:hashParams.get('vault') };
+  if (hashParams.get('credential-health')) return { name:'credentialHealth', workspaceId:hashParams.get('credential-health') };
   return null;
 }
 
@@ -302,7 +307,7 @@ function App() {
   // Admin-only sessions never loaded /v1: the state still holds the bundled
   // demo rows, which must not render as if they were live tenant data.
   const needsWorkspaceKey = apiState.state !== 'loading' && apiState.mode === 'api'
-    && !demoMode && !workspaceLoaded && route.name !== 'admin';
+    && !demoMode && !workspaceLoaded && route.name !== 'admin' && route.name !== 'credentialHealth';
   if (needsWorkspaceKey) view = (
     <div className="main-scroll scroll fade-in">
       <PageHead title="No workspace selected" sub="Browsing /v1 needs a workspace key." />
@@ -311,12 +316,14 @@ function App() {
         actionLabel={auth.admin ? 'Open Admin' : null} onAction={() => go('admin')} />
     </div>
   );
-  else if (route.name === 'admin') view = <AdminPanel onBrowseWorkspace={browseAsWorkspace} onReauth={reauth} />;
+  else if (route.name === 'admin') view = <AdminPanel onBrowseWorkspace={browseAsWorkspace} onReauth={reauth} onCredentialHealth={(workspaceId) => { const next = { name:'credentialHealth', workspaceId }; setRoute(next); writeRouteHash(next); }} />;
+  else if (route.name === 'credentialHealth') view = <CredentialHealthView workspaceId={route.workspaceId} onBack={() => go('admin')} onReauth={reauth} />;
   else if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={readOnly} />;
   else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={dataState} apiMode={apiState.mode} readOnly={readOnly} />;
   else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={dataState} readOnly={readOnly} />;
   else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} readOnly={readOnly} />;
   else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} readOnly={readOnly} />;
+  else if (route.name === 'vaults') view = <VaultsView mode={apiState.mode} initialVaultId={route.vaultId} onOpenVault={(vaultId) => { const next = { name:'vaults', vaultId }; setRoute(next); writeRouteHash(next); }} onBackToVaults={() => go('vaults')} />;
 
   return (
     <div className="app">

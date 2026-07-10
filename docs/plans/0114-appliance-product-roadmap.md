@@ -80,7 +80,9 @@ Greenfield or stub — the visible product parts:
   serves the console at `/console` (self-contained, vendored assets, no CDN);
   admin-key login drives live workspace/key CRUD via `/admin` (#151), a
   workspace key drives read-only `/v1` browsing incl. authenticated
-  downloads. `/v1` mutations from the UI remain deliberately disabled.
+  downloads. `/v1` mutations from the UI remain deny-by-default; the sole
+  exception is `mcp_oauth_validate` (plan 0125), gated by an exact
+  method+path capability at the transport chokepoint.
   Credential transport is fail-closed at boot (`OMA_TLS_TERMINATED` /
   `OMA_ALLOW_INSECURE_TRANSPORT`).
 - **Observability: logs only.** No metrics, health endpoint, alerts, or SLOs
@@ -142,7 +144,12 @@ boundary. Slice 2 (plan 0120): the console, served by the appliance at
 minting) and read-only `/v1` browsing with a workspace key — self-contained
 assets, in-memory-only browser keys, fail-closed credential transport.
 Follow-ups: #152 (mint idempotency guard), #155 (vendored-asset checksums),
-#156 (5xx demo-fallback UX).
+#156 (5xx demo-fallback UX). Slice 3 (plan 0125, #173): the console gained a
+Vaults view (browse vaults/credentials, validate an `mcp_oauth` credential in
+place — its first live `/v1` write, behind a deny-by-default capability gate)
+and an admin-only credential-health surface (per-credential refresh status,
+expiry, and next-refresh over a new paginated `/admin` endpoint). Deferred:
+credential create/rotate/archive forms.
 
 ### Arc C — Observability
 

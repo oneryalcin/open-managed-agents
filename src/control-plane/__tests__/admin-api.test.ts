@@ -8,6 +8,7 @@ import {
   type DeploymentControlPlane,
 } from "../app.ts";
 import { generateAdminKey } from "../admin/auth.ts";
+import { generateMasterKey } from "../secrets/master-key.ts";
 import type { ApiErrorBody } from "../errors.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import { MANAGED_AGENTS_BETA } from "./helpers.ts";
@@ -165,6 +166,103 @@ describe("admin API", () => {
       { adminKey: ADMIN_KEY },
     );
     expect(listed.status).toBe(404);
+    plane.stores.close();
+  });
+
+  it("lists token-free credential health through the paginated admin endpoint", async () => {
+    const plane = makePlane({ masterKey: true });
+    const workspace = plane.stores.workspaces.createWorkspace("tenant-health");
+    plane.stores.vaults.createVault({ row: {
+      id: "vlt_health", workspace_id: workspace.workspace_id, type: "vault",
+      display_name: "Health vault", metadata: {}, created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z", archived_at: null,
+    } });
+    plane.stores.vaults.createCredential({
+      row: {
+        id: "vcrd_health", workspace_id: workspace.workspace_id, vault_id: "vlt_health",
+        type: "vault_credential", display_name: "Health credential", metadata: {},
+        auth: { type: "static_bearer", mcp_server_url: "https://mcp.example.test/mcp" },
+        auth_version: 1, created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z", archived_at: null,
+      }, token: "admin-health-secret",
+    });
+    const path = `/admin/workspaces/${workspace.workspace_id}/mcp-credentials?limit=1`;
+    const denied = await adminRequest(plane.app, path);
+    expect(denied.status).toBe(401);
+    const ok = await adminRequest(plane.app, path, { adminKey: ADMIN_KEY });
+    expect(ok.status).toBe(200);
+    const text = await ok.text();
+    expect(text).not.toContain("admin-health-secret");
+    expect(JSON.parse(text)).toMatchObject({
+      data: [expect.objectContaining({
+        vaultId: "vlt_health", credentialId: "vcrd_health", hasRefresh: false,
+        refreshStatus: null, mcpServerUrl: "https://mcp.example.test/mcp",
+      })],
+      has_more: false,
+      next_page: null,
+    });
+    const missing = await adminRequest(plane.app, "/admin/workspaces/wrk_missing/mcp-credentials", { adminKey: ADMIN_KEY });
+    expect(missing.status).toBe(404);
+    plane.stores.close();
+  });
+
+  it("paginates deterministically, includes archived rows, and isolates workspaces", async () => {
+    // MCP execution deliberately left disabled: this admin read is metadata
+    // only and must work (and cause no egress) with OMA_ENABLE_MCP unset.
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const plane = makePlane({ masterKey: true });
+    const workspace = plane.stores.workspaces.createWorkspace("tenant-page");
+    const other = plane.stores.workspaces.createWorkspace("tenant-other");
+    const mkVault = (ws: string, id: string) => plane.stores.vaults.createVault({ row: {
+      id, workspace_id: ws, type: "vault", display_name: `Vault ${id}`, metadata: {},
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", archived_at: null,
+    } });
+    const mkCred = (ws: string, vault: string, id: string) => plane.stores.vaults.createCredential({ row: {
+      id, workspace_id: ws, vault_id: vault, type: "vault_credential", display_name: id, metadata: {},
+      auth: { type: "static_bearer", mcp_server_url: `https://mcp.example.test/${id}` },
+      auth_version: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", archived_at: null,
+    }, token: "secret-token" });
+    mkVault(workspace.workspace_id, "vlt_a");
+    mkCred(workspace.workspace_id, "vlt_a", "vcrd_1");
+    mkCred(workspace.workspace_id, "vlt_a", "vcrd_2");
+    mkCred(workspace.workspace_id, "vlt_a", "vcrd_3");
+    plane.stores.vaults.archiveCredential(workspace.workspace_id, "vlt_a", "vcrd_3", "2026-02-01T00:00:00Z");
+    mkVault(other.workspace_id, "vlt_x");
+    mkCred(other.workspace_id, "vlt_x", "vcrd_other");
+
+    type HealthPage = {
+      data: Array<{ credentialId: string; credentialArchivedAt: string | null }>;
+      has_more: boolean;
+      next_page: string | null;
+    };
+    const base = `/admin/workspaces/${workspace.workspace_id}/mcp-credentials`;
+    const first = (await (await adminRequest(plane.app, `${base}?limit=2`, { adminKey: ADMIN_KEY })).json()) as HealthPage;
+    // ORDER BY id DESC → vcrd_3 (archived), vcrd_2; page 2 → vcrd_1.
+    expect(first.data.map((r) => r.credentialId)).toEqual(["vcrd_3", "vcrd_2"]);
+    expect(first).toMatchObject({ has_more: true, next_page: "vcrd_2" });
+    expect(first.data[0]).toMatchObject({ credentialId: "vcrd_3", credentialArchivedAt: "2026-02-01T00:00:00Z" });
+
+    const second = (await (await adminRequest(plane.app, `${base}?limit=2&page=${first.next_page}`, { adminKey: ADMIN_KEY })).json()) as HealthPage;
+    expect(second.data.map((r) => r.credentialId)).toEqual(["vcrd_1"]);
+    expect(second).toMatchObject({ has_more: false, next_page: null });
+    // No other tenant's credential ever appears in this workspace's listing.
+    const allIds = [...first.data, ...second.data].map((r) => r.credentialId);
+    expect(allIds).not.toContain("vcrd_other");
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+    plane.stores.close();
+  });
+
+  it("rejects an admin credential-health read carrying only a workspace key", async () => {
+    const plane = makePlane({ masterKey: true });
+    const workspace = plane.stores.workspaces.createWorkspace("tenant-tier");
+    const minted = plane.stores.workspaces.mintKey(workspace.workspace_id, "browse");
+    const res = await plane.app.request(
+      `/admin/workspaces/${workspace.workspace_id}/mcp-credentials`,
+      { headers: { "x-api-key": minted.plaintextKey } },
+    );
+    expect(res.status).toBe(401);
     plane.stores.close();
   });
 
@@ -355,6 +453,7 @@ function makePlane(opts: {
   adminKey?: string;
   durable?: boolean;
   authMode?: "api-key" | "disabled" | undefined;
+  masterKey?: boolean;
 } = {}): DeploymentControlPlane {
   const root = mkdtempSync(join(tmpdir(), "oma-admin-api-"));
   tempRoots.push(root);
@@ -370,6 +469,7 @@ function makePlane(opts: {
       : {}),
     ...(authMode === undefined ? {} : { OMA_AUTH_MODE: authMode }),
     ...(admin ? { OMA_ADMIN_KEY: opts.adminKey ?? ADMIN_KEY } : {}),
+    ...(opts.masterKey ? { OMA_MASTER_KEY: generateMasterKey() } : {}),
   });
 }
 
