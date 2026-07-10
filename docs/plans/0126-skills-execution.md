@@ -291,3 +291,242 @@ execution). Key probe corrections to doc inferences: wire discriminator is
 rejected; mount path `/workspace/skills/<name>/`; read-tool coupling at
 session-create (not agent-create) with exact message; no skill-specific events.
 Awaiting adversarial panel review of this plan before implementation.
+
+## Appendix A — Independent adversarial review (2026-07-10)
+
+Reviewed PR 174 on `arc-skills` against `origin/main`, including plan 0126,
+both probe scripts and artifacts, the PR body, current OMA session/runtime code,
+and the pinned Pi implementation.
+
+**Verdict: request changes before implementation.** The core direction is good,
+but the plan is not yet decision-complete.
+
+### Blocking findings
+
+#### 1. D3 cannot legally vendor the four Anthropic document skills
+
+[Plan D3](#d3--prebuilt-anthropic-skills-vendor-anthropicsskills-read-only-catalog)
+proposes copying `xlsx/docx/pptx/pdf` into this distributable repository.
+
+Anthropic explicitly describes these document skills as source-available rather
+than open source. Their license prohibits retaining, reproducing, distributing,
+sublicensing, and creating derivative works.
+[Anthropic's repository](https://github.com/anthropics/skills),
+[document-skill license](https://github.com/anthropics/skills/blob/main/skills/docx/LICENSE.txt).
+
+Practical resolution:
+
+- Remove D3 and slice 4 in their current form.
+- Meet the exit criterion using an OMA-owned test/prebuilt skill or a clearly
+  Apache-licensed example.
+- Treat hosted `anthropic` catalog parity as deferred unless there is an
+  explicit redistribution agreement.
+- Do not describe these skills as “inert data”; they contain executable scripts
+  and environment dependencies.
+
+#### 2. Probe 56 does not establish several “VERIFIED” claims
+
+[Section 2](#2-wire-contract-from-probe-56--verified-against-hosted) says every
+listed shape is probe-verified, but the probe exercised only:
+
+- A zipped upload under one top-level directory.
+- Explicit `display_title`.
+- One three-item ListSkills page.
+- Two versions of the same skill.
+- A few attachment validations.
+
+It did not test:
+
+- Root-level `SKILL.md`.
+- Path-qualified individual multipart files.
+- Derived `display_title`.
+- Title uniqueness.
+- The 30 MB boundary.
+- Skills-only versus combined beta headers.
+- Pagination continuation.
+- Different frontmatter name versus ZIP directory.
+- Referenced skill/version deletion.
+
+The artifact contains only `xlsx` and `pptx`; it does not establish that hosted
+ListSkills returned `docx` and `pdf`. The PR body repeats that unsupported
+claim.
+
+The plan should distinguish:
+
+- Observed by probe.
+- Taken from documentation/specification.
+- Chosen OMA behavior.
+- Still unknown.
+
+#### 3. Probe 57's runtime evidence is not independently auditable
+
+The polling loop fetches the complete page repeatedly and increments counts
+again without deduplicating event IDs (`scratch/57-skills-execution-probe.py`,
+loop beginning around line 168). The artifact reports four `user.message`
+events even though only one was sent, demonstrating the double counting.
+
+The mount evidence retained in the artifact is the final `agent.message`, not
+the underlying bash tool result (`scratch/artifacts/57-skills-execution-probe.json`,
+`mount_evidence`). It is plausible, but a reviewer cannot distinguish genuine
+tool output from model repetition or hallucination.
+
+Before calling this fully verified, revise the probe to:
+
+- Deduplicate by event ID or advance the cursor.
+- Persist the relevant `agent.tool_use` and `agent.tool_result`.
+- Capture the exact command, exit status, and stdout containing the path.
+- Keep the distinct event-type set separately from event counts.
+
+### Major design gaps
+
+#### 4. The plan assumes session overrides and multi-agent behavior that OMA does not implement
+
+[Section 2.2](#22-attachment-already-modelled-in-oma-needs-hardening) and
+[D7](#d7--attachment-validation-hardening) refer to an existing
+session-override path.
+
+There is no such path. OMA's session API currently accepts only an agent string
+or `{type:"agent"}` and rejects `agent_with_overrides`
+(`src/control-plane/sessions/request.ts`, `agentField`).
+
+Likewise, multi-agent configuration is stored but has no runtime
+implementation. Therefore “20 skills counted across all agents” cannot be
+implemented as a small attachment-validation change.
+
+Practical choice:
+
+- Scope v1 to skills attached to the root persisted agent.
+- Enforce the cap and read-tool coupling for that effective configuration.
+- Name `agent_with_overrides` and multi-agent aggregation as later parity work.
+
+Otherwise this arc silently expands into session override and multi-agent
+execution work.
+
+#### 5. Session reproducibility and deletion semantics are undefined
+
+The plan says to resolve `agent.skills` and mount bundles, but does not say when
+`"latest"` becomes a concrete version or what survives:
+
+- New skill versions.
+- Agent changes.
+- Skill/version deletion.
+- Process restart.
+- Runtime eviction and re-creation.
+- Session-create rollback.
+
+OMA does not retain historical agent versions even though sessions record a
+version number. Resolving from the current agent/skill store later would make an
+existing session run different content or fail after deletion.
+
+Resolve each attachment to a concrete immutable version at session creation and
+persist a session skill snapshot or durable manifest. Runtime recovery must use
+that snapshot, not current `"latest"`.
+
+The plan also needs explicit behavior for deleting a version referenced by an
+active agent or session.
+
+#### 6. Storage limits and atomicity are incomplete
+
+A 30 MB upload currently cannot reach a new Skills route without
+application-level work: OMA's default request limit is 1 MiB, with a special
+bypass only for `POST /v1/files` (`src/control-plane/app.ts`, body-limit
+middleware).
+
+Skills need:
+
+- A route-specific body limit and global-limit bypass.
+- The existing bounded upload-admission gate.
+- A per-workspace durable skill-content quota.
+- Atomic metadata/object publication.
+- Rollback and orphan cleanup when object writes or SQLite commits fail.
+- Delete reclamation.
+- Limits on retained versions or total workspace bytes.
+
+A 100 MB uncompressed limit per version with unlimited versions remains a
+straightforward disk-exhaustion path.
+
+#### 7. Mount collisions are unspecified
+
+Duplicate `skill_id` does not prevent two distinct skills or versions from
+declaring the same frontmatter name. Both would map to:
+
+`/workspace/skills/<name>/`
+
+Custom skills could also collide with a prebuilt name such as `xlsx`.
+
+The plan must either:
+
+- Enforce workspace-wide uniqueness of the canonical skill name and prevent
+  name changes across versions; or
+- Reject collisions when resolving the effective session skill set.
+
+This needs store constraints and concurrency tests, not only an in-memory
+check.
+
+#### 8. Generalizing mount roots needs a stricter security design
+
+[D4](#d4--runtime-delivery-retarget-materializefileresources-to-a-skills-root)
+says each mount carries a validated root. That root must never be influenced by
+public session input.
+
+Use an internal discriminated type such as `kind: "upload" | "skill"` and
+derive the destination from the kind. Also specify:
+
+- Reject ZIP symlinks, hardlinks, devices, absolute paths, `..`, NULs,
+  duplicate normalized paths, and case-fold collisions.
+- Materialize skill files root-owned and non-writable by the sandbox user.
+- Decide whether executable bits are preserved. Current materialization
+  normalizes every file to `0644`, while some skills expect executable scripts.
+- Group extraction by trusted root and verify mixed-root rollback.
+- Prevent partially materialized skills from surviving preparation failure.
+
+### D5 result
+
+The sharpest stated open question is now resolved.
+
+The pinned Pi source supports synthetic skills with virtual paths, and normal
+prompt construction reads `name`, `description`, and `filePath` from
+`ResourceLoader.getSkills()` without opening `SKILL.md` host-side. `filePath`
+is formatted directly into `<location>`.
+
+Therefore:
+
+- A custom synthetic `ResourceLoader` is the right approach.
+- Host-side staging is unnecessary for normal model-driven activation.
+- `additionalSkillPaths` is not equivalent—it would cause host-side discovery.
+- Remove D5 from the open-question list and pin the finding to Pi version
+  `0.75.4`.
+- Implement a small complete `ResourceLoader` with no-op results for unrelated
+  resource types.
+
+The system-prompt gate is also straightforward: Pi includes skills when `read`
+appears in selected tools. Session validation must share the same pure
+effective-tool-policy evaluator as runtime so those decisions cannot drift.
+
+### Additional corrections
+
+- Specify the `/v1/skills` beta-header matrix and update the known `/v1`
+  route/auth classifier.
+- Probe referenced-skill and referenced-version deletion before fixing
+  lifecycle semantics.
+- Define whether a new version may change `name` or `directory`.
+- Preserve upload ordering and exact pagination cursor semantics.
+- Add a manifest-level SHA-256 and verify every file before materialization.
+- Make the custom-upload end-to-end smoke the milestone. Prebuilt parity should
+  not block useful skill execution.
+
+### What is solid
+
+The following decisions should remain:
+
+- Separate wire-resource and runtime-delivery layers.
+- `/workspace/skills/<name>/` as the container path.
+- Progressive disclosure through Pi metadata plus container-side `read`.
+- Provisioning instead of inventing a skill execution engine.
+- Read-tool coupling at session creation.
+- No new skill event vocabulary.
+- Treating `allowed-tools` as advisory rather than a security boundary.
+
+Overall: strong foundation, but implementation should wait until the licensing
+blocker, evidence labeling, session snapshot semantics, absent override scope,
+storage quotas, and name-collision policy are resolved.
