@@ -73,8 +73,8 @@ probe facts.
   (probe 56b: a folder name ≠ SKILL.md name → **400** "The folder name '…' must
   match the skill name '…'"). So the mount root is unambiguous. Custom `version`
   = **microseconds-since-epoch string** (16 digits; `1783682001075540` =
-  2026-07-10T11:13:21.075540Z) **[Obs]**; anthropic = date string (`"20260203"`)
-  **[Doc]**; both accept `"latest"` **[Doc]**.
+  2026-07-10T11:13:21.075540Z) **[Obs]**; anthropic = date string (`"20260203"`,
+  observed in probe 56's list) **[Obs]**; both accept `"latest"` **[Doc]**.
 - **GetSkill** `GET /v1/skills/{id}` = the CreateSkill shape (no inline versions) **[Obs]**.
 - **ListSkills** `GET /v1/skills` → `{ data, has_more, next_page }` **[Obs]**.
   Anthropic prebuilts appear here — probe observed **`xlsx` + `pptx`** only
@@ -192,13 +192,23 @@ the blob for materialization.
 ### D2 — Custom upload = the Skills resource; body-limit + zip safety
 
 Uploads go to `/v1/skills` (not Files) [Doc]. Multipart is already supported in
-OMA's Hono stack (`files/routes.ts:129`), **but two concrete gaps (review:
-Sonnet):** (1) repeated `files[]` needs `req.parseBody({ all: true })` or Hono
-keeps only the last file; (2) the `files/` bodyLimit is 24 MiB and the global
-default is 1 MiB with a bypass only for `POST /v1/files` (`app.ts` body-limit
-middleware) — **the skills route needs its own larger `bodyLimit` constant AND a
-global-limit bypass**, or a 30 MB upload is rejected at the transport layer
-before validation runs.
+OMA's Hono stack (`files/routes.ts:129`), **but four concrete transport gaps
+(review: Sonnet r1 + r2, Codex-adv r2):** (1) repeated `files[]` needs
+`req.parseBody({ all: true })` or Hono keeps only the last file; (2) the `files/`
+bodyLimit is 24 MiB and the global default is 1 MiB with a bypass only for
+`POST /v1/files` (`app.ts` body-limit middleware) — **the skills route needs its
+own larger `bodyLimit` constant AND a global-limit bypass**, or a 30 MB upload is
+rejected at the transport layer before validation runs. (3) **Reserve an
+`AdmissionLimits` in-flight upload slot BEFORE `bodyLimit`** — the files route
+does this deliberately (`files/routes.ts:23-38`, `admission.ts` `InFlightGauge`)
+because `bodyLimit` eagerly buffers the whole body when `content-length` is
+absent; skipping it lets N concurrent large uploads buffer 30 MB each (a
+buffering-DoS worse than files' 24 MiB). (4) **Register `/v1/skills` in the route
+classifier** — add it to `isManagedAgentsRoute` / `routeClassForPath` (v1 class)
+/ `hasRequiredBeta` (`skills-2025-10-02`) in `app.ts`, or the route falls outside
+auth/beta/metrics classification and behaves inconsistently with every other
+`/v1` endpoint. Slice 1 has an explicit task + tests for the classifier, the beta
+gate, the body-limit bypass, and the admission gate.
 
 Upload validation, layered:
 - **Request-size parity [Obs, probe 56b]:** reject > **30 MB** request with HTTP
@@ -247,16 +257,28 @@ historical agent versions, and skills are delete-only + mutable via new versions
 Resolving `agent.skills` live at runtime (or after a restart/eviction) would run
 different content than the session started with, or fail after deletion.
 
-**Decision [OMA]: at session create, resolve every attached skill to a concrete
-immutable `(skill_id, version, sha256)` and persist a per-session skill
-manifest** (a new session-scoped snapshot, alongside the existing file-resource
-snapshotting). `"latest"` is resolved **once, at session create**, to the
-then-current version. Runtime delivery, restart recovery, and runtime eviction/
-re-create all materialize from the **session manifest**, never from the current
-store. A version deleted after snapshot remains materializable from the snapshot
-bytes (the store must retain blobs referenced by any live session — see D9
-reclamation). This makes a session reproducible and decouples it from later
-uploads/deletes.
+**Decision [OMA] — COPY-snapshot, reusing the existing durable machinery
+(review round 2: Opus + Sonnet).** At session create, resolve each attached skill
+to a concrete `(skill_id, version)`, then **copy its validated zip blob into a
+session-scoped internal snapshot** — exactly what `prepareFileResources` does for
+file resources via `createInternalSnapshot` (`sessions/service.ts:849-890`). This
+is the decisive simplification: because the session owns an independent copy,
+- reproducibility holds (restart/evict-recreate materialize from the snapshot;
+  recovery already reads snapshot rows, never the agent store — confirmed:
+  `createFileMountResolver` `wiring.ts:59-94`, recovery `runner.ts:655-658`);
+- the SkillsStore blob is **freely deletable** — no refcount, no
+  "retain-blobs-referenced-by-a-live-session", no GC sweep, no session-end
+  trigger to define (this dissolves the round-2 retention-semantics gap);
+- crash-safety is inherited, not reinvented: reuse the existing durable-outbox
+  tables `pending_internal_snapshot_deletes` + `pending_internal_snapshot_create_rollbacks`
+  with startup-sweep reconciliation (`sessions/store.ts:52-96`, swept at
+  `service.ts:189,445,726-745`) so a blob-copy + SQL-commit that straddle a crash
+  reconcile correctly.
+`"latest"` is resolved **once, at session create**. The skill snapshot is a new
+row set modeled on `session_file_mount_snapshots` (add `session_skill_snapshots`:
+`session_id, skill_id, version, name, sha256, internal_snapshot_id`). Runtime
+delivery + the ResourceLoader (D5) read metadata AND bytes from **this snapshot**,
+never the live store.
 
 ### D5 — Advertising to Pi: custom synthetic `ResourceLoader` (RESOLVED)
 
@@ -264,23 +286,29 @@ uploads/deletes.
 Fable, External).** Wire a **fully custom `ResourceLoader`** into
 `createAgentSession` (`runner.ts:969`; today it passes none, so Pi's
 `DefaultResourceLoader` would scan the host cwd — wrong). Requirements:
-- Implement **all 9 `ResourceLoader` methods** (`resource-loader.d.ts:24-48`);
-  return empty for the non-skill ones. `AgentSession` calls each.
-- `getSkills()` returns one entry per snapshotted skill with name/description
-  from the manifest, `filePath = /workspace/skills/<name>/SKILL.md`, and a
-  populated `baseDir = /workspace/skills/<name>` (`agent-session.js:853,1702`
-  dereference `baseDir`). `formatSkillsForPrompt` emits `filePath` into
-  `<location>` with **no host read** — progressive disclosure via the container
-  `read` tool.
-- **Do NOT use `additionalSkillPaths`/`DefaultResourceLoader`** (review: all
-  four) — those do host-side `existsSync`+`readFileSync` (`skills.js:368`) and
-  would silently drop container paths. No host staging; no fallback needed.
-- **Named limitation [OMA]:** Pi's `/skill:<name>` explicit-invocation path does
-  a host-side `readFileSync(filePath)` (`agent-session.js:851`, run on every
-  `followUp`), which under container-only paths errors and passes the text
-  through unexpanded (graceful no-op, not a crash). So **`/skill:` explicit
-  invocation is unsupported under OMA**; only model-driven discovery works. Add
-  to non-goals.
+- Implement **all 9 `ResourceLoader` methods** (`resource-loader.d.ts:24-48`).
+  The non-skill methods return empties **except `getExtensions()`** (review
+  round 2: Opus) — a bare `{extensions:[]}` **crashes at construction**
+  (`agent-session.js:1884-1890` builds an `ExtensionRunner` from a real
+  `ExtensionRuntime`). Return a structurally-complete `LoadExtensionsResult` via
+  the exported `createExtensionRuntime()` (`extensions/loader.js:119`), **or**
+  delegate the non-skill methods to an internal
+  `DefaultResourceLoader({ noSkills:true, noExtensions:… })`. Name the factory in
+  code; do not hand-roll empties.
+- `getSkills()` returns one entry per **snapshotted** skill (D4) — name/description
+  from the snapshot, `filePath = /workspace/skills/<name>/SKILL.md`, `baseDir =
+  /workspace/skills/<name>` (deref'd at `agent-session.js:853`).
+  `formatSkillsForPrompt` emits `filePath` into `<location>` with **no host read**
+  — progressive disclosure via the container `read` tool.
+- **Do NOT use `additionalSkillPaths`/`DefaultResourceLoader` for skills** (all
+  four reviewers) — those do host-side `existsSync`+`readFileSync` (`skills.js:368`)
+  and would drop container paths.
+- **Named limitation [OMA]:** Pi's `/skill:<name>` explicit-invocation path does a
+  host-side `readFileSync(filePath)` (`agent-session.js:851`), reached only when a
+  user message literally starts with `/skill:` (not every `followUp`). Under
+  container-only paths it errors and passes the text through unexpanded (graceful
+  no-op). So **`/skill:` explicit invocation is unsupported under OMA**; only
+  model-driven discovery works. Non-goal below.
 
 ### D6 — Read-tool coupling at session-create; one shared policy evaluator
 
@@ -289,17 +317,19 @@ Reject a session whose effective (root-agent) config has non-empty skills but th
 required tool: skills require the read tool to be usable (enabled and not
 always_deny) on the session's `agent_toolset`"* [Obs].
 
-Two implementation constraints (review: Sonnet):
-- **Chicken-and-egg:** the existing resolver
-  (`createStoreBackedBuiltinToolAccessResolver`, `tool-permissions.ts:495-521`)
-  looks up an *existing* session row to find the agent — unavailable during
-  session-create validation. **Factor the toolset-config→permission logic
-  (`:513-521`) into a pure agent-only helper** callable from `sessions/service.ts`
-  before the row is inserted. Runtime and validation must call the **same pure
-  evaluator** so decisions cannot drift.
-- **State mapping:** hosted's `always_deny` ≈ OMA's `never_allow` policy →
-  `deny` permission (`tool-permissions.ts:16,527-530`). Reuse the existing
-  literal; do not add a new one.
+Two implementation constraints (review: Sonnet r1 + r2):
+- **One evaluator, mandated refactor.** Only lines 500-501 of
+  `createStoreBackedBuiltinToolAccessResolver` (`tool-permissions.ts:495-522`) are
+  session-scoped (session→agentId); the config→access computation (`:505-521`) is
+  a pure function of the agent. Extract `resolveBuiltinToolAccessForAgent(agent,
+  toolName)` and **rewrite the existing resolver to call it internally** (not two
+  parallel call sites that merely start identical); session-create validation
+  calls the same helper. (The chicken-and-egg is soft: the resolver already has a
+  `context?.agentId` fallback (`:501`) and `retrieveAny` returns `undefined` not
+  throw — so the pure factoring is the clean fix, not a hard prerequisite.)
+- **State mapping:** hosted `always_deny` ≈ OMA `never_allow` → `deny`
+  (`tool-permissions.ts:527-530`); rule = `enabled && permission !== "deny"`.
+  Reuse the existing literal; do not add a new one.
 
 ### D7 — Attachment validation hardening (root agent)
 
@@ -321,22 +351,33 @@ Fable).** `RuntimeSessionFileMount` gains an **internal, non-public**
 - `skill` → `/workspace/skills` (rw,exec — required, since skill `scripts/` are
   meant to run; uploads is `noexec` AND outside `/workspace`, so it is genuinely
   unusable for skills — the generalization is mandatory, not stylistic).
-Generalize the three currently uploads-hardcoded steps in `docker.ts`
-(`assertInside*` guard, the tar-extract destination, and the chown/normalize)
-plus the microsandbox impl, each keyed by `kind` with a per-root assert. Also:
-- Create `/workspace/skills` and chown before extraction (else the read tool hits
-  a missing/denied dir).
-- **Materialize skill files root-owned, not writable by the sandbox user**
-  (skills are read-only inputs); **preserve the executable bit for `scripts/`**
-  (current code normalizes to `0644` — decide per-file: `SKILL.md`/refs `0644`,
-  `scripts/*` `0755`).
+The materialize pipeline runs **once per distinct root** (review round 2: Opus —
+`materializeFileResources` is one tar→one extract→one normalize against
+`uploadsPath`, so mixed mounts become a per-`kind` loop: group by kind, tar +
+extract + normalize each root). Generalize the uploads-hardcoded steps in
+`docker.ts` (guard, extract destination, chown/normalize) and the microsandbox
+impl, each keyed by `kind`. Also:
+- **Mount `/workspace/skills` as its own `--tmpfs`** (review round 2: Opus +
+  Fable). Owning the *directory contents* root-owned is not enough: `/workspace`
+  is the sandbox user's writable tmpfs (`docker.ts:722`, uid 65534, 0700), so it
+  can `mv /workspace/skills aside` and shadow it. A dedicated tmpfs **mountpoint**
+  cannot be renamed/unlinked by the sandbox user — that is what actually delivers
+  "not writable/replaceable by the sandbox user." (§7a's claim is re-scoped to
+  this mechanism.) **Microsandbox asymmetry:** its normalize is `chmod 444` only,
+  no `chown`-to-root and no tmpfs seam (`microsandbox.ts:881`) — the tamper-proof
+  property is Docker-only in v1; note it as a per-provider limitation.
+- **Executable bit is SET by path, not "preserved"** (review round 2: Opus —
+  host temp files are `0644`, there is no bit to carry). A skills-specific
+  normalize sets `scripts/*` → `0755`, `SKILL.md`/refs → `0644`, contents
+  root-owned.
 - Path guards reject `..`/absolute (already present, `docker.ts:1033`); the
-  skill `name`==`directory` regex (D2) is a second layer.
-- **Mixed-root rollback + no partial-materialization:** a failure part-way
-  through must not leave a half-populated `/workspace/skills/<name>` a live
-  session would treat as complete; extract per-skill atomically (temp dir →
-  rename) and roll back on error. A mixed upload+skill mount test pins both roots
-  and the rollback.
+  `name`==`directory` rule (D2) is a second layer.
+- **No atomic-rename mechanism needed** (review round 2: Opus). The container is
+  **disposed on any materialize failure** (`docker.ts:374-376`), so create /
+  evict-recreate always start from a fresh container — a half-populated
+  `/workspace/skills` cannot survive into a live session. Drop the earlier
+  temp-dir→rename requirement; a mixed upload+skill mount test still pins both
+  roots and the dispose-on-failure path.
 
 ### D9 — Name uniqueness, quota, atomicity, reclamation
 
@@ -351,28 +392,36 @@ plus the microsandbox impl, each keyed by `kind` with a per-root assert. Also:
   400s a reused `display_title` ("Skill cannot reuse an existing display_title").
   Enforce workspace-wide `display_title` uniqueness with the same message shape;
   derive it from `name` when the upload omits it.
-- **Atomicity:** object-blob write and SQLite metadata commit are published
-  atomically; on failure, roll back and clean orphans (no dangling blob, no
-  metadata row without bytes). Delete reclaims blob bytes.
-- **Quota:** a per-workspace skill-content byte quota and a per-skill retained-
-  version cap (100 MB/version × unlimited versions is a disk-exhaustion path —
-  review: External). Blobs referenced by a live session snapshot (D4) are
-  retained even if the skill/version is deleted, until the session ends.
+- **Atomicity:** SkillsStore object-blob write + SQLite metadata commit published
+  atomically; on failure roll back and clean orphans. Delete reclaims blob bytes
+  **immediately** — because D4 gives each live session its own copied snapshot,
+  the store blob has no live-session dependents to protect (the round-2
+  retain-by-reference/GC/session-end complexity is gone; session snapshots
+  reclaim via the existing internal-snapshot delete queue when the session ends).
+- **Quota [OMA defaults — name them, review round 2: Sonnet]:** per-workspace
+  skill-content byte quota `OMA_SKILLS_WORKSPACE_MAX_BYTES` default **1 GiB**
+  (mirrors the `MAX_WORKSPACE_FILE_BYTES` pattern, `files/store-local.ts:188`) and
+  a per-skill retained-version cap `OMA_SKILLS_MAX_VERSIONS` default **20**
+  (100 MB/version × unlimited versions is a disk-exhaustion path — review:
+  External). The quota counts SkillsStore bytes only; session snapshot copies
+  (D4) are ephemeral and reclaimed at session end, so they do not pin quota.
 
 ## 5. Slice order (each testable in isolation)
 
 0. **Probes 56/57 — DONE** (57 re-run 2026-07-10 with auditable capture).
 1. **Skills resource + store** (D1, D2, D9-atomicity/quota). `SkillsStore` (raw
    zip blob per version + manifest), `/v1/skills` multipart upload with the
-   dedicated bodyLimit + global bypass, `parseBody({all:true})`, layered
-   size/bomb/zip-slip validation, SKILL.md parse + name==dir + name-uniqueness,
-   versioning, list/get/delete, delete-only lifecycle. **Custom-only** —
-   independent of sessions and of the anthropic catalog (D3 deferred), so slice-1
-   parity tests do NOT assert prebuilts. This is the milestone path.
+   **route/beta classifier registration + body-limit bypass + admission gate**
+   (D2), `parseBody({all:true})`, layered size/bomb/zip-slip validation, SKILL.md
+   parse + name==dir + name/display_title-uniqueness, versioning, list/get/delete,
+   delete-only lifecycle, quota. **Custom-only** — independent of sessions and of
+   the anthropic catalog (D3 deferred), so slice-1 parity tests do NOT assert
+   prebuilts. This is the milestone path.
 2. **Attachment validation** (D7) + **session-create read-tool coupling** (D6,
    the shared pure evaluator). Root-agent scope only.
-3. **Session skill snapshot + runtime delivery** (D4 + D8 + D5): snapshot at
-   create → materialize at `/workspace/skills/<name>/` via the discriminated
+3. **Session skill snapshot + runtime delivery** (D4 copy-snapshot + D8 + D5):
+   copy blob into a session snapshot at create → materialize at
+   `/workspace/skills/<name>/` via the discriminated
    mount (root-owned, exec-bit-preserving, atomic/rollback) → custom
    ResourceLoader → wire into `createPiSession` (`runner.ts:969`).
 4. **Live smoke 58** (the exit criterion): OMA end-to-end with an **OMA-owned
@@ -426,11 +475,14 @@ its `scripts/` run in the sandbox — an uploaded skill is, by design, a
 prompt-shaping + sandbox-code channel. This is acceptable because upload is
 gated by workspace auth and skills are the operator's own; it is NOT a boundary
 against a hostile skill author. Slice-4's leak sweep defines "intended surface"
-as: the skill's own files under `/workspace/skills/<name>` and whatever the model
-chooses to surface — and asserts NO workspace **secrets/vault/egress** material
-leaks through skill materialization, and `/workspace/skills` is not writable by
-the sandbox user (D8). Skill scripts inherit the session's existing egress/secret
-posture (they run as ordinary sandbox bash — no new exposure, no special grant).
+as: the skill's own files under `/workspace/skills/<name>` — and asserts NO
+workspace **secrets/vault/egress** material leaks through skill materialization,
+and that skills are **not replaceable by the sandbox user** via the dedicated
+`--tmpfs /workspace/skills` mountpoint (D8; Docker-only in v1 — microsandbox is a
+noted per-provider limitation). Skill scripts inherit the session's existing
+egress/secret posture (they run as ordinary sandbox bash — no new exposure, no
+special grant). "Whatever the model chooses to surface from its own inputs" is
+out of scope for the leak assertion (operator-trust boundary above).
 
 ## 8. Reusable seams (file:line — verified)
 
@@ -442,7 +494,9 @@ posture (they run as ordinary sandbox bash — no new exposure, no special grant
 | Deliver files to container | `materializeFileResources` | `sandbox/provider.ts:64`; `docker.ts:360`; called `runner.ts:655-663` |
 | Mount-root guard to generalize | `assertInsideUploadsPath` | `docker.ts:368,1033` |
 | Advertise skills to Pi | `createAgentSession` call (no loader today) | `runner.ts:969` |
-| Read-tool coupling enforcement | tool permissions (factor a pure evaluator) | `sessions/pi/tool-permissions.ts:495-521,527-530,16` |
+| Read-tool coupling enforcement | tool permissions (factor a pure evaluator) | `sessions/pi/tool-permissions.ts:495-522,527-530` |
+| Session snapshot copy machinery | `prepareFileResources` + internal snapshot + durable retry-queue tables | `sessions/service.ts:849-890,189,445,726-745`; `sessions/store.ts:52-96` |
+| Upload admission gate | in-flight upload reservation before bodyLimit | `files/routes.ts:23-38`; `admission.ts` `InFlightGauge` |
 | Wiring/lifecycle pattern | MCP store-backed provider | `mcp/bridge.ts:472`; consumed `runner.ts:668` |
 | Body-limit + bypass to mirror | files upload bodyLimit + global bypass | `files/routes.ts:15,42-48`; `app.ts` body-limit middleware |
 | Session-scoped snapshot precedent | file-resource snapshotting | `sessions/service.ts` `prepareFileResources` |
@@ -457,10 +511,11 @@ name==directory enforced, per-file multipart accepted, derived/duplicate
 
 1. **20-cap over-cap error message** (slice 2) — needs 21 *distinct* skill_ids;
    OMA picks its own message, parity probe optional.
-2. **ListSkills pagination semantics** (slice 1) — probe 56b anomaly: `limit=1`
-   returned `has_more=false` despite multiple skills present (probe 56's `limit=3`
-   *did* page). Hosted paging behavior here is unclear; low-stakes since OMA
-   implements its own cursor. A parity probe if wire-exact paging is wanted.
+2. **ListSkills pagination semantics** (slice 1) — probe 56b recorded `limit=1`
+   → `has_more=false`, `next_page=null` (the probe did not capture the returned
+   `data` length or the account's skill count, so "unexpected" is inferred, not
+   evidenced). Hosted paging behavior is unclear; low-stakes since OMA implements
+   its own cursor. A parity probe if wire-exact paging is wanted.
 3. **`anthropic` catalog** (deferred) — resolution/versioning only relevant once
    a redistribution arrangement unblocks D3.
 
@@ -492,8 +547,32 @@ name==directory enforced, per-file multipart accepted, derived/duplicate
     progressive disclosure via custom loader + container `read`, provision-not-
     execute, read-tool coupling at session-create, no new event vocabulary,
     `allowed-tools` advisory, D8 mount-root premise, files/ store pattern.
+- **Panel round 2 (2026-07-10):** re-review of the folded plan by the same four +
+  a probe-56b re-run. Verdict: implementation-ready modulo a bounded fix set (no
+  blockers, no redesign) — three source reads re-confirmed the Pi 0.75.4 claims,
+  D4-recovery-reads-snapshot and D6-evaluator-factorable confirmed. Folded:
+  - **Honesty (unanimous):** the name==directory enforcement was asserted from a
+    manual call, not the committed artifact → **re-ran probe 56b with the
+    `name_dir_mismatch` case**; the exact 400 message is now in the artifact.
+    Softened the §9.2 pagination framing; relabeled the anthropic date-version to
+    [Obs]; fixed anchor drifts (`baseDir` deref at `agent-session.js:853`;
+    `always_deny`→`deny` at `tool-permissions.ts:527-530`).
+  - **Storage keystone:** D4/D9 → **copy-snapshot** (copy the zip blob into a
+    session-scoped internal snapshot at create), reusing the existing durable
+    retry-queue tables. Collapses the D4↔D5 source contradiction, the retention/
+    session-end semantics, crash-safe durability, and quota-reclamation into one
+    reuse of proven machinery.
+  - **Upload:** added the pre-`bodyLimit` **admission in-flight gate** (buffering
+    DoS) and the **`/v1/skills` route/beta classifier + body-limit bypass** as an
+    explicit slice-1 task (D2).
+  - **Mechanism:** D5 `getExtensions` must return a real `ExtensionRuntime`
+    (`createExtensionRuntime`) or delegate to `DefaultResourceLoader` — a bare
+    empty crashes at construction; D6 mandates rewriting the resolver to call the
+    pure helper; D8 simplified (drop atomic-rename — container-dispose-on-failure
+    covers it; path-based `0755` not "preserve"; per-root loop; **`--tmpfs
+    /workspace/skills`** for real non-writability; microsandbox tamper-proofing a
+    noted per-provider gap); D9 quota defaults named (1 GiB / 20 versions).
 
-*(The independent external review that was appended here as Appendix A
-has been folded into §10 and the D-decisions above; the raw review is
-preserved in the PR 174 history at commit 72f2daa.)*
+*(The independent external review that was appended as Appendix A is folded into
+this log and the D-decisions; raw text preserved in PR 174 history at 72f2daa.)*
 

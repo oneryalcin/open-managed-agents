@@ -145,6 +145,17 @@ def main() -> None:
         if st == 200 and isinstance(b, dict):
             made.append(b["id"])
 
+        # 1b. folder name != SKILL.md frontmatter name (name==directory enforced?)
+        folder, fmname = f"folderx-{RUN}", f"framename-{RUN}"
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(f"{folder}/SKILL.md", skill_md(fmname))
+        st, b = create_skill([("files[]", "mismatch.zip", buf.getvalue())])
+        msg = b.get("error", {}).get("message") if isinstance(b, dict) else None
+        f["name_dir_mismatch"] = {"status": st, "message": msg, "folder": folder, "skill_name": fmname}
+        if st == 200 and isinstance(b, dict):
+            made.append(b["id"])
+
         # 2. path-qualified individual files (no zip)
         name = f"probe56b-files-{RUN}"
         st, b = create_skill([

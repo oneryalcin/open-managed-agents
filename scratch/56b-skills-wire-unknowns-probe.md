@@ -9,7 +9,7 @@ the `[Unk]` items the panel flagged as shaping slice 1.
 | Question | Result |
 |---|---|
 | Root-level SKILL.md zip (no folder) | **400** — "Zip must contain a top-level folder with all files inside it, including SKILL.md". Hosted **requires** a single top-level folder; root-level is rejected. |
-| `name` != folder name | **400** — "The folder name '…' must match the skill name '…' in SKILL.md." **name == directory is ENFORCED at upload.** |
+| `name` != folder name (`name_dir_mismatch` in artifact) | **400** — "The folder name '…' must match the skill name '…' in SKILL.md." **name == directory is ENFORCED at upload.** (Now captured in the artifact with the exact message; earlier runs asserted this from a separate manual call.) |
 | Path-qualified individual `files[]` (no zip) | **200 accepted** (`files[]` = `<name>/SKILL.md` as one part). |
 | Omitted `display_title` | **derived from the SKILL.md `name`** (not a prettified title) — got `display_title == name`. |
 | Duplicate `display_title` | **400** — "Skill cannot reuse an existing display_title: …". Uniqueness enforced (distinct from name). |
