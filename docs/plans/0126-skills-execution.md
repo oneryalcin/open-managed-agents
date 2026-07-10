@@ -170,33 +170,54 @@ vocabulary.**
 
 ## 4. Design decisions
 
-### D1 — Storage: explode-and-validate at upload; store per-FILE
+### D1 — Skill storage contract: a DEDICATED private store
 
 The skill *reference* (`{type, skill_id, version}`) already lives on the agent
-row (`agents/store.ts:20`). The gap is skill *content*.
+row (`agents/store.ts:20`). The gap is skill *content* — and two consecutive
+external storage reviews established it needs a **contract of its own**, not
+reuse-by-analogy of the `files/` machinery (which is public, 20 MiB-capped,
+100 MiB-quota-shared, and commits per-file with no multi-file transaction). This
+section is that contract; D4/D8/D9 build on it.
 
-**Decision [OMA] — explode at upload, store per-file (review round 3, external:
-the raw-zip-blob shape was undefined against the per-file pipeline).** The zip is
-**never stored as a blob.** At upload the route validates it, then **explodes it
-into individual files**, storing each through the existing per-file storage — the
-same `FileStorageRecord` shape the file-resource pipeline already uses
-(`files/types.ts`). This is the decisive realignment: because content lives as
-per-file records, the snapshot (D4), materialization (D8), and cleanup outbox all
-reuse the existing **per-file** machinery directly — no new archive-unzip path,
-no per-file-cap-vs-30 MB-archive mismatch, no bespoke tables.
+**Decision [OMA] — explode at upload into a dedicated PRIVATE `SkillContentStorage`.**
+The zip is never stored as a blob; at upload it is validated and exploded into
+individual files. But each file goes to a **new private content store**, NOT
+`FileStorage.create()` (which produces public `/v1/files` records — listable and
+deletable there; review round 4, external F2). `SkillContentStorage` is a
+separate object namespace with its own retrieval (internal-only, by
+`(skill_id, version, path)`), invisible to `/v1/files`, following the
+`files/store-{local,memory}` backend shape but as its own class.
 
-Two SQLite tables (the resource/version split the external review requires):
+**Tables (owner/version split — external F6):**
 - **`skills`** (owner): `workspace_id, skill_id, name, display_title, source,
-  latest_version, created_at`. **`name` and `display_title` UNIQUE per workspace
-  live HERE** — not on version rows, so a second version of the same skill does
-  not self-collide (review round 2: Sonnet/external F6).
+  latest_version, created_at`. `name` and `display_title` are **UNIQUE per
+  workspace HERE** — not on version rows, so a 2nd version of a skill does not
+  self-collide.
 - **`skill_versions`**: `skill_id, version, description, directory, file_count,
-  total_bytes, sha256(manifest), created_at`, plus the per-file records
-  (path + size + sha256 + storage file_id) keyed by `(skill_id, version)`.
-  `name`/`description`/`directory` are parsed from SKILL.md at upload; the
-  file_manifest is the list of per-file records (loader + recovery need
-  `description` and the manifest after the source skill is deleted — hence they
-  live in the version row, not just implied).
+  total_bytes, manifest_sha256, created_at`.
+- **`skill_files`**: `(skill_id, version, path)` → `size, sha256,
+  content_object_id`. This is the manifest the loader + recovery read after the
+  source skill is deleted (`description` on the version row, files here).
+
+**Aligned size caps [external F1]:** the per-file cap is **20 MiB**, matching the
+platform's `MAX_UPLOADED_FILE_BYTES` (`files/types.ts:15`) — NOT the earlier
+25 MB, which would upload then deterministically fail the 20 MiB snapshot copy at
+session create. Per-version total ≤ 100 MB, ≤ 500 files (D2).
+
+**Multi-file atomic publish + crash-safe rollback [external F3]:** exploding a
+skill is a multi-object write (N content objects + N `skill_files` rows + a
+`skill_versions` row + `skills.latest_version` bump). The existing per-file
+create commits each object individually — insufficient. Design:
+1. Write all content objects to a **staged/private prefix** and record them in a
+   `pending_skill_content_rollbacks` ledger BEFORE the metadata commit.
+2. Commit `skill_versions` + all `skill_files` + the `skills` upsert in **one
+   SQLite transaction** (publish); on success, clear the rollback ledger.
+3. On crash/failure before commit, a startup sweep deletes staged objects named
+   in the ledger (mirrors the existing `pending_internal_snapshot_create_rollbacks`
+   pattern, `sessions/store.ts`). No orphan objects, no partially-published
+   version.
+Delete uses a symmetric **`pending_skill_content_deletes`** outbox: mark the
+version deleted in one txn, then reclaim objects via the swept outbox.
 
 ### D2 — Custom upload = the Skills resource; body-limit + zip safety
 
@@ -219,21 +240,28 @@ auth/beta/metrics classification and behaves inconsistently with every other
 `/v1` endpoint. Slice 1 has an explicit task + tests for the classifier, the beta
 gate, the body-limit bypass, and the admission gate.
 
-**Zip parser [OMA — the repo has no zip dependency today; review round 3,
-external F4]:** add **`yauzl`** (a vetted streaming zip reader that inspects
-entries WITHOUT auto-extracting — the caller controls every write, which is the
-right primitive for zip-slip defense). No zip-*builder* is needed: content is
-exploded and stored per-file, never re-zipped. Pin the version; the parser choice
-is a first-class part of slice 1.
+**Zip parser [OMA — the repo has no zip dependency today; review round 3-4,
+external F4]:** add **`yauzl`** at a **pinned version**, a vetted streaming zip
+reader that inspects entries WITHOUT auto-extracting. Mandate its security-
+relevant usage (npmjs.com/package/yauzl): `lazyEntries: true` (process entry by
+entry, never inflate the whole archive); reject entries whose
+`compressedSize`/`uncompressedSize` breach the bomb caps BEFORE opening a read
+stream; **reject encrypted entries** (`generalPurposeBitFlag & 0x1`); inspect the
+Unix mode in `externalFileAttributes` and **reject non-regular-file/dir types**
+(symlink `0xA000`, device, fifo); cap **observed** decompressed bytes per entry
+as the stream flows (defend against a lying header); and `close()`/destroy on any
+error. No zip-*builder* is needed — content is exploded and stored per-file,
+never re-zipped.
 
 Upload → explode pipeline, layered (all at upload, streaming through yauzl —
 nothing deferred to materialize time):
 - **Request-size parity [Obs, probe 56b]:** reject > **30 MB** request with HTTP
   **413** `request_too_large` and the hosted message, at the dedicated bodyLimit
   BEFORE parsing.
-- **Zip-bomb guards [OMA defaults]:** total-uncompressed ≤ 100 MB, per-file
-  ≤ 25 MB, file-count ≤ 500, enforced incrementally as yauzl streams each entry
-  (abort on breach — never inflate the whole archive first).
+- **Zip-bomb guards [OMA defaults]:** total-uncompressed ≤ 100 MB, **per-file
+  ≤ 20 MiB** (aligned to the storage cap, D1 — NOT 25 MB), file-count ≤ 500,
+  enforced incrementally as yauzl streams each entry (abort on breach — never
+  inflate the whole archive first).
 - **Hostile-entry rejection (review: Fable + External + Codex-adv):** reject any
   entry whose type is not a regular file or directory (**symlink/hardlink/device
   → reject**), or whose name has `..`, absolute path, leading `/`, backslash,
@@ -296,13 +324,20 @@ archive against the 20 MiB single-file cap). Consequences:
   (`resource_id, file_id, mount_path`, `sessions/store.ts:60-72`), which now
   matches because skill snapshot entries ARE file mounts (kind `"skill"`, D8),
   not a bespoke archive. Session deletion promotes them through the same path.
-`"latest"` is resolved **once, at session create**. A small
-`session_skill_snapshots` grouping row (`session_id, skill_id, version, name,
-description`) records the per-skill metadata the loader needs (name/description
-for the prompt), referencing the copied per-file snapshot entries by
-`(skill_id, version)`. The ResourceLoader (D5) reads name/description from this
-grouping row and points `filePath` at the materialized container path; bytes come
-from the snapshot's file entries. Nothing reads the live store at runtime.
+`"latest"` is resolved **once, at session create**.
+
+**Snapshot association + kind persistence [external F5].** The existing
+`session_file_mount_snapshots` row has no `kind`/`skill_id`/`version`, so after a
+restart, recovery cannot tell a skill mount from an upload mount, nor which skill
+a file belongs to. Add:
+- a **`kind` column on the snapshot mount rows** (persisted, read by recovery so
+  it re-materializes each mount to the right root — D8);
+- a **`session_skill_snapshots` join** (`session_id, skill_id, version, name,
+  description, skill_snapshot_id`) recording per-skill metadata (the loader needs
+  name/description) and grouping its file-snapshot entries by `skill_snapshot_id`.
+The ResourceLoader (D5) reads name/description from this join and points
+`filePath` at the materialized container path; bytes come from the snapshot's file
+entries. Nothing reads the live store at runtime.
 
 ### D5 — Advertising to Pi: custom synthetic `ResourceLoader` (RESOLVED)
 
@@ -393,14 +428,17 @@ chown/normalize) and the microsandbox impl, each keyed by `kind`. Also:
   asymmetry:** its normalize is `chmod 444` only, no `chown`-to-root and no tmpfs
   seam (`microsandbox.ts:881`) — the tamper-proof property is Docker-only in v1;
   a noted per-provider limitation.
-- **Materialized-size admission [OMA — new, review round 3 external F3].** Upload
-  guards bound one version (≤100 MB); they do NOT bound what a *session* unpacks:
-  20 skills × 100 MB = 2 GB into a 64 MiB tmpfs. Add an **aggregate uncompressed
-  skill budget per session**, reusing the existing mounted-resource budget
-  (`MAX_SESSION_MOUNTED_BYTES = 50 MiB`, `sessions/service.ts:56`) — sum the
-  snapshotted skills' `total_bytes` at session create, reject over budget with a
-  clear error, and size the skills `--tmpfs` to that same budget. This closes the
-  disk-exhaustion path the upload caps alone leave open.
+- **Materialized-size admission — SHARED budget + memory headroom [external F3 +
+  F7].** Upload guards bound one version (≤100 MB); they do NOT bound what a
+  *session* unpacks (20 skills × 100 MB = 2 GB into a 64 MiB tmpfs). The existing
+  `MAX_SESSION_MOUNTED_BYTES = 50 MiB` (`sessions/service.ts:56`) is the budget —
+  but it must be **shared across uploads + skills**, not 50 MiB each: at session
+  create, sum file-mount `total_bytes` + snapshotted skills' `total_bytes` and
+  reject the combined total over budget. Size the skills `--tmpfs` from the skills
+  share, and — critically — the new tmpfs is a **fourth tmpfs**, so
+  `assertTmpfsMemoryHeadroom` (`docker.ts:685`, today validates uploads + outputs
+  against `--memory`) must add the skills tmpfs to its sum, or container start
+  fails or over-commits memory. Extend that assert; a headroom test pins it.
 - **Executable bit is SET by path, not "preserved"** (review round 2: Opus —
   host temp files are `0644`, there is no bit to carry). A skills-specific
   normalize sets `scripts/*` → `0755`, `SKILL.md`/refs → `0644`, contents
@@ -414,43 +452,38 @@ chown/normalize) and the microsandbox impl, each keyed by `kind`. Also:
   temp-dir→rename requirement; a mixed upload+skill mount test still pins both
   roots and the dispose-on-failure path.
 
-### D9 — Name uniqueness, quota, atomicity, reclamation
+### D9 — Uniqueness, quota domain, lifecycle
 
-**New (review: External + Opus + Fable + Sonnet).**
-- **Name / `display_title` uniqueness on the OWNER table (review round 3,
-  external F6):** enforce workspace-wide uniqueness of canonical `name` and
-  `display_title` as unique indexes on the `skills` owner table (D1) — **not on
-  version rows**, so a second version of the same skill does not self-collide.
-  `name`==`directory` is fixed for a skill (forbid changing it across versions);
-  a custom name colliding with a (future) prebuilt name is rejected; `display_title`
-  reuse → 400 with the hosted message ("Skill cannot reuse an existing
-  display_title", [Obs] probe 56b). Concurrency test for same-name races.
-- **Atomicity of the explode (review round 3, external F1/F5):** the per-file
-  `FileStorageRecord` writes + the `skills`/`skill_versions` row commit publish
-  atomically; on any failure, roll back and clean orphans (no per-file blob
-  without a version row, no version row without its files). Delete reclaims the
-  per-file bytes **immediately** — D4 gives each live session its own copied
-  snapshot, so store records have no live-session dependents; session snapshots
-  reclaim via the existing internal-snapshot delete queue at session end.
-- **Quota [OMA defaults — name them, review round 2: Sonnet]:** per-workspace
-  skill-content byte quota `OMA_SKILLS_WORKSPACE_MAX_BYTES` default **1 GiB**
-  (mirrors the `MAX_WORKSPACE_FILE_BYTES` pattern, `files/store-local.ts:188`) and
-  a per-skill retained-version cap `OMA_SKILLS_MAX_VERSIONS` default **20**
-  (100 MB/version × unlimited versions is a disk-exhaustion path — review:
-  External). The quota counts SkillsStore bytes only; session snapshot copies
-  (D4) are ephemeral and reclaimed at session end, so they do not pin quota.
+(Uniqueness, atomicity, and rollback are specified in D1. This decision covers
+the quota domain and the version-lifecycle edges.)
+- **Separate quota domain [external F4].** Because skill content lives in the
+  dedicated `SkillContentStorage` (D1), NOT the `files/` store, its bytes do
+  **not** count toward `MAX_WORKSPACE_FILE_BYTES` (100 MiB) — a `SkillContentStorage`
+  workspace-bytes accountant enforces its own `OMA_SKILLS_WORKSPACE_MAX_BYTES`
+  default **1 GiB**, and a per-skill retained-version cap `OMA_SKILLS_MAX_VERSIONS`
+  default **20**. Session snapshot copies are ephemeral (reclaimed at session end)
+  and do not count against the skills quota either. (Without the separate store,
+  source content + every session copy would compete inside the 100 MiB files
+  quota — the contradiction the external review flagged.)
+- **Delete-latest-version [external F6]:** deleting the version a skill's
+  `latest_version` points at **recomputes `latest_version` from the newest
+  remaining version** in the same transaction; deleting the sole version is the
+  delete-only path (version then skill). A `version:"latest"` attach resolves
+  against the recomputed pointer.
 
 ## 5. Slice order (each testable in isolation)
 
 0. **Probes 56/57 — DONE** (57 re-run 2026-07-10 with auditable capture).
-1. **Skills resource + store** (D1, D2, D9). `SkillsStore` (per-file records +
-   `skills`/`skill_versions` tables), `/v1/skills` multipart upload → **yauzl
-   explode-and-validate → per-file store**, with the **route/beta classifier
-   registration + body-limit bypass + admission gate** (D2), `parseBody({all:true})`,
-   layered size/bomb/hostile-entry validation, SKILL.md parse + name==dir +
-   owner-table name/display_title uniqueness, versioning, list/get/delete,
-   delete-only lifecycle, quota. **Custom-only** — independent of sessions and of
-   the anthropic catalog (D3 deferred), so slice-1 parity tests do NOT assert
+1. **Skills resource + store** (D1, D2, D9). Dedicated **private
+   `SkillContentStorage`** + `skills`/`skill_versions`/`skill_files` tables +
+   the staged-commit / rollback + delete outbox ledgers (D1); `/v1/skills`
+   multipart upload → **pinned-`yauzl` explode-and-validate → private per-file
+   store**, with the **route/beta classifier + body-limit bypass + admission gate**
+   (D2), `parseBody({all:true})`, layered 30 MB/bomb(≤20 MiB per file)/hostile-entry
+   validation, SKILL.md parse + name==dir + owner-table name/display_title
+   uniqueness, versioning, list/get/delete, delete-only + latest-recompute,
+   separate 1 GiB quota. **Custom-only** — independent of sessions and of the
+   anthropic catalog (D3 deferred), so slice-1 parity tests do NOT assert
    prebuilts. This is the milestone path.
 2. **Attachment validation** (D7) + **session-create read-tool coupling** (D6,
    the shared pure evaluator). Root-agent scope only.
@@ -629,7 +662,32 @@ name==directory enforced, per-file multipart accepted, derived/duplicate
   - **F7:** corrected the probe-56 `.md` docx/pdf overclaim to xlsx+pptx-observed.
   - Endorsed sound: wire contract, licensing, read-tool coupling, custom Pi
     loader, dedicated-mountpoint defense.
+- **External storage review (round 4 → rev 5, 2026-07-10):** the second storage
+  lane found that the rev-4 "reuse the `files/` per-file machinery" was still
+  analogy, not a contract. All 7 verified against code and folded — D1 rewritten
+  as a **dedicated storage contract**:
+  - **Private store (F2):** skill content goes to a new `SkillContentStorage`, NOT
+    `FileStorage.create()` (which yields public `/v1/files` records).
+  - **Aligned caps (F1):** per-file cap 20 MiB (was 25) to match
+    `MAX_UPLOADED_FILE_BYTES`, so a valid upload can't fail the snapshot copy.
+  - **Multi-file atomicity (F3):** staged-object + `pending_skill_content_rollbacks`
+    ledger + single-txn publish + delete outbox (mirrors the existing internal-
+    snapshot rollback pattern) — no orphan objects, no partial versions.
+  - **Quota domain (F4):** skills bytes are their own 1 GiB accountant, not the
+    shared 100 MiB `MAX_WORKSPACE_FILE_BYTES`.
+  - **Snapshot association (F5):** persist `kind` on snapshot mount rows +
+    a `session_skill_snapshots` join, so recovery re-materializes to the right root.
+  - **Shared budget + memory (F7):** the 50 MiB mounted budget is shared across
+    uploads+skills, and the new fourth `--tmpfs` is added to `assertTmpfsMemoryHeadroom`.
+  - **Delete-latest (F6):** recompute `latest_version` from the newest remaining.
+  - **yauzl usage contract:** pinned version + lazy entries, header-size + observed-
+    byte caps, encrypted-entry + non-regular-type rejection, error cleanup.
+  - **Honest note:** two consecutive storage reviews each found a fresh gap set,
+    because the storage layer was specified by analogy. Rev 5 replaces the analogy
+    with a designed contract; a focused storage-only review (or building slice 1
+    behind tests, which surfaces impedance faster than plan review) is the
+    recommended close before green-light.
 
-*(The independent external reviews (Appendix A + this storage lane) are folded
+*(The independent external reviews (Appendix A + the two storage lanes) are folded
 into this log and the D-decisions; raw text preserved in PR 174 history.)*
 
