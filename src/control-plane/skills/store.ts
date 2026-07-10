@@ -149,12 +149,14 @@ export class SqliteSkillsStore implements SkillsStore {
   }
 
   deleteVersion(workspaceId: WorkspaceId, skillId: string, version: string): boolean {
-    const row = this.db.prepare("SELECT version FROM skill_versions WHERE workspace_id=? AND skill_id=? AND version=?").get(workspaceId, skillId, version);
+    const resolved = version === "latest" ? this.row(workspaceId, skillId)?.latest_version : version;
+    if (!resolved) return false;
+    const row = this.db.prepare("SELECT version FROM skill_versions WHERE workspace_id=? AND skill_id=? AND version=?").get(workspaceId, skillId, resolved);
     if (!row) return false;
     const now = new Date().toISOString();
     withSqliteTransaction(this.db, () => {
-      this.db.prepare("INSERT OR IGNORE INTO pending_skill_content_deletes SELECT workspace_id,content_object_id,? FROM skill_files WHERE workspace_id=? AND skill_id=? AND version=?").run(now, workspaceId, skillId, version);
-      this.db.prepare("DELETE FROM skill_versions WHERE workspace_id=? AND skill_id=? AND version=?").run(workspaceId, skillId, version);
+      this.db.prepare("INSERT OR IGNORE INTO pending_skill_content_deletes SELECT workspace_id,content_object_id,? FROM skill_files WHERE workspace_id=? AND skill_id=? AND version=?").run(now, workspaceId, skillId, resolved);
+      this.db.prepare("DELETE FROM skill_versions WHERE workspace_id=? AND skill_id=? AND version=?").run(workspaceId, skillId, resolved);
       const latest = this.db.prepare("SELECT version FROM skill_versions WHERE workspace_id=? AND skill_id=? ORDER BY version DESC LIMIT 1").get(workspaceId, skillId) as { version: string } | undefined;
       this.db.prepare("UPDATE skills SET latest_version=?,updated_at=? WHERE workspace_id=? AND id=?").run(latest?.version ?? null, now, workspaceId, skillId);
     });

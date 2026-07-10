@@ -2,6 +2,7 @@ import { File } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import { createInMemoryControlPlaneApp } from "./helpers.ts";
 import { MAX_SKILLS_UPLOAD_REQUEST_BYTES } from "../skills/routes.ts";
+import { MAX_SKILL_FILES } from "../skills/types.ts";
 
 describe("skills API", () => {
   it("creates, versions, lists, retrieves, and deletes a custom skill", async () => {
@@ -26,6 +27,14 @@ describe("skills API", () => {
     expect((await app.request(`/v1/skills/${created.id}/versions/latest`)).status).toBe(404);
     expect((await app.request(`/v1/skills/${created.id}`, { method: "DELETE" })).status).toBe(200);
     expect((await app.request(`/v1/skills/${created.id}`)).status).toBe(404);
+  });
+
+  it("deletes the current version through the latest alias", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const created = await createSkill(app, "latest-delete", "one");
+    expect((await app.request(`/v1/skills/${created.id}/versions/latest`, { method: "DELETE" })).status).toBe(200);
+    expect(await json(app.request(`/v1/skills/${created.id}`))).toMatchObject({ latest_version: null });
+    expect((await app.request(`/v1/skills/${created.id}/versions/latest`)).status).toBe(404);
   });
 
   it("derives display_title and rejects duplicate names and titles", async () => {
@@ -63,6 +72,24 @@ describe("skills API", () => {
     const unicodeResponse = await app.request("/v1/skills", { method: "POST", body: unicode });
     expect(unicodeResponse.status).toBe(400);
     expect(await unicodeResponse.text()).toContain("duplicate paths");
+  });
+
+  it("rejects hostile paths and too many files", async () => {
+    const app = createInMemoryControlPlaneApp();
+    for (const path of ["../escape", "/absolute", "hostile\\backslash", "hostile/evil\0name"]) {
+      const form = skillForm("hostile", "paths");
+      form.append("files[]", new File(["bad"], path));
+      const response = await app.request("/v1/skills", { method: "POST", body: form });
+      expect(response.status, path).toBe(400);
+    }
+
+    const crowded = skillForm("crowded", "files");
+    for (let index = 0; index < MAX_SKILL_FILES; index += 1) {
+      crowded.append("files[]", new File([""], `crowded/files/${index}.txt`));
+    }
+    const response = await app.request("/v1/skills", { method: "POST", body: crowded });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("between 1 and 500 files");
   });
 
   it("accepts a validated zip bundle", async () => {
