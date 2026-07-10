@@ -1,6 +1,7 @@
 # Plan 0125 — Console Vaults/MCP Panel (browse, health, validate)
 
-Date: 2026-07-10
+Date: 2026-07-10 (rev 2 — panel review folded: Codex P2, Codex-adv 3,
+Sonnet 11, Opus 10 findings; see §Review log)
 Builds on: plan 0120 (console served from appliance, #157), plan 0122 §7A/§7B
 (M2/M3 vaults + mcp_oauth, #171/#172).
 
@@ -15,185 +16,274 @@ with no parity constraint: this is where OMA gets to be better than hosted,
 not just equal.
 
 **Decision: operational health data is exposed on the ADMIN tier**, not
-`/v1`. `GET /admin/workspaces/:id/mcp-credentials` returns the token-free
-runtime metadata that already exists internally
-(`readCredentialRuntimeMetadata`, store.ts). Rationale: refresh health is
-fleet-operational (the appliance operator's concern), `/v1` stays
-wire-pure, and the console already holds the admin key in its two-tier
-model (plan 0120: admin key → `/admin`, workspace key → `/v1`, keys never
-cross — api.js `buildRequestHeaders`, routes fixed by path prefix).
+`/v1`. `GET /admin/workspaces/:id/mcp-credentials` returns token-free
+runtime metadata. Rationale: refresh health is fleet-operational (the
+appliance operator's concern), `/v1` stays wire-pure, and the console
+already holds the admin key in its two-tier model (plan 0120: admin key →
+`/admin`, workspace key → `/v1`, keys never cross — api.js
+`buildRequestHeaders` :41). The new route inherits the admin prefix
+middleware (app.ts:281-299) and RouteClass accounting (app.ts:893)
+automatically — no new gate, no client tiering change (review: Opus
+CONFIRMED SOLID).
 
 **Scope: slices A–C only.** Create/rotate/archive credential forms are
-DELIBERATELY DEFERRED (named future slice D, sketched at the bottom):
-highest effort (write-only secret paste, structural-immutability-aware
-forms), lowest urgency (the API workflow works via SDK/curl), and the
-console's write posture deserves its own review after validate proves the
-pattern.
+DELIBERATELY DEFERRED (named slice D, sketched at the bottom).
 
-**Validate is the console's first live write.** Today the console is
-strictly read-only against a live server (`readOnly = apiState.mode !==
-'demo'`, app.jsx:249 — even Create session is demo-only). Validate is the
-right first write: non-destructive (an initialize probe + at most one
-coordinator-governed refresh), idempotent in effect, rate-floored
-server-side (10s validate floor, M3), and it is the ONLY way to clear
-`refresh_status = "invalid"` (the ticker deliberately skips invalid rows) —
-a health view that shows a red pill with no action is half a feature.
+**Write posture, stated precisely (review: Sonnet 6 — the first draft's
+"console's first live write" was wrong).** The AdminPanel already performs
+live `/admin` writes (createWorkspace / mintKey / revokeKey, auth.jsx:82ff),
+ungated by `readOnly`. The `readOnly` guard (app.jsx:248) covers `/v1`
+resource mutations, all demo-only today. Validate is therefore the first
+live **`/v1` write under the workspace key** — and it gets STRUCTURAL
+enforcement, not convention (review: Codex-adv high): see slice C.
 
 ## Slice A — read-only vault browsing (zero backend work)
 
-- Sidebar: "Vaults" nav item in the Managed Agents section (ui.jsx:74
-  `Sidebar`; nav list around ui.jsx:86), routed like environments/files.
-- Data: extend `loadConsoleData` (api.js:193) with
-  `fetchCursorPages("/v1/vaults?include_archived=true")` and, per vault,
-  `fetchCursorPages("/v1/vaults/{id}/credentials?include_archived=true")`
-  (both exist since M2/M3; page limit 20 per wire contract — reuse the
-  cursor pagination + `PartialNotice` truncation pattern, api.js:158).
-- Views, following the existing list/detail pattern (app.jsx
-  `SessionsList` → detail.jsx):
+- Sidebar: "Vaults" entry added to the `NAV` array (ui.jsx:68-72),
+  **first-class route following the Files pattern** — real route +
+  `routeHash` deep-linking (app.jsx:77-96). NOT the Environments pattern:
+  Environments is a dim placeholder, not a route (review: Codex-adv med).
+- **Loading contract (review: Opus BLOCKER 2 / Codex-adv med / Sonnet 2 —
+  three reviewers): vaults are NOT added to `loadConsoleData`.** That
+  function is one `Promise.all` on the critical boot path (api.js:190);
+  one failing vault fetch would drop the whole console to mock mode
+  (app.jsx:172) and the fan-out would gate first paint. Instead:
+  - `loadVaultsData()` in api.js, called lazily on entering the Vaults
+    route (and by the panel's Refresh button). Panel-scoped
+    loading/error states; a total failure shows `ErrorState` in the
+    panel only — sessions/agents/files are untouched by construction.
+  - Fetch vault pages first (`fetchCursorPages("/v1/vaults?include_archived=true")`,
+    existing helper :158, `PAGE_LIMIT=100`), then credential pages per
+    vault with **concurrency 4**, capped at the **first 50 vaults**
+    (excess → a warnings entry naming the count dropped).
+  - Per-vault credential failure does NOT reject the whole load: that
+    vault's row renders with a "credentials unavailable" marker and a
+    warnings entry; other vaults render normally.
+  - Truncation/partial data surfaces through the EXISTING `warnings`
+    strings mechanism (api.js `paginationWarnings` :235 → ModeBar,
+    ui.jsx:145). `PartialNotice` is a design-preview component wired to
+    the tweaks panel, not the real mechanism (review: Opus 9) — do not
+    use it for live partial data.
+  - Fact correction (review: Sonnet 11 / Opus 8): there is no 20-item
+    wire page cap; `MAX_CREDENTIALS_PER_VAULT = 20` (service.ts:29) is a
+    creation-side cap, and the console pages with `limit=100` — so one
+    credential page per vault in practice.
+- Views, following the existing list/detail pattern:
   - Vaults list: id, display_name, credential count, created, archived
     badge.
-  - Vault detail: credential table — id, display_name, auth type
-    (`static_bearer` / `mcp_oauth`), `mcp_server_url`, `expires_at`
-    (relative), archived badge. For mcp_oauth: token_endpoint host,
-    scope, auth method from the readable `refresh` subset.
-  - NO SECRETS EXIST IN THE RESPONSES (write-only enforcement is
-    API-level, M2) — the UI never has a secret to mishandle. Assert this
-    in a UI test anyway: rendered DOM for a seeded credential never
-    contains the token fixture.
-- Empty/loading/error/partial states: reuse states.jsx
-  (`SkeletonTable`/`ErrorState`/`EmptyState`/`PartialNotice`).
-- Demo mode: add vault fixtures to data.js so `?mode=demo` shows the
-  panel (existing pattern for all resources).
+  - Vault detail: credential table — id, display_name, auth type,
+    `mcp_server_url`, `expires_at` (relative), archived badge; for
+    mcp_oauth the readable `refresh` subset (token_endpoint host, scope,
+    auth method).
+  - No secret exists in any consumed response (M2 write-only
+    enforcement) — the UI never holds a secret. Test via the pure
+    mapping layer (see §Testing reality), not DOM.
+- Demo mode: vault fixtures in data.js; `loadVaultsData` is never called
+  in demo mode (route renders fixtures directly, matching the existing
+  demo contract).
 
 ## Slice B — health column (one new admin endpoint + UI)
 
 Backend:
-- Store: `listWorkspaceCredentialRuntimeMetadata(workspaceId)` — the
-  existing `runtimeMetadata()` row mapper (store.ts) over all
-  vault_credentials in the workspace (active + archived flag), token-free
-  by construction (SELECT of structural/scheduling columns only; never
-  touches the sealed blob).
+- Store: `listWorkspaceCredentialRuntimeMetadata(workspaceId)` — a NEW
+  prepared statement over all vault_credentials in the workspace
+  including archived rows (the existing per-credential statement
+  hardcodes `archived_at IS NULL`, store.ts:244-249), selecting the
+  runtime columns PLUS `archived_at`. The `runtimeMetadata()` mapper and
+  its type are **extended** with `archived: boolean` (review: Codex P2 /
+  Opus 5 / Sonnet 5 — the current mapper has no archived field; "reuse"
+  in the first draft was wrong). Still token-free by construction: the
+  SELECT never touches the sealed blob.
 - Admin service + route: `GET /admin/workspaces/:id/mcp-credentials` →
-  `{ data: [...] }` with vaultId, credentialId, authType, hasRefresh,
-  authVersion, expiresAt?, refreshStatus, refreshAttempts, nextRefreshAt,
-  authHintAt, archived. Admin routes live in admin/routes.ts (workspaces
-  + keys today, :11-:44); this grows the admin API's scope from
-  provisioning to operational monitoring — deliberate, per the central
-  decision.
-- Gate: NOT gated on OMA_ENABLE_MCP (it reads the DB, no egress; vault
-  CRUD is similarly ungated per M2 posture). Returns rows for
-  static_bearer too (authType lets the UI show "n/a").
+  **bare array** (admin-tier convention: listWorkspaces/listKeys return
+  bare arrays, admin/routes.ts:21,:40, documented in api.js:94 — the
+  first draft's `{data}` envelope imported the /v1 shape; review:
+  Sonnet 3 / Opus 5). Fields: vaultId, credentialId, authType,
+  hasRefresh, authVersion, expiresAt?, refreshStatus, refreshAttempts,
+  nextRefreshAt, authHintAt, archived.
+- **Existence guard** (review: Opus 6): the service method checks
+  `getWorkspace` first and 404s on unknown workspace — the `listKeys`
+  pattern (service.ts:71-73); a naive SELECT would return 200 `[]`.
+- Gate: NOT gated on OMA_ENABLE_MCP (DB read, no egress; matches M2's
+  ungated vault CRUD posture). static_bearer rows included (authType
+  lets the UI show "n/a").
 
-Console:
-- When the admin key is present (`auth.admin`), vault detail merges the
-  health fields by (vaultId, credentialId):
-  - Status pill: 🟢 `ok` / 🟡 `transient` (with attempts count) /
-    🔴 `invalid` / ⚪ static_bearer or no-refresh (n/a).
-  - `expires_at` countdown ("in 43 min" / "expired 2 h ago").
-  - `next_refresh_at` countdown ("next check in 38 min" / "— waiting for
-    validate" when invalid).
-  - "401 hint pending" badge when `authHintAt` is set.
-- Workspace-key-only login: health column renders as "—" with a single
-  hint line "Refresh health requires the operator (admin) login" — the
-  wire-visible columns still work. No admin call is attempted without
-  the admin flag (api.js key-tier routing enforces it anyway).
-- Refresh cadence: manual "Refresh" button on the panel + reload when
-  the tab is (re)opened. NO background polling loop in v1 — appliance
-  posture; a 30s poll on an open tab is a possible later tweak, not in
-  scope.
+Console — the workspace-id problem and the merged-state paths (review:
+Opus BLOCKERS 1 and 3 — the first draft was unbuildable: the console
+never retains a workspace id, and the only path to holding both keys was
+minting a fresh key from the create-workspace modal):
+- `browseAsWorkspace(plaintextKey)` becomes
+  `browseAsWorkspace(plaintextKey, workspaceId)`; the minted-key modal
+  (auth.jsx:195) passes `minted.workspace_id`; the id is stored in app
+  auth state and used for the health fetch and slice C's post-validate
+  refetch.
+- AdminPanel workspace rows gain a **"Mint key & browse"** action
+  (reusing the existing mint flow + modal), so an operator reaches any
+  EXISTING workspace's vault health without creating a workspace. This
+  supplies the workspace id by construction. Minted browse keys are
+  ordinary keys — name them `console-browse` so operators can recognize
+  and revoke them in the existing key list; auto-expiry is out of scope
+  (noted in Deferred).
+- **Health availability rule (decision-complete):** the health column
+  is available iff the session entered the workspace via an admin
+  browse path (workspace id known AND admin key held). A
+  pasted-workspace-key session (workspaceLogin) has no workspace id and
+  shows the wire-visible columns with one hint line: "Refresh health
+  requires browsing from the operator panel." No /admin call is
+  attempted in that state.
+- **Admin-401 mid-session** (review: Opus 4): if the health fetch 401s,
+  `clearKeyForPath` has already nulled the admin key (api.js:54-60) —
+  the panel must then set `auth.admin = false`, render the health column
+  in its unavailable state with a "re-enter the admin key" hint wired to
+  the existing `reauth()` path, and stop issuing /admin calls. Pinned by
+  a test.
+- Rendering: status pill 🟢 ok / 🟡 transient (with attempts) /
+  🔴 invalid / ⚪ n/a (static_bearer or no refresh); `expires_at` and
+  `next_refresh_at` as relative countdowns; "401 hint pending" badge
+  when `authHintAt` set; archived rows dimmed.
+- Refresh cadence: manual Refresh button + reload on route entry. NO
+  background polling in this arc.
 
-## Slice C — Validate button (first live write)
+## Slice C — Validate button (first live /v1 write)
 
-- Placement: per-credential action in the vault detail row + detail
-  panel, only for `auth.type === "mcp_oauth"` and not archived (the API
-  400s both; don't offer dead buttons — but DO keep it enabled for
-  `invalid` status: that is its main job).
-- Call: `POST /v1/vaults/{v}/credentials/{c}/mcp_oauth_validate` with the
-  workspace key (wire endpoint, M3). Button shows a spinner while the
-  probe runs (typical: seconds; worst case: server-side operation
-  timeout).
-- Result panel, mapped from the response (M3's 14-row table collapses to
-  three operator-facing outcomes):
-  - `valid` → green: "Credential works." Show probe status code.
-  - `invalid` → red: "Re-authorize with the provider and rotate the
-    credential." Show `refresh.status` (`no_refresh_token` vs `failed`)
-    and refresh http status when present.
-  - `unknown` → amber: "Could not conclude (transient/unreachable) — try
-    again later." Show whatever probe/refresh metadata exists.
-  - Full raw response behind a collapsible "details" disclosure, rendered
-    as ESCAPED preformatted text (`textContent`, never innerHTML):
-    `mcp_probe.http_response.body` is server-controlled text — scrubbed
-    server-side (M3), but the console must not add an XSS surface on top.
-    CSP (console-security tests) backs this, and a UI test pins that a
-    body containing `<img onerror>` renders inert.
-- After a validate completes, re-fetch the health row (slice B endpoint,
-  when admin) so a cleared `invalid` flips the pill green without a page
-  reload. Workspace-only sessions just show the validate result.
-- The `readOnly` write-guard (app.jsx:249) stays authoritative for every
-  OTHER mutation; validate gets an explicit carve-out constant
-  (`LIVE_ACTIONS = ["mcp_oauth_validate"]`-style, not a general
-  readOnly=false flip) so review can see exactly what became writable.
-- MCP disabled on the deployment: the API returns the wire-shaped 400
-  ("MCP is disabled on this deployment") — surface that text verbatim on
-  the button, don't hide the button (operators should learn the gate
-  exists).
+- **Structural write gate (review: Codex-adv high — convention is not a
+  boundary):** api.js's single `request()` chokepoint (:62) gains a
+  live-write allowlist: any non-GET to `/v1/*` whose path does not match
+  the allowlist (exactly one entry: `/mcp_oauth_validate` suffix) throws
+  client-side before fetch. The allowlist ALSO requires
+  `apiState.mode === 'api'` — in demo mode no live action ever fires
+  (review: Sonnet 7): the demo Validate click returns a canned fixture
+  response (demo contract: "local interactions mutate bundled demo data
+  only", ui.jsx:135-139). Tests attempt representative blocked writes
+  (session create, agent create, a DELETE) through `request()` and
+  assert they throw without a network call.
+- Placement: per-credential action in vault detail, only for
+  `auth.type === "mcp_oauth"` and not archived (API 400s both); enabled
+  especially when status is `invalid` — validate is the only way to
+  clear it (the ticker skips invalid rows).
+- **Confirm dialog** (review: Opus 7 — every other live write uses
+  `ConfirmDialog`, detail.jsx:485-496): "Validate contacts the MCP
+  server with this credential and may refresh the token at the
+  provider." Then POST `/v1/vaults/{v}/credentials/{c}/mcp_oauth_validate`
+  with the workspace key; spinner while running.
+- Result mapping — FOUR operator-facing outcomes (review: Sonnet 4 —
+  the floor is not a server problem):
+  - `valid` → green "Credential works." (probe status shown)
+  - `invalid` → red "Re-authorize with the provider and rotate the
+    credential." (`refresh.status` + refresh http status shown)
+  - `unknown` + `refresh.status === "skipped"` → grey "Validated too
+    recently — the refresh attempt was skipped (server cooldown). The
+    result reflects the probe only; retry shortly."
+  - other `unknown` → amber "Could not conclude (transient or
+    unreachable) — try again later."
+  After a completed validate the button disables for 10s client-side,
+  matching the server's validate floor, so the skipped state is hard to
+  produce accidentally.
+- Raw response behind a collapsible "details" disclosure rendered as
+  text children only — `mcp_probe.http_response.body` is
+  server-controlled text (scrubbed server-side, M3), and the console
+  adds no markup path on top (see §Testing reality for how this is
+  pinned without a DOM harness).
+- Post-validate: re-fetch the health rows (admin path available) so a
+  cleared `invalid` flips green without reload; workspace-only sessions
+  just show the result panel.
+- MCP disabled on the deployment: surface the wire-shaped 400 text
+  verbatim ("MCP is disabled on this deployment") on the result panel;
+  the button stays visible so operators learn the gate exists.
+
+## Testing reality (review: Sonnet 1 — HIGH; the first draft promised DOM
+tests the repo cannot run)
+
+The console has NO component-test harness: React is vendored UMD loaded
+in-browser, JSX is transpiled by Babel-standalone (`index.html:21-29`),
+and vitest collects only `ui/**/*.test.js` (vitest.config.ts:5) — pure
+functions from plain .js modules (precedent: api.test.js). Building a
+jsdom harness is explicitly OUT OF SCOPE for this arc (named in
+Deferred). Consequently ALL console logic that matters is written as
+pure functions in plain .js modules and tested there:
+
+- `vaults-data.js` (new, plain JS like api.js): response→row mapping,
+  health merge keyed by `(vaultId, credentialId, authVersion)` (an
+  archived-then-recreated credential has a new credentialId; version
+  disambiguates rotation), countdown formatting, validate outcome
+  classifier (the four-outcome mapping above), the live-write allowlist
+  predicate, warnings assembly for the loading contract.
+- Tests: outcome classifier over all mapping rows incl. floor-skip;
+  allowlist predicate blocks non-validate /v1 writes and everything in
+  demo mode; health merge drops/flags archived; mapped rows for a
+  seeded credential never contain the token fixture string; admin-401
+  degradation state transition.
+- XSS posture without DOM tests: React text children escape by default;
+  the new JSX must contain NO `dangerouslySetInnerHTML` and NO
+  `href`/`src` built from server-controlled strings — pinned by a
+  source-scan test over the new files (crude, honest, structural) plus
+  review. The server-side scrub (M3) remains the primary defense.
+- Backend tests are unaffected by the harness gap: admin endpoint
+  token-free serialization, archived rows included, 404 on unknown
+  workspace, 401 with workspace key (tier crossing), bare-array shape.
+- Integration: validate allowlist does not unlock other writes
+  (attempted session-create via request() throws); demo mode issues
+  zero network calls on the vaults route.
 
 ## Security notes (review checklist)
 
 - No secret ever reaches the browser: slice A relies on M2 write-only
   enforcement; slice B's endpoint is structurally token-free; slice C's
-  response is body-capped + scrubbed server-side and escaped client-side.
-- Key tiering unchanged: /v1 calls carry only the workspace key, /admin
-  only the admin key (api.js:41-59); the new admin endpoint slots into
-  the existing prefix routing with no client changes.
-- No secrets or keys in URLs; validate result is never written to
-  location.hash.
-- Transport: admin key + api-key mode already require loopback or TLS
-  (admin-transport gate, #157) — nothing new to add, but the plan relies
-  on it, so the review should confirm no new route bypasses RouteClass
-  accounting (app.ts:891 route classes).
-
-## Test plan
-
-- Store/service/route: metadata list is token-free (serialized JSON of
-  the response never contains seeded token fixtures), covers archived +
-  static rows, 404 on unknown workspace, admin-key-required (401 with
-  workspace key — tier crossing rejected).
-- Console unit (existing vitest UI harness, ui/.../src/__tests__/):
-  - Vault list + detail render from fixtures; secrets absent from DOM.
-  - Health merge: pills per status; hint badge; workspace-only fallback
-    line; no /admin call without admin flag.
-  - Validate: button gating (type/archived), three outcome renders,
-    hostile body renders inert (XSS pin), post-validate health refetch.
-- Integration (console-security/static pattern): admin endpoint route
-  class is "admin"; validate carve-out does not unlock other writes
-  (Create session still demo-only).
-- Demo mode renders vault fixtures without network.
+  response is body-capped + scrubbed server-side and text-rendered
+  client-side.
+- Key tiering unchanged; the new admin route inherits prefix auth +
+  RouteClass automatically (verified against app.ts:281-299, :893).
+- No secrets or keys in URLs or `location.hash`.
+- Live-write surface after this arc: exactly one /v1 endpoint, enforced
+  at the request chokepoint, plus the pre-existing /admin provisioning
+  writes.
 
 ## Deferred (named, not in this arc)
 
-- **Slice D — credential lifecycle forms**: create vault, create
-  credential (write-only secret paste, cleared after submit), rotate
-  (immutability-aware: structural fields read-only, per-field API errors
-  surfaced), archive/delete with confirm. Needs its own write-posture
-  review; the validate carve-out pattern above is the template.
-- Background auto-poll of health; per-deployment (cross-workspace) health
-  rollup on the admin landing page.
+- **Slice D — credential lifecycle forms**: create/rotate (write-only
+  secret paste, immutability-aware), archive/delete with confirm. Adds
+  entries to the live-write allowlist; needs its own write-posture
+  review.
+- Component-test harness (jsdom or Playwright) for the console.
+- Auto-expiry/scoping of `console-browse` minted keys.
+- Background health auto-poll; fleet-wide health rollup on the admin
+  landing page.
 
-## Current source anchors (re-confirm before editing)
+## Current source anchors (re-confirm before editing; lines verified
+against arc-console-vaults @ 94cb3b5 base)
 
-- ui/managed-agents-console/src/app.jsx: routing via `route.name` +
-  `go()` (:219), Sidebar mount (:323), `readOnly` guard (:249), auth
-  phases (:130), `loadLiveData` (:141).
-- ui/managed-agents-console/src/api.js: key tiering
-  `buildRequestHeaders` (:41), cursor pagination (:158),
-  `loadConsoleData` (:193).
-- ui/managed-agents-console/src/ui.jsx: `Sidebar` (:74) with Managed
-  Agents nav list (:86) and Operator section (:93).
-- src/control-plane/admin/routes.ts: workspaces/keys only (:11-:44).
-- src/control-plane/vaults/store.ts: `runtimeMetadata()` row mapper and
-  `readCredentialRuntimeMetadata` exist; no workspace-wide list yet.
-- src/control-plane/app.ts: RouteClass accounting (:891), admin mount
-  (:342), vaults mount with mcp deps (:334).
+- app.jsx: auth phases :129, `loadLiveData` :140, `browseAsWorkspace`
+  :206-216, `go()` :219, `readOnly` :248, Sidebar mount :323, routeHash
+  :77-96.
+- api.js: `PAGE_LIMIT=100` :8, `buildRequestHeaders` :41,
+  `clearKeyForPath` :54, `request` :62, bare-array note :94,
+  `fetchCursorPages` :158, `loadConsoleData` :190, `paginationWarnings`
+  :235.
+- ui.jsx: `NAV` array :68-72, `Sidebar` :74, demo contract copy
+  :135-139, ModeBar warnings :145.
+- auth.jsx: `AdminPanel` :82, minted-key modal onBrowse :195.
+- detail.jsx: `ConfirmDialog` usage :485-496.
+- admin/routes.ts :11-:53 (workspaces+keys only); admin service
+  existence guard pattern service.ts:71-73.
+- vaults/store.ts: `readCredentialRuntimeMetadataStmt` (archived-only
+  filter) :244-249, `readCredentialRuntimeMetadata` :621,
+  `runtimeMetadata()` :1007 (no archived field yet).
+- vaults/service.ts: `MAX_CREDENTIALS_PER_VAULT=20` :29 (creation cap,
+  not a page size).
+- app.ts: admin prefix middleware :281-299, vaults mount :334, admin
+  mount :342, RouteClass :891-893.
+- vaults/routes.ts: validate route + verbatim MCP-disabled string :92-94.
 - Wire API (do not extend): /v1/vaults CRUD + mcp_oauth_validate are
   hosted-exact per probe 52 and plan 0124's mapping table.
+
+## Review log
+
+Rev 2 folds the 4-reviewer panel (2026-07-10): Codex P2 (archived not in
+mapper), Codex-adv (central live-write gate — HIGH; loading contract;
+Environments-anchor), Sonnet (no DOM harness — HIGH; envelope
+convention; floor mapping; demo-mode validate; "first live write"
+framing; page-limit fact), Opus (workspace-id unbuildability — BLOCKER;
+loadConsoleData blast radius — BLOCKER; unreachable merged state —
+BLOCKER; admin-401 degradation; envelope; 404 guard; confirm dialog;
+PartialNotice mechanism; anchor drift). Confirmed-solid notes retained
+inline where load-bearing.
