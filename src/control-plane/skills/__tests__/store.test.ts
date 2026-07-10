@@ -43,6 +43,14 @@ describe("SqliteSkillsStore", () => {
     expect(store.getVersion("wrk_default", skill.id, "latest")).toBeUndefined();
     store.close();
   });
+
+  it("returns not-found when the owner disappears before createVersion commits", () => {
+    const store = new InMemorySkillsStore();
+    expect(() =>
+      store.createVersion("wrk_default", "skill_missing", bundle("missing", "race")),
+    ).toThrow(/Skill skill_missing not found/);
+    store.close();
+  });
 });
 
 function bundle(name: string, description: string) {

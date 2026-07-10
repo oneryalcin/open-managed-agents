@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { invalidRequest } from "../errors.ts";
+import { invalidRequest, notFound } from "../errors.ts";
 import { newSkillContentObjectId, newSkillId, newSkillVersionId } from "../ids.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type { WorkspaceId } from "../workspace.ts";
@@ -56,6 +56,9 @@ function newVersion(): string {
   return String(base + versionTick);
 }
 
+// Versions are fixed-width 16-digit microsecond timestamps for the supported
+// clock range, so SQLite TEXT ordering is chronological ordering.
+
 export class SqliteSkillsStore implements SkillsStore {
   private readonly objectsDir: string | undefined;
   private readonly memoryObjects: Map<string, Uint8Array> | undefined;
@@ -88,7 +91,7 @@ export class SqliteSkillsStore implements SkillsStore {
 
   createVersion(workspaceId: WorkspaceId, skillId: string, bundle: ValidatedSkillBundle): SkillVersionObject {
     const owner = this.row(workspaceId, skillId);
-    if (!owner) return undefined as never;
+    if (!owner) throw notFound(`Skill ${skillId} not found`);
     if (owner.name !== bundle.name) throw invalidRequest("Skill name and directory are immutable across versions");
     const count = Number((this.db.prepare("SELECT COUNT(*) n FROM skill_versions WHERE workspace_id=? AND skill_id=?").get(workspaceId, skillId) as { n: number }).n);
     if (count >= this.maxVersions) throw invalidRequest(`Skill may retain at most ${this.maxVersions} versions`);
@@ -169,7 +172,7 @@ export class SqliteSkillsStore implements SkillsStore {
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   }
   private row(workspaceId: WorkspaceId, id: string): SkillRow | undefined { return this.db.prepare("SELECT * FROM skills WHERE workspace_id=? AND id=?").get(workspaceId, id) as unknown as SkillRow | undefined; }
-  private objectPath(id: string): string { if (this.objectsDir === undefined) throw new Error("Skill object path unavailable for memory store"); return resolve(this.objectsDir, id.slice(0, 2), id); }
+  private objectPath(id: string): string { if (this.objectsDir === undefined) throw new Error("Skill object path unavailable for memory store"); const shard=createHash("sha256").update(id).digest("hex").slice(0,2); return resolve(this.objectsDir, shard, id); }
   private writeObject(id: string, bytes: Uint8Array): void { if (this.memoryObjects !== undefined) { if (this.memoryObjects.has(id)) throw new Error(`Skill content object ${id} already exists`); this.memoryObjects.set(id, bytes.slice()); return; } const path = this.objectPath(id); mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); writeFileSync(path, bytes, { mode: 0o600, flag: "wx" }); }
   private sweep(table: "pending_skill_content_rollbacks" | "pending_skill_content_deletes"): void {
     const rows = this.db.prepare(`SELECT content_object_id FROM ${table}`).all() as unknown as Array<{ content_object_id: string }>;
