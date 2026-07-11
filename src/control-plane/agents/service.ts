@@ -28,7 +28,7 @@ const MAX_SKILLS = 20;
 export class DefaultAgentService implements AgentService {
   constructor(
     private readonly store: AgentStore,
-    private readonly skills?: Pick<SkillsStore, "getSkill" | "getVersion">,
+    private readonly skills: Pick<SkillsStore, "getSkill" | "getVersion"> | undefined,
   ) {}
 
   create(

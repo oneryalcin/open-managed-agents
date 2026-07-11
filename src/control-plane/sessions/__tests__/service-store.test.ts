@@ -1401,7 +1401,7 @@ function createFixture(
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = opts.sessionStore ?? SqliteSessionStore.open(":memory:");
-  const agents = new DefaultAgentService(agentStore);
+  const agents = new DefaultAgentService(agentStore, undefined);
   const environments = new DefaultEnvironmentService(environmentStore);
   const fileStorage =
     opts.fileStorage instanceof InMemoryFileStorage

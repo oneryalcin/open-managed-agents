@@ -1751,7 +1751,7 @@ function makeFixture(
       },
     );
     return createControlPlaneApp({
-      agents: new DefaultAgentService(agentStore),
+      agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),
       sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore),
       sessionEvents: currentService,

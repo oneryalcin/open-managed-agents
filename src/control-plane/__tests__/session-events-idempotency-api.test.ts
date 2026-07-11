@@ -498,7 +498,7 @@ function makeFixture(
   const fileStorage = new InMemoryFileStorage();
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const app = createControlPlaneApp({
-    agents: new DefaultAgentService(agentStore),
+    agents: new DefaultAgentService(agentStore, undefined),
     environments: new DefaultEnvironmentService(environmentStore),
     files: new DefaultFileService(fileStorage),
     sessions: new DefaultSessionService(

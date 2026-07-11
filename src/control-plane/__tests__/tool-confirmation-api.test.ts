@@ -1099,7 +1099,7 @@ function makeSharedFixture(
   const makeApp = (nextRunner: RuntimeEventRunner) => {
     const broadcaster = new SessionEventBroadcaster(eventStore);
     return createControlPlaneApp({
-      agents: new DefaultAgentService(agentStore),
+      agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),
       sessions: new DefaultSessionService(
         sessionStore,

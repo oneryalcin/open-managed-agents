@@ -360,7 +360,7 @@ function makeFixture(
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const admission = createAdmissionLimits(config);
   const app = createRawControlPlaneApp({
-    agents: new DefaultAgentService(agentStore),
+    agents: new DefaultAgentService(agentStore, undefined),
     environments: new DefaultEnvironmentService(environmentStore),
     files: overrides.files ?? new DefaultFileService(fileStorage),
     skills: overrides.skills,

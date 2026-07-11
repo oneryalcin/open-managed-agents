@@ -45,7 +45,7 @@ const runner = new PiSessionRunner({
   customTools: () => TOOLS,
 });
 const app = createControlPlaneApp({
-  agents: new DefaultAgentService(agentStore),
+  agents: new DefaultAgentService(agentStore, undefined),
   environments: new DefaultEnvironmentService(environmentStore),
   sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore),
   sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {

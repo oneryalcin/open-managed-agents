@@ -11,7 +11,7 @@ const REQUEST = {
 describe("AgentService + AgentStore", () => {
   it("scopes agents by workspace internally", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
 
     const agent = service.create("wrk_a", REQUEST);
 
@@ -24,7 +24,7 @@ describe("AgentService + AgentStore", () => {
 
   it("archives agents idempotently while preserving direct lookup", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     const agent = service.create("wrk_default", REQUEST);
 
     const archived = service.archive("wrk_default", agent.id);
@@ -51,7 +51,7 @@ describe("AgentService + AgentStore", () => {
 
   it("does not leak archived agents across workspaces", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     const agent = service.create("wrk_a", REQUEST);
 
     expect(() => service.archive("wrk_b", agent.id)).toThrow(
@@ -63,7 +63,7 @@ describe("AgentService + AgentStore", () => {
 
   it("paginates list results by opaque next_page cursor", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     const first = service.create("wrk_default", {
       ...REQUEST,
       name: "First",
@@ -93,7 +93,7 @@ describe("AgentService + AgentStore", () => {
 
   it("does not treat an empty cursor as a valid store page", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     service.create("wrk_default", REQUEST);
 
     expect(store.list("wrk_default", { page: "" })).toEqual({
@@ -105,7 +105,7 @@ describe("AgentService + AgentStore", () => {
 
   it("scopes list results by workspace internally", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     const agentA = service.create("wrk_a", REQUEST);
     service.create("wrk_b", { ...REQUEST, name: "Other Workspace" });
 

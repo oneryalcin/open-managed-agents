@@ -196,7 +196,7 @@ async function runServer(): Promise<void> {
   });
   const broadcaster = new SessionEventBroadcaster(stores.events);
   const app = createControlPlaneApp({
-    agents: new DefaultAgentService(stores.agents),
+    agents: new DefaultAgentService(stores.agents, stores.skills),
     environments: new DefaultEnvironmentService(stores.environments),
     files: new DefaultFileService(stores.files),
     sessions: new DefaultSessionService(

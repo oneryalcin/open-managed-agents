@@ -744,7 +744,7 @@ function createLifecycleFixture(opts: {
   const broadcaster = new SessionEventBroadcaster(eventStore);
   return {
     app: createControlPlaneApp({
-      agents: new DefaultAgentService(agentStore),
+      agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),
       sessions: new DefaultSessionService(
         sessionStore,
