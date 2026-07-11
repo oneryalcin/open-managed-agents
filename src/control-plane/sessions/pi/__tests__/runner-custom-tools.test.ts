@@ -111,9 +111,14 @@ const sdk = vi.hoisted(() => {
     resourceLoader?: { getSkills(): { skills: Array<{ name: string; filePath: string; baseDir: string }>; diagnostics: unknown[] } };
   };
 
+  // Faithful to real Pi 0.80.6: getSkills() stays empty until reload() runs
+  // skillsOverride. If the runner ever stops awaiting reload(), the skills
+  // assertions below go empty and fail — which is the bug the mock previously hid.
   class MockResourceLoader {
+    private loaded: { skills: unknown[]; diagnostics: unknown[] } = { skills: [], diagnostics: [] };
     constructor(private readonly opts: { skillsOverride?: (base: { skills: never[]; diagnostics: never[] }) => any }) {}
-    getSkills() { return this.opts.skillsOverride?.({ skills: [], diagnostics: [] }) ?? { skills: [], diagnostics: [] }; }
+    async reload() { this.loaded = this.opts.skillsOverride?.({ skills: [], diagnostics: [] }) ?? { skills: [], diagnostics: [] }; }
+    getSkills() { return this.loaded; }
   }
 
   let emitBuiltinToolCallMessage = false;
@@ -351,6 +356,21 @@ describe("PiSessionRunner custom-tool bridge", () => {
       skills: [{ name: "demo-skill", filePath: "/workspace/skills/demo-skill/SKILL.md", baseDir: "/workspace/skills/demo-skill" }],
     });
     await runner.closeSession("wrk_default", "sesn_skill");
+  });
+
+  it("advertises skills from the snapshot provider when not passed inline (post-restart rebuild path)", async () => {
+    // After a restart/eviction the per-prepare skills map is empty, so the
+    // loader must fall back to the runner's persisted snapshot provider.
+    const runner = new PiSessionRunner({
+      skills: () => [{ name: "demo-skill", description: "Use the demo" }],
+      idleTtlMs: 0,
+    });
+    await runner.prepareSession("wrk_default", "sesn_skill_fallback", {});
+    expect(sdk.lastCreateOptions()?.resourceLoader?.getSkills()).toMatchObject({
+      diagnostics: [],
+      skills: [{ name: "demo-skill", filePath: "/workspace/skills/demo-skill/SKILL.md", baseDir: "/workspace/skills/demo-skill" }],
+    });
+    await runner.closeSession("wrk_default", "sesn_skill_fallback");
   });
 
   it("pauses always_ask builtin tools until a tool_confirmation is committed", async () => {

@@ -83,6 +83,33 @@ export type PiSessionFileMountResolver = (
 export interface PiSessionSkillSnapshot { name: string; description: string; }
 export type PiSessionSkillsProvider = (workspaceId: WorkspaceId, sessionId: string) => readonly PiSessionSkillSnapshot[];
 
+// Builds the resource loader that advertises snapshotted skills to the model at
+// their in-container mount paths. Exported so the real-SDK contract test can
+// exercise the exact same construction the runner uses. The loader must be
+// reload()ed before use (see createResourceLoader): a caller-provided loader is
+// used as-is by createAgentSession, and skillsOverride only runs inside reload().
+export function buildSessionSkillsResourceLoader(
+  skills: readonly PiSessionSkillSnapshot[],
+): DefaultResourceLoader {
+  return new DefaultResourceLoader({
+    cwd: "/",
+    agentDir: "/nonexistent-oma-pi-agent",
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    skillsOverride: () => ({
+      diagnostics: [],
+      skills: skills.map((skill) => {
+        const baseDir = `/workspace/skills/${skill.name}`;
+        const filePath = `${baseDir}/SKILL.md`;
+        return { name: skill.name, description: skill.description, filePath, baseDir, disableModelInvocation: false, sourceInfo: createSyntheticSourceInfo(filePath, { source: "oma-session-snapshot", scope: "temporary", origin: "top-level", baseDir }) };
+      }),
+    }),
+  });
+}
+
 interface RuntimeHandle {
   session: PiRuntimeSession;
   sandbox: SandboxProvider | undefined;
@@ -990,30 +1017,20 @@ export class PiSessionRunner implements RuntimeEventRunner {
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
       sessionManager: SessionManager.inMemory(),
-      resourceLoader: this.createResourceLoader(workspaceId, sessionId),
+      resourceLoader: await this.createResourceLoader(workspaceId, sessionId),
     });
     return session;
   }
 
-  private createResourceLoader(workspaceId: WorkspaceId, sessionId: string): DefaultResourceLoader {
+  private async createResourceLoader(workspaceId: WorkspaceId, sessionId: string): Promise<DefaultResourceLoader> {
     const skills = this.preparingSessionSkills.get(sessionId) ?? this.opts.skills?.(workspaceId, sessionId) ?? [];
-    return new DefaultResourceLoader({
-      cwd: "/",
-      agentDir: "/nonexistent-oma-pi-agent",
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-      skillsOverride: () => ({
-        diagnostics: [],
-        skills: skills.map((skill) => {
-          const baseDir = `/workspace/skills/${skill.name}`;
-          const filePath = `${baseDir}/SKILL.md`;
-          return { name: skill.name, description: skill.description, filePath, baseDir, disableModelInvocation: false, sourceInfo: createSyntheticSourceInfo(filePath, { source: "oma-session-snapshot", scope: "temporary", origin: "top-level", baseDir }) };
-        }),
-      }),
-    });
+    const loader = buildSessionSkillsResourceLoader(skills);
+    // createAgentSession only reload()s a loader it constructs itself; a
+    // caller-provided one is used as-is. skillsOverride runs inside reload(),
+    // so without this the model never sees <available_skills> even though the
+    // skill files are mounted in the sandbox.
+    await loader.reload();
+    return loader;
   }
 
   private preparingSessionAgentContext(

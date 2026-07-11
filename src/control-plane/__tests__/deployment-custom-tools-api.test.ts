@@ -64,6 +64,8 @@ const sdk = vi.hoisted(() => {
     SessionManager: { inMemory: vi.fn(() => ({})) },
     DefaultResourceLoader: class {
       constructor(readonly opts: unknown) {}
+      async reload() {}
+      getSkills() { return { skills: [], diagnostics: [] }; }
     },
     createSyntheticSourceInfo: vi.fn((path: string, options: object) => ({ path, ...options })),
     defineTool: vi.fn((tool: MockToolDefinition) => tool),
