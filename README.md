@@ -6,6 +6,14 @@ Swap the `base_url` in your Anthropic SDK and your agents run here instead:
 same API, same event stream, same sandboxed execution — but the sessions,
 files, and sandboxes live on your machines, under your policies.
 
+> **Where OMA stands today:** wire-compatible on the synchronous single-agent
+> core — agents, sessions, sandboxes, tools, skills, MCP, vaults, SSE — with
+> sandbox security and egress controls that *exceed* the hosted product. The
+> orchestration/persistence layer (multi-agent runtime, memory stores,
+> scheduled deployments, webhooks, outcomes) is deliberately deferred. See
+> **[PARITY.md](PARITY.md)** for the full domain-by-domain scorecard and the
+> active parity worklist.
+
 ## Quickstart
 
 From a checkout (Node ≥ 22.19):
