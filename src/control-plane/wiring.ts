@@ -70,6 +70,16 @@ export function createFileMountResolver(
   };
 }
 
+export function createSkillSnapshotsProvider(
+  sessionStore: Pick<SqliteSessionStore, "getSkillSnapshots">,
+) {
+  return (workspaceId: string, sessionId: string) =>
+    sessionStore.getSkillSnapshots(workspaceId, sessionId).map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+    }));
+}
+
 async function snapshotToRuntimeMount(
   workspaceId: string,
   fileStorage: Pick<FileStorage, "openInternalSnapshotBytes">,
@@ -85,6 +95,7 @@ async function snapshotToRuntimeMount(
     );
   }
   return {
+    kind: snapshot.kind,
     mountPath: snapshot.mount_path,
     snapshotFileId: snapshot.snapshot_file_id,
     sha256: snapshot.sha256,

@@ -961,6 +961,7 @@ class HookedSessionStore implements SessionStore {
   getFileMountSnapshots(): SessionFileMountSnapshotRow[] {
     return [];
   }
+  getSkillSnapshots(): [] { return []; }
 
   listPendingInternalSnapshotDeleteWorkspaces(): WorkspaceId[] {
     return [];

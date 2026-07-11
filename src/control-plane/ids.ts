@@ -24,6 +24,10 @@ export function newSessionResourceId(): string {
   return `sesrsc_${uuidv7()}`;
 }
 
+export function newSessionSkillSnapshotId(): string {
+  return `sesskill_${uuidv7()}`;
+}
+
 export function newSessionId(): string {
   return `sesn_${uuidv7()}`;
 }

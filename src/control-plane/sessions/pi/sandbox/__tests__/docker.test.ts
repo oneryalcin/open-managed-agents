@@ -48,7 +48,7 @@ describe("Docker sandbox provider command construction", () => {
       containerName: "oma-test",
       workspacePath: "/workspace",
       image: "alpine:3.19",
-      memory: "256m",
+      memory: "384m",
       cpus: "1",
       pidsLimit: "64",
       tmpfsSize: "64m",
@@ -65,7 +65,7 @@ describe("Docker sandbox provider command construction", () => {
     expect(args).toContain("--pids-limit");
     expect(args).toContain("64");
     expect(args).toContain("--memory");
-    expect(args).toContain("256m");
+    expect(args).toContain("384m");
     expect(args).toContain("--tmpfs");
     expect(args).toContain(
       "/workspace:rw,exec,nosuid,nodev,uid=65534,gid=65534,mode=700,size=64m",
@@ -76,6 +76,9 @@ describe("Docker sandbox provider command construction", () => {
     expect(args).toContain(
       "/mnt/session/outputs:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=100m",
     );
+    expect(args).toContain(
+      "/workspace/skills:rw,exec,nosuid,nodev,uid=0,gid=0,mode=755,size=64m",
+    );
     expect(args).not.toContain("/var/run/docker.sock");
   });
 
@@ -84,7 +87,7 @@ describe("Docker sandbox provider command construction", () => {
       containerName: "oma-test",
       workspacePath: "/workspace",
       image: "alpine:3.19",
-      memory: "256m",
+      memory: "384m",
       cpus: "1",
       pidsLimit: "64",
       tmpfsSize: "64m",
@@ -113,7 +116,7 @@ describe("Docker sandbox provider command construction", () => {
       containerName: "oma-test",
       workspacePath: "/workspace",
       image: "alpine:3.19",
-      memory: "256m",
+      memory: "384m",
       cpus: "1",
       pidsLimit: "64",
       tmpfsSize: "64m",
@@ -1012,7 +1015,7 @@ describe("Docker sandbox provider integration", () => {
         workspaceTmpfs: true,
         uploadsTmpfs: true,
         pidsLimit: 64,
-        memory: 268435456,
+        memory: 402653184,
       });
 
       await provider.operations.write.mkdir("/workspace/src");
@@ -1047,6 +1050,7 @@ describe("Docker sandbox provider integration", () => {
       ).resolves.toEqual(Buffer.from("export const value = 2;\n"));
       await expect(provider.operations.ls.readdir("/workspace")).resolves.toEqual([
         "README.md",
+        "skills",
         "src",
       ]);
       await expect(
@@ -1117,6 +1121,7 @@ describe("Docker sandbox provider integration", () => {
       await expect(
         provider.materializeFileResources?.([
           {
+            kind: "upload",
             mountPath: "/mnt/session/uploads/data/probe.txt",
             snapshotFileId: "file_snapshot",
             sha256:
@@ -1124,13 +1129,21 @@ describe("Docker sandbox provider integration", () => {
             sizeBytes: 6,
             bytes: Buffer.from("hello\n"),
           },
+          {
+            kind: "skill",
+            mountPath: "/workspace/skills/demo/scripts/run.sh",
+            snapshotFileId: "file_skill_snapshot",
+            sha256: "4726de74e6ad02ddb5decee701960c06c6fd91a871f95238350941eed7dbb22a",
+            sizeBytes: 8,
+            bytes: Buffer.from("echo ok\n"),
+          },
         ]),
       ).resolves.toBeUndefined();
 
       const chunks: Buffer[] = [];
       await expect(
         provider.operations.bash.exec(
-          "cat /mnt/session/uploads/data/probe.txt && test ! -w /mnt/session/uploads/data/probe.txt && test ! -x /mnt/session/uploads/data/probe.txt",
+          "cat /mnt/session/uploads/data/probe.txt && test ! -w /mnt/session/uploads/data/probe.txt && test ! -x /mnt/session/uploads/data/probe.txt && test -x /workspace/skills/demo/scripts/run.sh && test ! -w /workspace/skills/demo/scripts/run.sh && /workspace/skills/demo/scripts/run.sh && ! mv /workspace/skills /workspace/skills-away",
           "/workspace",
           {
             env: {},
@@ -1139,7 +1152,7 @@ describe("Docker sandbox provider integration", () => {
           },
         ),
       ).resolves.toEqual({ exitCode: 0 });
-      expect(Buffer.concat(chunks).toString("utf8")).toBe("hello\n");
+      expect(Buffer.concat(chunks).toString("utf8")).toContain("hello\nok\n");
     } finally {
       provider.dispose();
     }

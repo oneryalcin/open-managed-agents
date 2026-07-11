@@ -49,12 +49,19 @@ export interface ValidatedSkillBundle {
   manifestSha256: string;
 }
 
+export interface SkillVersionFile {
+  path: string;
+  sizeBytes: number;
+  sha256: string;
+}
+
 export interface SkillsStore {
   createSkill(workspaceId: WorkspaceId, displayTitle: string, bundle: ValidatedSkillBundle): SkillObject;
   createVersion(workspaceId: WorkspaceId, skillId: string, bundle: ValidatedSkillBundle): SkillVersionObject;
   getSkill(workspaceId: WorkspaceId, skillId: string): SkillObject | undefined;
   listSkills(workspaceId: WorkspaceId, limit: number, after?: string): SkillPage<SkillObject>;
   getVersion(workspaceId: WorkspaceId, skillId: string, version: string): SkillVersionObject | undefined;
+  getVersionFiles(workspaceId: WorkspaceId, skillId: string, version: string): SkillVersionFile[];
   listVersions(workspaceId: WorkspaceId, skillId: string, limit: number, after?: string): SkillPage<SkillVersionObject>;
   deleteVersion(workspaceId: WorkspaceId, skillId: string, version: string): boolean;
   deleteSkill(workspaceId: WorkspaceId, skillId: string): boolean;

@@ -39,6 +39,18 @@ export interface SessionFileMountSnapshotRow {
   snapshot_file_id: string;
   sha256: string;
   size_bytes: number;
+  kind: "upload" | "skill";
+  skill_snapshot_id: string | null;
+}
+
+export interface SessionSkillSnapshotRow {
+  workspace_id: WorkspaceId;
+  session_id: string;
+  skill_snapshot_id: string;
+  skill_id: string;
+  version: string;
+  name: string;
+  description: string;
 }
 
 export interface PendingInternalSnapshotDeleteRow
@@ -60,6 +72,7 @@ export interface PendingInternalSnapshotCreateRollbackRow
 export interface CreateSessionRecord {
   row: SessionRow;
   snapshots?: SessionFileMountSnapshotRow[];
+  skillSnapshots?: SessionSkillSnapshotRow[];
 }
 
 export interface CreateSessionIdempotencyCommit {
@@ -98,6 +111,7 @@ export interface SessionStore {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): SessionFileMountSnapshotRow[];
+  getSkillSnapshots(workspaceId: WorkspaceId, sessionId: string): SessionSkillSnapshotRow[];
   listPendingInternalSnapshotDeleteWorkspaces(): WorkspaceId[];
   getPendingInternalSnapshotDeletes(
     workspaceId: WorkspaceId,

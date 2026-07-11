@@ -773,6 +773,7 @@ describe("microsandbox sandbox provider", () => {
     await expect(
       provider.materializeFileResources?.([
         {
+          kind: "upload",
           mountPath: "/mnt/session/uploads/data/probe.txt",
           snapshotFileId: "file_snapshot",
           sha256:
@@ -812,6 +813,7 @@ describe("microsandbox sandbox provider", () => {
     await expect(
       provider.materializeFileResources?.([
         {
+          kind: "upload",
           mountPath: "/mnt/session/uploads/data/probe.txt",
           snapshotFileId: "file_snapshot",
           sha256: "0".repeat(64),
@@ -976,6 +978,7 @@ describe("microsandbox sandbox provider live smoke", () => {
         await expect(
           provider.materializeFileResources?.([
             {
+              kind: "upload",
               mountPath: "/mnt/session/uploads/data/probe.txt",
               snapshotFileId: "file_snapshot",
               sha256:

@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqliteAgentStore } from "../../agents/store.ts";
 import { DefaultAgentService } from "../../agents/service.ts";
@@ -8,6 +9,7 @@ import { DEFAULT_WORKSPACE_ID } from "../../workspace.ts";
 import { DefaultSessionService } from "../service.ts";
 import { SqliteSessionStore } from "../store.ts";
 import { InMemoryFileStorage } from "../../files/store.ts";
+import { InMemorySkillsStore } from "../../skills/store.ts";
 import type { SessionFileMountSnapshotRow, SessionStore } from "../types.ts";
 import type {
   RuntimeEventRunner,
@@ -1373,7 +1375,48 @@ describe("session service/store", () => {
       }),
     ).rejects.toThrow("6 bytes mounted byte limit");
   });
+
+  it("copies attached skill files into durable session snapshots", async () => {
+    const agentStore = SqliteAgentStore.open(":memory:");
+    const environmentStore = SqliteEnvironmentStore.open(":memory:");
+    const sessionStore = SqliteSessionStore.open(":memory:");
+    const files = new InMemoryFileStorage();
+    const skills = new InMemorySkillsStore();
+    const runtime = new FakeRuntimePreparer();
+    runtime.currentStore = sessionStore;
+    const skill = skills.createSkill(DEFAULT_WORKSPACE_ID, "Snapshot", skillBundle("snapshot-skill"));
+    const agent = new DefaultAgentService(agentStore, skills).create(DEFAULT_WORKSPACE_ID, { name: "Skill agent", model: "claude-opus-4-7", tools: [{ type: "agent_toolset_20260401" }], skills: [{ type: "custom", skill_id: skill.id, version: "latest" }] });
+    const environment = new DefaultEnvironmentService(environmentStore).create(DEFAULT_WORKSPACE_ID, { name: "Skill env", config: { type: "cloud" } });
+    const service = new DefaultSessionService(sessionStore, agentStore, environmentStore, files, { skills, runtime });
+    const session = await service.create(DEFAULT_WORKSPACE_ID, { agent: agent.id, environment_id: environment.id });
+    const grouping = sessionStore.getSkillSnapshots(DEFAULT_WORKSPACE_ID, session.id);
+    expect(grouping).toMatchObject([{ skill_id: skill.id, version: skill.latest_version, name: "snapshot-skill" }]);
+    const snapshots = sessionStore.getFileMountSnapshots(DEFAULT_WORKSPACE_ID, session.id);
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots.every((row) => row.kind === "skill" && row.skill_snapshot_id === grouping[0]!.skill_snapshot_id)).toBe(true);
+    expect(runtime.prepares[0]?.fileMounts.map((mount) => [mount.kind, mount.mountPath])).toEqual([["skill", "/workspace/skills/snapshot-skill/SKILL.md"], ["skill", "/workspace/skills/snapshot-skill/scripts/run.sh"]]);
+    expect(runtime.prepares[0]?.skills).toEqual([{ name: "snapshot-skill", description: "snapshot test" }]);
+    expect(skills.deleteVersion(DEFAULT_WORKSPACE_ID, skill.id, "latest")).toBe(true);
+    for (const snapshot of snapshots) expect(await files.openInternalSnapshotBytes(DEFAULT_WORKSPACE_ID, snapshot.snapshot_file_id)).toBeDefined();
+  });
+
+  it("shares the mounted-byte limit between uploads and skills", async () => {
+    const agentStore = SqliteAgentStore.open(":memory:"); const environmentStore = SqliteEnvironmentStore.open(":memory:"); const sessionStore = SqliteSessionStore.open(":memory:");
+    const files = new InMemoryFileStorage(); const skills = new InMemorySkillsStore();
+    const skill = skills.createSkill(DEFAULT_WORKSPACE_ID, "Budget", skillBundle("budget-skill"));
+    const agent = new DefaultAgentService(agentStore, skills).create(DEFAULT_WORKSPACE_ID, { name: "Budget agent", model: "claude-opus-4-7", tools: [{ type: "agent_toolset_20260401" }], skills: [{ type: "custom", skill_id: skill.id }] });
+    const environment = new DefaultEnvironmentService(environmentStore).create(DEFAULT_WORKSPACE_ID, { name: "Budget env", config: { type: "cloud" } });
+    const upload = await files.create(DEFAULT_WORKSPACE_ID, { filename: "input", mimeType: "text/plain", body: bytes("1234") });
+    const service = new DefaultSessionService(sessionStore, agentStore, environmentStore, files, { skills, maxMountedBytes: 10 });
+    await expect(service.create(DEFAULT_WORKSPACE_ID, { agent: agent.id, environment_id: environment.id, resources: [{ type: "file", file_id: upload.metadata.id }] })).rejects.toThrow("Session resources exceed the 10 bytes mounted byte limit");
+  });
 });
+
+function skillBundle(name: string) {
+  const entries = [[`${name}/SKILL.md`, `---\nname: ${name}\ndescription: snapshot test\n---\n`], [`${name}/scripts/run.sh`, "echo ok\n"]] as const;
+  const files = entries.map(([path, content]) => { const data = bytes(content); return { path, bytes: data, size: data.byteLength, sha256: createHash("sha256").update(data).digest("hex") }; });
+  return { name, description: "snapshot test", directory: name, files, totalBytes: files.reduce((sum, file) => sum + file.size, 0), manifestSha256: "manifest" };
+}
 
 function createFixture(
   opts: {
@@ -1474,6 +1517,7 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
     fileMounts: NonNullable<RuntimeSessionPrepareOptions["fileMounts"]>;
     vaultIds: readonly string[] | undefined;
     agent: RuntimeSessionPrepareOptions["agent"];
+    skills: RuntimeSessionPrepareOptions["skills"];
   }> = [];
   readonly closed: Array<{ workspaceId: string; sessionId: string }> = [];
 
@@ -1496,6 +1540,7 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
       fileMounts: opts.fileMounts ?? [],
       vaultIds: opts.vaultIds,
       agent: opts.agent,
+      skills: opts.skills,
     });
     if (this.opts.throwOnPrepare) throw this.opts.throwOnPrepare;
   }
@@ -1550,6 +1595,7 @@ function failCreateStore(delegate: SqliteSessionStore): SessionStore {
     archive: delegate.archive.bind(delegate),
     delete: delegate.delete.bind(delegate),
     getFileMountSnapshots: delegate.getFileMountSnapshots.bind(delegate),
+    getSkillSnapshots: delegate.getSkillSnapshots.bind(delegate),
     listPendingInternalSnapshotDeleteWorkspaces:
       delegate.listPendingInternalSnapshotDeleteWorkspaces.bind(delegate),
     getPendingInternalSnapshotDeletes:
@@ -1590,6 +1636,8 @@ function rollbackRow(
     snapshot_file_id: opts.snapshotFileId,
     sha256: "sha256",
     size_bytes: opts.sizeBytes ?? 4,
+    kind: "upload",
+    skill_snapshot_id: null,
   };
 }
 

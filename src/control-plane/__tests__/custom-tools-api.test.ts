@@ -1491,6 +1491,7 @@ class CollidingSessionStore implements SessionStore {
   getFileMountSnapshots(): [] {
     return [];
   }
+  getSkillSnapshots(): [] { return []; }
 
   listPendingInternalSnapshotDeleteWorkspaces(): [] {
     return [];

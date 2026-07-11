@@ -359,7 +359,7 @@ entries. Nothing reads the live store at runtime.
 
 ### D5 — Advertising to Pi: custom synthetic `ResourceLoader` (RESOLVED)
 
-**Confirmed against pinned Pi 0.75.4 by three independent source reads (Opus,
+**Confirmed against pinned Pi 0.80.6 by three independent source reads (Opus,
 Fable, External).** Wire a **fully custom `ResourceLoader`** into
 `createAgentSession` (`runner.ts:969`; today it passes none, so Pi's
 `DefaultResourceLoader` would scan the host cwd — wrong). Requirements:
@@ -523,6 +523,10 @@ the quota domain and the version-lifecycle edges.)
    the discriminated per-file mount (sized `--tmpfs`, root-owned, path-based
    exec bits) → custom ResourceLoader → wire into `createPiSession`
    (`runner.ts:969`).
+   **Implemented on `arc-skills` (slice 3):** concrete-version copy snapshots,
+   persisted kind/grouping metadata, shared upload+skill byte admission,
+   Docker/microsandbox skill materialization, and synthetic Pi ResourceLoader
+   delivery are test-pinned including real Docker permission behavior.
 4. **Live smoke 58** (the exit criterion): OMA end-to-end with an **OMA-owned
    Apache example skill** — agent + attached skill → session → model `read`s
    `/workspace/skills/<name>/SKILL.md` (assert via the bash/read tool_result, per

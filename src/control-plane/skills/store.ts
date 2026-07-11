@@ -13,6 +13,7 @@ import {
   type SkillPage,
   type SkillsStore,
   type SkillVersionObject,
+  type SkillVersionFile,
   type ValidatedSkillBundle,
 } from "./types.ts";
 
@@ -141,6 +142,14 @@ export class SqliteSkillsStore implements SkillsStore {
     const row = this.db.prepare("SELECT * FROM skill_versions WHERE workspace_id=? AND skill_id=? AND version=?").get(workspaceId, skillId, resolved) as unknown as VersionRow | undefined;
     const owner = this.row(workspaceId, skillId);
     return row && owner ? toVersion(row, owner.name) : undefined;
+  }
+  getVersionFiles(workspaceId: WorkspaceId, skillId: string, version: string): SkillVersionFile[] {
+    return this.db.prepare("SELECT path,size_bytes,sha256 FROM skill_files WHERE workspace_id=? AND skill_id=? AND version=? ORDER BY path")
+      .all(workspaceId, skillId, version)
+      .map((row) => {
+        const file = row as { path: string; size_bytes: number; sha256: string };
+        return { path: file.path, sizeBytes: file.size_bytes, sha256: file.sha256 };
+      });
   }
   listVersions(workspaceId: WorkspaceId, skillId: string, limit: number, after?: string): SkillPage<SkillVersionObject> {
     const owner = this.row(workspaceId, skillId); if (!owner) return { data: [], has_more: false, next_page: null };

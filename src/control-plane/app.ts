@@ -91,6 +91,7 @@ import { SqliteVaultStore } from "./vaults/store.ts";
 import type { VaultService } from "./vaults/types.ts";
 import {
   createFileMountResolver,
+  createSkillSnapshotsProvider,
   createSessionEgressBundleResolver,
   createStoreBackedCustomToolsProvider,
 } from "./wiring.ts";
@@ -600,6 +601,7 @@ export function createDeploymentControlPlane(
         ...(stores.secrets === undefined ? {} : { secrets: stores.secrets }),
       }),
     fileMountResolver: createFileMountResolver(stores.sessions, stores.files),
+    skills: createSkillSnapshotsProvider(stores.sessions),
     customTools:
       opts.runner?.customTools ??
       createStoreBackedCustomToolsProvider({
