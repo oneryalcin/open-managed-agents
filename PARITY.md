@@ -172,9 +172,11 @@ Known, roadmap-tracked. Leave until each is scheduled as its own arc. Grouped by
 
 ## Doc-honesty fixes (stale/incorrect internal docs)
 
-- `docs/plans/0114-appliance-product-roadmap.md:102` — says the agent `skills` field is runtime-inert. **Stale**: skills shipped (`26f754d`); the runtime consumes them (`sessions/pi/runner.ts` `buildSessionSkillsResourceLoader`, proven by smoke `scratch/59-…`).
-- `docs/architecture.md:183` — lists `grep` as done. **Wrong**: `grep` is unwired (Pile B Tier 1).
-- **Scheduled deployments** are absent from the roadmap capability-gap table entirely — add a row so the gap is tracked like GitHub mounts are.
+All resolved 2026-07-11:
+
+- [x] `docs/plans/0114-appliance-product-roadmap.md` — skills row corrected from "runtime-inert" to DONE (0126; runtime consumes them via `sessions/pi/runner.ts` `buildSessionSkillsResourceLoader`, smoke `scratch/59-…`).
+- [x] `docs/architecture.md` — `grep` corrected from ✅ to "not yet wired"; `glob` clarified as wired under the name `find`.
+- [x] `docs/plans/0114-appliance-product-roadmap.md` — added a **Scheduled deployments** row to the capability-gap table (was untracked).
 
 ---
 

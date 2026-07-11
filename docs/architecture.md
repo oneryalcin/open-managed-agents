@@ -180,8 +180,9 @@ These four invariants make the rules above *correct under concurrency*. Each is 
 
 | Concern | Sandbox | Control plane |
 |---|---|---|
-| `bash`, file ops, `glob`, `grep` | ✅ | |
-| `web_fetch`, `web_search` | TBD — could run in sandbox (Pi default) or via control plane (more control) | |
+| `bash`, file ops (`read`/`write`/`edit`), `find` (glob), `ls` | ✅ wired in sandbox | |
+| `grep` | ❌ not yet wired — Pi ships `createGrepToolDefinition`; unwired in `sessions/pi/sandbox/provider.ts` (see [PARITY.md](../PARITY.md) Pile B) | |
+| `web_fetch`, `web_search` | TBD — could run in sandbox (Pi default) or via control plane (more control); egress boundary now shipped, so unblocked | |
 | Pi `AgentSession` instance | | ✅ |
 | Custom tool execution | | ✅ |
 | MCP tool routing (0122 M1) | | ✅ control-plane MCP client (streamable HTTP, SSRF-guarded); sandbox never dials MCP servers |

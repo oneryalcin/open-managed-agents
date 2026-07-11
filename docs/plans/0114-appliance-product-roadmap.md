@@ -99,12 +99,13 @@ implementing any row** (house discipline; the 0113 probes are the model).
 
 | Capability | Hosted | OMA today | Note |
 | --- | --- | --- | --- |
-| Skills | Loaded into session container | **Wire-accepted, runtime-inert** (`skills` parsed/stored/echoed; nothing in `sessions/pi/` consumes it) | Fundamentally files + instructions into the sandbox; no heavy dependency. **Now unblocked** (egress done) |
+| Skills | Loaded into session container | **DONE (0126, 2026-07-11)** — `/v1/skills` CRUD/versioning, attachment + read-tool admission, copy-at-create session snapshot, and container-mounted progressive-disclosure delivery are live-smoke proven (`sessions/pi/runner.ts` `buildSessionSkillsResourceLoader`, smoke `scratch/59-skills-live-smoke.ts`) | Anthropic prebuilt catalog + console/multi-agent skill surfaces deliberately deferred (see [PARITY.md](../../PARITY.md)) |
 | MCP servers | Sessions connect, auth handled | **DONE (0122 M1-M3, 2026-07-09)** — execution, vault-backed `static_bearer`, and proactive/reactive `mcp_oauth` refresh are live-smoke proven | Servers work end-to-end behind `OMA_ENABLE_MCP`; access, refresh, and client-secret values stay outside model-visible events |
 | Sandbox networking | `environment.config.networking: {type: "limited", allowed_hosts}` | **DONE (2026-07-06)** — `networking.allow`/`credentials` parsed into a per-session egress policy; docker-local sidecar honors it, else `--network none` (0117c–e) | The enabling gap — now closed; skills, MCP, web tools, repo mounts unblocked |
 | Secret handling | Vault + boundary injection; secrets never in sandbox | **DONE (2026-07-06)** — envelope-encrypted `SqliteSecretsStore`, sentinels in the sandbox, real values injected only at the TLS-terminated proxy leg (0117c/d, 0118) | Same egress boundary does allowlist + injection; #130 closed |
 | Session usage | Cumulative token usage per session | `usage: null` | Wire schema + span-level usage already captured in [observability schema findings](../references/managed-agents-observability-schema-findings.md); metering = aggregation |
 | GitHub repo mounts | With out-of-band token injection | Absent | After egress + secrets |
+| Scheduled deployments | `/v1/deployments` cron schedule, `deployment_runs`, pause/unpause/archive | Absent | Post-core automation; deferred (added 2026-07-11 — previously untracked) |
 | Task budgets | `task_budgets` token caps | Absent | Threat model §8 open item |
 | Memory stores | Early hosted feature | Absent | Deliberately deferred; Osaurus notes in [agentos-osaurus-prior-art.md](../references/agentos-osaurus-prior-art.md) are the shelf material |
 | Event topology | Full vocabulary incl. streaming chunks, MCP tool events | Partial — tracked in [managed-agents-event-topology.md](../references/managed-agents-event-topology.md) (#77) | Parity polish, not capability |
