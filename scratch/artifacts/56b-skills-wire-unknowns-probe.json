@@ -1,0 +1,96 @@
+{
+  "run": "cbede6d1",
+  "root_zip": {
+    "status": 400,
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "Zip must contain a top-level folder with all files inside it, including SKILL.md"
+      },
+      "request_id": "req_011Ccu2yvm879ReP1Hig1Kp7"
+    }
+  },
+  "name_dir_mismatch": {
+    "status": 400,
+    "message": "The folder name 'folderx-cbede6d1' must match the skill name 'framename-cbede6d1' in SKILL.md.",
+    "folder": "folderx-cbede6d1",
+    "skill_name": "framename-cbede6d1"
+  },
+  "individual_files": {
+    "status": 200,
+    "body": {
+      "type": "skill",
+      "id": "skill_01CkkU73ybXpy9z8GsuihG8Y",
+      "created_at": "2026-07-10T20:48:56.353557Z",
+      "updated_at": "2026-07-10T20:48:56.353557Z",
+      "display_title": "probe56b-files-cbede6d1",
+      "source": "custom",
+      "latest_version": "1783716535923911"
+    }
+  },
+  "derived_display_title": {
+    "status": 200,
+    "display_title": "probe56b-derive-cbede6d1"
+  },
+  "duplicate_display_title": {
+    "first": 200,
+    "second": 400,
+    "second_body": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "Skill cannot reuse an existing display_title: Probe 56b skill cbede6d1"
+      },
+      "request_id": "req_011Ccu2zB1sZ6wzDQtRRoKxS"
+    }
+  },
+  "pagination": {
+    "page1_has_more": false,
+    "page1_next": false,
+    "page2_status": null,
+    "page2_first_id": null
+  },
+  "attach_before_delete": {
+    "status": 200
+  },
+  "delete_referenced_skill": {
+    "status": 200
+  },
+  "agent_after_skill_delete": {
+    "status": 200,
+    "skills": [
+      {
+        "skill_id": "skill_0139ovxomLxYAgi7ZwpSdDLA",
+        "type": "custom",
+        "version": "latest"
+      }
+    ]
+  },
+  "reattach_deleted_skill": {
+    "status": 400,
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "str"
+      },
+      "request_id": "req_011Ccu2zQgQXz2dWt4RWyGF1"
+    }
+  },
+  "over_30mb": {
+    "upload_bytes": 32506249,
+    "status": 413,
+    "body": {
+      "error": {
+        "type": "request_too_large",
+        "message": "Request exceeds the maximum size. The Skills API accepts requests up to 30MBs."
+      }
+    }
+  },
+  "cleanup": {
+    "agent_archive": 200,
+    "del_skill_01CkkU": 200,
+    "del_skill_01VfHp": 200
+  }
+}

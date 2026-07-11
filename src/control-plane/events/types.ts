@@ -418,6 +418,7 @@ export type RuntimeSessionOutputCollection =
     };
 
 export interface RuntimeSessionFileMount {
+  kind: "upload" | "skill";
   mountPath: string;
   snapshotFileId: string;
   sha256: string;
@@ -427,6 +428,7 @@ export interface RuntimeSessionFileMount {
 
 export interface RuntimeSessionPrepareOptions {
   fileMounts?: readonly RuntimeSessionFileMount[];
+  skills?: readonly { name: string; description: string }[];
   /**
    * Creation-time hint for runtimes that prepare a sandbox before the session
    * row is committed. The committed row remains authoritative after create.

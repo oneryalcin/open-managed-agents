@@ -58,7 +58,7 @@ describe("deployment storage", () => {
       OMA_FILE_STORAGE_ROOT: paths.objectRoot,
     };
     const stores = createDeploymentStoresFromEnv(env);
-    const agents = new DefaultAgentService(stores.agents);
+    const agents = new DefaultAgentService(stores.agents, stores.skills);
     const environments = new DefaultEnvironmentService(stores.environments);
     const files = new DefaultFileService(stores.files);
     const sessions = new DefaultSessionService(
@@ -98,7 +98,7 @@ describe("deployment storage", () => {
     stores.close();
 
     const restarted = createDeploymentStoresFromEnv(env);
-    expect(new DefaultAgentService(restarted.agents).retrieve("wrk_default", agent.id))
+    expect(new DefaultAgentService(restarted.agents, restarted.skills).retrieve("wrk_default", agent.id))
       .toMatchObject({ id: agent.id, name: agent.name });
     expect(
       new DefaultEnvironmentService(restarted.environments).retrieve(

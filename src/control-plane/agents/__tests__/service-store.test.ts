@@ -11,7 +11,7 @@ const REQUEST = {
 describe("AgentService + AgentStore", () => {
   it("scopes agents by workspace internally", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
 
     const agent = service.create("wrk_a", REQUEST);
 
@@ -24,7 +24,7 @@ describe("AgentService + AgentStore", () => {
 
   it("archives agents idempotently while preserving direct lookup", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     const agent = service.create("wrk_default", REQUEST);
 
     const archived = service.archive("wrk_default", agent.id);
@@ -51,7 +51,7 @@ describe("AgentService + AgentStore", () => {
 
   it("does not leak archived agents across workspaces", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     const agent = service.create("wrk_a", REQUEST);
 
     expect(() => service.archive("wrk_b", agent.id)).toThrow(
@@ -63,7 +63,7 @@ describe("AgentService + AgentStore", () => {
 
   it("paginates list results by opaque next_page cursor", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     const first = service.create("wrk_default", {
       ...REQUEST,
       name: "First",
@@ -93,7 +93,7 @@ describe("AgentService + AgentStore", () => {
 
   it("does not treat an empty cursor as a valid store page", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     service.create("wrk_default", REQUEST);
 
     expect(store.list("wrk_default", { page: "" })).toEqual({
@@ -105,7 +105,7 @@ describe("AgentService + AgentStore", () => {
 
   it("scopes list results by workspace internally", () => {
     const store = SqliteAgentStore.open(":memory:");
-    const service = new DefaultAgentService(store);
+    const service = new DefaultAgentService(store, undefined);
     const agentA = service.create("wrk_a", REQUEST);
     service.create("wrk_b", { ...REQUEST, name: "Other Workspace" });
 
@@ -114,5 +114,35 @@ describe("AgentService + AgentStore", () => {
       has_more: false,
       next_page: null,
     });
+  });
+
+  it("accepts exactly twenty distinct skill attachments", () => {
+    const store = SqliteAgentStore.open(":memory:");
+    const service = new DefaultAgentService(store, {
+      getSkill: (_workspaceId, skillId) => ({
+        id: skillId,
+        display_title: skillId,
+        latest_version: "1",
+        source: "custom",
+        type: "skill",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }),
+      getVersion: (_workspaceId, skillId, version) => ({
+        id: `skill_version_${skillId}`,
+        skill_id: skillId,
+        version,
+        name: skillId,
+        description: "test",
+        directory: skillId,
+        type: "skill_version",
+        created_at: "2026-01-01T00:00:00.000Z",
+      }),
+    });
+    const skills = Array.from({ length: 20 }, (_, index) => ({
+      type: "custom" as const,
+      skill_id: `skill_${index}`,
+    }));
+    expect(service.create("wrk_default", { ...REQUEST, skills }).skills).toEqual(skills);
   });
 });

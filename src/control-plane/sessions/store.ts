@@ -8,6 +8,7 @@ import type {
   PendingInternalSnapshotCreateRollbackRow,
   PendingInternalSnapshotDeleteRow,
   SessionFileMountSnapshotRow,
+  SessionSkillSnapshotRow,
   SessionRow,
   SessionStore,
 } from "./types.ts";
@@ -58,7 +59,19 @@ CREATE TABLE IF NOT EXISTS session_file_mount_snapshots (
   snapshot_file_id  TEXT NOT NULL,
   sha256            TEXT NOT NULL,
   size_bytes        INTEGER NOT NULL,
+  kind              TEXT NOT NULL DEFAULT 'upload',
+  skill_snapshot_id TEXT,
   PRIMARY KEY (workspace_id, session_id, resource_id)
+);
+CREATE TABLE IF NOT EXISTS session_skill_snapshots (
+  workspace_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  skill_snapshot_id TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, session_id, skill_snapshot_id)
 );
 CREATE INDEX IF NOT EXISTS session_file_mount_snapshots_by_session
 ON session_file_mount_snapshots (workspace_id, session_id);
@@ -72,6 +85,8 @@ CREATE TABLE IF NOT EXISTS pending_internal_snapshot_deletes (
   snapshot_file_id  TEXT NOT NULL,
   sha256            TEXT NOT NULL,
   size_bytes        INTEGER NOT NULL,
+  kind              TEXT NOT NULL DEFAULT 'upload',
+  skill_snapshot_id TEXT,
   created_at        TEXT NOT NULL,
   last_attempt_at   TEXT,
   attempt_count     INTEGER NOT NULL DEFAULT 0,
@@ -88,6 +103,8 @@ CREATE TABLE IF NOT EXISTS pending_internal_snapshot_create_rollbacks (
   snapshot_file_id  TEXT NOT NULL,
   sha256            TEXT NOT NULL,
   size_bytes        INTEGER NOT NULL,
+  kind              TEXT NOT NULL DEFAULT 'upload',
+  skill_snapshot_id TEXT,
   created_at        TEXT NOT NULL,
   last_attempt_at   TEXT,
   attempt_count     INTEGER NOT NULL DEFAULT 0,
@@ -118,6 +135,7 @@ export class SqliteSessionStore implements SessionStore {
   private readonly insertStmt: StatementSync;
   private readonly insertResourceStmt: StatementSync;
   private readonly insertSnapshotStmt: StatementSync;
+  private readonly insertSkillSnapshotStmt: StatementSync;
   private readonly retrieveActiveStmt: StatementSync;
   private readonly countActiveStmt: StatementSync;
   private readonly countAllActiveStmt: StatementSync;
@@ -129,6 +147,7 @@ export class SqliteSessionStore implements SessionStore {
   private readonly deleteSnapshotsStmt: StatementSync;
   private readonly resourcesBySessionStmt: StatementSync;
   private readonly snapshotsBySessionStmt: StatementSync;
+  private readonly skillSnapshotsBySessionStmt: StatementSync;
   private readonly pendingSnapshotDeleteWorkspacesStmt: StatementSync;
   private readonly pendingSnapshotDeletesByWorkspaceStmt: StatementSync;
   private readonly pendingSnapshotDeletesBySessionStmt: StatementSync;
@@ -147,6 +166,7 @@ export class SqliteSessionStore implements SessionStore {
     this.db = db;
     this.db.exec(SCHEMA);
     ensureVaultIdsColumn(this.db);
+    ensureSnapshotColumns(this.db);
     this.insertStmt = this.db.prepare(
       `INSERT INTO sessions (
         id, workspace_id, type, agent_id, agent_version, environment_id,
@@ -161,8 +181,13 @@ export class SqliteSessionStore implements SessionStore {
     this.insertSnapshotStmt = this.db.prepare(
       `INSERT INTO session_file_mount_snapshots (
         workspace_id, session_id, resource_id, file_id, mount_path,
-        snapshot_file_id, sha256, size_bytes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        snapshot_file_id, sha256, size_bytes, kind, skill_snapshot_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.insertSkillSnapshotStmt = this.db.prepare(
+      `INSERT INTO session_skill_snapshots
+       (workspace_id,session_id,skill_snapshot_id,skill_id,version,name,description)
+       VALUES (?,?,?,?,?,?,?)`,
     );
     this.retrieveActiveStmt = this.db.prepare(
       `SELECT * FROM sessions
@@ -187,11 +212,11 @@ export class SqliteSessionStore implements SessionStore {
     this.insertPendingSnapshotDeletesStmt = this.db.prepare(
       `INSERT OR IGNORE INTO pending_internal_snapshot_deletes (
         workspace_id, session_id, resource_id, file_id, mount_path,
-        snapshot_file_id, sha256, size_bytes, created_at
+        snapshot_file_id, sha256, size_bytes, kind, skill_snapshot_id, created_at
       )
       SELECT
         workspace_id, session_id, resource_id, file_id, mount_path,
-        snapshot_file_id, sha256, size_bytes, ?
+        snapshot_file_id, sha256, size_bytes, kind, skill_snapshot_id, ?
       FROM session_file_mount_snapshots
       WHERE workspace_id = ? AND session_id = ?`,
     );
@@ -216,6 +241,9 @@ export class SqliteSessionStore implements SessionStore {
       `SELECT * FROM session_file_mount_snapshots
        WHERE workspace_id = ? AND session_id = ?
        ORDER BY resource_id ASC`,
+    );
+    this.skillSnapshotsBySessionStmt = this.db.prepare(
+      `SELECT * FROM session_skill_snapshots WHERE workspace_id=? AND session_id=? ORDER BY skill_snapshot_id`,
     );
     this.pendingSnapshotDeleteWorkspacesStmt = this.db.prepare(
       `SELECT DISTINCT workspace_id
@@ -246,8 +274,8 @@ export class SqliteSessionStore implements SessionStore {
     this.insertPendingSnapshotCreateRollbackStmt = this.db.prepare(
       `INSERT INTO pending_internal_snapshot_create_rollbacks (
         workspace_id, session_id, resource_id, file_id, mount_path,
-        snapshot_file_id, sha256, size_bytes, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        snapshot_file_id, sha256, size_bytes, kind, skill_snapshot_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.clearPendingSnapshotCreateRollbacksBySessionStmt = this.db.prepare(
       `DELETE FROM pending_internal_snapshot_create_rollbacks
@@ -341,7 +369,12 @@ export class SqliteSessionStore implements SessionStore {
           snapshot.snapshot_file_id,
           snapshot.sha256,
           snapshot.size_bytes,
+          snapshot.kind,
+          snapshot.skill_snapshot_id,
         );
+      }
+      for (const skill of record.skillSnapshots ?? []) {
+        this.insertSkillSnapshotStmt.run(skill.workspace_id, skill.session_id, skill.skill_snapshot_id, skill.skill_id, skill.version, skill.name, skill.description);
       }
       idempotency?.complete();
       this.clearPendingSnapshotCreateRollbacksBySessionStmt.run(s.workspace_id, s.id);
@@ -390,6 +423,7 @@ export class SqliteSessionStore implements SessionStore {
     return this.withTransaction(() => {
       this.insertPendingSnapshotDeletesStmt.run(now, workspaceId, sessionId);
       this.deleteSnapshotsStmt.run(workspaceId, sessionId);
+      this.db.prepare("DELETE FROM session_skill_snapshots WHERE workspace_id=? AND session_id=?").run(workspaceId, sessionId);
       this.deleteResourcesStmt.run(workspaceId, sessionId);
       this.deleteStmt.run(workspaceId, sessionId);
       return existing;
@@ -408,6 +442,10 @@ export class SqliteSessionStore implements SessionStore {
       workspaceId,
       sessionId,
     ) as unknown as SessionFileMountSnapshotRow[];
+  }
+
+  getSkillSnapshots(workspaceId: string, sessionId: string): SessionSkillSnapshotRow[] {
+    return this.skillSnapshotsBySessionStmt.all(workspaceId, sessionId) as unknown as SessionSkillSnapshotRow[];
   }
 
   listPendingInternalSnapshotDeleteWorkspaces(): string[] {
@@ -465,6 +503,8 @@ export class SqliteSessionStore implements SessionStore {
       row.snapshot_file_id,
       row.sha256,
       row.size_bytes,
+      row.kind,
+      row.skill_snapshot_id,
       createdAt,
     );
   }
@@ -609,6 +649,22 @@ function ensureVaultIdsColumn(db: DatabaseSync): void {
   }>;
   if (columns.some((column) => column.name === "vault_ids")) return;
   db.exec("ALTER TABLE sessions ADD COLUMN vault_ids TEXT NOT NULL DEFAULT '[]'");
+}
+
+function ensureSnapshotColumns(db: DatabaseSync): void {
+  for (const table of [
+    "session_file_mount_snapshots",
+    "pending_internal_snapshot_deletes",
+    "pending_internal_snapshot_create_rollbacks",
+  ]) {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "kind")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN kind TEXT NOT NULL DEFAULT 'upload'`);
+    }
+    if (!columns.some((column) => column.name === "skill_snapshot_id")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN skill_snapshot_id TEXT`);
+    }
+  }
 }
 
 function parseVaultIds(value: string): string[] {

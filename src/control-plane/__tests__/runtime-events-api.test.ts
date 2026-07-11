@@ -559,7 +559,7 @@ function makeFixture(
   return {
     broadcaster,
     app: createControlPlaneApp({
-      agents: new DefaultAgentService(agentStore),
+      agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),
       files: new DefaultFileService(fileStorage),
       sessions: new DefaultSessionService(

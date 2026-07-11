@@ -1,0 +1,95 @@
+{
+  "cleanup": {
+    "agent_archive": 200,
+    "env_delete": 200,
+    "session_archive": 200,
+    "skill_delete": 200
+  },
+  "create_agent": {
+    "id": "agent_015WGGaaA1MHDtdUgBXw9VFA",
+    "skills_echo": [
+      {
+        "skill_id": "skill_01NcpVLCaAp2yodzX8SsnXdt",
+        "type": "custom",
+        "version": "latest"
+      }
+    ],
+    "status": 200
+  },
+  "create_environment": {
+    "id": "env_017FuNPu8cKKdFrSGZepg6im",
+    "status": 200
+  },
+  "create_session": {
+    "id": "sesn_01Js2QW8J9xDskB4mKKeRAk3",
+    "status": 200
+  },
+  "create_skill": {
+    "id": "skill_01NcpVLCaAp2yodzX8SsnXdt",
+    "status": 200
+  },
+  "distinct_event_types": [
+    "agent.message",
+    "agent.thinking",
+    "agent.tool_result",
+    "agent.tool_use",
+    "session.status_idle",
+    "session.status_running",
+    "session.thread_status_idle",
+    "session.thread_status_running",
+    "span.model_request_end",
+    "span.model_request_start",
+    "user.message"
+  ],
+  "event_count_deduped": 17,
+  "last_session_status": "idle",
+  "mount_evidence_model_reported": "[{\"text\": \"`PROBE57_MOUNT=/workspace/skills/probe57-6c7ac119/SKILL.md`\", \"type\": \"text\"}]",
+  "mount_evidence_tool_records": [
+    {
+      "content": {
+        "file_path": "/workspace/skills/probe57-6c7ac119/SKILL.md"
+      },
+      "id": "sevt_015xVo6awWHygqyAvx22XJFG",
+      "type": "agent.tool_use"
+    },
+    {
+      "content": [
+        {
+          "text": "1\t---\n2\tname: probe57-6c7ac119\n3\tdescription: Diagnostic probe skill. Use this whenever the user says 'run the probe skill'.\n4\t---\n5\t\n6\t# Probe skill\n7\t\n8\tWhen invoked, use the bash tool to run exactly:\n9\t\n10\t```\n11\tpwd && ls -la ~/.skills 2>/dev/null; readlink -f \"$0\" 2>/dev/null; find / -name SKILL.md 2>/dev/null | grep -i probe57 | head -1\n12\t```\n13\t\n14\tThen reply with a single line: `PROBE57_MOUNT=<the SKILL.md absolute path you found>`.\n",
+          "type": "text"
+        }
+      ],
+      "id": "sevt_014upor9gSKsXP1bVEckLwDU",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": {
+        "command": "pwd && ls -la ~/.skills 2>/dev/null; readlink -f \"$0\" 2>/dev/null; find / -name SKILL.md 2>/dev/null | grep -i probe57 | head -1"
+      },
+      "id": "sevt_01WEfMxYKQMVrBDLruKHNZJc",
+      "type": "agent.tool_use"
+    },
+    {
+      "content": [
+        {
+          "text": "/\n/workspace/skills/probe57-6c7ac119/SKILL.md\n",
+          "type": "text"
+        }
+      ],
+      "id": "sevt_011odv2aBrxgZHvT6Vya4Hqz",
+      "type": "agent.tool_result"
+    }
+  ],
+  "run": "6c7ac119",
+  "send_user_message": {
+    "status": 200
+  },
+  "session_tools_cleared_with_skills": {
+    "error": {
+      "message": "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's `agent_toolset`",
+      "type": "invalid_request_error"
+    },
+    "status": 400
+  },
+  "skill_specific_events": []
+}

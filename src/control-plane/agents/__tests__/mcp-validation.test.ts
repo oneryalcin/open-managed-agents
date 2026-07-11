@@ -4,7 +4,7 @@ import { SqliteAgentStore } from "../store.ts";
 import { DefaultAgentService } from "../service.ts";
 
 function service(): DefaultAgentService {
-  return new DefaultAgentService(SqliteAgentStore.open(":memory:"));
+  return new DefaultAgentService(SqliteAgentStore.open(":memory:"), undefined);
 }
 
 function agentWithMcp(overrides: {

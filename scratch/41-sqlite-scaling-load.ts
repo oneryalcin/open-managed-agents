@@ -476,6 +476,8 @@ function snapshotRows(
     snapshot_file_id: `file_snapshot_load_${sessionIndex}_${resourceIndex}`,
     sha256: "0".repeat(64),
     size_bytes: 0,
+    kind: "upload",
+    skill_snapshot_id: null,
   }));
 }
 

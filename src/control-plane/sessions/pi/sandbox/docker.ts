@@ -41,7 +41,8 @@ const DEFAULT_IMAGE = "bash:5.2";
 const DEFAULT_WORKSPACE = "/workspace";
 const DEFAULT_UPLOADS_PATH = "/mnt/session/uploads";
 const DEFAULT_OUTPUTS_PATH = "/mnt/session/outputs";
-const DEFAULT_MEMORY = "256m";
+const DEFAULT_SKILLS_PATH = "/workspace/skills";
+const DEFAULT_MEMORY = "384m";
 const DEFAULT_CPUS = "1";
 const DEFAULT_PIDS_LIMIT = "64";
 const DEFAULT_TMPFS_SIZE = "64m";
@@ -362,33 +363,41 @@ export async function createDockerSandboxProvider(
   ): Promise<void> => {
     if (mounts.length === 0) return;
     recordSandboxNotDisposed(disposed);
-    const tempRoot = await mkdtemp(joinHostPath(tmpdir(), "oma-session-mounts-"));
-    try {
-      for (const mount of mounts) {
-        const relativePath = assertInsideUploadsPath(
-          mount.mountPath,
-          resolved.uploadsPath,
-        );
-        await writeMountFile(tempRoot, relativePath, mount);
-      }
+    for (const kind of ["upload", "skill"] as const) {
+      const selected = mounts.filter((mount) => mount.kind === kind);
+      if (selected.length === 0) continue;
+      const destination = kind === "upload" ? resolved.uploadsPath : DEFAULT_SKILLS_PATH;
+      const tempRoot = await mkdtemp(joinHostPath(tmpdir(), "oma-session-mounts-"));
+      try {
+        if (kind === "skill") {
+          await dockerChecked(resolved.dockerCommand, ["exec", "--user", "65534:65534", containerName, "chmod", "711", resolved.workspacePath], { timeoutMs: resolved.operationTimeoutMs });
+        }
+        for (const mount of selected) {
+          const relativePath = assertInsideMountRoot(mount.mountPath, destination);
+          await writeMountFile(tempRoot, relativePath, mount);
+        }
       // Docker exec timeout only owns the local Docker CLI process; the
       // caller must dispose the container on materialization failure so any
       // in-container tar/chown work cannot leak a half-mounted sandbox.
-      await dockerChecked(
+        await dockerChecked(
         resolved.dockerCommand,
-        buildDockerExtractIntoContainerArgs(containerName, resolved.uploadsPath),
+        buildDockerExtractIntoContainerArgs(containerName, destination),
         {
           input: createTarArchive(tempRoot),
           timeoutMs: resolved.operationTimeoutMs,
         },
       );
-      await dockerChecked(
+        await dockerChecked(
         resolved.dockerCommand,
-        buildDockerNormalizeUploadsArgs(containerName, resolved.uploadsPath),
+        kind === "upload" ? buildDockerNormalizeUploadsArgs(containerName, destination) : buildDockerNormalizeSkillsArgs(containerName, destination),
         { timeoutMs: resolved.operationTimeoutMs },
       );
-    } finally {
-      await rm(tempRoot, { force: true, recursive: true });
+      } finally {
+        if (kind === "skill") {
+          await dockerChecked(resolved.dockerCommand, ["exec", "--user", "65534:65534", containerName, "chmod", "700", resolved.workspacePath], { timeoutMs: resolved.operationTimeoutMs });
+        }
+        await rm(tempRoot, { force: true, recursive: true });
+      }
     }
   };
   const collectOutputFiles = async (): Promise<readonly SandboxOutputFile[]> => {
@@ -686,6 +695,7 @@ export function buildDockerRunArgs(opts: {
     opts.memory,
     opts.tmpfsSize,
     opts.outputsTmpfsSize ?? opts.tmpfsSize,
+    opts.tmpfsSize,
   );
   const labels = Object.entries(opts.labels ?? {}).flatMap(([key, value]) => [
     "--label",
@@ -724,6 +734,8 @@ export function buildDockerRunArgs(opts: {
     `${uploadsPath}:rw,nosuid,nodev,noexec,mode=755,size=${opts.tmpfsSize}`,
     "--tmpfs",
     `${outputsPath}:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=${outputsTmpfsSize}`,
+    "--tmpfs",
+    `${DEFAULT_SKILLS_PATH}:rw,exec,nosuid,nodev,uid=0,gid=0,mode=755,size=${opts.tmpfsSize}`,
     "--workdir",
     opts.workspacePath,
     "--user",
@@ -793,6 +805,10 @@ export function buildDockerNormalizeUploadsArgs(
     "sh",
     uploadsPath,
   ];
+}
+
+export function buildDockerNormalizeSkillsArgs(containerName: string, skillsPath: string): string[] {
+  return ["exec", "--user", "0:0", containerName, "sh", "-c", "chown -R 0:0 \"$1\" && find \"$1\" -type d -exec chmod 755 {} + && find \"$1\" -type f -exec chmod 644 {} + && find \"$1\" -path '*/scripts/*' -type f -exec chmod 755 {} +", "sh", skillsPath];
 }
 
 export function buildDockerExecShellArgs(
@@ -1046,6 +1062,14 @@ export function assertInsideUploadsPath(
   throw new Error(`Session file mount path escapes uploads root: ${absolutePath}`);
 }
 
+function assertInsideMountRoot(absolutePath: string, rootPath: string): string {
+  if (!posix.isAbsolute(absolutePath)) throw new Error(`Session file mount path must be absolute: ${absolutePath}`);
+  const root = posix.resolve(rootPath);
+  const rel = posix.relative(root, posix.resolve(absolutePath));
+  if (rel !== "" && !rel.startsWith("..") && !posix.isAbsolute(rel)) return rel;
+  throw new Error(`Session file mount path escapes ${rootPath}: ${absolutePath}`);
+}
+
 export function assertInsideDockerOutputPath(
   absolutePath: string,
   outputsPath = DEFAULT_OUTPUTS_PATH,
@@ -1253,6 +1277,7 @@ function assertTmpfsMemoryHeadroom(
   memory: string,
   tmpfsSize: string,
   outputsTmpfsSize: string,
+  skillsTmpfsSize: string,
 ): void {
   const memoryBytes = parseDockerByteSize(memory, "memory");
   const tmpfsBytes = parseDockerByteSize(tmpfsSize, "tmpfsSize");
@@ -1260,9 +1285,10 @@ function assertTmpfsMemoryHeadroom(
     outputsTmpfsSize,
     "outputsTmpfsSize",
   );
-  if (tmpfsBytes * 2 + outputTmpfsBytes < memoryBytes) return;
+  const skillsTmpfsBytes = parseDockerByteSize(skillsTmpfsSize, "skillsTmpfsSize");
+  if (tmpfsBytes * 2 + outputTmpfsBytes + skillsTmpfsBytes < memoryBytes) return;
   throw new Error(
-    "Docker sandbox memory must exceed workspace tmpfs plus uploads tmpfs plus outputs tmpfs",
+    "Docker sandbox memory must exceed workspace tmpfs plus uploads tmpfs plus outputs tmpfs plus skills tmpfs",
   );
 }
 

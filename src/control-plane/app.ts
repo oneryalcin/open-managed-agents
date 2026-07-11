@@ -40,6 +40,10 @@ import { filesRoutes } from "./files/routes.ts";
 import { DefaultFileService } from "./files/service.ts";
 import { InMemoryFileStorage } from "./files/store.ts";
 import type { FileService } from "./files/types.ts";
+import { skillsRoutes } from "./skills/routes.ts";
+import { DefaultSkillsService } from "./skills/service.ts";
+import { InMemorySkillsStore } from "./skills/store.ts";
+import type { SkillsService } from "./skills/types.ts";
 import { createBestEffortSessionOutputCoordinator } from "./deployment-session-output-coordinator.ts";
 import { createBestEffortRuntimeEventCoordinator } from "./deployment-runtime-event-coordinator.ts";
 import type {
@@ -87,6 +91,7 @@ import { SqliteVaultStore } from "./vaults/store.ts";
 import type { VaultService } from "./vaults/types.ts";
 import {
   createFileMountResolver,
+  createSkillSnapshotsProvider,
   createSessionEgressBundleResolver,
   createStoreBackedCustomToolsProvider,
 } from "./wiring.ts";
@@ -105,6 +110,7 @@ import { translatePiEvent } from "./sessions/pi/translator.ts";
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
 export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 export const FILES_API_BETA = "files-api-2025-04-14";
+export const SKILLS_API_BETA = "skills-2025-10-02";
 
 type AppEnv = ControlPlaneRouteEnv;
 
@@ -123,6 +129,7 @@ export interface ControlPlaneServices {
   agents: AgentService;
   environments: EnvironmentService;
   files?: FileService;
+  skills?: SkillsService;
   // Absent = no secrets backend wired; the routes still register and return
   // the clear "requires a master key" 400 (never a confusing 404).
   secrets?: SecretsService;
@@ -310,7 +317,7 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   });
 
   app.use("*", async (c, next) => {
-    if (c.req.method === "POST" && c.req.path === "/v1/files") {
+    if (c.req.method === "POST" && (c.req.path === "/v1/files" || c.req.path === "/v1/skills" || /^\/v1\/skills\/[^/]+\/versions$/.test(c.req.path))) {
       await next();
       return;
     }
@@ -323,6 +330,13 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     "/v1/files",
     filesRoutes(
       services.files ?? new DefaultFileService(new InMemoryFileStorage()),
+      services.admission,
+    ),
+  );
+  app.route(
+    "/v1/skills",
+    skillsRoutes(
+      services.skills ?? new DefaultSkillsService(new InMemorySkillsStore()),
       services.admission,
     ),
   );
@@ -587,6 +601,7 @@ export function createDeploymentControlPlane(
         ...(stores.secrets === undefined ? {} : { secrets: stores.secrets }),
       }),
     fileMountResolver: createFileMountResolver(stores.sessions, stores.files),
+    skills: createSkillSnapshotsProvider(stores.sessions),
     customTools:
       opts.runner?.customTools ??
       createStoreBackedCustomToolsProvider({
@@ -674,9 +689,10 @@ export function createDeploymentControlPlane(
     ...(authMode === "api-key"
       ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
       : {}),
-    agents: new DefaultAgentService(stores.agents),
+    agents: new DefaultAgentService(stores.agents, stores.skills),
     environments: new DefaultEnvironmentService(stores.environments),
     files: new DefaultFileService(stores.files),
+    skills: new DefaultSkillsService(stores.skills),
     secrets: new DefaultSecretsService(stores.secrets),
     vaults: vaultService,
     ...(runtimeConfig.mcp === undefined
@@ -697,6 +713,7 @@ export function createDeploymentControlPlane(
       stores.files,
       {
         runtime: runner,
+        skills: stores.skills,
         egressCapability: {
           canHonorNetworking: runtimeConfig.egress !== undefined,
           hasSecretsStore: stores.secrets !== undefined,
@@ -809,6 +826,7 @@ export function createInMemoryControlPlaneApp(
   const vaultStore = SqliteVaultStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
   const fileStorage = new InMemoryFileStorage();
+  const skillsStore = new InMemorySkillsStore();
   const sessionOutputCoordinator = createBestEffortSessionOutputCoordinator({
     sessions: sessionStore,
     events: eventStore,
@@ -821,9 +839,10 @@ export function createInMemoryControlPlaneApp(
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const vaultService = new DefaultVaultService(vaultStore);
   return createControlPlaneApp({
-    agents: new DefaultAgentService(agentStore),
+    agents: new DefaultAgentService(agentStore, skillsStore),
     environments: new DefaultEnvironmentService(environmentStore),
     files: new DefaultFileService(fileStorage),
+    skills: new DefaultSkillsService(skillsStore),
     vaults: vaultService,
     sessions: new DefaultSessionService(
       sessionStore,
@@ -832,6 +851,7 @@ export function createInMemoryControlPlaneApp(
       fileStorage,
       {
         ...(opts.runtime?.runner ? { runtime: opts.runtime.runner } : {}),
+        skills: skillsStore,
         vaults: vaultService,
         idempotencyLedger: eventStore,
         createSessionRowsWithIdempotency:
@@ -864,6 +884,7 @@ function isManagedAgentsRoute(path: string): boolean {
     "/v1/agents",
     "/v1/environments",
     "/v1/files",
+    "/v1/skills",
     // Secrets MUST be auth-gated: leaving it off this list would skip the
     // auth middleware and fall back to wrk_default (plan 0117e-2).
     "/v1/secrets",
@@ -912,6 +933,9 @@ function hasRequiredBeta(path: string, betaFeatures: Set<string>): boolean {
   }
   if (path === "/v1/files" || path.startsWith("/v1/files/")) {
     return betaFeatures.has(FILES_API_BETA);
+  }
+  if (path === "/v1/skills" || path.startsWith("/v1/skills/")) {
+    return betaFeatures.has(SKILLS_API_BETA);
   }
   return false;
 }

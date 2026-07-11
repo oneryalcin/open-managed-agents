@@ -24,12 +24,28 @@ export function newSessionResourceId(): string {
   return `sesrsc_${uuidv7()}`;
 }
 
+export function newSessionSkillSnapshotId(): string {
+  return `sesskill_${uuidv7()}`;
+}
+
 export function newSessionId(): string {
   return `sesn_${uuidv7()}`;
 }
 
 export function newSecretId(): string {
   return `sec_${uuidv7()}`;
+}
+
+export function newSkillId(): string {
+  return `skill_${uuidv7()}`;
+}
+
+export function newSkillVersionId(): string {
+  return `skill_version_${uuidv7()}`;
+}
+
+export function newSkillContentObjectId(): string {
+  return `skobj_${uuidv7()}`;
 }
 
 export function newVaultId(): string {

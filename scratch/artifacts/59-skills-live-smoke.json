@@ -1,0 +1,23 @@
+{
+  "verdict": "PASS",
+  "skill_id": "skill_019f50f4-9be4-7132-9530-6403f470ce97",
+  "concrete_version": "1783769635812001",
+  "session_id": "sesn_019f50f4-9be7-75ca-a21a-ba2e97cf6791",
+  "container_id": "b425df01f4ef",
+  "source_version_deleted_before_turn": true,
+  "read_tool_use": true,
+  "bash_tool_use": true,
+  "proof_tool_result": "OMA_SKILLS_LIVE_PROOF=read-and-executed",
+  "event_types": [
+    "agent.message",
+    "agent.tool_result",
+    "agent.tool_use",
+    "session.status_running",
+    "span.model_request_end",
+    "span.model_request_start",
+    "user.message"
+  ],
+  "host_secret_leaked": false,
+  "skill_files_non_writable": true,
+  "mountpoint_replaceable": false
+}

@@ -744,7 +744,7 @@ function createLifecycleFixture(opts: {
   const broadcaster = new SessionEventBroadcaster(eventStore);
   return {
     app: createControlPlaneApp({
-      agents: new DefaultAgentService(agentStore),
+      agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),
       sessions: new DefaultSessionService(
         sessionStore,
@@ -961,6 +961,7 @@ class HookedSessionStore implements SessionStore {
   getFileMountSnapshots(): SessionFileMountSnapshotRow[] {
     return [];
   }
+  getSkillSnapshots(): [] { return []; }
 
   listPendingInternalSnapshotDeleteWorkspaces(): WorkspaceId[] {
     return [];

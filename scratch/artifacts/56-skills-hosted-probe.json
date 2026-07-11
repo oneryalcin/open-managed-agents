@@ -1,0 +1,257 @@
+{
+  "attach_anthropic_with_version": {
+    "body": {
+      "archived_at": "NoneType",
+      "created_at": "2026-07-10T11:13:24.676699Z",
+      "description": "NoneType",
+      "id": "agent_01B6WhJFswJ8rWJCWxBsrmqR",
+      "mcp_servers": [],
+      "metadata": {},
+      "model": {
+        "id": "claude-sonnet-4-6",
+        "speed": "standard"
+      },
+      "multiagent": "NoneType",
+      "name": "probe56-agent-17c41ea7-088c",
+      "skills": [
+        {
+          "skill_id": "xlsx",
+          "type": "anthropic",
+          "version": "latest"
+        }
+      ],
+      "system": "NoneType",
+      "tools": [],
+      "type": "agent",
+      "updated_at": "2026-07-10T11:13:24.676699Z",
+      "version": "int"
+    },
+    "status": 200
+  },
+  "attach_bad_type": {
+    "body": {
+      "error": {
+        "message": "str",
+        "type": "invalid_request_error"
+      },
+      "request_id": "req_011CctH6b5H3KZjckdGc36v9",
+      "type": "error"
+    },
+    "status": 400
+  },
+  "attach_over_cap": {
+    "body": {
+      "error": {
+        "message": "Agent has invalid configuration: duplicate skill_id \"xlsx\"",
+        "type": "invalid_request_error"
+      },
+      "request_id": "req_011CctH6cbYSeqBiZU8p5Xk9",
+      "type": "error"
+    },
+    "status": 400
+  },
+  "attach_skills_tools_cleared": {
+    "body": {
+      "archived_at": "NoneType",
+      "created_at": "2026-07-10T11:13:26.158450Z",
+      "description": "NoneType",
+      "id": "agent_01AafgSJTmpsKjLucChWbeVF",
+      "mcp_servers": [],
+      "metadata": {},
+      "model": {
+        "id": "claude-sonnet-4-6",
+        "speed": "standard"
+      },
+      "multiagent": "NoneType",
+      "name": "probe56-agent-17c41ea7-bf9c",
+      "skills": [
+        {
+          "skill_id": "xlsx",
+          "type": "anthropic",
+          "version": "latest"
+        }
+      ],
+      "system": "NoneType",
+      "tools": [],
+      "type": "agent",
+      "updated_at": "2026-07-10T11:13:26.158450Z",
+      "version": "int"
+    },
+    "status": 200
+  },
+  "attach_unknown_custom": {
+    "body": {
+      "error": {
+        "message": "str",
+        "type": "invalid_request_error"
+      },
+      "request_id": "req_011CctH6biDKt6MQLFBBFrLV",
+      "type": "error"
+    },
+    "status": 400
+  },
+  "attach_valid_baseline": {
+    "body": {
+      "archived_at": "NoneType",
+      "created_at": "2026-07-10T11:13:26.500956Z",
+      "description": "NoneType",
+      "id": "agent_01RYw4eUGea4cCf1wEFULrvm",
+      "mcp_servers": [],
+      "metadata": {},
+      "model": {
+        "id": "claude-sonnet-4-6",
+        "speed": "standard"
+      },
+      "multiagent": "NoneType",
+      "name": "probe56-agent-17c41ea7-7a74",
+      "skills": [
+        {
+          "skill_id": "xlsx",
+          "type": "anthropic",
+          "version": "latest"
+        }
+      ],
+      "system": "NoneType",
+      "tools": [],
+      "type": "agent",
+      "updated_at": "2026-07-10T11:13:26.500956Z",
+      "version": "int"
+    },
+    "status": 200
+  },
+  "cleanup": {
+    "delete_skill_after_versions": {
+      "status": 200
+    },
+    "delete_skill_with_versions": {
+      "body": {
+        "error": {
+          "message": "str",
+          "type": "invalid_request_error"
+        },
+        "request_id": "req_011CctH6j1WR3H2y1C8PThJY",
+        "type": "error"
+      },
+      "status": 400
+    },
+    "delete_version_17836820": {
+      "status": 200
+    }
+  },
+  "create_skill": {
+    "body": {
+      "created_at": "2026-07-10T11:13:21.931633Z",
+      "display_title": "Probe 56 skill 17c41ea7",
+      "id": "skill_01DAPrwvTudtSmU1srNN9rjf",
+      "latest_version": "1783682001075540",
+      "source": "custom",
+      "type": "skill",
+      "updated_at": "2026-07-10T11:13:21.931633Z"
+    },
+    "status": 200
+  },
+  "create_version": {
+    "body": {
+      "created_at": "2026-07-10T11:13:23.505000Z",
+      "description": "Probe 56 throwaway skill; greets and reports its own path.",
+      "directory": "probe56-17c41ea7",
+      "id": "skill_version_01QgNiLzj3UZMARoJ3zvj8ND",
+      "name": "probe56-17c41ea7",
+      "skill_id": "skill_01DAPrwvTudtSmU1srNN9rjf",
+      "type": "skill_version",
+      "version": "1783682003001855"
+    },
+    "status": 200
+  },
+  "get_skill": {
+    "body": {
+      "created_at": "2026-07-10T11:13:21.931633Z",
+      "display_title": "Probe 56 skill 17c41ea7",
+      "id": "skill_01DAPrwvTudtSmU1srNN9rjf",
+      "latest_version": "1783682001075540",
+      "source": "custom",
+      "type": "skill",
+      "updated_at": "2026-07-10T11:13:21.931787Z"
+    },
+    "status": 200
+  },
+  "get_version": {
+    "body": {
+      "created_at": "2026-07-10T11:13:21.931787Z",
+      "description": "Probe 56 throwaway skill; greets and reports its own path.",
+      "directory": "probe56-17c41ea7",
+      "id": "skill_version_015xB6FyVMvToFybz37mM4Ef",
+      "name": "probe56-17c41ea7",
+      "skill_id": "skill_01DAPrwvTudtSmU1srNN9rjf",
+      "type": "skill_version",
+      "version": "1783682001075540"
+    },
+    "status": 200
+  },
+  "list_skills": {
+    "envelope": {
+      "data": [
+        {
+          "created_at": "2026-07-10T11:13:21.931633Z",
+          "display_title": "Probe 56 skill 17c41ea7",
+          "id": "skill_01DAPrwvTudtSmU1srNN9rjf",
+          "latest_version": "1783682001075540",
+          "source": "custom",
+          "type": "skill",
+          "updated_at": "2026-07-10T11:13:21.931787Z"
+        },
+        {
+          "created_at": "2025-10-14T08:41:11.530827Z",
+          "display_title": "xlsx",
+          "id": "xlsx",
+          "latest_version": "20260203",
+          "source": "anthropic",
+          "type": "skill",
+          "updated_at": "2026-06-22T20:18:02.461831Z"
+        },
+        {
+          "created_at": "2025-10-14T08:41:11.530747Z",
+          "display_title": "pptx",
+          "id": "pptx",
+          "latest_version": "20260622",
+          "source": "anthropic",
+          "type": "skill",
+          "updated_at": "2026-06-22T20:18:02.449350Z"
+        }
+      ],
+      "has_more": "bool",
+      "next_page": "NoneType"
+    },
+    "status": 200
+  },
+  "list_versions": {
+    "envelope": {
+      "data": [
+        {
+          "created_at": "2026-07-10T11:13:21.931787Z",
+          "description": "Probe 56 throwaway skill; greets and reports its own path.",
+          "directory": "probe56-17c41ea7",
+          "id": "skill_version_015xB6FyVMvToFybz37mM4Ef",
+          "name": "probe56-17c41ea7",
+          "skill_id": "skill_01DAPrwvTudtSmU1srNN9rjf",
+          "type": "skill_version",
+          "version": "1783682001075540"
+        },
+        {
+          "created_at": "2026-07-10T11:13:23.505000Z",
+          "description": "Probe 56 throwaway skill; greets and reports its own path.",
+          "directory": "probe56-17c41ea7",
+          "id": "skill_version_01QgNiLzj3UZMARoJ3zvj8ND",
+          "name": "probe56-17c41ea7",
+          "skill_id": "skill_01DAPrwvTudtSmU1srNN9rjf",
+          "type": "skill_version",
+          "version": "1783682003001855"
+        }
+      ],
+      "has_more": "bool",
+      "next_page": "NoneType"
+    },
+    "status": 200
+  },
+  "run": "17c41ea7"
+}

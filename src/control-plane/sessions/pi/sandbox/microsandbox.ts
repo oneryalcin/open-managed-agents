@@ -350,15 +350,19 @@ export async function createMicrosandboxSandboxProvider(
   ): Promise<void> => {
     if (mounts.length === 0) return;
     recordSandboxNotDisposed(disposed);
-    const tempRoot = await mkdtemp(joinHostPath(tmpdir(), "oma-msb-mounts-"));
-    try {
-      for (const mount of mounts) {
+    for (const kind of ["upload", "skill"] as const) {
+      const selected = mounts.filter((mount) => mount.kind === kind);
+      if (selected.length === 0) continue;
+      const destination = kind === "upload" ? resolved.uploadsPath : "/workspace/skills";
+      const tempRoot = await mkdtemp(joinHostPath(tmpdir(), "oma-msb-mounts-"));
+      try {
+      for (const mount of selected) {
         const relativePath = assertInsideMicrosandboxUploadsPath(
           mount.mountPath,
-          resolved.uploadsPath,
+          destination,
         );
         const hostPath = await writeMountFile(tempRoot, relativePath, mount);
-        const guestPath = posix.join(resolved.uploadsPath, relativePath);
+        const guestPath = posix.join(destination, relativePath);
         await shell(buildMicrosandboxMkdirCommand(posix.dirname(guestPath)));
         await microsandboxChecked(
           resolved.cli,
@@ -369,9 +373,10 @@ export async function createMicrosandboxSandboxProvider(
           { timeoutMs: resolved.operationTimeoutMs },
         );
       }
-      await shell(buildMicrosandboxNormalizeUploadsCommand(resolved.uploadsPath));
-    } finally {
-      await rm(tempRoot, { force: true, recursive: true });
+      await shell(kind === "upload" ? buildMicrosandboxNormalizeUploadsCommand(destination) : buildMicrosandboxNormalizeSkillsCommand(destination));
+      } finally {
+        await rm(tempRoot, { force: true, recursive: true });
+      }
     }
   };
   const collectOutputFiles = async (): Promise<readonly SandboxOutputFile[]> => {
@@ -881,6 +886,10 @@ export function buildMicrosandboxNormalizeUploadsCommand(
       "find \"$1\" -type d -exec chmod 755 {} + && find \"$1\" -type f -exec chmod 444 {} +",
     args: [uploadsPath],
   };
+}
+
+export function buildMicrosandboxNormalizeSkillsCommand(skillsPath: string): MicrosandboxShellCommand {
+  return { script: "find \"$1\" -type d -exec chmod 755 {} + && find \"$1\" -type f -exec chmod 444 {} + && find \"$1\" -path '*/scripts/*' -type f -exec chmod 555 {} +", args: [skillsPath] };
 }
 
 export function buildMicrosandboxStatCommand(

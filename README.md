@@ -126,6 +126,13 @@ What works today, at outcome level:
   [plan 0120](docs/plans/0120-dashboard.md),
   [plan 0125](docs/plans/0125-console-vaults-mcp.md)). Fully self-contained —
   no CDN at first paint; browser keys live in page memory only.
+- **Custom skills execution**: upload/version private skill bundles, attach
+  them to agents, snapshot concrete content at session creation, advertise the
+  skill through Pi, and read or execute its root-owned files inside the Docker
+  sandbox under `/workspace/skills`. Session snapshots remain reproducible
+  after source deletion; the live exit smoke covers model discovery, `read`,
+  `bash`, leak checks, tamper resistance, and cleanup
+  ([plan 0126](docs/plans/0126-skills-execution.md)).
 
 - **Observability.** `GET /health` (liveness + readiness, compose
   healthcheck), fail-closed Prometheus `/metrics`, and structured JSON logs
@@ -137,9 +144,6 @@ What's still missing — the
 the authoritative sequencing:
 
 - session usage metering (`usage` is `null`);
-- skills execution (wire-accepted today but runtime-inert; unblocked by the
-  egress + secrets boundary — the remaining half of the capability exit
-  criterion now that MCP, including OAuth, has shipped end-to-end);
 - agent versioning, broader event-topology parity, file-upload idempotency,
   remote sandbox providers, RBAC within a workspace, and CI.
 

@@ -21,15 +21,22 @@ import type {
   ManagedAgentsTool,
 } from "../../types/agents.ts";
 import { isJsonObject, isJsonValue, type JsonObject } from "../../types/json.ts";
+import type { SkillsStore } from "../skills/types.ts";
+
+const MAX_SKILLS = 20;
 
 export class DefaultAgentService implements AgentService {
-  constructor(private readonly store: AgentStore) {}
+  constructor(
+    private readonly store: AgentStore,
+    private readonly skills: Pick<SkillsStore, "getSkill" | "getVersion"> | undefined,
+  ) {}
 
   create(
     workspaceId: WorkspaceId,
     input: unknown,
   ): ManagedAgentsAgent {
     const req = parseCreateAgent(input);
+    this.assertSkillAttachments(workspaceId, req.skills ?? []);
     const now = new Date().toISOString();
     const id = newAgentId();
     const row: AgentRow = {
@@ -51,6 +58,28 @@ export class DefaultAgentService implements AgentService {
       archived_at: null,
     };
     return toManagedAgent(this.store.create({ row }));
+  }
+
+  private assertSkillAttachments(
+    workspaceId: WorkspaceId,
+    attachments: ManagedAgentsSkill[],
+  ): void {
+    for (const attachment of attachments) {
+      if (attachment.type === "anthropic") {
+        throw invalidRequest(
+          "anthropic prebuilt skills are not available on this deployment",
+        );
+      }
+      if (!this.skills?.getSkill(workspaceId, attachment.skill_id)) {
+        throw invalidRequest(`Unknown custom skill_id: ${attachment.skill_id}`);
+      }
+      const version = attachment.version ?? "latest";
+      if (!this.skills.getVersion(workspaceId, attachment.skill_id, version)) {
+        throw invalidRequest(
+          `Agent has invalid configuration: \`skill_id\` \`${attachment.skill_id}\` version \`${version}\` not found`,
+        );
+      }
+    }
   }
 
   retrieve(
@@ -250,10 +279,23 @@ function skillArrayField(
   const value = obj[field];
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw invalidRequest(`\`${field}\` must be an array`);
+  if (value.length > MAX_SKILLS) {
+    throw invalidRequest(`\`${field}\` may contain at most ${MAX_SKILLS} skills`);
+  }
+  const seen = new Set<string>();
   return value.map((v) => {
     const skill = jsonObjectField(v, field);
     const type = stringField(skill, "type", { required: true });
+    if (type !== "custom" && type !== "anthropic") {
+      throw invalidRequest("`skills[].type` must be `custom` or `anthropic`");
+    }
     const skillId = stringField(skill, "skill_id", { required: true });
+    if (seen.has(skillId)) {
+      throw invalidRequest(
+        `Agent has invalid configuration: duplicate skill_id "${skillId}"`,
+      );
+    }
+    seen.add(skillId);
     const version = optionalStringField(skill, "version");
     return version === undefined
       ? { type, skill_id: skillId }

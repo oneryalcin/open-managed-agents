@@ -18,6 +18,9 @@ import { EventStore } from "../events/store.ts";
 import { DefaultFileService } from "../files/service.ts";
 import { InMemoryFileStorage } from "../files/store.ts";
 import type { FileService } from "../files/types.ts";
+import { DefaultSkillsService } from "../skills/service.ts";
+import { InMemorySkillsStore } from "../skills/store.ts";
+import type { SkillsService } from "../skills/types.ts";
 import { DefaultSessionService } from "../sessions/service.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
 import type { ApiErrorBody } from "../errors.ts";
@@ -285,6 +288,22 @@ describe("upload admission", () => {
     await inFlight;
     fixture.close();
   });
+
+  it("applies the upload admission gate to skill creation", async () => {
+    const gate = deferred();
+    const fixture = makeFixture(
+      { maxConcurrentUploadsPerWorkspace: 1 },
+      { skills: slowSkillsService(gate.promise) },
+    );
+    const inFlight = uploadSkill(fixture.app, "first-skill");
+    await tick();
+    const rejected = await uploadSkill(fixture.app, "second-skill");
+    expect(rejected.status).toBe(429);
+    expect(rejected.headers.get("retry-after")).toBe("1");
+    gate.resolve();
+    expect((await inFlight).status).toBe(200);
+    fixture.close();
+  });
 });
 
 describe("SSE stream admission", () => {
@@ -330,7 +349,7 @@ describe("SSE stream admission", () => {
 
 function makeFixture(
   config: AdmissionLimitsConfig,
-  overrides: { files?: FileService } = {},
+  overrides: { files?: FileService; skills?: SkillsService } = {},
 ) {
   const db = new DatabaseSync(":memory:");
   const agentStore = new SqliteAgentStore(db);
@@ -341,9 +360,10 @@ function makeFixture(
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const admission = createAdmissionLimits(config);
   const app = createRawControlPlaneApp({
-    agents: new DefaultAgentService(agentStore),
+    agents: new DefaultAgentService(agentStore, undefined),
     environments: new DefaultEnvironmentService(environmentStore),
     files: overrides.files ?? new DefaultFileService(fileStorage),
+    skills: overrides.skills,
     sessions: new DefaultSessionService(
       sessionStore,
       agentStore,
@@ -444,6 +464,21 @@ function upload(app: Fixture["app"]): Promise<Response> {
   );
 }
 
+function uploadSkill(app: Fixture["app"], name: string): Promise<Response> {
+  const form = new FormData();
+  form.append(
+    "files[]",
+    new File([`---\nname: ${name}\ndescription: admission\n---\n`], `${name}/SKILL.md`),
+  );
+  return Promise.resolve(
+    app.request("/v1/skills", {
+      method: "POST",
+      headers: { "anthropic-beta": MANAGED_AGENTS_BETA },
+      body: form,
+    }),
+  );
+}
+
 function slowFileService(gatePromise: Promise<void>): FileService {
   const inner = new DefaultFileService(new InMemoryFileStorage());
   return {
@@ -457,6 +492,23 @@ function slowFileService(gatePromise: Promise<void>): FileService {
       return inner.upload(workspaceId, input);
     },
   } as FileService;
+}
+
+function slowSkillsService(gatePromise: Promise<void>): SkillsService {
+  const inner = new DefaultSkillsService(new InMemorySkillsStore());
+  return {
+    create: async (workspaceId, displayTitle, files) => {
+      await gatePromise;
+      return inner.create(workspaceId, displayTitle, files);
+    },
+    createVersion: inner.createVersion.bind(inner),
+    get: inner.get.bind(inner),
+    list: inner.list.bind(inner),
+    getVersion: inner.getVersion.bind(inner),
+    listVersions: inner.listVersions.bind(inner),
+    deleteVersion: inner.deleteVersion.bind(inner),
+    delete: inner.delete.bind(inner),
+  };
 }
 
 function deferred() {

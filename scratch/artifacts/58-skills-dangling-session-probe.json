@@ -1,0 +1,77 @@
+{
+  "run": "2f6f2f78",
+  "create_skill": {
+    "status": 200,
+    "id": "skill_011XuRxUTV7AaBqSoj3sqViM",
+    "version": "1783728920657517"
+  },
+  "create_environment": {
+    "status": 200,
+    "id": "env_01LB9YWvrTQ73GzVHm53oZJH"
+  },
+  "attach_bogus_version": {
+    "status": 400,
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "Agent has invalid configuration: `skill_id` `skill_011XuRxUTV7AaBqSoj3sqViM` version `does-not-exist` not found"
+      },
+      "request_id": "req_011CcuJizGA1CGUvKE1Rg967"
+    }
+  },
+  "attach_latest": {
+    "status": 200,
+    "body": {
+      "archived_at": null,
+      "created_at": "2026-07-11T00:15:22.234604Z",
+      "description": null,
+      "id": "agent_01UaoA1E5MoqQEPm13Xfvxbm",
+      "mcp_servers": [],
+      "metadata": {},
+      "model": {
+        "id": "claude-sonnet-4-6",
+        "speed": "standard"
+      },
+      "multiagent": null,
+      "name": "probe58-latest-2f6f2f78",
+      "skills": [
+        {
+          "skill_id": "skill_011XuRxUTV7AaBqSoj3sqViM",
+          "type": "custom",
+          "version": "latest"
+        }
+      ],
+      "system": null,
+      "tools": [
+        {
+          "configs": [],
+          "default_config": {
+            "enabled": true,
+            "permission_policy": {
+              "type": "always_allow"
+            }
+          },
+          "type": "agent_toolset_20260401"
+        }
+      ],
+      "type": "agent",
+      "updated_at": "2026-07-11T00:15:22.234604Z",
+      "version": 1
+    }
+  },
+  "delete_attached_version": {
+    "status": 200
+  },
+  "session_after_delete_last_version": {
+    "status": 400,
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "Could not resolve one or more skills: skill \"skill_011XuRxUTV7AaBqSoj3sqViM\" version \"latest\" not found"
+      },
+      "request_id": "req_011CcuJj8MpbWr5A9djs4paL"
+    }
+  }
+}

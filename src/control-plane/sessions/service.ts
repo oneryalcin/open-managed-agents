@@ -33,10 +33,12 @@ import type {
 } from "../events/types.ts";
 import { RuntimeUnsupportedSessionFileResourcesError } from "../events/types.ts";
 import type { FileStorage, FileStorageRecord } from "../files/types.ts";
-import { newFileId, newSessionId, newSessionResourceId } from "../ids.ts";
+import { newFileId, newSessionId, newSessionResourceId, newSessionSkillSnapshotId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { parseCreateSession, parseAgentRef } from "./request.ts";
 import type { VaultService } from "../vaults/types.ts";
+import type { SkillsStore } from "../skills/types.ts";
+import { resolveBuiltinToolAccessForAgent } from "./pi/tool-permissions.ts";
 import {
   normalizeSessionFileResources,
   type SessionFileResourceMountInput,
@@ -47,6 +49,7 @@ import type {
   CreateSessionIdempotencyCommit,
   CreateSessionRecord,
   SessionFileMountSnapshotRow,
+  SessionSkillSnapshotRow,
   SessionRow,
   SessionService,
   SessionStore,
@@ -99,6 +102,7 @@ export interface DefaultSessionServiceOptions {
   maxMountedBytes?: number;
   egressCapability?: SessionEgressCapability;
   vaults?: Pick<VaultService, "assertVaultsUsable">;
+  skills?: Pick<SkillsStore, "getVersion" | "getVersionFiles" | "openContent">;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
   deleteSessionRows?: (
     workspaceId: WorkspaceId,
@@ -119,6 +123,7 @@ export class DefaultSessionService implements SessionService {
   private readonly maxActiveSessionsPerWorkspace: number | undefined;
   private readonly egressCapability: SessionEgressCapability | undefined;
   private readonly vaults: Pick<VaultService, "assertVaultsUsable"> | undefined;
+  private readonly skills: Pick<SkillsStore, "getVersion" | "getVersionFiles" | "openContent"> | undefined;
   private readonly maxFileResources: number;
   private readonly maxMountedBytes: number;
   private readonly runtime:
@@ -166,6 +171,7 @@ export class DefaultSessionService implements SessionService {
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.egressCapability = opts.egressCapability;
     this.vaults = opts.vaults;
+    this.skills = opts.skills;
     this.runtime = opts.runtime;
     this.deleteSessionRows = opts.deleteSessionRows;
     this.idempotencyLedger = opts.idempotencyLedger;
@@ -353,6 +359,22 @@ export class DefaultSessionService implements SessionService {
         `Agent ${agentRef.id} has version ${agent.version}; requested version ${agentRef.version} not found`,
       );
     }
+    if (agent.skills.length > 0) {
+      const read = resolveBuiltinToolAccessForAgent(agent, "read");
+      if (!read.enabled || read.permission === "deny") {
+        throw invalidRequest(
+          "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's `agent_toolset`",
+        );
+      }
+      for (const attachment of agent.skills) {
+        const version = attachment.version ?? "latest";
+        if (!this.skills?.getVersion(workspaceId, attachment.skill_id, version)) {
+          throw invalidRequest(
+            `Could not resolve one or more skills: skill "${attachment.skill_id}" version "${version}" not found`,
+          );
+        }
+      }
+    }
     const environment = this.environments.retrieve(workspaceId, req.environment_id);
     if (!environment) {
       throw invalidRequest(`Environment ${req.environment_id} not found`);
@@ -363,7 +385,7 @@ export class DefaultSessionService implements SessionService {
     const now = new Date().toISOString();
     const sessionId = newSessionId();
     let externalSideEffectsStarted = false;
-    const { resources, snapshots, mounts } = await this.prepareFileResources(
+    const preparedFiles = await this.prepareFileResources(
       workspaceId,
       sessionId,
       req.resources ?? [],
@@ -375,6 +397,20 @@ export class DefaultSessionService implements SessionService {
         },
       },
     );
+    const preparedSkills = await this.prepareSkillResources(
+      workspaceId,
+      sessionId,
+      agent.skills,
+      now,
+      preparedFiles.totalBytes,
+      {
+        idempotency: opts.idempotency,
+        onExternalSideEffect: () => { externalSideEffectsStarted = true; },
+      },
+    );
+    const resources = preparedFiles.resources;
+    const snapshots = [...preparedFiles.snapshots, ...preparedSkills.snapshots];
+    const mounts = [...preparedFiles.mounts, ...preparedSkills.mounts];
     const row: SessionRow = {
       id: sessionId,
       workspace_id: workspaceId,
@@ -409,6 +445,7 @@ export class DefaultSessionService implements SessionService {
           Promise.resolve(
             this.runtime.prepareSession(workspaceId, row.id, {
               fileMounts: mounts,
+              skills: preparedSkills.skills.map(({ name, description }) => ({ name, description })),
               environmentId: row.environment_id,
               vaultIds: row.vault_ids,
               agent: row.agent,
@@ -417,7 +454,11 @@ export class DefaultSessionService implements SessionService {
         );
         runtimePrepared = true;
       }
-      const record = { row, snapshots: sessionSnapshots };
+      const record = {
+        row,
+        snapshots: sessionSnapshots,
+        skillSnapshots: preparedSkills.skills.map((skill) => ({ ...skill, session_id: row.id })),
+      };
       if (opts.idempotency && this.idempotencyLedger) {
         const response = toManagedSession(row);
         const completion = idempotencyCompletion(
@@ -774,9 +815,10 @@ export class DefaultSessionService implements SessionService {
     resources: ManagedAgentsSessionFileResource[];
     snapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">>;
     mounts: RuntimeSessionFileMount[];
+    totalBytes: number;
   }> {
     if (resources.length === 0) {
-      return { resources: [], snapshots: [], mounts: [] };
+      return { resources: [], snapshots: [], mounts: [], totalBytes: 0 };
     }
     if (!this.files) {
       throw invalidRequest("File resources are not supported by this server.");
@@ -857,6 +899,8 @@ export class DefaultSessionService implements SessionService {
           snapshot_file_id: snapshotFileId,
           sha256: item.sha256,
           size_bytes: item.bytes.byteLength,
+          kind: "upload",
+          skill_snapshot_id: null,
         };
         this.store.recordPendingInternalSnapshotCreateRollback(
           rollbackRow,
@@ -887,6 +931,8 @@ export class DefaultSessionService implements SessionService {
           snapshot_file_id: snapshot.metadata.id,
           sha256: snapshot.sha256,
           size_bytes: snapshot.metadata.size_bytes,
+          kind: "upload",
+          skill_snapshot_id: null,
         });
       }
     } catch (error) {
@@ -910,13 +956,64 @@ export class DefaultSessionService implements SessionService {
       })),
       snapshots: createdSnapshots,
       mounts: createdSnapshots.map((snapshot, index) => ({
+        kind: "upload",
         mountPath: snapshot.mount_path,
         snapshotFileId: snapshot.snapshot_file_id,
         sha256: snapshot.sha256,
         sizeBytes: snapshot.size_bytes,
         bytes: prepared[index]!.bytes,
       })),
+      totalBytes,
     };
+  }
+
+  private async prepareSkillResources(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    attachments: readonly { skill_id: string; version?: string }[],
+    now: string,
+    existingBytes: number,
+    opts: { idempotency?: RequestIdempotencyKey; onExternalSideEffect?: () => void },
+  ): Promise<{
+    skills: Array<Omit<SessionSkillSnapshotRow, "session_id">>;
+    snapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">>;
+    mounts: RuntimeSessionFileMount[];
+  }> {
+    if (attachments.length === 0) return { skills: [], snapshots: [], mounts: [] };
+    if (!this.skills || !this.files) throw invalidRequest("Skills are not supported by this server.");
+    const skills: Array<Omit<SessionSkillSnapshotRow, "session_id">> = [];
+    const snapshots: Array<Omit<SessionFileMountSnapshotRow, "session_id">> = [];
+    const mounts: RuntimeSessionFileMount[] = [];
+    let totalBytes = existingBytes;
+    try {
+      for (const attachment of attachments) {
+        const requested = attachment.version ?? "latest";
+        const version = this.skills.getVersion(workspaceId, attachment.skill_id, requested);
+        if (!version) throw invalidRequest(`Could not resolve one or more skills: skill "${attachment.skill_id}" version "${requested}" not found`);
+        const skillSnapshotId = newSessionSkillSnapshotId();
+        skills.push({ workspace_id: workspaceId, skill_snapshot_id: skillSnapshotId, skill_id: attachment.skill_id, version: version.version, name: version.name, description: version.description });
+        for (const file of this.skills.getVersionFiles(workspaceId, attachment.skill_id, version.version)) {
+          const bytes = this.skills.openContent(workspaceId, attachment.skill_id, version.version, file.path);
+          if (!bytes || sha256Hex(bytes) !== file.sha256) throw invalidRequest(`Skill ${attachment.skill_id} failed integrity validation`);
+          totalBytes += bytes.byteLength;
+          if (totalBytes > this.maxMountedBytes) throw invalidRequest(`Session resources exceed the ${limitLabel(this.maxMountedBytes)} mounted byte limit`);
+          const resourceId = newSessionResourceId();
+          const snapshotFileId = newFileId();
+          const mountPath = `/workspace/skills/${file.path}`;
+          const rollbackRow: SessionFileMountSnapshotRow = { workspace_id: workspaceId, session_id: sessionId, resource_id: resourceId, file_id: `${attachment.skill_id}:${version.version}:${file.path}`, mount_path: mountPath, snapshot_file_id: snapshotFileId, sha256: file.sha256, size_bytes: bytes.byteLength, kind: "skill", skill_snapshot_id: skillSnapshotId };
+          this.store.recordPendingInternalSnapshotCreateRollback(rollbackRow, now);
+          opts.onExternalSideEffect?.();
+          const snapshot = await this.withIdempotencyHeartbeat(workspaceId, opts.idempotency, this.files.createInternalSnapshot(workspaceId, { fileId: snapshotFileId, filename: file.path.split("/").at(-1) ?? "skill-file", mimeType: "application/octet-stream", scopeId: resourceId, body: bytes }));
+          const row = { workspace_id: workspaceId, resource_id: resourceId, file_id: rollbackRow.file_id, mount_path: mountPath, snapshot_file_id: snapshot.metadata.id, sha256: snapshot.sha256, size_bytes: snapshot.metadata.size_bytes, kind: "skill" as const, skill_snapshot_id: skillSnapshotId };
+          snapshots.push(row);
+          mounts.push({ kind: "skill", mountPath, snapshotFileId: row.snapshot_file_id, sha256: row.sha256, sizeBytes: row.size_bytes, bytes });
+        }
+      }
+      return { skills, snapshots, mounts };
+    } catch (error) {
+      await this.sweepPendingInternalSnapshotCreateRollbacks(workspaceId, sessionId).catch((cleanupError) => log.warn("snapshot_create_rollback_sweep_failed", { error: cleanupError }));
+      throw error;
+    }
   }
 
   private async closeRuntimeBestEffort(

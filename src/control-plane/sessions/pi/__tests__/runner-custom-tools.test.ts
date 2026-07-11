@@ -108,7 +108,18 @@ const sdk = vi.hoisted(() => {
     noTools?: "all" | "builtin";
     tools?: string[];
     customTools?: MockToolDefinition[];
+    resourceLoader?: { getSkills(): { skills: Array<{ name: string; filePath: string; baseDir: string }>; diagnostics: unknown[] } };
   };
+
+  // Faithful to real Pi 0.80.6: getSkills() stays empty until reload() runs
+  // skillsOverride. If the runner ever stops awaiting reload(), the skills
+  // assertions below go empty and fail — which is the bug the mock previously hid.
+  class MockResourceLoader {
+    private loaded: { skills: unknown[]; diagnostics: unknown[] } = { skills: [], diagnostics: [] };
+    constructor(private readonly opts: { skillsOverride?: (base: { skills: never[]; diagnostics: never[] }) => any }) {}
+    async reload() { this.loaded = this.opts.skillsOverride?.({ skills: [], diagnostics: [] }) ?? { skills: [], diagnostics: [] }; }
+    getSkills() { return this.loaded; }
+  }
 
   let emitBuiltinToolCallMessage = false;
 
@@ -116,6 +127,8 @@ const sdk = vi.hoisted(() => {
     AuthStorage: MockAuthStorage,
     ModelRegistry: MockModelRegistry,
     SessionManager: { inMemory: vi.fn(() => ({})) },
+    DefaultResourceLoader: MockResourceLoader,
+    createSyntheticSourceInfo: vi.fn((path: string, options: object) => ({ path, ...options })),
     defineTool: vi.fn((tool: MockToolDefinition) => tool),
     createAgentSession: vi.fn(
       async (opts: MockCreateOptions) => {
@@ -138,6 +151,8 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   defineTool: sdk.defineTool,
   ModelRegistry: sdk.ModelRegistry,
   SessionManager: sdk.SessionManager,
+  DefaultResourceLoader: sdk.DefaultResourceLoader,
+  createSyntheticSourceInfo: sdk.createSyntheticSourceInfo,
 }));
 
 import { PiSessionRunner, type PiSessionFileMount } from "../runner.ts";
@@ -266,6 +281,7 @@ describe("PiSessionRunner custom-tool bridge", () => {
     );
     const mounts: PiSessionFileMount[] = [
       {
+        kind: "upload",
         mountPath: "/mnt/session/uploads/probe.txt",
         snapshotFileId: "file_snapshot",
         sha256: "sha",
@@ -325,6 +341,36 @@ describe("PiSessionRunner custom-tool bridge", () => {
     expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
       "ask_user",
     ]);
+  });
+
+  it("advertises snapshotted skills at container paths", async () => {
+    const runner = new PiSessionRunner({
+      skills: () => [],
+      idleTtlMs: 0,
+    });
+    await runner.prepareSession("wrk_default", "sesn_skill", {
+      skills: [{ name: "demo-skill", description: "Use the demo" }],
+    });
+    expect(sdk.lastCreateOptions()?.resourceLoader?.getSkills()).toMatchObject({
+      diagnostics: [],
+      skills: [{ name: "demo-skill", filePath: "/workspace/skills/demo-skill/SKILL.md", baseDir: "/workspace/skills/demo-skill" }],
+    });
+    await runner.closeSession("wrk_default", "sesn_skill");
+  });
+
+  it("advertises skills from the snapshot provider when not passed inline (post-restart rebuild path)", async () => {
+    // After a restart/eviction the per-prepare skills map is empty, so the
+    // loader must fall back to the runner's persisted snapshot provider.
+    const runner = new PiSessionRunner({
+      skills: () => [{ name: "demo-skill", description: "Use the demo" }],
+      idleTtlMs: 0,
+    });
+    await runner.prepareSession("wrk_default", "sesn_skill_fallback", {});
+    expect(sdk.lastCreateOptions()?.resourceLoader?.getSkills()).toMatchObject({
+      diagnostics: [],
+      skills: [{ name: "demo-skill", filePath: "/workspace/skills/demo-skill/SKILL.md", baseDir: "/workspace/skills/demo-skill" }],
+    });
+    await runner.closeSession("wrk_default", "sesn_skill_fallback");
   });
 
   it("pauses always_ask builtin tools until a tool_confirmation is committed", async () => {

@@ -473,7 +473,7 @@ function makeAuthFixture(opts: { auth?: boolean } = {}) {
   const fileStorage = new InMemoryFileStorage();
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const app = createRawControlPlaneApp({
-    agents: new DefaultAgentService(agentStore),
+    agents: new DefaultAgentService(agentStore, undefined),
     environments: new DefaultEnvironmentService(environmentStore),
     files: new DefaultFileService(fileStorage),
     sessions: new DefaultSessionService(

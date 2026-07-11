@@ -469,6 +469,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     });
     const mounts: PiSessionFileMount[] = [
       {
+        kind: "upload",
         mountPath: "/mnt/session/uploads/probe.txt",
         snapshotFileId: "file_snapshot",
         sha256: "sha",
@@ -518,6 +519,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     });
     const mounts: PiSessionFileMount[] = [
       {
+        kind: "upload",
         mountPath: "/mnt/session/uploads/probe.txt",
         snapshotFileId: "file_snapshot",
         sha256: "sha",
@@ -541,6 +543,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const sandboxes: FakeSandboxProvider[] = [];
     const mounts: PiSessionFileMount[] = [
       {
+        kind: "upload",
         mountPath: "/mnt/session/uploads/probe.txt",
         snapshotFileId: "file_snapshot",
         sha256: "sha",
@@ -574,6 +577,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
     const mounts: PiSessionFileMount[] = [
       {
+        kind: "upload",
         mountPath: "/mnt/session/uploads/probe.txt",
         snapshotFileId: "file_snapshot",
         sha256: "sha",
@@ -599,6 +603,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const sandbox = new FakeSandboxProvider(["bash"], ["bash"]);
     const preparedMounts: PiSessionFileMount[] = [
       {
+        kind: "upload",
         mountPath: "/mnt/session/uploads/prepared.txt",
         snapshotFileId: "file_prepared",
         sha256: "sha",
@@ -608,6 +613,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     ];
     const resolverMounts: PiSessionFileMount[] = [
       {
+        kind: "upload",
         mountPath: "/mnt/session/uploads/resolver.txt",
         snapshotFileId: "file_resolver",
         sha256: "sha",
@@ -643,6 +649,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
       runner.prepareSession("wrk", "sesn_1", {
         fileMounts: [
           {
+            kind: "upload",
             mountPath: "/mnt/session/uploads/probe.txt",
             snapshotFileId: "file_snapshot",
             sha256: "sha",

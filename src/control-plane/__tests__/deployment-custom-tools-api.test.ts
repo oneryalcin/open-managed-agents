@@ -62,6 +62,12 @@ const sdk = vi.hoisted(() => {
     AuthStorage: MockAuthStorage,
     ModelRegistry: MockModelRegistry,
     SessionManager: { inMemory: vi.fn(() => ({})) },
+    DefaultResourceLoader: class {
+      constructor(readonly opts: unknown) {}
+      async reload() {}
+      getSkills() { return { skills: [], diagnostics: [] }; }
+    },
+    createSyntheticSourceInfo: vi.fn((path: string, options: object) => ({ path, ...options })),
     defineTool: vi.fn((tool: MockToolDefinition) => tool),
     createAgentSession: vi.fn(async (opts: MockCreateOptions) => {
       lastCreateOptions = opts;
@@ -80,6 +86,8 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   defineTool: sdk.defineTool,
   ModelRegistry: sdk.ModelRegistry,
   SessionManager: sdk.SessionManager,
+  DefaultResourceLoader: sdk.DefaultResourceLoader,
+  createSyntheticSourceInfo: sdk.createSyntheticSourceInfo,
 }));
 
 import { createDeploymentControlPlaneApp } from "./helpers.ts";
