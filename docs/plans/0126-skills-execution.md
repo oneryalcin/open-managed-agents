@@ -418,6 +418,14 @@ attaches rejected while the catalog is deferred (D3). Cross-reference asserts
 mirror MCP's (`service.ts:344-372`). Cap is per the root agent's own list (§2.2
 scope); cross-agent aggregation is deferred.
 
+**Version resolution [Obs, probe 58]:** agent-create resolves an explicit
+`version` (or `"latest"` when omitted) and rejects a missing version with the
+hosted error shape. Session-create resolves every attachment again, because a
+version may have been deleted after the agent was stored; a missing version is
+rejected with `Could not resolve one or more skills: skill "…" version "…" not
+found`. Slice 3 reuses this admission boundary while copying the resolved bytes
+into the durable session snapshot.
+
 ### D8 — Discriminated mount contract + skill mount root
 
 **Rewritten for a concrete, safe contract (review: Codex-adv + Opus + External +
@@ -540,7 +548,9 @@ the quota domain and the version-lifecycle edges.)
   version deletion/latest recomputation.
 - Validation: bad type, unknown custom id, duplicate skill_id, 20-cap per agent,
   `anthropic`-attach-rejected-while-deferred, and the session-create
-  read-tool-coupling 400 with the **verbatim** message (via the shared evaluator).
+  read-tool-coupling 400 with the **verbatim** message (via the shared evaluator);
+  bogus explicit version rejected at agent-create and deleted-latest rejected at
+  session-create (probe 58).
 - Snapshot/repro: `"latest"` resolved at create; a new version uploaded
   mid-session does not change the running session; a version deleted after
   snapshot still materializes from snapshot bytes; restart + eviction/re-create

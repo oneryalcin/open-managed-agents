@@ -711,6 +711,7 @@ export function createDeploymentControlPlane(
       stores.files,
       {
         runtime: runner,
+        skills: stores.skills,
         egressCapability: {
           canHonorNetworking: runtimeConfig.egress !== undefined,
           hasSecretsStore: stores.secrets !== undefined,
@@ -848,6 +849,7 @@ export function createInMemoryControlPlaneApp(
       fileStorage,
       {
         ...(opts.runtime?.runner ? { runtime: opts.runtime.runner } : {}),
+        skills: skillsStore,
         vaults: vaultService,
         idempotencyLedger: eventStore,
         createSessionRowsWithIdempotency:

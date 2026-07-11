@@ -28,7 +28,7 @@ const MAX_SKILLS = 20;
 export class DefaultAgentService implements AgentService {
   constructor(
     private readonly store: AgentStore,
-    private readonly skills?: Pick<SkillsStore, "getSkill">,
+    private readonly skills?: Pick<SkillsStore, "getSkill" | "getVersion">,
   ) {}
 
   create(
@@ -72,6 +72,12 @@ export class DefaultAgentService implements AgentService {
       }
       if (!this.skills?.getSkill(workspaceId, attachment.skill_id)) {
         throw invalidRequest(`Unknown custom skill_id: ${attachment.skill_id}`);
+      }
+      const version = attachment.version ?? "latest";
+      if (!this.skills.getVersion(workspaceId, attachment.skill_id, version)) {
+        throw invalidRequest(
+          `Agent has invalid configuration: \`skill_id\` \`${attachment.skill_id}\` version \`${version}\` not found`,
+        );
       }
     }
   }

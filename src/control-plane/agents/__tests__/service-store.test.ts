@@ -115,4 +115,34 @@ describe("AgentService + AgentStore", () => {
       next_page: null,
     });
   });
+
+  it("accepts exactly twenty distinct skill attachments", () => {
+    const store = SqliteAgentStore.open(":memory:");
+    const service = new DefaultAgentService(store, {
+      getSkill: (_workspaceId, skillId) => ({
+        id: skillId,
+        display_title: skillId,
+        latest_version: "1",
+        source: "custom",
+        type: "skill",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }),
+      getVersion: (_workspaceId, skillId, version) => ({
+        id: `skill_version_${skillId}`,
+        skill_id: skillId,
+        version,
+        name: skillId,
+        description: "test",
+        directory: skillId,
+        type: "skill_version",
+        created_at: "2026-01-01T00:00:00.000Z",
+      }),
+    });
+    const skills = Array.from({ length: 20 }, (_, index) => ({
+      type: "custom" as const,
+      skill_id: `skill_${index}`,
+    }));
+    expect(service.create("wrk_default", { ...REQUEST, skills }).skills).toEqual(skills);
+  });
 });

@@ -37,6 +37,7 @@ import { newFileId, newSessionId, newSessionResourceId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import { parseCreateSession, parseAgentRef } from "./request.ts";
 import type { VaultService } from "../vaults/types.ts";
+import type { SkillsStore } from "../skills/types.ts";
 import { resolveBuiltinToolAccessForAgent } from "./pi/tool-permissions.ts";
 import {
   normalizeSessionFileResources,
@@ -100,6 +101,7 @@ export interface DefaultSessionServiceOptions {
   maxMountedBytes?: number;
   egressCapability?: SessionEgressCapability;
   vaults?: Pick<VaultService, "assertVaultsUsable">;
+  skills?: Pick<SkillsStore, "getVersion">;
   runtime?: Pick<RuntimeEventRunner, "prepareSession" | "closeSession">;
   deleteSessionRows?: (
     workspaceId: WorkspaceId,
@@ -120,6 +122,7 @@ export class DefaultSessionService implements SessionService {
   private readonly maxActiveSessionsPerWorkspace: number | undefined;
   private readonly egressCapability: SessionEgressCapability | undefined;
   private readonly vaults: Pick<VaultService, "assertVaultsUsable"> | undefined;
+  private readonly skills: Pick<SkillsStore, "getVersion"> | undefined;
   private readonly maxFileResources: number;
   private readonly maxMountedBytes: number;
   private readonly runtime:
@@ -167,6 +170,7 @@ export class DefaultSessionService implements SessionService {
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.egressCapability = opts.egressCapability;
     this.vaults = opts.vaults;
+    this.skills = opts.skills;
     this.runtime = opts.runtime;
     this.deleteSessionRows = opts.deleteSessionRows;
     this.idempotencyLedger = opts.idempotencyLedger;
@@ -358,8 +362,16 @@ export class DefaultSessionService implements SessionService {
       const read = resolveBuiltinToolAccessForAgent(agent, "read");
       if (!read.enabled || read.permission === "deny") {
         throw invalidRequest(
-          "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's agent_toolset",
+          "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's `agent_toolset`",
         );
+      }
+      for (const attachment of agent.skills) {
+        const version = attachment.version ?? "latest";
+        if (!this.skills?.getVersion(workspaceId, attachment.skill_id, version)) {
+          throw invalidRequest(
+            `Could not resolve one or more skills: skill "${attachment.skill_id}" version "${version}" not found`,
+          );
+        }
       }
     }
     const environment = this.environments.retrieve(workspaceId, req.environment_id);

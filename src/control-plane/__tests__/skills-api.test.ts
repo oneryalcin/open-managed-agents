@@ -138,15 +138,18 @@ describe("skills API", () => {
       { type: "custom", skill_id: skill.id, version: "latest" },
     ]);
 
-    const invalidCases = [
-      [{ type: "unknown", skill_id: skill.id }],
-      [{ type: "custom", skill_id: "skill_missing" }],
-      [{ type: "custom", skill_id: skill.id }, { type: "custom", skill_id: skill.id }],
-      [{ type: "anthropic", skill_id: "xlsx" }],
-      Array.from({ length: 21 }, (_, index) => ({ type: "custom", skill_id: `skill_${index}` })),
+    const invalidCases: Array<{ skills: Array<Record<string, string>>; message: string }> = [
+      { skills: [{ type: "unknown", skill_id: skill.id }], message: "must be `custom` or `anthropic`" },
+      { skills: [{ type: "custom", skill_id: "skill_missing" }], message: "Unknown custom skill_id" },
+      { skills: [{ type: "custom", skill_id: skill.id, version: "does-not-exist" }], message: `Agent has invalid configuration: \`skill_id\` \`${skill.id}\` version \`does-not-exist\` not found` },
+      { skills: [{ type: "custom", skill_id: skill.id }, { type: "custom", skill_id: skill.id }], message: `Agent has invalid configuration: duplicate skill_id \"${skill.id}\"` },
+      { skills: [{ type: "anthropic", skill_id: "xlsx" }], message: "anthropic prebuilt skills are not available" },
+      { skills: Array.from({ length: 21 }, (_, index) => ({ type: "custom", skill_id: `skill_${index}` })), message: "may contain at most 20 skills" },
     ];
-    for (const skills of invalidCases) {
-      expect((await createAgent(app, { skills })).status).toBe(400);
+    for (const invalid of invalidCases) {
+      const response = await createAgent(app, { skills: invalid.skills });
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: { message: string } }).error.message).toContain(invalid.message);
     }
   });
 
@@ -176,7 +179,7 @@ describe("skills API", () => {
       });
       expect(response.status).toBe(400);
       expect(await response.text()).toContain(
-        "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's agent_toolset",
+        "Missing required tool: skills require the read tool to be usable (enabled and not always_deny) on the session's `agent_toolset`",
       );
     }
 
@@ -189,6 +192,40 @@ describe("skills API", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ agent: allowedAgent.id, environment_id: environment.id }),
     })).status).toBe(200);
+
+    const askAgent = await (await createAgent(app, {
+      skills: [{ type: "custom", skill_id: skill.id }],
+      tools: [{ type: "agent_toolset_20260401", configs: [{ name: "read", permission_policy: { type: "always_ask" } }] }],
+    })).json() as { id: string };
+    expect((await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent: askAgent.id, environment_id: environment.id }),
+    })).status).toBe(200);
+  });
+
+  it("re-resolves attached skill versions at session creation", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const skill = await createSkill(app, "stale-skill", "stale");
+    const agent = await (await createAgent(app, {
+      skills: [{ type: "custom", skill_id: skill.id, version: "latest" }],
+      tools: [{ type: "agent_toolset_20260401" }],
+    })).json() as { id: string };
+    const environment = await json(app.request("/v1/environments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Stale skills environment", config: { type: "cloud" } }),
+    }));
+    expect((await app.request(`/v1/skills/${skill.id}/versions/latest`, { method: "DELETE" })).status).toBe(200);
+    const response = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent: agent.id, environment_id: environment.id }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toBe(
+      `Could not resolve one or more skills: skill \"${skill.id}\" version \"latest\" not found`,
+    );
   });
 });
 
