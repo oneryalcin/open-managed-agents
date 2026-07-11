@@ -532,6 +532,11 @@ the quota domain and the version-lifecycle edges.)
    `/workspace/skills/<name>/SKILL.md` (assert via the bash/read tool_result, per
    probe 57's method) and uses it; event vocabulary unchanged; a leak sweep whose
    "intended" surface is explicitly defined (D-trust below).
+   **Completed as smoke 59** (`scratch/59-skills-live-smoke.ts`): real Docker,
+   real model `read` + `bash` tool evidence, source-version deletion before the
+   turn, no new event vocabulary, host-secret/egress leak sweep, non-writable
+   files, immovable mountpoint, and verified container cleanup. Raw evidence is
+   persisted under `scratch/artifacts/59-skills-live-smoke.json`.
 5. **Deferred, named:** anthropic prebuilt catalog (pending redistribution — D3);
    `agent_with_overrides` + multi-agent cap aggregation (§2.2); console
    browsing/upload (mirrors plan 0125).
