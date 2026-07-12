@@ -88,7 +88,7 @@ the risk of silent contradiction, not by how easy they first appear.
 - [x] **`DELETE /v1/sessions/{id}` on a running session is blocked** *(DONE 2026-07-12)*
   - CMA `[Doc]`: a running session cannot be deleted; interrupt first (`session-operations.md:578`).
   - CMA `[Obs]`: probe 38 (`scratch/artifacts/38-managed-agents-delete-running-probe.json`) — DELETE while running → HTTP 400 `invalid_request_error`, message `"Cannot delete session while it is running. Send an interrupt event or wait for the session to complete."`; the rejected DELETE leaves the session running; a concurrent interrupt succeeds asynchronously while DELETE stays rejected.
-  - Fix (shipped): `assertSessionDeletable` (`events/service.ts`) mirrors the archive running-detection and `sessionNotDeletable()` (`events/session-guards.ts`) returns the verbatim hosted message; the delete route preflights before any mutation. Regression + mutation-checked in `session-lifecycle-api.test.ts`; the delete-vs-indexing race in `runtime-events-api.test.ts` is now closed by the guard (delete refused until the turn settles).
+  - Fix (shipped): `assertSessionDeletable` (`events/service.ts`) mirrors the archive running-detection and `sessionNotDeletable()` (`events/session-guards.ts`) returns the verbatim hosted message; `DefaultSessionService` requires this guard at construction and runs it before any deletion mutation. Regression + mutation-checked in `session-lifecycle-api.test.ts`; the delete-vs-indexing race in `runtime-events-api.test.ts` is now closed by the guard (delete refused until the turn settles).
 
 - [ ] **`networking` accept-and-ignore trap** *(verified)*
   - CMA `[Doc]`: `config.networking: {type:"unrestricted"}` / `{type:"limited", allowed_hosts:[…]}` grants the documented access (`environments.md:379`).
@@ -257,7 +257,8 @@ goal because OMA's deployment model is intentionally different.
   selection, stronger default Docker isolation, and boundary secret injection
   even where the implementation is not byte-for-byte hosted behavior.
 - 🔵 **Lifecycle guards are in-process, not durable** — `assertSessionArchivable`
-  and `assertSessionDeletable` (`events/service.ts`) detect a live turn via the
+  and the required `assertDeletable` dependency (`events/service.ts`)
+  detect a live turn via the
   in-process `activeRuntimeTaskCount` map. The `sessions.status` column only ever
   holds `idle`/`terminated` (only archive flips it, `sessions/store.ts:208`), so
   the `status === "running"/"rescheduling"` branch is currently unreachable — the

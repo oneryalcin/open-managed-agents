@@ -347,13 +347,6 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   if (services.vaults) {
     app.route("/v1/vaults", vaultsRoutes(services.vaults, services.mcp));
   }
-  // Wire the running-session delete guard once, here at the composition root:
-  // this is the single place that owns both services, so the invariant travels
-  // with the deletion domain and no session-service construction site can forget
-  // it (see SessionService.bindDeletableGuard).
-  services.sessions.bindDeletableGuard((w, s) =>
-    services.sessionEvents.assertSessionDeletable(w, s),
-  );
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route(
     "/v1/sessions/:sessionId/events",
@@ -719,6 +712,7 @@ export function createDeploymentControlPlane(
       stores.environments,
       stores.files,
       {
+        assertDeletable: sessionEvents.assertSessionDeletable.bind(sessionEvents),
         runtime: runner,
         skills: stores.skills,
         egressCapability: {
@@ -845,6 +839,14 @@ export function createInMemoryControlPlaneApp(
   });
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const vaultService = new DefaultVaultService(vaultStore);
+  const sessionEvents = new DefaultSessionEventsService(
+    eventStore,
+    sessionStore,
+    broadcaster,
+    opts.runtime
+      ? { ...opts.runtime, sessionOutputCoordinator, runtimeEventCoordinator }
+      : undefined,
+  );
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore, skillsStore),
     environments: new DefaultEnvironmentService(environmentStore),
@@ -857,6 +859,7 @@ export function createInMemoryControlPlaneApp(
       environmentStore,
       fileStorage,
       {
+        assertDeletable: sessionEvents.assertSessionDeletable.bind(sessionEvents),
         ...(opts.runtime?.runner ? { runtime: opts.runtime.runner } : {}),
         skills: skillsStore,
         vaults: vaultService,
@@ -865,14 +868,7 @@ export function createInMemoryControlPlaneApp(
           sessionStore.createAndCompleteIdempotency.bind(sessionStore),
       },
     ),
-    sessionEvents: new DefaultSessionEventsService(
-      eventStore,
-      sessionStore,
-      broadcaster,
-      opts.runtime
-        ? { ...opts.runtime, sessionOutputCoordinator, runtimeEventCoordinator }
-        : undefined,
-    ),
+    sessionEvents,
   });
 }
 

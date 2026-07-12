@@ -66,7 +66,10 @@ describe("deployment storage", () => {
       stores.agents,
       stores.environments,
       stores.files,
-      { deleteSessionRows: stores.sessionCoordinator.deleteSessionRows },
+      {
+        assertDeletable: () => {},
+        deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,
+      },
     );
     const agent = agents.create("wrk_default", {
       name: "Durable Agent",
@@ -112,6 +115,7 @@ describe("deployment storage", () => {
         restarted.agents,
         restarted.environments,
         restarted.files,
+        { assertDeletable: () => {} },
       ).retrieve("wrk_default", session.id),
     ).toMatchObject({ id: session.id, agent: { id: agent.id } });
     await expect(
@@ -198,7 +202,10 @@ describe("deployment storage", () => {
       stores.agents,
       stores.environments,
       stores.files,
-      { deleteSessionRows: stores.sessionCoordinator.deleteSessionRows },
+      {
+        assertDeletable: () => {},
+        deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,
+      },
     );
 
     await expect(sessions.delete("wrk_default", sessionId)).resolves.toEqual({

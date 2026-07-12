@@ -205,6 +205,7 @@ async function runServer(): Promise<void> {
       stores.environments,
       stores.files,
       {
+        assertDeletable: () => {},
         idempotencyLedger: stores.events,
         createSessionRowsWithIdempotency:
           stores.sessions.createAndCompleteIdempotency.bind(stores.sessions),

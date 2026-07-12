@@ -571,6 +571,12 @@ function makeFixture(
     sessions: sessionStore,
     events: eventStore,
   });
+  const sessionEvents = new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {
+    runner,
+    translate: translatePiEvent,
+    sessionOutputCoordinator,
+    runtimeEventCoordinator: opts.runtimeEventCoordinator ?? runtimeEventCoordinator,
+  });
   return {
     broadcaster,
     app: createControlPlaneApp({
@@ -582,14 +588,12 @@ function makeFixture(
         agentStore,
         environmentStore,
         fileStorage,
+        {
+          assertDeletable: (workspaceId, sessionId) =>
+            sessionEvents.assertSessionDeletable(workspaceId, sessionId),
+        },
       ),
-      sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {
-        runner,
-        translate: translatePiEvent,
-        sessionOutputCoordinator,
-        runtimeEventCoordinator:
-          opts.runtimeEventCoordinator ?? runtimeEventCoordinator,
-      }),
+      sessionEvents,
     }),
   };
 }

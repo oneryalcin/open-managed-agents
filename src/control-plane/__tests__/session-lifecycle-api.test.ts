@@ -805,6 +805,20 @@ function createLifecycleFixture(opts: {
   const sessionStore = SqliteSessionStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
   const broadcaster = new SessionEventBroadcaster(eventStore);
+  let sessionEvents!: DefaultSessionEventsService;
+  sessionEvents = new DefaultSessionEventsService(
+    eventStore,
+    sessionStore,
+    broadcaster,
+    {
+      runner: opts.runner,
+      translate: opts.translate,
+      runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+        sessions: sessionStore,
+        events: eventStore,
+      }),
+    },
+  );
   return {
     app: createControlPlaneApp({
       agents: new DefaultAgentService(agentStore, undefined),
@@ -813,20 +827,13 @@ function createLifecycleFixture(opts: {
         sessionStore,
         agentStore,
         environmentStore,
-      ),
-      sessionEvents: new DefaultSessionEventsService(
-        eventStore,
-        sessionStore,
-        broadcaster,
+        undefined,
         {
-          runner: opts.runner,
-          translate: opts.translate,
-          runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
-            sessions: sessionStore,
-            events: eventStore,
-          }),
+          assertDeletable: (workspaceId, sessionId) =>
+            sessionEvents.assertSessionDeletable(workspaceId, sessionId),
         },
       ),
+      sessionEvents,
     }),
     eventStore,
   };

@@ -1135,7 +1135,7 @@ function makeVaultsFixture(
       agentStore,
       environmentStore,
       fileStorage,
-      { vaults: vaultService },
+      { assertDeletable: () => {}, vaults: vaultService },
     ),
     sessionEvents: new DefaultSessionEventsService(
       eventStore,

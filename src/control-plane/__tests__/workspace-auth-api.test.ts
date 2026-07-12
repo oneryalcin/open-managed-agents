@@ -482,6 +482,7 @@ function makeAuthFixture(opts: { auth?: boolean } = {}) {
       environmentStore,
       fileStorage,
       {
+        assertDeletable: () => {},
         idempotencyLedger: eventStore,
         createSessionRowsWithIdempotency:
           sessionStore.createAndCompleteIdempotency.bind(sessionStore),

@@ -370,6 +370,7 @@ function makeFixture(
       environmentStore,
       fileStorage,
       {
+        assertDeletable: () => {},
         idempotencyLedger: eventStore,
         createSessionRowsWithIdempotency:
           sessionStore.createAndCompleteIdempotency.bind(sessionStore),

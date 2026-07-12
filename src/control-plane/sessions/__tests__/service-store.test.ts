@@ -130,6 +130,34 @@ describe("session service/store", () => {
     ).toEqual([]);
   });
 
+  it("runs the required deletion guard before direct service deletion", async () => {
+    const fixture = createFixture();
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Guarded Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Guarded Env");
+    const session = await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+    const guarded = new DefaultSessionService(
+      fixture.sessionStore,
+      fixture.agentStore,
+      fixture.environmentStore,
+      fixture.fileStorage,
+      {
+        assertDeletable: () => {
+          throw new Error(
+            "Cannot delete session while it is running. Send an interrupt event or wait for the session to complete.",
+          );
+        },
+      },
+    );
+
+    await expect(guarded.delete(DEFAULT_WORKSPACE_ID, session.id)).rejects.toThrow(
+      "Cannot delete session while it is running",
+    );
+    expect(guarded.retrieve(DEFAULT_WORKSPACE_ID, session.id).id).toBe(session.id);
+  });
+
   it("rejects invalid pending snapshot cleanup retry caps", () => {
     expect(() => createFixture({ pendingSnapshotCleanupMaxAttempts: 0 })).toThrow(
       "pendingSnapshotCleanupMaxAttempts must be at least 1",
@@ -413,7 +441,7 @@ describe("session service/store", () => {
       fixture.agentStore,
       fixture.environmentStore,
       fixture.fileStorage,
-      { pendingSnapshotCleanupMaxAttempts: 2 },
+      { assertDeletable: () => {}, pendingSnapshotCleanupMaxAttempts: 2 },
     );
     await restarted.drainStartupSnapshotSweepsForTest();
 
@@ -529,6 +557,7 @@ describe("session service/store", () => {
       fixture.agentStore,
       fixture.environmentStore,
       fixture.fileStorage,
+      { assertDeletable: () => {} },
     );
     await restarted.drainStartupSnapshotSweepsForTest();
 
@@ -977,6 +1006,7 @@ describe("session service/store", () => {
       fixture.agentStore,
       fixture.environmentStore,
       fixture.fileStorage,
+      { assertDeletable: () => {} },
     );
     await restarted.drainStartupSnapshotSweepsForTest();
 
@@ -1182,6 +1212,7 @@ describe("session service/store", () => {
       fixture.agentStore,
       fixture.environmentStore,
       fixture.fileStorage,
+      { assertDeletable: () => {} },
     );
     await restarted.drainStartupSnapshotSweepsForTest();
 
@@ -1387,7 +1418,7 @@ describe("session service/store", () => {
     const skill = skills.createSkill(DEFAULT_WORKSPACE_ID, "Snapshot", skillBundle("snapshot-skill"));
     const agent = new DefaultAgentService(agentStore, skills).create(DEFAULT_WORKSPACE_ID, { name: "Skill agent", model: "claude-opus-4-7", tools: [{ type: "agent_toolset_20260401" }], skills: [{ type: "custom", skill_id: skill.id, version: "latest" }] });
     const environment = new DefaultEnvironmentService(environmentStore).create(DEFAULT_WORKSPACE_ID, { name: "Skill env", config: { type: "cloud" } });
-    const service = new DefaultSessionService(sessionStore, agentStore, environmentStore, files, { skills, runtime });
+    const service = new DefaultSessionService(sessionStore, agentStore, environmentStore, files, { assertDeletable: () => {}, skills, runtime });
     const session = await service.create(DEFAULT_WORKSPACE_ID, { agent: agent.id, environment_id: environment.id });
     const grouping = sessionStore.getSkillSnapshots(DEFAULT_WORKSPACE_ID, session.id);
     expect(grouping).toMatchObject([{ skill_id: skill.id, version: skill.latest_version, name: "snapshot-skill" }]);
@@ -1407,7 +1438,7 @@ describe("session service/store", () => {
     const agent = new DefaultAgentService(agentStore, skills).create(DEFAULT_WORKSPACE_ID, { name: "Budget agent", model: "claude-opus-4-7", tools: [{ type: "agent_toolset_20260401" }], skills: [{ type: "custom", skill_id: skill.id }] });
     const environment = new DefaultEnvironmentService(environmentStore).create(DEFAULT_WORKSPACE_ID, { name: "Budget env", config: { type: "cloud" } });
     const upload = await files.create(DEFAULT_WORKSPACE_ID, { filename: "input", mimeType: "text/plain", body: bytes("1234") });
-    const service = new DefaultSessionService(sessionStore, agentStore, environmentStore, files, { skills, maxMountedBytes: 10 });
+    const service = new DefaultSessionService(sessionStore, agentStore, environmentStore, files, { assertDeletable: () => {}, skills, maxMountedBytes: 10 });
     await expect(service.create(DEFAULT_WORKSPACE_ID, { agent: agent.id, environment_id: environment.id, resources: [{ type: "file", file_id: upload.metadata.id }] })).rejects.toThrow("Session resources exceed the 10 bytes mounted byte limit");
   });
 });
@@ -1464,6 +1495,7 @@ function createFixture(
     environmentStore,
     fileStorage,
     {
+      assertDeletable: () => {},
       ...(opts.maxFileResources === undefined
         ? {}
         : { maxFileResources: opts.maxFileResources }),
