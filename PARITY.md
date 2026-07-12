@@ -33,10 +33,11 @@ claim of blanket superiority over Anthropic's hosted environment.
 
 **Strategic shape:** OMA is strong and largely wire-faithful on the **synchronous single-agent core** (agent → session → sandbox → tools → skills → MCP → vaults → SSE) and thin on the **orchestration / automation / persistence layer**. The near-term bar is trust: requests on the surface OMA already exposes must not succeed while silently doing nothing or doing the opposite of CMA's contract.
 
-**Recommended pre-v1 sequence:** running-session delete guard → networking
-translation/rejection → probe-backed tool config validation → reject the inert
-multi-agent façade → `glob`/`grep` parity slice → pagination probes/semantics →
-agent update/versioning → usable environment image story → web tools.
+**Recommended pre-v1 sequence:** ~~running-session delete guard~~ (DONE
+2026-07-12) → networking translation/rejection → probe-backed tool config
+validation → reject the inert multi-agent façade → `glob`/`grep` parity slice →
+pagination probes/semantics → agent update/versioning → usable environment image
+story → web tools.
 
 ## Legend
 
@@ -84,10 +85,10 @@ the risk of silent contradiction, not by how easy they first appear.
 
 ### Tier 1 — correctness / safety
 
-- [ ] **`DELETE /v1/sessions/{id}` on a running session is not blocked** *(verified)*
+- [x] **`DELETE /v1/sessions/{id}` on a running session is blocked** *(DONE 2026-07-12)*
   - CMA `[Doc]`: a running session cannot be deleted; interrupt first (`session-operations.md:578`).
-  - OMA: `sessions/routes.ts` → `SessionService.delete()` has no status guard. Only the *archive* path guards (`events/service.ts:751,765` `assertSessionArchivable`); no `assertSessionDeletable`/`sessionNotDeletable` exists. Risk: silently tearing down a live sandbox mid-execution.
-  - Fix: mirror `assertSessionArchivable` in the delete path; reject `running`/`rescheduling` with the CMA-shaped error.
+  - CMA `[Obs]`: probe 38 (`scratch/artifacts/38-managed-agents-delete-running-probe.json`) — DELETE while running → HTTP 400 `invalid_request_error`, message `"Cannot delete session while it is running. Send an interrupt event or wait for the session to complete."`; the rejected DELETE leaves the session running; a concurrent interrupt succeeds asynchronously while DELETE stays rejected.
+  - Fix (shipped): `assertSessionDeletable` (`events/service.ts`) mirrors the archive running-detection and `sessionNotDeletable()` (`events/session-guards.ts`) returns the verbatim hosted message; the delete route preflights before any mutation. Regression + mutation-checked in `session-lifecycle-api.test.ts`; the delete-vs-indexing race in `runtime-events-api.test.ts` is now closed by the guard (delete refused until the turn settles).
 
 - [ ] **`networking` accept-and-ignore trap** *(verified)*
   - CMA `[Doc]`: `config.networking: {type:"unrestricted"}` / `{type:"limited", allowed_hosts:[…]}` grants the documented access (`environments.md:379`).
@@ -255,6 +256,29 @@ goal because OMA's deployment model is intentionally different.
 - 🔵 **Sandbox and egress policy** — preserve OMA's fail-closed provider
   selection, stronger default Docker isolation, and boundary secret injection
   even where the implementation is not byte-for-byte hosted behavior.
+- 🔵 **Lifecycle guards are in-process, not durable** — `assertSessionArchivable`
+  and `assertSessionDeletable` (`events/service.ts`) detect a live turn via the
+  in-process `activeRuntimeTaskCount` map. The `sessions.status` column only ever
+  holds `idle`/`terminated` (only archive flips it, `sessions/store.ts:208`), so
+  the `status === "running"/"rescheduling"` branch is currently unreachable — the
+  running signal is entirely in-memory. In the single-node appliance this is safe:
+  a turn runs *in* the control-plane process, so if that process dies the turn is
+  dead (nothing live to protect), and boot recovery (`recoverAllAbandonedRuntimeTurns`,
+  `app.ts:674`) synchronously re-`beginRuntimeTask`s resumable turns *before* the
+  served app is built. Residual gap: (a) a **multi-process / shared-SQLite**
+  deployment — a DELETE on process B can't see process A's live turn; (b) a narrow
+  **lease-retry-delayed** recovery window where the counter is 0 but a durable turn
+  is pending. Both are out of scope for the single-node model; the durable-state,
+  transactional version of these guards (covering *both* archive and delete) is a
+  **scale-out-arc** follow-up, not a per-endpoint fix. Raised by Codex adversarial
+  review of the delete-guard slice, 2026-07-12.
+
+## Small follow-up probes
+
+- [ ] **`rescheduling` delete/archive rejection wording** — probe 38 only observed
+  status `running`. The delete (and archive) guards reject `rescheduling` with the
+  same message as a conservative mirror; hosted may permit it or use different
+  wording. Probe before treating the `rescheduling` path as parity-confirmed.
 
 ---
 

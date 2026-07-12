@@ -533,6 +533,10 @@ export class DefaultSessionService implements SessionService {
     if (!result) {
       throw notFound(`Session ${sessionId} not found`);
     }
+    // Load-bearing, not dead code. The delete-vs-live-indexing race is now closed
+    // by assertSessionDeletable (a running turn can't be deleted), but this sweep
+    // still covers process-restart / abandoned-turn recovery, where a session row
+    // can carry orphaned output/snapshot rows with no live task. Do not remove.
     await this.sweepPendingInternalSnapshotDeletes(workspaceId, sessionId).catch(
       (error) => {
         log.warn("snapshot_delete_sweep_failed", { error });

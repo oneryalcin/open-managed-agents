@@ -327,6 +327,10 @@ export interface SessionEventsService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): SessionRow;
+  assertSessionDeletable(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): void;
   archiveSession(
     workspaceId: WorkspaceId,
     sessionId: string,

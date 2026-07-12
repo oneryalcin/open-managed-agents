@@ -86,6 +86,7 @@ export function sessionsRoutes(
 
   app.delete("/:id", async (c) => {
     const sessionId = c.req.param("id");
+    events.assertSessionDeletable(workspaceIdFrom(c), sessionId);
     const deleted = await service.delete(workspaceIdFrom(c), sessionId);
     await events.deleteSession(workspaceIdFrom(c), sessionId);
     return c.json(deleted, 200);

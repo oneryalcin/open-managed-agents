@@ -312,7 +312,7 @@ describe("Runtime events API", () => {
     expect(deletedDownload.status).toBe(404);
   });
 
-  it("does not resurrect output files when session delete races with indexing", async () => {
+  it("blocks delete during output collection, then cleans up once the turn settles", async () => {
     const runner = new DelayedOutputCollectingRunner([
       {
         relativePath: "late.txt",
@@ -336,13 +336,27 @@ describe("Runtime events API", () => {
     expect(send.status).toBe(200);
     await runner.collectionStarted;
 
+    // The turn is still running (output collection is mid-flight), so hosted
+    // rejects the delete (probe 38). This serializes delete against indexing:
+    // the resurrection race is closed by construction, not by cleanup sweeps.
+    const rejected = await fixture.app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(rejected.status).toBe(400);
+
+    runner.releaseCollection();
+    await runner.collectionFinished;
+    await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc`,
+      (body) =>
+        body.data.some((event) => event.type === "session.status_idle"),
+    );
+
     const deleted = await fixture.app.request(`/v1/sessions/${session.id}`, {
       method: "DELETE",
     });
     expect(deleted.status).toBe(200);
-
-    runner.releaseCollection();
-    await runner.collectionFinished;
 
     const outputs = await fixture.app.request(
       `/v1/files?scope_id=${session.id}&limit=10`,

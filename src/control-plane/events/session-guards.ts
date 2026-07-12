@@ -33,6 +33,16 @@ export function sessionNotArchivable(
   );
 }
 
+// Message string is fixed to match hosted CMA verbatim (probe 38): the observed
+// error carries no session id. Probe 38 only exercised status "running"; we
+// reuse this single wording for the "rescheduling" case as a conservative mirror
+// of the archive guard (unverified against hosted — see PARITY.md follow-up).
+export function sessionNotDeletable(): Error {
+  return invalidRequest(
+    "Cannot delete session while it is running. Send an interrupt event or wait for the session to complete.",
+  );
+}
+
 export function archiveGuardKey(
   workspaceId: WorkspaceId,
   sessionId: string,
