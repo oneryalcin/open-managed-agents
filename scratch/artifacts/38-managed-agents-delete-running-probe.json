@@ -1,0 +1,46 @@
+{
+  "run_id": "1783816320-85104",
+  "model": "claude-sonnet-4-6",
+  "primary": {
+    "status_before_delete": "running",
+    "delete_while_running": {
+      "status": 400,
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "Cannot delete session while it is running. Send an interrupt event or wait for the session to complete."
+        }
+      }
+    },
+    "status_after_rejected_delete": "running",
+    "interrupt_after_delete": {
+      "status": 200,
+      "event_type": "user.interrupt"
+    }
+  },
+  "concurrent_delete_and_interrupt": {
+    "status_before": "running",
+    "delete": {
+      "status": 400,
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "Cannot delete session while it is running. Send an interrupt event or wait for the session to complete."
+        }
+      }
+    },
+    "interrupt": {
+      "status": 200,
+      "event_type": "user.interrupt"
+    },
+    "immediate_status_after_race": "running",
+    "interpretation": "The interrupt is accepted asynchronously; DELETE remains rejected while the session is still running."
+  },
+  "cleanup": {
+    "sessions": "deleted after interrupt settled",
+    "environment": "deleted",
+    "agent": "archived"
+  }
+}
