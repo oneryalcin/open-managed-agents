@@ -12,37 +12,35 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-01 (`dev/pi-runtime-rollout-policy`). Earlier
-`#69 / #51 / #13 / #113` queue is landed/closed; superseded below._
+_Last updated 2026-07-12 (`arc-c-networking`, probe commit `8344271`). `main`
+is synced at `ff2ae54` after PR #179._
 
-- `main` is the integration branch. Docs/scratch slices commit straight to `main`;
-  code slices land via `dev/*` branch → PR → squash-merge.
-- Since the last handoff, three arcs landed: **coordinator seams** (ADR 0014, PRs
-  #112/#114), **request idempotency** (ADR 0015, PRs #116/#120 — closed `#13`),
-  and a **sandbox-provider evaluation** (plans 0106/0107, issue #121). `#51` is
-  closed. See "What Landed Recently" below.
-- **`#59` interrupt/message abort-window ordering is closed.** PR #122 merged to
-  `main` (squash `4ec0903`): the original abort-window fix plus an
-  overlapping-interrupt **coalescing** hardening (one in-flight `abort()` per
-  session, found by the review constellation + hot-path trace). All in
-  `src/control-plane/sessions/pi/runner.ts`.
-- **First `microsandbox-local` provider slice is landed.** PR #123 merged to
-  `main` (squash `2f756ee`): deployment gate, CLI builders/adapter, provider
-  skeleton, explicit durable workspace volume, no-network policy,
-  uploads/outputs tmpfs hardening, file materialization/output collection,
-  owned-resource cleanup/reaping, and Docker-style guest process-group
-  timeout/abort cleanup. Proxy-grade secrets remain rejected/out of scope; guest
-  env forwarding remains disabled.
-- **`#113` runtime coordinator seam audit is closed.** PR #124 merged to `main`
-  (squash `9b067f9`): the audit found no required coordinator migration, but
-  documented the unfenced `persistRuntimeDrafts -> appendBatch(events)` footgun
-  and the future rule that turn-scoped runtime rows must not use that path.
-- **Top active work:** `#16` Pi runtime production rollout policy on
-  `dev/pi-runtime-rollout-policy`. This is a policy/docs slice defining dark
-  runtime vs deployment runtime, allowed local/demo/single-node durable modes,
-  and the gates that still block multi-worker/managed production.
-- Untracked-on-purpose: `scratch/oma-sandbox-provider-landscape.md` (research copy
-  behind a gist). Don't commit/delete without asking.
+- `main` is the integration branch. Feature/code slices use a short-lived
+  `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
+  land in the same reviewable branch when they are part of an active slice.
+- The current product-status source is [PARITY.md](PARITY.md): it records the
+  CMA comparison, deliberate non-goals, evidence-backed gaps, and the ordered
+  pre-v1 worklist.
+- The synchronous single-agent core is substantially shipped: agents, sessions,
+  Docker/microsandbox providers, tools, skills, MCP, vault credentials, and SSE.
+  Sandbox security and egress controls intentionally exceed the hosted
+  self-hosted baseline in several areas.
+- MCP OAuth and runtime token refresh are shipped (M2/M3, commits `0d96505` and
+  `c980b4b`), including validate, wake-loop refresh, live smoke, and secret
+  scrubbing. The console vault/MCP surface is also landed.
+- Custom skills are shipped (PR #174, `26f754d`): per-file storage and
+  validation, version admission, copy-at-create session snapshots, sandbox
+  materialization, and Pi 0.80.6 progressive-disclosure delivery.
+- Running-session deletion parity is shipped (PR #179, merge `ff2ae54`): the
+  hosted 400 contract is probed, and `DefaultSessionService` requires the
+  liveness guard at construction before deletion can mutate state.
+- Active work is the networking parity slice on `arc-c-networking`. Probe 60
+  established unrestricted vs limited behavior; probe 61 covered wildcards,
+  package managers, MCP-access gating, and invalid host formats. The next code
+  change must translate or explicitly reject CMA-shaped networking rather than
+  accept and silently ignore it.
+- Issues `#16`, `#107`, `#113`, and `#121` are closed. `#103`, `#118`, and `#119`
+  remain open follow-up work; PR #169 / issue #164 is the events-service split.
 
 Treat lifecycle, restart recovery, storage ordering, idempotency, sandbox
 provider boundaries, and hosted parity as sharp edges, not routine CRUD.
@@ -323,43 +321,52 @@ A slice is done when:
 
 Full detail lives in-repo; this is the index + the one invariant to carry from each.
 
-- **Coordinator seams** (ADR 0014; PRs #112, #114). Real cross-store invariants
-  moved behind deployment-level coordinators: durable mode = atomic (shared
-  `DatabaseSync`, SAVEPOINT-re-entrant `withSqliteTransaction`), in-memory =
-  best-effort. *"No await in the commit path" is load-bearing.* `#113` (open)
-  audits remaining seams.
-- **Request idempotency** (ADR 0015; PRs #116 events.send, #120 sessions.create —
-  closed `#13`). The design insight: **ledger completion happens inside the domain
-  transaction**, which turns crash recovery from policy into theorem (a surviving
-  `in_progress` row provably means no committed side effect). Async create paths
-  use a status-guarded **heartbeat** to keep "abandoned ⟹ dead" true for
-  live-but-slow requests. Cookbooks: `retry-safe-events-send.md`,
-  `retry-safe-session-create.md`, `client-retry-and-cleanup.md`. `#118/#119` (open)
-  defer upload + streaming idempotency.
-- **Session lifecycle** (plan 0104; `faab4e9`). Pinned: archive keeps live SSE
-  streams open; delete force-closes after terminal `session.deleted`. Cookbook
-  `session-lifecycle-flow.md`.
-- **Sandbox provider evaluation** (plans 0106/0107; scratch probes 0106–0109;
-  issue #121). Landscape + provider-contract audit + hands-on probes of Docker
-  Sandboxes, microsandbox, and Anthropic `sandbox-runtime`. Pinned in 0107:
-  the **explicit-persistence invariant** (session workspace = explicit durable
-  mount/volume/disk; rootfs is disposable), **create-time capability rejection**
-  (audit conclusion #8), and **secrets gated out of v1** (substitution only runs
-  in the TLS-interception path, which failed locally; upstream
-  microsandbox#646/#752/#769/#969 confirm).
+- **Coordinator seams** (ADR 0014; PRs #112/#114). Durable mode remains atomic
+  through the shared `DatabaseSync` transaction boundary; in-memory mode is
+  explicitly best-effort. *No await in the commit path* remains load-bearing.
+- **Request idempotency** (ADR 0015; PRs #116/#120). Completion stays inside the
+  domain transaction, with a status-guarded heartbeat for slow async creates.
+  Upload and streaming idempotency remain the deliberate `#118/#119` follow-up.
+- **Pi runtime and sandbox providers** (PRs #122/#123/#125; plans 0106/0107).
+  Interrupt coalescing, microsandbox-local, Docker isolation, explicit durable
+  workspace mounts, provider gates, and create-time capability rejection are
+  shipped. The runtime rollout policy itself is closed under issue #16.
+- **MCP connector and vault credentials** (PRs #167/#171/#172). Static bearer
+  and OAuth credentials, refresh coordination, runtime token injection,
+  validate, ticker wake-up, live smoke, and secret scrubbing are shipped.
+- **Console vault/MCP operations** (PR #173) provide credential browse, health,
+  and validation views without exposing secret material.
+- **Custom skills execution** (PR #174, `26f754d`). Upload validation, per-file
+  storage, attachment/read coupling, immutable session snapshots, sandbox
+  delivery, and Pi 0.80.6 resource-loader advertisement are all smoke-tested.
+- **Product parity tracker** (`PARITY.md`, `296582b`) is now the standing
+  source of truth for CMA gaps and deliberate post-v1 deferrals.
+- **Running-session delete parity** (PR #179, `ff2ae54`) is probe-backed and
+  constructor-guarded. A direct service caller cannot omit the liveness
+  preflight without failing construction/typecheck.
 
 ## Immediate Next Work
 
-1. **Finish `#16` Pi runtime rollout policy** — review the policy doc and
-   merge. It should close #16 without adding a speculative global runtime flag:
-   `createControlPlaneApp(...)` remains the dark-runtime shape, while
-   `createDeploymentControlPlaneApp(...)` wires Pi and sandbox execution remains
-   provider-gated by deployment config.
-2. **Standing queue (evidence-gated):** `#107` SQLite scaling (200–400
-   sessions); `#103` deployment hardening; `#118/#119` upload + streaming
-   idempotency. Postgres / async-store boundary stays gated on a
-   concrete multi-process need per ADR 0014 (exploratory `dev/async-store-boundary`
-   branch — do not merge speculatively).
+1. **Networking parity** — implement the next slice on `arc-c-networking`.
+   Probe 61 shows that CMA accepts empty allowlists, subdomain-only wildcards,
+   package-manager access, and MCP-access gating as separate capabilities;
+   URL/port entries are rejected while uppercase hostnames are preserved. Do
+   not map this into OMA's policy engine until wildcard matching, registry
+   allowlists, MCP URL resolution, and the unsafe `unrestricted` case have
+   explicit semantics. The minimum acceptable interim behavior is a clear 400,
+   never accept-and-ignore.
+2. **Probe-backed tool-config validation** — settle unknown tool names,
+   permission-policy values, duplicate/cap precedence, and the `glob`/`grep`
+   vocabulary before changing the wire contract. Track the result in
+   `PARITY.md` and the relevant plan/probe artifact.
+3. **Finish the pre-v1 trust pass** — next candidates are rejecting the inert
+   `multiagent` façade or implementing the `glob`/`grep` slice, followed by
+   pagination semantics and agent update/versioning. Use `PARITY.md` for the
+   current ordering rather than this handoff as an independent backlog.
+4. **Standing queue (evidence-gated):** `#103` deployment hardening and
+   `#118/#119` upload + streaming idempotency. Postgres/async-store work remains
+   gated on a concrete multi-process need per ADR 0014; do not merge it
+   speculatively. PR #169 / issue #164 (events-service split) is parallelizable.
 
 ## Practical Rules for the Next Agent
 
