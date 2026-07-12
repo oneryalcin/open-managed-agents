@@ -298,6 +298,69 @@ describe("session lifecycle API", () => {
     ]);
   });
 
+  it("rejects delete while a runtime turn is active without mutation or cleanup", async () => {
+    const runner = new DelayedRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: {
+        runner,
+        translate: () => [],
+      },
+    });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "start runtime");
+    await runner.started;
+
+    const deleteRes = await app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(deleteRes.status).toBe(400);
+    expect(await deleteRes.json()).toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        message: DELETE_RUNNING_MESSAGE,
+      },
+    });
+    expect(runner.closed).toEqual([]);
+
+    // The rejected delete must leave the session running and readable (probe 38).
+    const activeRes = await app.request(`/v1/sessions/${session.id}`);
+    expect(activeRes.status).toBe(200);
+
+    const eventsBeforeRelease = await listEvents(app, session.id);
+    expect(eventsBeforeRelease.data.map((event) => event.type)).toEqual([
+      "user.message",
+    ]);
+
+    runner.release();
+    await waitFor(() => runner.completed === 1);
+  });
+
+  it("deletes after interrupt lets the active runtime settle", async () => {
+    const runner = new DelayedRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: () => [] },
+    });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "start runtime");
+    await runner.started;
+
+    await sendInterrupt(app, session.id);
+    await waitFor(() => runner.completed === 1);
+
+    const deleteRes = await app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+    });
+    expect(deleteRes.status).toBe(200);
+    expect((await deleteRes.json()) as ManagedAgentsDeletedSession).toEqual({
+      id: session.id,
+      type: "session_deleted",
+    });
+    expect(runner.interrupted).toEqual([session.id]);
+    expect(runner.closed).toEqual([session.id]);
+
+    expect((await app.request(`/v1/sessions/${session.id}`)).status).toBe(404);
+  });
+
   it("archives a session paused on custom-tool requires_action", async () => {
     const runner = new PausedCustomToolRunner();
     const app = createInMemoryControlPlaneApp({
@@ -742,6 +805,20 @@ function createLifecycleFixture(opts: {
   const sessionStore = SqliteSessionStore.open(":memory:");
   const eventStore = EventStore.open(":memory:");
   const broadcaster = new SessionEventBroadcaster(eventStore);
+  let sessionEvents!: DefaultSessionEventsService;
+  sessionEvents = new DefaultSessionEventsService(
+    eventStore,
+    sessionStore,
+    broadcaster,
+    {
+      runner: opts.runner,
+      translate: opts.translate,
+      runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
+        sessions: sessionStore,
+        events: eventStore,
+      }),
+    },
+  );
   return {
     app: createControlPlaneApp({
       agents: new DefaultAgentService(agentStore, undefined),
@@ -750,20 +827,13 @@ function createLifecycleFixture(opts: {
         sessionStore,
         agentStore,
         environmentStore,
-      ),
-      sessionEvents: new DefaultSessionEventsService(
-        eventStore,
-        sessionStore,
-        broadcaster,
+        undefined,
         {
-          runner: opts.runner,
-          translate: opts.translate,
-          runtimeEventCoordinator: createBestEffortRuntimeEventCoordinator({
-            sessions: sessionStore,
-            events: eventStore,
-          }),
+          assertDeletable: (workspaceId, sessionId) =>
+            sessionEvents.assertSessionDeletable(workspaceId, sessionId),
         },
       ),
+      sessionEvents,
     }),
     eventStore,
   };
@@ -1159,6 +1229,10 @@ function archiveRunningMessage(
 ): string {
   return `Session ${sessionId} cannot be archived while its status is "${status}". Only pending or idle sessions may be archived.`;
 }
+
+// Verbatim hosted CMA delete-while-running error (probe 38).
+const DELETE_RUNNING_MESSAGE =
+  "Cannot delete session while it is running. Send an interrupt event or wait for the session to complete.";
 
 async function delay(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));

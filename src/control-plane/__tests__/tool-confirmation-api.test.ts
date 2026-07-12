@@ -1105,6 +1105,8 @@ function makeSharedFixture(
         sessionStore,
         agentStore,
         environmentStore,
+        undefined,
+        { assertDeletable: () => {} },
       ),
       sessionEvents: new DefaultSessionEventsService(
         eventStore,

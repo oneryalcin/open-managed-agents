@@ -97,6 +97,13 @@ export interface SessionEgressCapability {
 }
 
 export interface DefaultSessionServiceOptions {
+  /**
+   * Required liveness preflight for deletion. The composition root supplies
+   * the concrete session-events guard; keeping it constructor-owned means a
+   * service cannot be used before app wiring and accidentally delete a live
+   * runtime.
+   */
+  assertDeletable: (workspaceId: WorkspaceId, sessionId: string) => void;
   maxActiveSessionsPerWorkspace?: number;
   maxFileResources?: number;
   maxMountedBytes?: number;
@@ -138,6 +145,10 @@ export class DefaultSessionService implements SessionService {
         sessionId: string,
       ) => DeleteSessionRowsResult | undefined)
     | undefined;
+  private readonly assertDeletable: (
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ) => void;
   private readonly idempotencyLedger: RequestIdempotencyLedger | undefined;
   private readonly createSessionRowsWithIdempotency:
     | ((
@@ -162,9 +173,15 @@ export class DefaultSessionService implements SessionService {
     private readonly store: SessionStore,
     private readonly agents: AgentStore,
     private readonly environments: EnvironmentStore,
-    private readonly files?: FileStorage,
-    opts: DefaultSessionServiceOptions = {},
+    private readonly files: FileStorage | undefined,
+    opts: DefaultSessionServiceOptions,
   ) {
+    if (opts.assertDeletable === undefined) {
+      throw new Error(
+        "DefaultSessionService requires assertDeletable for safe session deletion",
+      );
+    }
+    this.assertDeletable = opts.assertDeletable;
     this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
     this.onAdmissionRejected = opts.onAdmissionRejected;
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
@@ -527,12 +544,20 @@ export class DefaultSessionService implements SessionService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<ManagedAgentsDeletedSession> {
+    // Domain-owned liveness invariant: reject deleting a running session before
+    // any row/file mutation, so no caller (route or internal) can tear down a
+    // live runtime. Synchronous, so it runs in the same tick as the row removal.
+    this.assertDeletable(workspaceId, sessionId);
     const result =
       this.deleteSessionRows?.(workspaceId, sessionId) ??
       this.deleteSessionRowsWithDefaultStore(workspaceId, sessionId);
     if (!result) {
       throw notFound(`Session ${sessionId} not found`);
     }
+    // Load-bearing, not dead code. The delete-vs-live-indexing race is now closed
+    // by assertSessionDeletable (a running turn can't be deleted), but this sweep
+    // still covers process-restart / abandoned-turn recovery, where a session row
+    // can carry orphaned output/snapshot rows with no live task. Do not remove.
     await this.sweepPendingInternalSnapshotDeletes(workspaceId, sessionId).catch(
       (error) => {
         log.warn("snapshot_delete_sweep_failed", { error });

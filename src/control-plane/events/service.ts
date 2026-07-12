@@ -65,6 +65,7 @@ import {
   requireActiveSession,
   requireExistingSession,
   sessionNotArchivable,
+  sessionNotDeletable,
   sessionScopeKey,
 } from "./session-guards.ts";
 import {
@@ -776,6 +777,24 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
     if (session.status === "running" || session.status === "rescheduling") {
       throw sessionNotArchivable(sessionId, session.status);
+    }
+  }
+
+  // Preflight for DELETE /v1/sessions/:id. Hosted CMA rejects a delete while the
+  // session is running with a 400 (probe 38); we reuse the same running-detection
+  // as archive so a session whose runtime task is live but whose row status lags
+  // is still blocked. Must run before any store mutation in the route.
+  assertSessionDeletable(workspaceId: WorkspaceId, sessionId: string): void {
+    const session = requireExistingSession(this.sessions, workspaceId, sessionId);
+    if (session.archived_at !== null || session.status === "terminated") return;
+    if (
+      this.activeRuntimeTaskCount(workspaceId, sessionId) > 0 &&
+      !this.hasPendingRuntimeActions(workspaceId, sessionId)
+    ) {
+      throw sessionNotDeletable();
+    }
+    if (session.status === "running" || session.status === "rescheduling") {
+      throw sessionNotDeletable();
     }
   }
 

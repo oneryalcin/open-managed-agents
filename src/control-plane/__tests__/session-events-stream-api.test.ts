@@ -243,7 +243,9 @@ function makeFixture(): {
     app: createControlPlaneApp({
       agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),
-      sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore),
+      sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore, undefined, {
+        assertDeletable: () => {},
+      }),
       sessionEvents,
     }),
   };

@@ -712,6 +712,7 @@ export function createDeploymentControlPlane(
       stores.environments,
       stores.files,
       {
+        assertDeletable: sessionEvents.assertSessionDeletable.bind(sessionEvents),
         runtime: runner,
         skills: stores.skills,
         egressCapability: {
@@ -838,6 +839,14 @@ export function createInMemoryControlPlaneApp(
   });
   const broadcaster = new SessionEventBroadcaster(eventStore);
   const vaultService = new DefaultVaultService(vaultStore);
+  const sessionEvents = new DefaultSessionEventsService(
+    eventStore,
+    sessionStore,
+    broadcaster,
+    opts.runtime
+      ? { ...opts.runtime, sessionOutputCoordinator, runtimeEventCoordinator }
+      : undefined,
+  );
   return createControlPlaneApp({
     agents: new DefaultAgentService(agentStore, skillsStore),
     environments: new DefaultEnvironmentService(environmentStore),
@@ -850,6 +859,7 @@ export function createInMemoryControlPlaneApp(
       environmentStore,
       fileStorage,
       {
+        assertDeletable: sessionEvents.assertSessionDeletable.bind(sessionEvents),
         ...(opts.runtime?.runner ? { runtime: opts.runtime.runner } : {}),
         skills: skillsStore,
         vaults: vaultService,
@@ -858,14 +868,7 @@ export function createInMemoryControlPlaneApp(
           sessionStore.createAndCompleteIdempotency.bind(sessionStore),
       },
     ),
-    sessionEvents: new DefaultSessionEventsService(
-      eventStore,
-      sessionStore,
-      broadcaster,
-      opts.runtime
-        ? { ...opts.runtime, sessionOutputCoordinator, runtimeEventCoordinator }
-        : undefined,
-    ),
+    sessionEvents,
   });
 }
 

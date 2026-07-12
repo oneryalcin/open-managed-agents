@@ -112,6 +112,7 @@ const app = createControlPlaneApp({
     environmentStore,
     fileStorage,
     {
+      assertDeletable: () => {},
       runtime: runner,
       vaults: vaultService,
       idempotencyLedger: eventStore,

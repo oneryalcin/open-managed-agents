@@ -1,0 +1,111 @@
+{
+  "environment_requests": {
+    "limited": {
+      "allowed_hosts": [
+        "example.com"
+      ],
+      "type": "limited"
+    },
+    "unrestricted": {
+      "type": "unrestricted"
+    }
+  },
+  "limited": {
+    "events": [
+      {
+        "type": "session.status_running"
+      },
+      {
+        "type": "session.thread_status_running"
+      },
+      {
+        "type": "user.message"
+      },
+      {
+        "type": "span.model_request_start"
+      },
+      {
+        "name": "bash",
+        "type": "agent.tool_use"
+      },
+      {
+        "type": "span.model_request_end"
+      },
+      {
+        "tool_use_id": "sevt_013p8ywJ3o7UFMcJGnqoWisD",
+        "type": "agent.tool_result"
+      },
+      {
+        "type": "span.model_request_start"
+      },
+      {
+        "text": "Here are the two output lines verbatim:\n\n```\nhost=example.com http_code=200 exit_code=0\nhost=example.org http_code=403 exit_code=0\n```",
+        "type": "agent.message"
+      },
+      {
+        "type": "span.model_request_end"
+      },
+      {
+        "type": "session.thread_status_idle"
+      },
+      {
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.status_idle"
+      }
+    ],
+    "label": "limited",
+    "session_id": "sesn_01TshifB6gGwquSyuscJ4q1f"
+  },
+  "model": "claude-sonnet-4-6",
+  "run_id": "1783860345-82596",
+  "unrestricted": {
+    "events": [
+      {
+        "type": "session.status_running"
+      },
+      {
+        "type": "session.thread_status_running"
+      },
+      {
+        "type": "user.message"
+      },
+      {
+        "type": "span.model_request_start"
+      },
+      {
+        "name": "bash",
+        "type": "agent.tool_use"
+      },
+      {
+        "type": "span.model_request_end"
+      },
+      {
+        "tool_use_id": "sevt_017Vh5t3MYMdtr19WMzHBSf7",
+        "type": "agent.tool_result"
+      },
+      {
+        "type": "span.model_request_start"
+      },
+      {
+        "text": "Here are the two output lines verbatim:\n\n```\nhost=example.com http_code=200 exit_code=0\nhost=example.org http_code=200 exit_code=0\n```",
+        "type": "agent.message"
+      },
+      {
+        "type": "span.model_request_end"
+      },
+      {
+        "type": "session.thread_status_idle"
+      },
+      {
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.status_idle"
+      }
+    ],
+    "label": "unrestricted",
+    "session_id": "sesn_01TZtaBrLXCvM6xd4Digu7Rh"
+  }
+}

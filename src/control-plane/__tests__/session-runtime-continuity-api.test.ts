@@ -219,7 +219,9 @@ function makeFixture(factory: FakeQueuedSessionFactory): {
     app: createControlPlaneApp({
       agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),
-      sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore),
+      sessions: new DefaultSessionService(sessionStore, agentStore, environmentStore, undefined, {
+        assertDeletable: () => {},
+      }),
       sessionEvents: new DefaultSessionEventsService(eventStore, sessionStore, broadcaster, {
         runner,
         translate: translatePiEvent,

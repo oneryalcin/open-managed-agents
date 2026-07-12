@@ -191,6 +191,7 @@ function makeSecretsFixture(opts: { secretsStore?: boolean } = {}) {
       agentStore,
       environmentStore,
       fileStorage,
+      { assertDeletable: () => {} },
     ),
     sessionEvents: new DefaultSessionEventsService(
       eventStore,

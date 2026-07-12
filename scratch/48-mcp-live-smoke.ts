@@ -75,6 +75,7 @@ const app = createControlPlaneApp({
     environmentStore,
     fileStorage,
     {
+      assertDeletable: () => {},
       runtime: runner,
       idempotencyLedger: eventStore,
       createSessionRowsWithIdempotency:
