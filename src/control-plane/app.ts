@@ -347,6 +347,13 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   if (services.vaults) {
     app.route("/v1/vaults", vaultsRoutes(services.vaults, services.mcp));
   }
+  // Wire the running-session delete guard once, here at the composition root:
+  // this is the single place that owns both services, so the invariant travels
+  // with the deletion domain and no session-service construction site can forget
+  // it (see SessionService.bindDeletableGuard).
+  services.sessions.bindDeletableGuard((w, s) =>
+    services.sessionEvents.assertSessionDeletable(w, s),
+  );
   app.route("/v1/sessions", sessionsRoutes(services.sessions, services.sessionEvents));
   app.route(
     "/v1/sessions/:sessionId/events",

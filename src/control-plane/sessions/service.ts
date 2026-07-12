@@ -138,6 +138,9 @@ export class DefaultSessionService implements SessionService {
         sessionId: string,
       ) => DeleteSessionRowsResult | undefined)
     | undefined;
+  private assertDeletable:
+    | ((workspaceId: WorkspaceId, sessionId: string) => void)
+    | undefined;
   private readonly idempotencyLedger: RequestIdempotencyLedger | undefined;
   private readonly createSessionRowsWithIdempotency:
     | ((
@@ -523,10 +526,20 @@ export class DefaultSessionService implements SessionService {
     return toManagedSession(row);
   }
 
+  bindDeletableGuard(
+    assert: (workspaceId: WorkspaceId, sessionId: string) => void,
+  ): void {
+    this.assertDeletable = assert;
+  }
+
   async delete(
     workspaceId: WorkspaceId,
     sessionId: string,
   ): Promise<ManagedAgentsDeletedSession> {
+    // Domain-owned liveness invariant: reject deleting a running session before
+    // any row/file mutation, so no caller (route or internal) can tear down a
+    // live runtime. Synchronous, so it runs in the same tick as the row removal.
+    this.assertDeletable?.(workspaceId, sessionId);
     const result =
       this.deleteSessionRows?.(workspaceId, sessionId) ??
       this.deleteSessionRowsWithDefaultStore(workspaceId, sessionId);

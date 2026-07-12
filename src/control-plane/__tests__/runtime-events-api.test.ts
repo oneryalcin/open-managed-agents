@@ -337,8 +337,9 @@ describe("Runtime events API", () => {
     await runner.collectionStarted;
 
     // The turn is still running (output collection is mid-flight), so hosted
-    // rejects the delete (probe 38). This serializes delete against indexing:
-    // the resurrection race is closed by construction, not by cleanup sweeps.
+    // rejects the delete (probe 38). Because the guard refuses any delete while
+    // the runtime task is live, a delete can never run concurrently with output
+    // indexing — the resurrection race is unreachable, not merely cleaned up after.
     const rejected = await fixture.app.request(`/v1/sessions/${session.id}`, {
       method: "DELETE",
     });

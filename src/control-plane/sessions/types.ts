@@ -180,6 +180,15 @@ export interface SessionService {
     workspaceId: WorkspaceId,
     opts?: ListSessionsOptions,
   ): ManagedAgentsListPage<ManagedAgentsSession>;
+  /**
+   * Bind the running-session liveness preflight used by `delete()`. Wired once
+   * at the composition root (`createControlPlaneApp`), which owns both the
+   * session and events services, so the guard travels with the deletion domain
+   * and no construction site can forget it. See PARITY.md (delete-guard slice).
+   */
+  bindDeletableGuard(
+    assert: (workspaceId: WorkspaceId, sessionId: string) => void,
+  ): void;
 }
 
 export type {
