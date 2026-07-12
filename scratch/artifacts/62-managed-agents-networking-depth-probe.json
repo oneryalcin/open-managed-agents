@@ -1,0 +1,31 @@
+{
+  "model": "claude-sonnet-4-6",
+  "networking": {
+    "allowed_hosts": [
+      "*.nip.io"
+    ],
+    "type": "limited"
+  },
+  "probe": {
+    "events": [
+      "session.status_running",
+      "session.thread_status_running",
+      "user.message",
+      "span.model_request_start",
+      "agent.thinking",
+      "agent.tool_use",
+      "span.model_request_end",
+      "agent.tool_result",
+      "span.model_request_start",
+      "agent.message",
+      "span.model_request_end",
+      "session.thread_status_idle",
+      "session.status_idle"
+    ],
+    "messages": [
+      "Here is every output line verbatim:\n\n```\ntarget=https_nested http_code=503 exit_code=0\ntarget=https_one_label http_code=503 exit_code=0\ntarget=https_base http_code=403 exit_code=0\ntarget=http_nested http_code=403 exit_code=0\ntarget=http_one_label http_code=403 exit_code=0\ntarget=http_base http_code=403 exit_code=0\n```"
+    ],
+    "session_id": "sesn_01XFRC56428fPre6CyZdDv9G"
+  },
+  "run_id": "1783879467-40821"
+}
