@@ -1,0 +1,121 @@
+{
+  "events": [
+    {
+      "type": "session.status_running"
+    },
+    {
+      "type": "session.thread_status_running"
+    },
+    {
+      "content": [
+        {
+          "text": "Run the required glob and grep probe now.",
+          "type": "text"
+        }
+      ],
+      "type": "user.message"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "type": "agent.thinking"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/uploads",
+        "pattern": "*.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "context": 1,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "probe"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/probe64.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/probe64.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "content": [
+        {
+          "text": "The glob found one Markdown file (`probe64.md`) in `/mnt/session/uploads`, and the grep confirmed it contains a match for \"probe\".",
+          "type": "text"
+        }
+      ],
+      "type": "agent.message"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.thread_status_idle"
+    },
+    {
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.status_idle"
+    }
+  ],
+  "model": "claude-sonnet-5",
+  "run_id": "55626f21",
+  "tool_uses": [
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/uploads",
+        "pattern": "*.md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "context": 1,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "probe"
+      },
+      "name": "grep"
+    }
+  ]
+}

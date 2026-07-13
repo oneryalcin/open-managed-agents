@@ -3,6 +3,9 @@ import { createInMemoryControlPlaneApp } from "./helpers.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ApiErrorBody } from "../errors.ts";
 
+const DISABLED_UNSUPPORTED_BUILTINS = ["glob", "grep", "web_fetch", "web_search"]
+  .map((name) => ({ name, enabled: false }));
+
 const VALID_AGENT = {
   name: "Coding Assistant",
   model: "claude-opus-4-7",
@@ -11,6 +14,7 @@ const VALID_AGENT = {
     {
       type: "agent_toolset_20260401",
       default_config: { permission_policy: "always_ask" },
+      configs: DISABLED_UNSUPPORTED_BUILTINS,
     },
   ],
 };
@@ -33,6 +37,7 @@ describe("agents API", () => {
         {
           type: "agent_toolset_20260401",
           default_config: { permission_policy: { type: "always_ask" } },
+          configs: DISABLED_UNSUPPORTED_BUILTINS,
         },
       ],
     });
@@ -175,11 +180,11 @@ describe("agents API", () => {
         tools: [
           {
             type: "agent_toolset_20260401",
-            default_config: { permission_policy: { type: "always_allow" } },
+            default_config: { enabled: false, permission_policy: { type: "always_allow" } },
           },
           {
             type: "agent_toolset_20260401",
-            default_config: { permission_policy: { type: "always_ask" } },
+            default_config: { enabled: false, permission_policy: { type: "always_ask" } },
           },
         ],
       }),
@@ -242,7 +247,7 @@ describe("agents API", () => {
     await expect(res.json()).resolves.toMatchObject({ multiagent: null });
   });
 
-  it("materializes the hosted default builtin tool config when omitted", async () => {
+  it("materializes deployment defaults for unsupported builtin tools", async () => {
     const app = createInMemoryControlPlaneApp();
     const res = await app.request("/v1/agents", {
       method: "POST",
@@ -261,7 +266,7 @@ describe("agents API", () => {
         enabled: true,
         permission_policy: { type: "always_allow" },
       },
-      configs: [],
+      configs: DISABLED_UNSUPPORTED_BUILTINS,
     }]);
   });
 
@@ -351,9 +356,9 @@ describe("agents API", () => {
     }
   });
 
-  it("accepts the hosted builtin vocabulary and both hosted policies", async () => {
+  it("accepts executable builtin names and both hosted policies", async () => {
     const app = createInMemoryControlPlaneApp();
-    const names = ["bash", "edit", "glob", "grep", "read", "web_fetch", "web_search", "write"];
+    const names = ["bash", "edit", "read", "write"];
     const res = await app.request("/v1/agents", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -362,9 +367,13 @@ describe("agents API", () => {
         model: "claude-opus-4-7",
         tools: [{
           type: "agent_toolset_20260401",
-          default_config: { permission_policy: { type: "always_ask" } },
+          default_config: {
+            enabled: false,
+            permission_policy: { type: "always_ask" },
+          },
           configs: names.map((name, index) => ({
             name,
+            enabled: true,
             permission_policy: { type: index % 2 === 0 ? "always_allow" : "always_ask" },
           })),
         }],
@@ -372,7 +381,79 @@ describe("agents API", () => {
     });
     expect(res.status).toBe(200);
     const agent = (await res.json()) as ManagedAgentsAgent;
-    expect((agent.tools[0] as { configs: unknown[] }).configs).toHaveLength(names.length);
+    expect((agent.tools[0] as { configs: unknown[] }).configs).toHaveLength(
+      names.length + DISABLED_UNSUPPORTED_BUILTINS.length,
+    );
+  });
+
+  it("validates effective enablement for unsupported builtins", async () => {
+    const app = createInMemoryControlPlaneApp();
+    for (const name of ["glob", "grep", "web_fetch", "web_search"]) {
+      const res = await app.request("/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: `Unsupported ${name}`,
+          model: "claude-opus-4-7",
+          tools: [{
+            type: "agent_toolset_20260401",
+            default_config: { enabled: false },
+            configs: [{ name, enabled: true }],
+          }],
+        }),
+      });
+      expect(res.status).toBe(400);
+      await expect(res.text()).resolves.toContain(
+        `Builtin tool \`${name}\` is not supported by this deployment yet`,
+      );
+    }
+
+    const inheritedEnabled = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Inherited enabled unsupported tool",
+        model: "claude-opus-4-7",
+        tools: [{
+          type: "agent_toolset_20260401",
+          default_config: { enabled: true },
+          configs: [{ name: "grep" }],
+        }],
+      }),
+    });
+    expect(inheritedEnabled.status).toBe(400);
+
+    const afterRejected = await app.request("/v1/agents?limit=10");
+    await expect(afterRejected.json()).resolves.toMatchObject({ data: [] });
+
+    const inheritedDisabled = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Inherited disabled unsupported tool",
+        model: "claude-opus-4-7",
+        tools: [{
+          type: "agent_toolset_20260401",
+          default_config: { enabled: false },
+          configs: [{ name: "grep" }],
+        }],
+      }),
+    });
+    expect(inheritedDisabled.status).toBe(200);
+
+    const explicitlyDisabled = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Explicitly disabled unsupported tools",
+        model: "claude-opus-4-7",
+        tools: [{
+          type: "agent_toolset_20260401",
+          configs: DISABLED_UNSUPPORTED_BUILTINS,
+        }],
+      }),
+    });
+    expect(explicitlyDisabled.status).toBe(200);
   });
 
   it("returns the public notFound envelope for unregistered routes", async () => {
