@@ -142,12 +142,13 @@ describe("Core control-plane API", () => {
     expect(descRes.status).toBe(200);
     const descPage = (await descRes.json()) as {
       data: ManagedAgentsSession[];
-      has_more: boolean;
       next_page: string | null;
+      prev_page: string | null;
     };
+    expect(Object.keys(descPage).sort()).toEqual(["data", "next_page", "prev_page"]);
     expect(descPage.data.map((s) => s.id)).toEqual([second.id]);
-    expect(descPage.has_more).toBe(true);
-    expect(descPage.next_page).toBe(second.id);
+    expect(descPage.prev_page).toBe(null);
+    expect(descPage.next_page).toEqual(expect.any(String));
 
     const nextDescRes = await app.request(
       `/v1/sessions?agent_id=${agent.id}&order=desc&limit=1&page=${descPage.next_page}`,
@@ -155,12 +156,18 @@ describe("Core control-plane API", () => {
     expect(nextDescRes.status).toBe(200);
     const nextDescPage = (await nextDescRes.json()) as {
       data: ManagedAgentsSession[];
-      has_more: boolean;
       next_page: string | null;
+      prev_page: string | null;
     };
     expect(nextDescPage.data.map((s) => s.id)).toEqual([first.id]);
-    expect(nextDescPage.has_more).toBe(false);
     expect(nextDescPage.next_page).toBe(null);
+    expect(nextDescPage.prev_page).toEqual(expect.any(String));
+
+    const backDescRes = await app.request(
+      `/v1/sessions?agent_id=${agent.id}&order=desc&limit=1&page=${nextDescPage.prev_page}`,
+    );
+    expect(backDescRes.status).toBe(200);
+    await expect(backDescRes.json()).resolves.toEqual(descPage);
 
     const omittedRes = await app.request(
       `/v1/sessions?agent_id=${agent.id}&limit=10`,
@@ -177,12 +184,87 @@ describe("Core control-plane API", () => {
     expect(ascRes.status).toBe(200);
     const ascPage = (await ascRes.json()) as {
       data: ManagedAgentsSession[];
-      has_more: boolean;
       next_page: string | null;
+      prev_page: string | null;
     };
     expect(ascPage.data.map((s) => s.id)).toEqual([first.id]);
-    expect(ascPage.has_more).toBe(true);
-    expect(ascPage.next_page).toBe(first.id);
+    expect(ascPage.prev_page).toBe(null);
+    expect(ascPage.next_page).toEqual(expect.any(String));
+    const nextAscRes = await app.request(
+      `/v1/sessions?agent_id=${agent.id}&order=asc&limit=1&page=${ascPage.next_page}`,
+    );
+    const nextAscPage = (await nextAscRes.json()) as {
+      data: ManagedAgentsSession[];
+      next_page: string | null;
+      prev_page: string | null;
+    };
+    expect(nextAscPage.data.map((s) => s.id)).toEqual([second.id]);
+    expect(nextAscPage.next_page).toBe(null);
+    expect(nextAscPage.prev_page).toEqual(expect.any(String));
+    const backAscRes = await app.request(
+      `/v1/sessions?agent_id=${agent.id}&order=asc&limit=1&page=${nextAscPage.prev_page}`,
+    );
+    await expect(backAscRes.json()).resolves.toEqual(ascPage);
+
+    await expectError(
+      await app.request(`/v1/sessions?page=not-a-valid-cursor`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${agent.id}&order=desc&limit=1&page=${descPage.next_page}!`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    await expectError(
+      await app.request(
+        `/v1/sessions?agent_id=${agent.id}&order=desc&limit=1&page=${encodeURIComponent(`${descPage.next_page}===`)}`,
+      ),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    const tamperedOrder = tamperSessionCursor(descPage.next_page!, (payload) => {
+      payload.order = "asc";
+    });
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${agent.id}&order=asc&limit=1&page=${tamperedOrder}`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    const tamperedAgent = tamperSessionCursor(descPage.next_page!, (payload) => {
+      payload.agentId = otherAgent.id;
+    });
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${otherAgent.id}&order=desc&limit=1&page=${tamperedAgent}`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    const tamperedArchived = tamperSessionCursor(descPage.next_page!, (payload) => {
+      payload.includeArchived = true;
+    });
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${agent.id}&order=desc&include_archived=true&limit=1&page=${tamperedArchived}`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${agent.id}&order=asc&limit=1&page=${descPage.next_page}`),
+      400,
+      "invalid_request_error",
+      "page token order does not match request",
+    );
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${otherAgent.id}&order=desc&limit=1&page=${descPage.next_page}`),
+      400,
+      "invalid_request_error",
+      "page token filters do not match request",
+    );
 
     await expectError(
       await app.request(`/v1/sessions?agent_id=${agent.id}&order=sideways`),
@@ -487,4 +569,18 @@ async function expectError(
     request_id: expect.stringMatching(/^req_/),
   });
   expect(body.request_id).toBe(requestId);
+}
+
+function tamperSessionCursor(
+  cursor: string,
+  mutate: (payload: Record<string, unknown>) => void,
+): string {
+  const [encodedPayload, signature] = cursor.split(".");
+  expect(encodedPayload).toEqual(expect.any(String));
+  expect(signature).toEqual(expect.any(String));
+  const payload = JSON.parse(
+    Buffer.from(encodedPayload!, "base64url").toString("utf8"),
+  ) as Record<string, unknown>;
+  mutate(payload);
+  return `${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}.${signature}`;
 }

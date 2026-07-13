@@ -26,7 +26,6 @@ import type {
   SessionRow,
   SessionStore,
 } from "../sessions/types.ts";
-import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type {
@@ -1061,14 +1060,14 @@ class HookedSessionStore implements SessionStore {
   list(
     workspaceId: WorkspaceId,
     opts: ListSessionsOptions = {},
-  ): ManagedAgentsListPage<SessionRow> {
+  ): import("../sessions/types.ts").SessionListPage<SessionRow> {
     const data = [...this.rows.values()].filter((row) => {
       if (row.workspace_id !== workspaceId) return false;
       return opts.includeArchived === true
         ? true
         : row.archived_at === null && row.status !== "terminated";
     });
-    return { data, has_more: false, next_page: null };
+    return { data, next_page: null, prev_page: null };
   }
 
   private key(workspaceId: WorkspaceId, sessionId: string): string {

@@ -12,8 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-13 (`arc-g-cma-glob-probe`, plan 0131 implemented in
-PR #184; final architecture review pending)._
+_Last updated 2026-07-13 (`arc-h-pagination-probe`; PR #184 merged; plan 0132
+session bidirectional pagination complete and awaiting review)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may

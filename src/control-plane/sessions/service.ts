@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type {
   CreateManagedSessionResourceInput,
   ManagedAgentsDeletedSession,
@@ -48,6 +47,7 @@ import type {
   CreateSessionIdempotencyCommit,
   CreateSessionRecord,
   SessionFileMountSnapshotRow,
+  SessionListPage,
   SessionSkillSnapshotRow,
   SessionRow,
   SessionService,
@@ -813,12 +813,12 @@ export class DefaultSessionService implements SessionService {
   list(
     workspaceId: WorkspaceId,
     opts: ListSessionsOptions = {},
-  ): ManagedAgentsListPage<ManagedAgentsSession> {
+  ): SessionListPage<ManagedAgentsSession> {
     const page = this.store.list(workspaceId, opts);
     return {
       data: page.data.map(toManagedSession),
-      has_more: page.has_more,
       next_page: page.next_page,
+      prev_page: page.prev_page,
     };
   }
 
