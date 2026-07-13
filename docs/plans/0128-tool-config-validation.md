@@ -1,7 +1,7 @@
 # Plan 0128 — CMA tool-config validation
 
-Date: 2026-07-13  
-Branch: `main` after networking parity PR #180  
+Date: 2026-07-13
+Branch: `main` after networking parity PR #180
 Evidence: [probe 63](../../scratch/63-managed-agents-tool-config-validation-probe.md)
 
 ## Problem

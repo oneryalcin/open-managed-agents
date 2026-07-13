@@ -1,7 +1,7 @@
 # Probe 63 — hosted tool-config validation and precedence
 
-Date: 2026-07-13  
-Status: complete  
+Date: 2026-07-13
+Status: complete
 Artifact: `scratch/artifacts/63-managed-agents-tool-config-validation-probe.json`
 
 ## Question

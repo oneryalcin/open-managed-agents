@@ -246,10 +246,23 @@ function parseTool(value: unknown): ManagedAgentsTool {
   const tool = jsonObjectField(value, "tools");
   const type = stringField(tool, "type", { required: true });
   if (type === "agent_toolset_20260401") {
+    // Probe 63 shows a narrow precedence distinction: a structurally
+    // malformed default policy yields to config validation, while a
+    // semantically unknown default policy wins before configs are inspected.
+    const parseConfigsFirst = hasStructurallyMalformedDefaultPolicy(tool);
+    const defaultConfig = parseConfigsFirst
+      ? undefined
+      : optionalDefaultConfigSpread(tool, { materialize: true });
+    const configs = optionalToolConfigsSpread(tool, {
+      builtin: true,
+      materialize: true,
+    });
     return {
       type,
-      ...optionalDefaultConfigSpread(tool, { materialize: true }),
-      ...optionalToolConfigsSpread(tool, { builtin: true, materialize: true }),
+      ...(parseConfigsFirst
+        ? optionalDefaultConfigSpread(tool, { materialize: true })
+        : defaultConfig),
+      ...configs,
     };
   }
   if (type === "mcp_toolset") {
@@ -556,6 +569,18 @@ function optionalDefaultConfigSpread(
         : { permission_policy: permissionPolicy }),
     },
   };
+}
+
+function hasStructurallyMalformedDefaultPolicy(
+  obj: Record<string, unknown>,
+): boolean {
+  const defaultConfig = obj.default_config;
+  if (!isJsonObject(defaultConfig)) return defaultConfig !== undefined;
+  const policy = defaultConfig.permission_policy;
+  if (policy === undefined) return false;
+  if (typeof policy === "string") return policy.length === 0;
+  if (!isJsonObject(policy)) return true;
+  return typeof policy.type !== "string" || policy.type.length === 0;
 }
 
 function optionalToolConfigsSpread(

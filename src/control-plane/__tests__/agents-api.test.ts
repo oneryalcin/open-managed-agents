@@ -253,6 +253,56 @@ describe("agents API", () => {
     await expect(listed.json()).resolves.toMatchObject({ data: [] });
   });
 
+  it("matches probe 63 precedence for mixed-invalid builtin configs", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const cases = [
+      {
+        name: "unknown config name wins over malformed default policy",
+        configs: [{ name: "oma_probe_unknown_tool" }],
+        default_config: { permission_policy: { type: 42 } },
+        message: "`configs[].name`",
+      },
+      {
+        name: "unknown default policy wins over unknown config name",
+        configs: [{ name: "oma_probe_unknown_tool" }],
+        default_config: { permission_policy: { type: "oma_probe_unknown_policy" } },
+        message: "`permission_policy.type`",
+      },
+      {
+        name: "unknown default policy wins over malformed config name",
+        configs: [{ name: 42 }],
+        default_config: { permission_policy: { type: "oma_probe_unknown_policy" } },
+        message: "`permission_policy.type`",
+      },
+      {
+        name: "unknown per-config policy wins over unknown config name",
+        configs: [{ name: "oma_probe_unknown_tool", permission_policy: { type: "oma_probe_unknown_policy" } }],
+        default_config: undefined,
+        message: "`permission_policy.type`",
+      },
+    ];
+
+    for (const item of cases) {
+      const res = await app.request("/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: `Mixed invalid ${item.name}`,
+          model: "claude-opus-4-7",
+          tools: [{
+            type: "agent_toolset_20260401",
+            configs: item.configs,
+            ...(item.default_config === undefined
+              ? {}
+              : { default_config: item.default_config }),
+          }],
+        }),
+      });
+      expect(res.status, item.name).toBe(400);
+      await expect(res.text(), item.name).resolves.toContain(item.message);
+    }
+  });
+
   it("accepts the hosted builtin vocabulary and both hosted policies", async () => {
     const app = createInMemoryControlPlaneApp();
     const names = ["bash", "edit", "glob", "grep", "read", "web_fetch", "web_search", "write"];
