@@ -35,8 +35,9 @@ change those resources or session-event pagination.
 
 Cursor contents are implementation details, not a client API or authorization
 mechanism. Workspace identity remains server context and is not trusted from the
-cursor. The signing key is random and stable for the session-store process
-lifetime; outstanding cursors intentionally become invalid after restart.
+cursor. The signing key is random and stable for one `SqliteSessionStore`
+instance; outstanding cursors intentionally become invalid if that store is
+recreated, including after deployment restart.
 
 ## Tests before implementation
 

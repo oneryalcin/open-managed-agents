@@ -65,6 +65,30 @@ describe("session service/store", () => {
     ]);
   });
 
+  it("rejects a session cursor when it is replayed in another workspace", async () => {
+    const fixture = createFixture();
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+
+    await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+    await fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+    const cursor = fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, {
+      limit: 1,
+    }).next_page;
+    expect(cursor).toEqual(expect.any(String));
+
+    expect(() => fixture.sessionStore.list(OTHER_WORKSPACE_ID, {
+      limit: 1,
+      page: cursor!,
+    })).toThrow("invalid page cursor");
+  });
+
   it("treats an empty page cursor as an invalid direct store cursor", async () => {
     const fixture = createFixture();
     const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
