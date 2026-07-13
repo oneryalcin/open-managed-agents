@@ -213,6 +213,20 @@ describe("Core control-plane API", () => {
       "invalid page cursor",
     );
     await expectError(
+      await app.request(`/v1/sessions?agent_id=${agent.id}&order=desc&limit=1&page=${descPage.next_page}!`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    await expectError(
+      await app.request(
+        `/v1/sessions?agent_id=${agent.id}&order=desc&limit=1&page=${encodeURIComponent(`${descPage.next_page}===`)}`,
+      ),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    await expectError(
       await app.request(`/v1/sessions?agent_id=${agent.id}&order=asc&limit=1&page=${descPage.next_page}`),
       400,
       "invalid_request_error",

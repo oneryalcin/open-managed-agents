@@ -37,7 +37,7 @@ claim of blanket superiority over Anthropic's hosted environment.
 2026-07-12) → networking translation/rejection → probe-backed tool config
 validation → reject the inert multi-agent façade (DONE 2026-07-13) →
 `glob`/`grep` honesty boundary (DONE 2026-07-13) → sandbox-backed CMA
-`glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning → usable
+`glob` (DONE 2026-07-13) → pagination semantics (PR #185, review pending) → agent update/versioning → usable
 environment image story → web tools. Provider-owned `grep` remains a separate
 search arc rather than a prerequisite for `glob`.
 
@@ -160,7 +160,7 @@ the risk of silent contradiction, not by how easy they first appear.
     content search and a deterministic binary/search strategy. Pi's default
     host-process `rg` path is not an acceptable implementation.
 
-- [x] **Bidirectional session pagination / `prev_page`** *(DONE 2026-07-13; plan 0132; probe 66)*
+- [ ] **Bidirectional session pagination / `prev_page`** *(implemented in PR #185; review pending; plan 0132; probe 66)*
   - CMA `[Obs]`: session pages are `{data,next_page,prev_page}` without
     `has_more`; page 2's `prev_page` is submitted through `page` and returns
     page 1 in the original requested order for both ascending and descending

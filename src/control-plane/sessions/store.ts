@@ -728,7 +728,14 @@ function decodeSessionCursor(
 ): SessionCursorPayload {
   let payload: unknown;
   try {
-    payload = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+      throw new Error("non-canonical base64url");
+    }
+    const decoded = Buffer.from(value, "base64url");
+    if (decoded.toString("base64url") !== value) {
+      throw new Error("non-canonical base64url");
+    }
+    payload = JSON.parse(decoded.toString("utf8"));
   } catch {
     throw invalidRequest("invalid page cursor");
   }
