@@ -251,6 +251,116 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
     }
   });
 
+  it("exposes bounded CMA glob instead of Pi find and accounts public calls", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
+    try {
+      const provider = createHostPassthroughSandboxProvider({
+        workspaceRoot: workspace,
+        unsafeAllowHostPassthrough: true,
+      });
+      await writeFile(join(workspace, "a.md"), "a");
+      await writeFile(join(workspace, "b.md"), "b");
+
+      expect(provider.toolNames.has("glob")).toBe(true);
+      expect(provider.toolNames.has("find")).toBe(false);
+      expect(provider.tools.some((tool) => tool.name === "find")).toBe(false);
+      const results = await provider.operations.glob.glob({
+        pattern: "*.md",
+        cwd: workspace,
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      });
+
+      expect([...results].sort()).toEqual([
+        `${await realpath(workspace)}/a.md`,
+        `${await realpath(workspace)}/b.md`,
+      ]);
+      await expect(provider.operations.glob.glob({
+        pattern: "*.md",
+        cwd: workspace,
+        signal: new AbortController().signal,
+        maxMatches: 1,
+        maxRawBytes: 1024,
+        maxOutputBytes: 1024,
+        timeoutMs: 10_000,
+      })).resolves.toHaveLength(1);
+      await expect(provider.operations.glob.glob({
+        pattern: "*.md",
+        cwd: workspace,
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1,
+        maxOutputBytes: 1024,
+        timeoutMs: 10_000,
+      })).rejects.toThrow("raw bytes");
+      await expect(provider.operations.glob.glob({
+        pattern: "*.md",
+        cwd: workspace,
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1024,
+        maxOutputBytes: 1024,
+        timeoutMs: 0,
+      })).rejects.toThrow("timed out");
+      const aborted = new AbortController();
+      aborted.abort();
+      await expect(provider.operations.glob.glob({
+        pattern: "*.md",
+        cwd: workspace,
+        signal: aborted.signal,
+        maxMatches: 100,
+        maxRawBytes: 1024,
+        maxOutputBytes: 1024,
+        timeoutMs: 10_000,
+      })).rejects.toThrow("Operation aborted");
+      const glob = provider.tools.find((tool) => tool.name === "glob");
+      expect(glob).toBeDefined();
+      const publicResult = await glob!.execute(
+        "toolu_glob_test",
+        { pattern: "*.md", path: workspace },
+        new AbortController().signal,
+        undefined,
+        {} as never,
+      );
+      expect(publicResult.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(`${await realpath(workspace)}/a.md`),
+      });
+      expect(provider.invocations.byTool.glob).toBe(6);
+      expect(provider.invocations.byTool.find).toBe(0);
+      expect(provider.invocations.toolCallIds.glob.has("toolu_glob_test")).toBe(true);
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
+  it("does not charge host raw-byte limits for directory-only traversal", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
+    try {
+      const provider = createHostPassthroughSandboxProvider({
+        workspaceRoot: workspace,
+        unsafeAllowHostPassthrough: true,
+      });
+      for (let index = 0; index < 20; index += 1) {
+        await mkdir(join(workspace, `directory-${index.toString().padStart(3, "0")}`));
+      }
+      await expect(provider.operations.glob.glob({
+        pattern: "*.md",
+        cwd: workspace,
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1,
+        maxOutputBytes: 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual([]);
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
   it("prunes ignored directories before traversal", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
     const ignored = join(workspace, "node_modules");

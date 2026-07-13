@@ -12,8 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-13 (`arc-f-glob-grep-honesty`, probe 64 complete;
-validation: focused tests)._
+_Last updated 2026-07-13 (`arc-g-cma-glob-probe`, plan 0131 implemented in
+PR #184; final architecture review pending)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -47,9 +47,10 @@ validation: focused tests)._
 - Multiagent honesty is merged to `main` via PR #182. Non-null
   `multiagent` configurations now reject before persistence with a stable 400;
   the full coordinator runtime remains deferred.
-- The glob/grep slice is active on `arc-f-glob-grep-honesty`. Pi 0.80.6 source
-  inspection and probe 64 are complete; OMA will reject these names honestly
-  until sandboxed Docker/microsandbox search operations exist.
+- Glob/grep honesty merged via PR #183. The active `arc-g-cma-glob-probe`
+  branch adds probes 65/65b and plan 0131: CMA `glob` requires a separately
+  accounted, bounded, cancellable provider operation; provider-owned `grep`
+  remains separate.
 - Issues `#16`, `#107`, `#113`, and `#121` are closed. `#103`, `#118`, and `#119`
   remain open follow-up work; PR #169 / issue #164 is the events-service split.
 
@@ -365,18 +366,20 @@ Full detail lives in-repo; this is the index + the one invariant to carry from e
 - **Multiagent honesty** (plan `0129`) is merged via PR #182: every non-null
   configuration is rejected before persistence; null/absent values remain
   compatible and legacy rows remain readable.
-- **Unsupported builtin honesty boundary** (plan `0130`, probe 64) is
-  implemented in the current branch: omitted `glob`, `grep`, `web_fetch`, and
-  `web_search` materialize as disabled deployment defaults; explicit configs
-  reject only when effectively enabled. Legacy rows remain readable.
+- **Unsupported builtin honesty boundary** (plan `0130`, probe 64) merged via
+  PR #183: omitted `glob`, `grep`, `web_fetch`, and `web_search` materialize as
+  disabled deployment defaults; explicit configs reject only when effectively
+  enabled. PR #184 implements CMA `glob` with bounded NUL-streaming operations,
+  active cancellation, guest PID cleanup, defensive grammar, and verified
+  Docker/microsandbox coverage. Pi `find` is no longer model-facing. Agents
+  created during the PR #183 honesty window retain their persisted
+  `glob:false` override and must be recreated until agent update exists.
 
 ## Immediate Next Work
 
-1. **Finish the pre-v1 trust pass** — implement CMA-facing `glob` by adapting
-   the safe glob operations already available in Docker and microsandbox.
-   Keep `grep` rejected until providers own content search and a deterministic
-   search-binary strategy. Use `PARITY.md` for ordering rather than this handoff
-   as an independent backlog.
+1. **Probe bidirectional pagination** across sessions and each list resource,
+   then implement real backward-cursor semantics. Keep `grep` rejected until
+   providers own content search and a deterministic search-binary strategy.
 2. **Pagination and agent update/versioning** — probe pagination semantics,
    then add the highest-value missing core workflow: agent update plus
    versioning.

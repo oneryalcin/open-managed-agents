@@ -569,6 +569,7 @@ describe("microsandbox sandbox provider", () => {
     cli.queueExec(ok("file"));
     cli.queueExec(ok("README.md\nsrc\n"));
     cli.queueExec(ok("src/index.ts\n"));
+    cli.queueExec(ok("__OMA_GLOB_READY__\0src/index.ts\0"));
     cli.queueExecSync(ok(""));
     cli.queueExecSync(ok(""));
     const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
@@ -596,6 +597,15 @@ describe("microsandbox sandbox provider", () => {
         limit: 10,
       }),
     ).resolves.toEqual(["/workspace/src/index.ts"]);
+    await expect(provider.operations.glob.glob({
+      pattern: "*.ts",
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    })).resolves.toEqual(["/workspace/src/index.ts"]);
     provider.dispose();
 
     expect(cli.calls.slice(2, 8).map((call) => call.args[0])).toEqual([
@@ -613,6 +623,227 @@ describe("microsandbox sandbox provider", () => {
     expect(provider.invocations.byTool.read).toBe(1);
     expect(provider.invocations.byTool.ls).toBe(2);
     expect(provider.invocations.byTool.find).toBe(1);
+    expect(provider.invocations.byTool.glob).toBe(1);
+    const globCall = cli.calls.find((call) =>
+      call.args.some((arg) => arg.includes("find . -type f -print0"))
+    );
+    expect(globCall?.args).toContain("--stream");
+  });
+
+  it("terminates CMA glob enumeration at 100 matches and forwards caller abort", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    let operationSignal: AbortSignal | undefined;
+    cli.queueExec((opts) => {
+      operationSignal = opts?.signal;
+      const records = Array.from(
+        { length: 150 },
+        (_, index) => `./file-${String(index).padStart(3, "0")}.md\0`,
+      ).join("");
+      opts?.onStdout?.(Buffer.from(`__OMA_GLOB_READY__\0${records}`));
+      return okResult("");
+    });
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    const matches = await provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    });
+    expect(matches).toHaveLength(100);
+    expect(operationSignal?.aborted).toBe(true);
+
+    const invoke = (overrides: Partial<Parameters<typeof provider.operations.glob.glob>[0]> = {}) =>
+      provider.operations.glob.glob({
+        pattern: "*.md",
+        cwd: "/workspace",
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+        ...overrides,
+      });
+    cli.queueExec((opts) => {
+      opts?.onStdout?.(Buffer.from(`__OMA_GLOB_READY__\0./${"x".repeat(32)}.txt\0`));
+      return okResult("");
+    });
+    cli.queueExec(ok(""));
+    await expect(invoke({ maxRawBytes: 8 })).rejects.toThrow("raw bytes");
+    cli.queueExec((opts) => {
+      opts?.onStdout?.(Buffer.from("__OMA_GLOB_READY__\0./a.md\0"));
+      return okResult("");
+    });
+    cli.queueExec(ok(""));
+    await expect(invoke({ maxOutputBytes: 8 })).rejects.toThrow("output exceeds");
+    cli.queueExec((opts) => {
+      opts?.onStdout?.(Buffer.from("__OMA_GLOB_READY__\0"));
+      throw new Error("microsandbox timeout");
+    });
+    cli.queueExec(ok(""));
+    await expect(invoke({ timeoutMs: 1 })).rejects.toThrow("timeout");
+
+    const abortDuringCleanup = new AbortController();
+    cli.queueExec(ok("__OMA_GLOB_READY__\0"));
+    cli.queueExec(() => {
+      abortDuringCleanup.abort();
+      return okResult("");
+    });
+    await expect(invoke({ signal: abortDuringCleanup.signal }))
+      .rejects.toThrow("Operation aborted");
+
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: aborted.signal,
+      maxMatches: 100,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("Operation aborted");
+    expect(cli.calls).toHaveLength(12);
+    provider.dispose();
+  });
+
+  it("poisons the sandbox when glob dispatch fails before readiness", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    const abort = new AbortController();
+    cli.queueExec(() => {
+      abort.abort();
+      const error = new Error("aborted before readiness");
+      error.name = "AbortError";
+      throw error;
+    });
+    cli.queueExec(ok("removed-sandbox"));
+    cli.queueExecSync(ok("removed-volume"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: abort.signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("Operation aborted");
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .rejects.toThrow("disposed");
+    expect(cli.calls.filter((call) => call.mode === "sync")).toHaveLength(1);
+  });
+
+  it("poisons pre-readiness timeouts and retries failed checked removal on dispose", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    cli.queueExec(fail("transport timeout before readiness"));
+    cli.queueExec(() => okResult("", "remove failed", 1));
+    cli.queueExecSync(ok("removed-sandbox-on-retry"));
+    cli.queueExecSync(ok("removed-volume-on-retry"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 1,
+    })).rejects.toThrow("Failed to remove poisoned microsandbox");
+    expect(provider.isPoisoned?.()).toBe(true);
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .rejects.toThrow("disposed");
+
+    provider.dispose();
+    expect(cli.calls.filter((call) => call.mode === "sync")).toHaveLength(2);
+  });
+
+  it("poisons the provider when post-readiness glob cleanup fails", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    cli.queueExec((opts) => {
+      opts?.onStdout?.(Buffer.from("__OMA_GLOB_READY__\0"));
+      return okResult("");
+    });
+    cli.queueExec(fail("cleanup failed"));
+    cli.queueExec(ok("removed-sandbox"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("cleanup failed");
+    expect(provider.isPoisoned?.()).toBe(true);
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .rejects.toThrow("disposed");
+
+    provider.dispose();
+    expect(cli.calls.filter((call) => call.mode === "sync")).toHaveLength(1);
+  });
+
+  it("keeps the sandbox healthy when a missing glob path fails after readiness", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    cli.queueExec((opts) => {
+      opts?.onStdout?.(Buffer.from("__OMA_GLOB_READY__\0"));
+      return okResult("", "missing path", 1);
+    });
+    cli.queueExec(ok("cleaned"));
+    cli.queueExec(ok("after"));
+    cli.queueExecSync(ok("removed-sandbox"));
+    cli.queueExecSync(ok("removed-volume"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace/missing",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("missing path");
+    expect(provider.isPoisoned?.()).toBe(false);
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .resolves.toEqual(Buffer.from("after"));
+    provider.dispose();
   });
 
   it("normalizes bash streaming results without forwarding guest env", async () => {
@@ -1030,6 +1261,37 @@ describe("microsandbox sandbox provider live smoke", () => {
         await expect(readLiveFileSize(provider, "leak.txt")).resolves.toBe(
           sizeAfterTimeout,
         );
+
+        await expect(provider.operations.glob.glob({
+          pattern: "*.pid",
+          cwd: "/workspace",
+          signal: new AbortController().signal,
+          maxMatches: 100,
+          maxRawBytes: 1024 * 1024,
+          maxOutputBytes: 64 * 1024,
+          timeoutMs: 10_000,
+        })).resolves.toEqual([]);
+        await provider.operations.bash.exec(
+          "i=1; while [ $i -le 500 ]; do printf x > file-$(printf '%04d' $i).md; i=$((i+1)); done",
+          "/workspace",
+          { env: {}, onData: () => {}, timeout: 5 },
+        );
+        await expect(provider.operations.glob.glob({
+          pattern: "*.md",
+          cwd: "/workspace",
+          signal: new AbortController().signal,
+          maxMatches: 100,
+          maxRawBytes: 1024 * 1024,
+          maxOutputBytes: 64 * 1024,
+          timeoutMs: 10_000,
+        })).resolves.toHaveLength(100);
+        const globProcesses: Buffer[] = [];
+        await provider.operations.bash.exec(
+          "a='.oma-'; b='glob-'; needle=$a$b; for f in /proc/[0-9]*/cmdline; do cmd=$(tr '\\0' ' ' < \"$f\" 2>/dev/null || true); case \"$cmd\" in find\\ \\.\\ -type\\ f\\ -print0*|*\"$needle\"*) printf '%s\\n' \"$cmd\";; esac; done",
+          "/workspace",
+          { env: {}, onData: (chunk) => globProcesses.push(chunk), timeout: 5 },
+        );
+        expect(Buffer.concat(globProcesses).toString("utf8")).toBe("");
 
         await expect(
           provider.operations.bash.exec(

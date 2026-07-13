@@ -36,7 +36,6 @@ const CMA_BUILTIN_TOOL_NAMES = [
 ] as const;
 const CMA_PERMISSION_POLICY_TYPES = ["always_allow", "always_ask"] as const;
 const OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES = [
-  "glob",
   "grep",
   "web_fetch",
   "web_search",

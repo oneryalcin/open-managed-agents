@@ -451,6 +451,105 @@ describe("Docker sandbox provider command construction", () => {
 });
 
 describe("Docker sandbox provider factory", () => {
+  it("poisons the provider on a transport timeout before glob readiness", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oma-docker-glob-poison-"));
+    const logPath = join(dir, "docker.log");
+    const removeAttemptPath = join(dir, "remove-attempted");
+    const dockerPath = join(dir, "docker");
+    await writeFile(
+      dockerPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${logPath}"
+case "$1" in
+  run) ;;
+  rm)
+    if [ ! -e "${removeAttemptPath}" ]; then
+      : > "${removeAttemptPath}"
+      printf 'transient remove failure\n' >&2
+      exit 1
+    fi
+    ;;
+  exec) sleep 1 ;;
+  *) exit 1 ;;
+esac
+`,
+    );
+    await chmod(dockerPath, 0o755);
+    const provider = await createDockerSandboxProvider("wrk", "sesn", {
+      dockerCommand: dockerPath,
+      operationTimeoutMs: 1_000,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 10,
+    })).rejects.toThrow(/timed out|timeout/i);
+    expect(provider.isPoisoned?.()).toBe(true);
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .rejects.toThrow("disposed");
+
+    provider.dispose();
+    const calls = (await readFile(logPath, "utf8")).trim().split("\n");
+    expect(calls.filter((call) => call.startsWith("rm -f "))).toHaveLength(2);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("poisons the provider when post-readiness glob cleanup fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oma-docker-glob-cleanup-poison-"));
+    const logPath = join(dir, "docker.log");
+    const firstExecPath = join(dir, "first-exec");
+    const dockerPath = join(dir, "docker");
+    await writeFile(
+      dockerPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${logPath}"
+case "$1" in
+  run|rm) ;;
+  exec)
+    if [ ! -e "${firstExecPath}" ]; then
+      : > "${firstExecPath}"
+      printf '__OMA_GLOB_READY__\\0'
+    else
+      printf 'cleanup failed\n' >&2
+      exit 1
+    fi
+    ;;
+  *) exit 1 ;;
+esac
+`,
+    );
+    await chmod(dockerPath, 0o755);
+    const provider = await createDockerSandboxProvider("wrk", "sesn", {
+      dockerCommand: dockerPath,
+      operationTimeoutMs: 1_000,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 1_000,
+    })).rejects.toThrow(/cleanup failed|docker exec failed/i);
+    expect(provider.isPoisoned?.()).toBe(true);
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .rejects.toThrow("disposed");
+
+    provider.dispose();
+    const calls = (await readFile(logPath, "utf8")).trim().split("\n");
+    expect(calls.filter((call) => call.startsWith("rm -f "))).toHaveLength(1);
+    await rm(dir, { recursive: true, force: true });
+  });
+
   it("shares the one-time stale container sweep across concurrent first sessions", async () => {
     const dir = await mkdtemp(join(tmpdir(), "oma-docker-reaper-"));
     const logPath = join(dir, "docker.log");
@@ -1060,6 +1159,17 @@ describe("Docker sandbox provider integration", () => {
           limit: 10,
         }),
       ).resolves.toEqual(["/workspace/src/index.ts"]);
+      await expect(provider.operations.glob.glob({
+        pattern: "*.ts",
+        cwd: "/workspace",
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/workspace/src/index.ts"]);
+      expect(provider.invocations.byTool.glob).toBe(1);
+      expect(provider.invocations.byTool.find).toBe(2);
 
       const chunks: Buffer[] = [];
       const result = await provider.operations.bash.exec(
@@ -1203,6 +1313,104 @@ describe("Docker sandbox provider integration", () => {
           timeout: 1,
         }),
       ).resolves.toEqual({ exitCode: 0 });
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("stops bounded CMA glob enumeration and leaves no guest find process", async () => {
+    const label = `oma-docker-cma-glob-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 10_000,
+    });
+    try {
+      const emptyStartedAt = performance.now();
+      await expect(provider.operations.glob.glob({
+        pattern: "*.does-not-exist",
+        cwd: "/workspace",
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 18,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual([]);
+      expect(performance.now() - emptyStartedAt).toBeLessThan(2_000);
+
+      await expect(provider.operations.glob.glob({
+        pattern: "*.md",
+        cwd: "/workspace/missing",
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1024,
+        maxOutputBytes: 1024,
+        timeoutMs: 10_000,
+      })).rejects.toThrow();
+      await expect(provider.operations.bash.exec("true", "/workspace", {
+        env: {},
+        onData: () => {},
+        timeout: 2,
+      })).resolves.toEqual({ exitCode: 0 });
+
+      const initialGlob = await provider.operations.glob.glob({
+        pattern: "*",
+        cwd: "/workspace",
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      });
+      expect(initialGlob.every((path) => !path.includes(".oma-glob-") && !path.endsWith(".pid"))).toBe(true);
+      await expect(provider.operations.glob.glob({
+        pattern: "*.pid",
+        cwd: "/workspace",
+        signal: new AbortController().signal,
+        maxMatches: 100,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual([]);
+      await provider.operations.bash.exec(
+        "i=1; while [ $i -le 500 ]; do printf x > file-$(printf '%04d' $i).md; i=$((i+1)); done",
+        "/workspace",
+        { env: {}, onData: () => {}, timeout: 5 },
+      );
+      const assertNoGuestGlob = async (): Promise<void> => {
+        const processChunks: Buffer[] = [];
+        await provider.operations.bash.exec(
+          "a='.oma-'; b='glob-'; needle=$a$b; for f in /proc/[0-9]*/cmdline; do cmd=$(tr '\\0' ' ' < \"$f\" 2>/dev/null || true); case \"$cmd\" in find\\ \\.\\ -type\\ f\\ -print0*|*\"$needle\"*) printf '%s\\n' \"$cmd\";; esac; done",
+          "/workspace",
+          { env: {}, onData: (chunk) => processChunks.push(chunk), timeout: 2 },
+        );
+        expect(Buffer.concat(processChunks).toString("utf8")).toBe("");
+      };
+      const invoke = (overrides: Partial<Parameters<typeof provider.operations.glob.glob>[0]> = {}) =>
+        provider.operations.glob.glob({
+          pattern: "*.md",
+          cwd: "/workspace",
+          signal: new AbortController().signal,
+          maxMatches: 100,
+          maxRawBytes: 1024 * 1024,
+          maxOutputBytes: 64 * 1024,
+          timeoutMs: 10_000,
+          ...overrides,
+        });
+
+      await expect(invoke()).resolves.toHaveLength(100);
+      await assertNoGuestGlob();
+      await expect(invoke({ maxRawBytes: 8 })).rejects.toThrow(/raw bytes|stdout exceeded/);
+      await assertNoGuestGlob();
+      await expect(invoke({ maxOutputBytes: 8 })).rejects.toThrow("output exceeds");
+      await assertNoGuestGlob();
+      const abort = new AbortController();
+      const aborted = invoke({ signal: abort.signal });
+      abort.abort();
+      await expect(aborted).rejects.toThrow(/aborted/i);
+      expect(containersForLabel(label)).toEqual([]);
     } finally {
       provider.dispose();
     }

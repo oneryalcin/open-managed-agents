@@ -1,0 +1,320 @@
+{
+  "events": [
+    {
+      "id": "id_002",
+      "type": "session.status_running"
+    },
+    {
+      "id": "id_003",
+      "type": "session.thread_status_running"
+    },
+    {
+      "content": [
+        {
+          "text": "Run this setup command in one bash call:\n\nset -eu\nroot=/mnt/session/glob65b\nrm -rf \"$root\"\nmkdir -p \"$root/sub\"\nprintf a > \"$root/a.md\"\nprintf b > \"$root/b.md\"\nprintf c > \"$root/c.txt\"\nprintf q > \"$root/q?.md\"\nprintf l > \"$root/[literal].md\"\nprintf n > \"$root/sub/nested.md\"\n\n\nThen make these glob calls exactly in order:\n1. {\"pattern\":\"?.md\",\"path\":\"/mnt/session/glob65b\"}\n2. {\"pattern\":\"[ab].md\",\"path\":\"/mnt/session/glob65b\"}\n3. {\"pattern\":\"[a-c].md\",\"path\":\"/mnt/session/glob65b\"}\n4. {\"pattern\":\"{a,b}.md\",\"path\":\"/mnt/session/glob65b\"}\n5. {\"pattern\":\"q\\\\?.md\",\"path\":\"/mnt/session/glob65b\"}\n6. {\"pattern\":\"\\\\[literal\\\\].md\",\"path\":\"/mnt/session/glob65b\"}\n7. {\"pattern\":\"*.md\",\"path\":\"mnt/session/glob65b\"}\n",
+          "type": "text"
+        }
+      ],
+      "id": "id_001",
+      "type": "user.message"
+    },
+    {
+      "id": "id_004",
+      "type": "span.model_request_start"
+    },
+    {
+      "id": "id_005",
+      "type": "agent.thinking"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_006",
+      "input": {
+        "command": "set -eu\nroot=/mnt/session/glob65b\nrm -rf \"$root\"\nmkdir -p \"$root/sub\"\nprintf a > \"$root/a.md\"\nprintf b > \"$root/b.md\"\nprintf c > \"$root/c.txt\"\nprintf q > \"$root/q?.md\"\nprintf l > \"$root/[literal].md\"\nprintf n > \"$root/sub/nested.md\"\n"
+      },
+      "name": "bash",
+      "type": "agent.tool_use"
+    },
+    {
+      "id": "id_007",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "(no output)",
+          "type": "text"
+        }
+      ],
+      "id": "id_008",
+      "is_error": false,
+      "tool_use_id": "id_006",
+      "type": "agent.tool_result"
+    },
+    {
+      "id": "id_009",
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_010",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "?.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_011",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "[ab].md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_012",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "[a-c].md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_013",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "{a,b}.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_014",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "q\\?.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_015",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "\\[literal\\].md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_016",
+      "input": {
+        "path": "mnt/session/glob65b",
+        "pattern": "*.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "id": "id_017",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65b/b.md\n/mnt/session/glob65b/a.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_018",
+      "is_error": false,
+      "tool_use_id": "id_010",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65b/b.md\n/mnt/session/glob65b/a.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_019",
+      "is_error": false,
+      "tool_use_id": "id_011",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65b/b.md\n/mnt/session/glob65b/a.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_020",
+      "is_error": false,
+      "tool_use_id": "id_012",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65b/b.md\n/mnt/session/glob65b/a.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_021",
+      "is_error": false,
+      "tool_use_id": "id_013",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65b/q?.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_022",
+      "is_error": false,
+      "tool_use_id": "id_014",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65b/[literal].md",
+          "type": "text"
+        }
+      ],
+      "id": "id_023",
+      "is_error": false,
+      "tool_use_id": "id_015",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "mnt/session/glob65b/b.md\nmnt/session/glob65b/q?.md\nmnt/session/glob65b/[literal].md\nmnt/session/glob65b/sub/nested.md\nmnt/session/glob65b/a.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_024",
+      "is_error": false,
+      "tool_use_id": "id_016",
+      "type": "agent.tool_result"
+    },
+    {
+      "id": "id_025",
+      "type": "span.model_request_start"
+    },
+    {
+      "content": [
+        {
+          "text": "Completed the setup and all seven glob calls in the specified order, exactly as provided without modification.",
+          "type": "text"
+        }
+      ],
+      "id": "id_026",
+      "type": "agent.message"
+    },
+    {
+      "id": "id_027",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "id": "id_028",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.thread_status_idle"
+    },
+    {
+      "id": "id_029",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.status_idle"
+    }
+  ],
+  "glob_call_count": 7,
+  "model": "claude-sonnet-5",
+  "run_id": "c6688a62",
+  "tool_uses": [
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "command": "set -eu\nroot=/mnt/session/glob65b\nrm -rf \"$root\"\nmkdir -p \"$root/sub\"\nprintf a > \"$root/a.md\"\nprintf b > \"$root/b.md\"\nprintf c > \"$root/c.txt\"\nprintf q > \"$root/q?.md\"\nprintf l > \"$root/[literal].md\"\nprintf n > \"$root/sub/nested.md\"\n"
+      },
+      "name": "bash"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "?.md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "[ab].md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "[a-c].md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "{a,b}.md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "q\\?.md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65b",
+        "pattern": "\\[literal\\].md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "mnt/session/glob65b",
+        "pattern": "*.md"
+      },
+      "name": "glob"
+    }
+  ]
+}

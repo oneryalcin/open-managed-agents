@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +12,12 @@ import type {
   ReadOperations,
   WriteOperations,
 } from "@earendil-works/pi-coding-agent";
+import {
+  CMA_GLOB_READY_MARKER,
+  CmaGlobReadinessFilter,
+  CmaGlobStreamCollector,
+  compileCmaGlob,
+} from "./cma-glob.ts";
 import { matchGlob } from "./glob.ts";
 import {
   createEgressSidecar,
@@ -23,6 +29,7 @@ import {
   createSandboxInvocationStats,
   createSandboxToolDefinitions,
   recordSandboxInvocation,
+  type CmaGlobOperations,
   type SandboxDisposedFlag,
   type SandboxOperations,
   type SandboxOutputFile,
@@ -163,6 +170,8 @@ interface DockerExecOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   maxStdoutBytes?: number;
+  maxCombinedBytes?: number;
+  guestTimeout?: boolean;
 }
 
 interface DockerExecResult {
@@ -321,6 +330,33 @@ export async function createDockerSandboxProvider(
   const invocations = createSandboxInvocationStats();
   const disposed: SandboxDisposedFlag = { value: false };
   const activeDockerExecPids = new Set<number>();
+  let disposeAttempted = false;
+  let poisoned = false;
+  let poisonPromise: Promise<void> | undefined;
+  const disposeInfrastructure = (): void => {
+    if (disposeAttempted) return;
+    disposeAttempted = true;
+    disposed.value = true;
+    for (const pid of activeDockerExecPids) killProcessGroup(pid);
+    forceRemoveDockerContainer(resolved.dockerCommand, containerName);
+    opts.egress?.dispose();
+  };
+  const poisonInfrastructure = (): Promise<void> => {
+    poisoned = true;
+    disposed.value = true;
+    if (poisonPromise) return poisonPromise;
+    poisonPromise = (async () => {
+      for (const pid of activeDockerExecPids) killProcessGroup(pid);
+      await removeDockerContainerChecked(
+        resolved.dockerCommand,
+        containerName,
+        resolved.operationTimeoutMs,
+      );
+      disposeAttempted = true;
+      opts.egress?.dispose();
+    })();
+    return poisonPromise;
+  };
 
   const dockerShell = (
     command: DockerShellCommand,
@@ -330,8 +366,9 @@ export async function createDockerSandboxProvider(
       resolved.dockerCommand,
       buildDockerExecShellArgs(containerName, command.script, command.args, {
         interactive: command.interactive ?? command.input !== undefined,
-        timeoutSeconds:
-          (execOpts.timeoutMs ?? resolved.operationTimeoutMs) / 1000,
+        timeoutSeconds: execOpts.guestTimeout === false
+          ? undefined
+          : (execOpts.timeoutMs ?? resolved.operationTimeoutMs) / 1000,
         workdir: resolved.workspacePath,
       }),
       {
@@ -514,6 +551,89 @@ export async function createDockerSandboxProvider(
       }).map((rel) => posix.join(root, rel));
     },
   };
+  const globOps: CmaGlobOperations = {
+    glob: async ({ pattern, cwd, signal, maxMatches, maxRawBytes, maxOutputBytes, outputBase, timeoutMs }) => {
+      recordSandboxInvocation(invocations, disposed, "glob");
+      const root = assertInsideDockerWorkspace(cwd, resolved.workspacePath);
+      if (signal.aborted) throw new Error("Operation aborted");
+      const controller = new AbortController();
+      const ownershipToken = `oma-glob-${randomUUID()}`;
+      const protocolBytes = Buffer.byteLength(CMA_GLOB_READY_MARKER, "utf8") + 1;
+      const abortFromCaller = () => controller.abort();
+      signal.addEventListener("abort", abortFromCaller, { once: true });
+      let streamError: Error | undefined;
+      const readiness = new CmaGlobReadinessFilter(CMA_GLOB_READY_MARKER);
+      const collector = new CmaGlobStreamCollector(compileCmaGlob(pattern), {
+        root,
+        maxMatches,
+        maxRawBytes,
+        maxOutputBytes,
+        join: posix.join,
+        formatForOutput: outputBase === undefined
+          ? undefined
+          : (absolutePath) => posix.relative(outputBase, absolutePath),
+        onLimit: () => controller.abort(),
+      });
+      try {
+        await dockerShell(buildDockerCmaGlobEnumerationCommand(root, ownershipToken), {
+          signal: controller.signal,
+          timeoutMs,
+          guestTimeout: false,
+          // Transport framing is bounded separately; the collector applies the
+          // caller-visible raw filename limit after removing readiness bytes.
+          // Node may deliver readiness plus more than the public raw allowance
+          // in one pipe chunk. Leave one bounded chunk of transport slack so
+          // the readiness filter and collector, rather than the transport,
+          // classify that data. The collector still enforces maxRawBytes.
+          maxStdoutBytes: maxRawBytes + protocolBytes + 64 * 1024,
+          maxCombinedBytes: maxRawBytes + protocolBytes + 128 * 1024,
+          onStdout: (chunk) => {
+            try {
+              const filenames = readiness.push(chunk);
+              if (filenames) collector.push(filenames);
+            } catch (error) {
+              streamError = error as Error;
+              controller.abort();
+            }
+          },
+        });
+        if (streamError) throw streamError;
+        if (signal.aborted) throw new Error("Operation aborted");
+        readiness.assertReady();
+        collector.finish();
+      } catch (error) {
+        if (streamError) throw streamError;
+        if (signal.aborted) throw new Error("Operation aborted");
+        if (!collector.limitReached) throw error;
+      } finally {
+        try {
+          if (!readiness.ready) {
+            // Any terminal path before a positive dispatch acknowledgement is
+            // ambiguous. Verified container removal is the only fail-closed
+            // guarantee that delayed guest work cannot appear afterward.
+            await poisonInfrastructure();
+          } else {
+            try {
+              await dockerShell(buildDockerCmaGlobCleanupCommand(ownershipToken), {
+                timeoutMs: 3_000,
+                guestTimeout: false,
+              });
+            } catch (cleanupError) {
+              // Readiness proves dispatch, not successful termination. If the
+              // token-scoped cleanup cannot prove the guest process is gone,
+              // destroy the isolation boundary before returning the error.
+              await poisonInfrastructure();
+              throw cleanupError;
+            }
+          }
+        } finally {
+          signal.removeEventListener("abort", abortFromCaller);
+        }
+      }
+      if (signal.aborted) throw new Error("Operation aborted");
+      return collector.matches;
+    },
+  };
   const lsOps: LsOperations = {
     exists: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "ls");
@@ -628,6 +748,7 @@ export async function createDockerSandboxProvider(
     write: writeOps,
     edit: editOps,
     find: findOps,
+    glob: globOps,
     ls: lsOps,
   };
 
@@ -637,23 +758,15 @@ export async function createDockerSandboxProvider(
     invocations,
     materializeFileResources,
     operations,
-    toolNames: new Set(["bash", "read", "write", "edit", "find", "ls"]),
+    toolNames: new Set(["bash", "read", "write", "edit", "glob", "ls"]),
     tools: createSandboxToolDefinitions(
       resolved.workspacePath,
       operations,
       invocations,
       disposed,
     ),
-    dispose: () => {
-      disposed.value = true;
-      for (const pid of activeDockerExecPids) {
-        killProcessGroup(pid);
-      }
-      forceRemoveDockerContainer(resolved.dockerCommand, containerName);
-      // Tear down the per-session sidecar + its --internal network last, so a
-      // granted egress session leaves no proxy container or network behind.
-      opts.egress?.dispose();
-    },
+    isPoisoned: () => poisoned,
+    dispose: disposeInfrastructure,
   };
 }
 
@@ -940,6 +1053,59 @@ export function buildDockerReaddirCommand(
   absolutePath: string,
 ): DockerShellCommand {
   return { script: "ls -1A \"$1\"", args: [absolutePath] };
+}
+
+export function buildDockerCmaGlobCleanupCommand(
+  ownershipToken: string,
+): DockerShellCommand {
+  return {
+    script: [
+      "pids=''",
+      "for f in /proc/[0-9]*/environ; do",
+      "  pid=${f#/proc/}; pid=${pid%/environ}",
+      "  if tr '\\0' '\\n' < \"$f\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then",
+      "    start=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    case \"$start\" in ''|*[!0-9]*) :;; *) pids=\"$pids $pid:$start\";; esac",
+      "  fi",
+      "done",
+      "for entry in $pids; do",
+      "  pid=${entry%%:*}; start=${entry#*:}",
+      "  current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "  if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then",
+      "    kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+      "  fi",
+      "done",
+      "attempt=0",
+      "while [ -n \"$pids\" ] && [ \"$attempt\" -lt 40 ]; do",
+      "  remaining=''",
+      "  for entry in $pids; do",
+      "    pid=${entry%%:*}; start=${entry#*:}",
+      "    current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then remaining=\"$remaining $entry\"; fi",
+      "  done",
+      "  pids=$remaining",
+      "  [ -z \"$pids\" ] && break",
+      "  attempt=$((attempt + 1)); sleep 0.05",
+      "done",
+      "[ -z \"$pids\" ]",
+    ].join("\n"),
+    args: [ownershipToken],
+  };
+}
+
+export function buildDockerCmaGlobEnumerationCommand(
+  root: string,
+  ownershipToken: string,
+): DockerShellCommand {
+  return {
+    script: [
+      "set -eu",
+      "setsid env \"OMA_GLOB_OWNER=$2\" sh -c 'set -eu; printf \"%s\\0\" __OMA_GLOB_READY__; cd \"$1\"; exec find . -type f -print0' \"$2\" \"$1\" &",
+      "child=$!",
+      "wait \"$child\"",
+    ].join("\n"),
+    args: [root, ownershipToken],
+  };
 }
 
 export function buildDockerGlobEnumerationCommand(
@@ -1537,7 +1703,9 @@ async function dockerExec(
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;
+    let combinedBytes = 0;
     let settled = false;
+    let terminalError: Error | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const settle = (fn: () => void) => {
@@ -1553,25 +1721,33 @@ async function dockerExec(
       killProcessGroup(child.pid);
       if (!child.killed) child.kill();
     };
+    const terminate = (error: Error) => {
+      if (terminalError || settled) return;
+      terminalError = error;
+      kill();
+    };
     const onAbort = () => {
       opts.onAbort?.();
-      kill();
-      settle(() => reject(new Error("aborted")));
+      terminate(new Error("aborted"));
     };
 
+    const chargeCombinedOutput = (chunk: Buffer): boolean => {
+      combinedBytes += chunk.byteLength;
+      if (opts.maxCombinedBytes !== undefined && combinedBytes > opts.maxCombinedBytes) {
+        terminate(new Error(`docker output exceeded ${opts.maxCombinedBytes} bytes`));
+        return false;
+      }
+      return true;
+    };
     child.stdout.on("data", (chunk: Buffer) => {
+      if (!chargeCombinedOutput(chunk)) return;
       const maxStdoutBytes = opts.maxStdoutBytes;
       const nextStdoutBytes = stdoutBytes + chunk.byteLength;
       if (
         maxStdoutBytes !== undefined &&
         nextStdoutBytes > maxStdoutBytes
       ) {
-        kill();
-        settle(() =>
-          reject(
-            new Error(`docker stdout exceeded ${maxStdoutBytes} bytes`),
-          ),
-        );
+        terminate(new Error(`docker stdout exceeded ${maxStdoutBytes} bytes`));
         return;
       }
       stdoutBytes = nextStdoutBytes;
@@ -1580,27 +1756,28 @@ async function dockerExec(
       opts.onData?.(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
+      if (!chargeCombinedOutput(chunk)) return;
       stderr.push(chunk);
       opts.onStderr?.(chunk);
       opts.onData?.(chunk);
     });
     child.on("error", (error) => settle(() => reject(error)));
     child.on("close", (exitCode) =>
-      settle(() =>
-        resolve({
+      settle(() => {
+        if (terminalError) reject(terminalError);
+        else resolve({
           stdout: Buffer.concat(stdout),
           stderr: Buffer.concat(stderr),
           exitCode,
-        }),
-      ),
+        });
+      }),
     );
     if (opts.signal?.aborted) onAbort();
     else opts.signal?.addEventListener("abort", onAbort, { once: true });
     if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
       timer = setTimeout(() => {
         opts.onAbort?.();
-        kill();
-        settle(() => reject(new DockerTimeoutError()));
+        terminate(new DockerTimeoutError());
       }, opts.timeoutMs);
     }
     if (opts.input !== undefined) child.stdin.end(opts.input);
@@ -1663,4 +1840,33 @@ function forceRemoveDockerContainer(
   containerName: string,
 ): void {
   spawnSync(dockerCommand, ["rm", "-f", containerName], { stdio: "ignore" });
+}
+
+async function removeDockerContainerChecked(
+  dockerCommand: string,
+  containerName: string,
+  timeoutMs: number,
+): Promise<void> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = await dockerExec(
+        dockerCommand,
+        ["rm", "-f", containerName],
+        { timeoutMs },
+      );
+      if (result.exitCode === 0) return;
+      const detail = Buffer.concat([result.stderr, result.stdout]).toString("utf8");
+      if (/no such (?:container|object)/i.test(detail)) return;
+      lastError = new Error(
+        `docker rm -f ${containerName} failed with ${result.exitCode}: ${detail}`,
+      );
+    } catch (error) {
+      lastError = error as Error;
+    }
+  }
+  throw new Error(
+    `Failed to remove poisoned Docker sandbox ${containerName}`,
+    { cause: lastError },
+  );
 }

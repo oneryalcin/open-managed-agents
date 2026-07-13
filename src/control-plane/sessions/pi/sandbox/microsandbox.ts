@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,11 +11,18 @@ import type {
   ReadOperations,
   WriteOperations,
 } from "@earendil-works/pi-coding-agent";
+import {
+  CMA_GLOB_READY_MARKER,
+  CmaGlobReadinessFilter,
+  CmaGlobStreamCollector,
+  compileCmaGlob,
+} from "./cma-glob.ts";
 import { matchGlob } from "./glob.ts";
 import {
   createSandboxInvocationStats,
   createSandboxToolDefinitions,
   recordSandboxInvocation,
+  type CmaGlobOperations,
   type SandboxDisposedFlag,
   type SandboxOperations,
   type SandboxOutputFile,
@@ -71,9 +78,12 @@ export interface MicrosandboxCliExecOptions {
   env?: NodeJS.ProcessEnv;
   input?: Buffer | string;
   onData?: (data: Buffer) => void;
+  onStdout?: (data: Buffer) => void;
+  onStderr?: (data: Buffer) => void;
   signal?: AbortSignal;
   timeoutMs?: number;
   maxBuffer?: number;
+  guestTimeout?: boolean;
 }
 
 export interface MicrosandboxCli {
@@ -303,6 +313,31 @@ export async function createMicrosandboxSandboxProvider(
 
   const invocations = createSandboxInvocationStats();
   const disposed: SandboxDisposedFlag = { value: false };
+  let disposeAttempted = false;
+  let poisoned = false;
+  let poisonPromise: Promise<void> | undefined;
+  const disposeInfrastructure = (): void => {
+    if (disposeAttempted) return;
+    disposeAttempted = true;
+    disposed.value = true;
+    forceRemoveMicrosandboxSandbox(resolved.cli, sandboxName, resolved);
+    forceRemoveMicrosandboxVolume(resolved.cli, volumeName, resolved);
+  };
+  const poisonInfrastructure = (): Promise<void> => {
+    poisoned = true;
+    disposed.value = true;
+    if (poisonPromise) return poisonPromise;
+    poisonPromise = (async () => {
+      await removeMicrosandboxSandboxChecked(
+        resolved.cli,
+        sandboxName,
+        resolved.operationTimeoutMs,
+      );
+      disposeAttempted = true;
+      forceRemoveMicrosandboxVolume(resolved.cli, volumeName, resolved);
+    })();
+    return poisonPromise;
+  };
 
   const shell = (
     command: MicrosandboxShellCommand,
@@ -315,10 +350,15 @@ export async function createMicrosandboxSandboxProvider(
         script: command.script,
         args: command.args,
         workdir: resolved.workspacePath,
-        timeout: timeoutSecondsText(
-          execOpts.timeoutMs ?? resolved.operationTimeoutMs,
-        ),
-        stream: command.input !== undefined || execOpts.input !== undefined,
+        timeout: execOpts.guestTimeout === false
+          ? undefined
+          : timeoutSecondsText(execOpts.timeoutMs ?? resolved.operationTimeoutMs),
+        stream:
+          command.input !== undefined ||
+          execOpts.input !== undefined ||
+          execOpts.onData !== undefined ||
+          execOpts.onStdout !== undefined ||
+          execOpts.onStderr !== undefined,
       }),
       {
         ...execOpts,
@@ -523,6 +563,90 @@ export async function createMicrosandboxSandboxProvider(
       }).map((rel) => posix.join(root, rel));
     },
   };
+  const globOps: CmaGlobOperations = {
+    glob: async ({ pattern, cwd, signal, maxMatches, maxRawBytes, maxOutputBytes, outputBase, timeoutMs }) => {
+      recordSandboxInvocation(invocations, disposed, "glob");
+      const root = assertInsideMicrosandboxWorkspace(cwd, resolved.workspacePath);
+      if (signal.aborted) throw new Error("Operation aborted");
+      const controller = new AbortController();
+      const ownershipToken = `oma-glob-${randomUUID()}`;
+      const protocolBytes = Buffer.byteLength(CMA_GLOB_READY_MARKER, "utf8") + 1;
+      const abortFromCaller = () => controller.abort();
+      signal.addEventListener("abort", abortFromCaller, { once: true });
+      let streamError: Error | undefined;
+      let sawStdout = false;
+      const readiness = new CmaGlobReadinessFilter(CMA_GLOB_READY_MARKER);
+      const collector = new CmaGlobStreamCollector(compileCmaGlob(pattern), {
+        root,
+        maxMatches,
+        maxRawBytes,
+        maxOutputBytes,
+        join: posix.join,
+        formatForOutput: outputBase === undefined
+          ? undefined
+          : (absolutePath) => posix.relative(outputBase, absolutePath),
+        onLimit: () => controller.abort(),
+      });
+      try {
+        const result = await shell(
+          buildMicrosandboxCmaGlobEnumerationCommand(root, ownershipToken),
+          {
+          signal: controller.signal,
+          timeoutMs,
+          guestTimeout: false,
+          maxBuffer: maxRawBytes + protocolBytes + 64 * 1024,
+          onStdout: (chunk) => {
+            sawStdout = true;
+            try {
+              const filenames = readiness.push(chunk);
+              if (filenames) collector.push(filenames);
+            } catch (error) {
+              streamError = error as Error;
+              controller.abort();
+            }
+          },
+          },
+        );
+        // Test/custom CLI implementations may return buffered stdout without
+        // invoking the optional streaming callback.
+        if (!sawStdout && result.stdout.length > 0) {
+          const filenames = readiness.push(result.stdout);
+          if (filenames) collector.push(filenames);
+        }
+        if (streamError) throw streamError;
+        if (signal.aborted) throw new Error("Operation aborted");
+        readiness.assertReady();
+        collector.finish();
+      } catch (error) {
+        if (streamError) throw streamError;
+        if (signal.aborted) throw new Error("Operation aborted");
+        if (!collector.limitReached) throw error;
+      } finally {
+        try {
+          if (!readiness.ready) {
+            await poisonInfrastructure();
+          } else {
+            try {
+              await shell(
+                buildMicrosandboxCmaGlobCleanupCommand(ownershipToken),
+                {
+                  timeoutMs: 3_000,
+                  guestTimeout: false,
+                },
+              );
+            } catch (cleanupError) {
+              await poisonInfrastructure();
+              throw cleanupError;
+            }
+          }
+        } finally {
+          signal.removeEventListener("abort", abortFromCaller);
+        }
+      }
+      if (signal.aborted) throw new Error("Operation aborted");
+      return collector.matches;
+    },
+  };
   const lsOps: LsOperations = {
     exists: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "ls");
@@ -646,6 +770,7 @@ export async function createMicrosandboxSandboxProvider(
     write: writeOps,
     edit: editOps,
     find: findOps,
+    glob: globOps,
     ls: lsOps,
   };
 
@@ -655,18 +780,15 @@ export async function createMicrosandboxSandboxProvider(
     invocations,
     materializeFileResources,
     operations,
-    toolNames: new Set(["bash", "read", "write", "edit", "find", "ls"]),
+    toolNames: new Set(["bash", "read", "write", "edit", "glob", "ls"]),
     tools: createSandboxToolDefinitions(
       resolved.workspacePath,
       operations,
       invocations,
       disposed,
     ),
-    dispose: () => {
-      disposed.value = true;
-      forceRemoveMicrosandboxSandbox(resolved.cli, sandboxName, resolved);
-      forceRemoveMicrosandboxVolume(resolved.cli, volumeName, resolved);
-    },
+    isPoisoned: () => poisoned,
+    dispose: disposeInfrastructure,
   };
 }
 
@@ -908,6 +1030,59 @@ export function buildMicrosandboxReaddirCommand(
   return { script: "ls -1A \"$1\"", args: [absolutePath] };
 }
 
+export function buildMicrosandboxCmaGlobCleanupCommand(
+  ownershipToken: string,
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "pids=''",
+      "for f in /proc/[0-9]*/environ; do",
+      "  pid=${f#/proc/}; pid=${pid%/environ}",
+      "  if tr '\\0' '\\n' < \"$f\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then",
+      "    start=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    case \"$start\" in ''|*[!0-9]*) :;; *) pids=\"$pids $pid:$start\";; esac",
+      "  fi",
+      "done",
+      "for entry in $pids; do",
+      "  pid=${entry%%:*}; start=${entry#*:}",
+      "  current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "  if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then",
+      "    kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+      "  fi",
+      "done",
+      "attempt=0",
+      "while [ -n \"$pids\" ] && [ \"$attempt\" -lt 40 ]; do",
+      "  remaining=''",
+      "  for entry in $pids; do",
+      "    pid=${entry%%:*}; start=${entry#*:}",
+      "    current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then remaining=\"$remaining $entry\"; fi",
+      "  done",
+      "  pids=$remaining",
+      "  [ -z \"$pids\" ] && break",
+      "  attempt=$((attempt + 1)); sleep 0.05",
+      "done",
+      "[ -z \"$pids\" ]",
+    ].join("\n"),
+    args: [ownershipToken],
+  };
+}
+
+export function buildMicrosandboxCmaGlobEnumerationCommand(
+  root: string,
+  ownershipToken: string,
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "set -eu",
+      "setsid env \"OMA_GLOB_OWNER=$2\" sh -c 'set -eu; printf \"%s\\0\" __OMA_GLOB_READY__; cd \"$1\"; exec find . -type f -print0' \"$2\" \"$1\" &",
+      "child=$!",
+      "wait \"$child\"",
+    ].join("\n"),
+    args: [root, ownershipToken],
+  };
+}
+
 export function buildMicrosandboxGlobEnumerationCommand(
   root: string,
   ignore: readonly string[] = [],
@@ -1095,40 +1270,56 @@ export function execMicrosandboxCommand(
     const child = spawn(command, [...args], {
       cwd: opts.cwd,
       env: opts.env,
-      signal: opts.signal,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let outputBytes = 0;
     let settled = false;
+    let terminalError: Error | undefined;
     let timeout: NodeJS.Timeout | undefined;
     const finish = (result: MicrosandboxCliResult): void => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
-      resolve(result);
+      opts.signal?.removeEventListener("abort", onAbort);
+      if (terminalError) reject(terminalError);
+      else resolve(result);
     };
     const fail = (error: Error): void => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
+      opts.signal?.removeEventListener("abort", onAbort);
       reject(error);
     };
-    const collect = (target: Buffer[], chunk: Buffer): void => {
+    const onAbort = (): void => {
+      if (settled || terminalError) return;
+      terminalError = new Error("aborted");
+      terminalError.name = "AbortError";
+      child.kill("SIGKILL");
+    };
+    const collect = (
+      target: Buffer[],
+      chunk: Buffer,
+      onStreamData: ((data: Buffer) => void) | undefined,
+    ): void => {
       outputBytes += chunk.byteLength;
       if (outputBytes > maxBuffer) {
-        fail(
-          new Error(`Microsandbox command output exceeded ${maxBuffer} bytes`),
-        );
-        child.kill("SIGKILL");
+        if (!terminalError) {
+          terminalError = new Error(
+            `Microsandbox command output exceeded ${maxBuffer} bytes`,
+          );
+          child.kill("SIGKILL");
+        }
         return;
       }
       target.push(chunk);
+      onStreamData?.(chunk);
       opts.onData?.(chunk);
     };
-    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
-    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk, opts.onStdout));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk, opts.onStderr));
     child.stdin.on("error", fail);
     child.stdout.on("error", fail);
     child.stderr.on("error", fail);
@@ -1141,6 +1332,8 @@ export function execMicrosandboxCommand(
         stderr: Buffer.concat(stderr),
       }),
     );
+    if (opts.signal?.aborted) onAbort();
+    else opts.signal?.addEventListener("abort", onAbort, { once: true });
     try {
       if (opts.input !== undefined) child.stdin.end(opts.input);
       else child.stdin.end();
@@ -1369,6 +1562,22 @@ function forceRemoveMicrosandboxSandbox(
     // terminal hook, while create-time partial cleanup preserves the original
     // construction error.
   }
+}
+
+async function removeMicrosandboxSandboxChecked(
+  cli: MicrosandboxCli,
+  sandboxName: string,
+  timeoutMs: number,
+): Promise<void> {
+  const result = await cli.exec(buildMicrosandboxRemoveArgs(sandboxName), {
+    timeoutMs,
+  });
+  if (result.signal === null && result.status === 0) return;
+  const detail = errorText(result);
+  if (/not found|does not exist|no such/i.test(detail)) return;
+  throw new Error(
+    `Failed to remove poisoned microsandbox ${sandboxName}: ${detail}`,
+  );
 }
 
 function forceRemoveMicrosandboxVolume(
