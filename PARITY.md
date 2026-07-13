@@ -227,8 +227,11 @@ the risk of silent contradiction, not by how easy they first appear.
 These are larger than the wire-honesty pass but directly affect whether an
 early adopter can build and iterate a credible single-agent product.
 
-1. **Agent update + versioning** — `POST /v1/agents/{id}` with optimistic
-   version checks plus `GET /v1/agents/{id}/versions`. OMA currently pins every
+1. **Agent update + versioning** *(probe 67 complete)* — `POST /v1/agents/{id}`
+   with optimistic version checks plus `GET /v1/agents/{id}/versions`. Hosted
+   updates allocate immutable integer revisions, reject stale expected versions
+   with 409, retain historical retrieval after archive, and select latest or an
+   explicitly pinned version at session creation. OMA currently pins every
    agent at version 1, forcing recreation for ordinary prompt/tool iteration.
    This is the highest-value missing core workflow after Pile B.
 2. **Usable environment image story** — provide a batteries-included default
