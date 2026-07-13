@@ -30,8 +30,8 @@ implemented and awaiting review)._
   signed, workspace-bound cursors and preserved ascending/descending order.
 - Probe 67 established hosted agent update/version behavior. Plan 0133 now
   implements immutable revisions, optimistic updates, authenticated version
-  history, exact-version runtime pinning, and shared model-catalog admission;
-  final review is pending.
+  history, exact-version runtime pinning, and shared model-catalog admission in
+  PR #186; final review is pending.
 - Standing follow-ups remain `#103`, `#118`, and `#119`; consult GitHub rather
   than this file for their current status.
 

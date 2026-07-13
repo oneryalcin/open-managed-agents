@@ -1,7 +1,7 @@
 # CMA Agent Update and Immutable Versioning
 
 Date: 2026-07-14
-Status: implemented; review pending
+Status: implemented in PR #186; review pending
 Evidence: hosted probe 67 plus the cached CMA `agent-setup` and `sessions`
 documentation
 
