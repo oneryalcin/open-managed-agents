@@ -1,0 +1,579 @@
+{
+  "candidate_tool_names": {
+    "bash": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [
+              {
+                "enabled": false,
+                "name": "bash",
+                "permission_policy": {
+                  "type": "always_allow"
+                }
+              }
+            ],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "edit": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [
+              {
+                "enabled": false,
+                "name": "edit",
+                "permission_policy": {
+                  "type": "always_allow"
+                }
+              }
+            ],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "find": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].configs[0].name: \"find\" is not a valid value; expected one of bash, edit, glob, grep, read, web_fetch, web_search, write",
+        "status_code": 400
+      }
+    },
+    "glob": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [
+              {
+                "enabled": false,
+                "name": "glob",
+                "permission_policy": {
+                  "type": "always_allow"
+                }
+              }
+            ],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "grep": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [
+              {
+                "enabled": false,
+                "name": "grep",
+                "permission_policy": {
+                  "type": "always_allow"
+                }
+              }
+            ],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "read": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [
+              {
+                "enabled": false,
+                "name": "read",
+                "permission_policy": {
+                  "type": "always_allow"
+                }
+              }
+            ],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "web_fetch": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [
+              {
+                "enabled": false,
+                "name": "web_fetch",
+                "permission_policy": {
+                  "type": "always_allow"
+                }
+              }
+            ],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "web_search": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [
+              {
+                "enabled": false,
+                "name": "web_search",
+                "permission_policy": {
+                  "type": "always_allow"
+                }
+              }
+            ],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "write": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [
+              {
+                "enabled": false,
+                "name": "write",
+                "permission_policy": {
+                  "type": "always_allow"
+                }
+              }
+            ],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    }
+  },
+  "cases": {
+    "baseline_no_tool_config": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "duplicate_and_unknown_policy": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].configs[0].permission_policy.type: \"oma_probe_unknown_policy\" is not a valid value",
+        "status_code": 400
+      }
+    },
+    "duplicate_config_conflicting_policy": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "tools.0.agent_toolset_20260401.configs.1: duplicate entry for tool \"AGENT_TOOL_NAME_BASH\"",
+        "status_code": 400
+      }
+    },
+    "duplicate_config_same_name": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "tools.0.agent_toolset_20260401.configs.1: duplicate entry for tool \"AGENT_TOOL_NAME_BASH\"",
+        "status_code": 400
+      }
+    },
+    "duplicate_toolset_entries": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "tools.1.agent_toolset_20260401: duplicate entry; at most one agent_toolset_20260401 is allowed",
+        "status_code": 400
+      }
+    },
+    "malformed_config_entry_and_unknown_default_policy": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].default_config.permission_policy.type: \"oma_probe_unknown_policy\" is not a valid value",
+        "status_code": 400
+      }
+    },
+    "unknown_config_permission_policy": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].configs[0].permission_policy.type: \"oma_probe_unknown_policy\" is not a valid value",
+        "status_code": 400
+      }
+    },
+    "unknown_default_permission_policy": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].default_config.permission_policy.type: \"oma_probe_unknown_policy\" is not a valid value",
+        "status_code": 400
+      }
+    },
+    "unknown_tool_and_malformed_default_policy": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].configs[0].name: \"oma_probe_unknown_tool\" is not a valid value; expected one of bash, edit, glob, grep, read, web_fetch, web_search, write",
+        "status_code": 400
+      }
+    },
+    "unknown_tool_and_unknown_policy": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].configs[0].permission_policy.type: \"oma_probe_unknown_policy\" is not a valid value",
+        "status_code": 400
+      }
+    },
+    "unknown_tool_name": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].configs[0].name: \"oma_probe_unknown_tool\" is not a valid value; expected one of bash, edit, glob, grep, read, web_fetch, web_search, write",
+        "status_code": 400
+      }
+    }
+  },
+  "model": "claude-sonnet-5",
+  "permission_policy_candidates": {
+    "always_allow": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "always_ask": {
+      "accepted": true,
+      "response": {
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "multiagent": null,
+        "tools": [
+          {
+            "configs": [],
+            "default_config": {
+              "enabled": true,
+              "permission_policy": {
+                "type": "always_ask"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ]
+      }
+    },
+    "always_deny": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].default_config.permission_policy.type: \"always_deny\" is not a valid value",
+        "status_code": 400
+      }
+    },
+    "deny": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].default_config.permission_policy.type: \"deny\" is not a valid value",
+        "status_code": 400
+      }
+    },
+    "never_allow": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].default_config.permission_policy.type: \"never_allow\" is not a valid value",
+        "status_code": 400
+      }
+    },
+    "oma_probe_unknown_policy": {
+      "accepted": false,
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Failed to parse request: tools[0].default_config.permission_policy.type: \"oma_probe_unknown_policy\" is not a valid value",
+        "status_code": 400
+      }
+    }
+  },
+  "run_id": "26898f89"
+}

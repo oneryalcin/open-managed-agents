@@ -165,7 +165,7 @@ describe("skills API", () => {
     for (const tools of [
       [],
       [{ type: "agent_toolset_20260401", configs: [{ name: "read", enabled: false }] }],
-      [{ type: "agent_toolset_20260401", configs: [{ name: "read", permission_policy: { type: "never_allow" } }] }],
+      [{ type: "agent_toolset_20260401", configs: [{ name: "read", enabled: false }] }],
     ]) {
       const agentResponse = await createAgent(app, {
         skills: [{ type: "custom", skill_id: skill.id }],

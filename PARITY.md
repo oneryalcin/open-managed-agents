@@ -104,15 +104,18 @@ the risk of silent contradiction, not by how easy they first appear.
     exist. The HTTPS-only mapping is OMA's conservative supported subset, not a
     universal claim about all CMA transport behavior.
 
-- [ ] **Unknown tool configs and policy types can silently no-op** *(`[Unk]` hosted rejection behavior; OMA behavior verified)*
-  - CMA: documented tool names and permission-policy values are closed sets,
-    but exact rejection behavior and precedence for unknown values are not yet
-    captured. Probe before changing wire behavior.
-  - OMA: `agents/service.ts` accepts arbitrary `configs[].name` and policy
-    strings; unknown values can persist while having no runtime effect.
-  - Fix: first probe unknown tool names, unknown policy types, duplicates, and
-    precedence. Then validate against the supported vocabulary or explicitly
-    preserve/document any hosted acceptance behavior.
+- [x] **Unknown tool configs and policy types can silently no-op** *(DONE 2026-07-13; probe 63)*
+  - CMA `[Obs]`: builtin names are exactly `bash`, `edit`, `glob`, `grep`,
+    `read`, `web_fetch`, `web_search`, and `write`; permission policies tested
+    as valid are `always_allow` and `always_ask`; unknowns, `find`,
+    `never_allow`, and duplicate builtin configs return 400. Omitted builtin
+    config materializes an always-allow default (`scratch/63-…`).
+  - OMA now validates the CMA builtin vocabulary and policy set at agent create,
+    rejects duplicate builtin configs, materializes the implicit builtin
+    defaults, and leaves MCP config names server-defined. The parser rejects
+    before an agent row is persisted.
+  - Deliberate follow-ups remain separate: Pi's internal `find` name versus
+    CMA `glob`/`grep`, and runtime support for the accepted web-tool names.
 
 - [ ] **`multiagent` configuration is accepted but runtime-inert** *(OMA verified)*
   - CMA `[Doc]`: coordinator agents delegate through a multi-agent runtime and
@@ -171,10 +174,11 @@ the risk of silent contradiction, not by how easy they first appear.
   - OMA: mounts are rewritten under `/mnt/session/uploads/<segments>` (`sessions/resources.ts:24`, `SESSION_UPLOADS_ROOT`) and the echoed `file_id` is the original upload's id (deliberate ADR-0013, `docs/plans/0043-…:37,66`). The response `mount_path` reflects the rewritten path.
   - Fix: either honor literal `mount_path` + mint a session-scoped id, or surface the divergence explicitly in docs/response.
 
-- [ ] **Agent create response omits implicit `default_config`**
+- [x] **Agent create response omits implicit `default_config`** *(DONE 2026-07-13; probe 63)*
   - CMA: response echoes `default_config.permission_policy: {type:"always_allow"}` even when omitted on create (`agent-setup.md:176`).
-  - OMA: `optionalDefaultConfigSpread` (`agents/service.ts:511`) returns `{}` when omitted; a client reading `tools[0].default_config.permission_policy.type` gets `undefined`.
-  - Fix: echo the implicit default in the create/get response.
+  - OMA now materializes the builtin toolset default (`enabled: true`,
+    `permission_policy.type: "always_allow"`) and an empty `configs` array on
+    create/get responses when omitted.
 
 - [ ] **Environment archive/delete endpoints missing**
   - CMA: `POST /v1/environments/{id}/archive`, `DELETE /v1/environments/{id}` (`environments.md:568,574`).
