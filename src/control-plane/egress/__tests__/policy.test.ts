@@ -456,7 +456,10 @@ describe("credentialed egress e2e (plan 0117c)", () => {
   let unflaggedTcpPort: number;
   let proxy: ReturnType<typeof createEgressProxy>;
   let proxyPort: number;
+  let hostedProxy: ReturnType<typeof createEgressProxy>;
+  let hostedProxyPort: number;
   let ca: MitmCA;
+  const HOSTED_TOKEN = "hosted-session-token";
   let sentinel: string;
   let stripSentinel: string;
   const upstreamSeen: Array<{ path: string; auth?: string; apiKey?: string }> = [];
@@ -549,9 +552,31 @@ describe("credentialed egress e2e (plan 0117c)", () => {
     });
     await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
     proxyPort = (proxy.address() as { port: number }).port;
+
+    // Exercise the hosted translation through the real proxy stack. The
+    // fixture cannot bind to privileged port 443, so only the internal test
+    // hostname is rewritten to localhost; the translated HTTPS/443 marker is
+    // deliberately left unchanged. Both denial paths happen before dialing.
+    const hosted = resolveSessionEgress({
+      environmentConfig: {
+        networking: { type: "limited", allowed_hosts: ["api.example.com"] },
+      },
+      revealSecret: () => undefined,
+    })!;
+    hosted.policy.allow[0]!.host = "localhost";
+    hostedProxy = createEgressProxy({
+      ...hosted.hooks,
+      mitmCA: ca,
+      tlsTerminateUpstreamCA: readFileSync(join(work, "c.pem")),
+      proxyAuthToken: HOSTED_TOKEN,
+      dangerouslyAllowPrivateAddressesForTest: true,
+    });
+    await new Promise<void>((r) => hostedProxy.listen(0, "127.0.0.1", r));
+    hostedProxyPort = (hostedProxy.address() as { port: number }).port;
   });
 
   afterAll(async () => {
+    await new Promise<void>((r) => hostedProxy.close(() => r()));
     await new Promise<void>((r) => proxy.close(() => r()));
     await new Promise<void>((r) => echo.close(() => r()));
     await new Promise<void>((r) => plainEcho.close(() => r()));
@@ -673,6 +698,29 @@ describe("credentialed egress e2e (plan 0117c)", () => {
       },
     });
     expect(res.httpStatus).toBe(403);
+  });
+
+  it("blocks hosted http://allowed-host:443 through the real proxy", async () => {
+    const res = await absoluteFormProxyRequest({
+      proxyPort: hostedProxyPort,
+      targetUrl: "http://localhost:443/should-not-dial",
+      token: HOSTED_TOKEN,
+    });
+    expect(res.httpStatus).toBe(403);
+    expect(res.body).toMatch(/requires HTTPS transport/);
+  });
+
+  it("kills plaintext bytes after a hosted CONNECT instead of opaque-tunneling", async () => {
+    const res = await rawTunnel({
+      proxyPort: hostedProxyPort,
+      host: "localhost",
+      port: 443,
+      token: HOSTED_TOKEN,
+      payload: "GET /should-not-tunnel HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    });
+    expect(res.connectStatus).toBe(200);
+    expect(res.closed).toBe(true);
+    expect(res.response).toBe("");
   });
 
   it("denies an in-scope sentinel on the plain absolute-form HTTPS leg", async () => {
