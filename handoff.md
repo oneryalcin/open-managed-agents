@@ -12,7 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-13 (`arc-i-agent-versioning-probe`; probe 67 complete)._
+_Last updated 2026-07-14 (`arc-i-agent-versioning-probe`; probe 67 complete;
+plan 0133 implementation-ready)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -29,8 +30,8 @@ _Last updated 2026-07-13 (`arc-i-agent-versioning-probe`; probe 67 complete)._
   signed, workspace-bound cursors and preserved ascending/descending order.
 - Probe 67 now establishes hosted agent update/version behavior: immutable
   integer revisions, expected-version concurrency, newest-first history,
-  historical session pinning, and archive restrictions. The implementation
-  plan is the next step.
+  historical session pinning, and archive restrictions. Plan 0133 defines the
+  storage migration, update API, and exact-version runtime-pinning work.
 - Standing follow-ups remain `#103`, `#118`, and `#119`; consult GitHub rather
   than this file for their current status.
 

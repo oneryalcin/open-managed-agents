@@ -197,6 +197,17 @@ the risk of silent contradiction, not by how easy they first appear.
 
 ### Tier 3 — contract divergences to document or fix
 
+- [ ] **Session `agent` response is a compact reference, not the resolved configuration**
+  - CMA `[Obs, probe 67]`: session create returns the selected agent revision's
+    model, system, tools, skills, MCP servers, name, description, ID, and
+    version inline.
+  - OMA: session responses expose only `{type,id,version}`
+    (`src/types/sessions.ts:7-19`, `sessions/serialize.ts:4-26`). Plan 0133 makes
+    execution follow that exact pinned revision but deliberately leaves this
+    cross-cutting response-envelope migration separate.
+  - Fix: enrich create/retrieve/list/archive/idempotency session responses from
+    the immutable revision without changing the stored session identity.
+
 - [ ] **Mount-path rewriting + file_id identity**
   - CMA: files mount "at the exact path you specify"; a new session-scoped `file_id` is minted for the mounted instance (`files.md:238,673`).
   - OMA: mounts are rewritten under `/mnt/session/uploads/<segments>` (`sessions/resources.ts:24`, `SESSION_UPLOADS_ROOT`) and the echoed `file_id` is the original upload's id (deliberate ADR-0013, `docs/plans/0043-…:37,66`). The response `mount_path` reflects the rewritten path.
@@ -227,13 +238,14 @@ the risk of silent contradiction, not by how easy they first appear.
 These are larger than the wire-honesty pass but directly affect whether an
 early adopter can build and iterate a credible single-agent product.
 
-1. **Agent update + versioning** *(probe 67 complete)* — `POST /v1/agents/{id}`
+1. **Agent update + versioning** *(probe 67 complete; plan 0133)* — `POST /v1/agents/{id}`
    with optimistic version checks plus `GET /v1/agents/{id}/versions`. Hosted
    updates allocate immutable integer revisions, reject stale expected versions
    with 409, retain historical retrieval after archive, and select latest or an
    explicitly pinned version at session creation. OMA currently pins every
    agent at version 1, forcing recreation for ordinary prompt/tool iteration.
-   This is the highest-value missing core workflow after Pile B.
+   This is the highest-value missing core workflow after Pile B. Implementation
+   plan: [`docs/plans/0133-cma-agent-update-versioning.md`](docs/plans/0133-cma-agent-update-versioning.md).
 2. **Usable environment image story** — provide a batteries-included default
    runtime and a reviewed per-environment image override. Today the minimal
    `bash:5.2` / Alpine defaults require operators to build an image before a
