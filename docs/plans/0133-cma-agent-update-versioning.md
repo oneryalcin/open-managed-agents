@@ -191,10 +191,25 @@ Model IDs are interpreted inside the configured deployment provider namespace
 (the same `provider` currently used by `PiSessionRunner`); the CMA model object
 does not select a provider. Introduce an explicit injected
 `AgentModelAvailability` capability, backed in production by Pi's
-`ModelRegistry.find(provider, modelId)`. Require it at production composition
-for agent create/update and session admission rather than inspecting optional
-methods at call time. Unit-only service fixtures may inject a deterministic
-accept-all or finite-set fake.
+`ModelRegistry.find(provider, modelId)`. `find()` establishes catalog
+registration only; it does **not** prove that provider credentials are currently
+configured or valid. Authentication is a separate, potentially transient
+runtime concern and must not make durable agent create/update admission depend
+on ambient credential availability.
+
+Production composition must create one shared model-catalog owner, including
+Pi's paired `AuthStorage`/`ModelRegistry`, and pass the same `ModelRegistry`
+instance (and provider namespace) to both the admission capability and
+`PiSessionRunner`; the runner also receives that owner's paired `AuthStorage`.
+Do not let each side construct an independent
+registry: custom-model registration or catalog refresh could otherwise make
+admission and execution disagree. Refactor the runner's currently private
+field construction into an injected production dependency. A standalone
+runner may construct a private default only in tests/internal use where no
+agent-backed production admission path exists. Require the admission capability
+at production composition for agent create/update and session admission rather
+than inspecting optional methods at call time. Unit-only service fixtures may
+inject a deterministic accept-all or finite-set fake.
 
 Create and update reject an unavailable final model before persistence with a
 stable OMA `invalid_request_error`, e.g.
@@ -328,8 +343,10 @@ them from routes.
 
 - Add request/page types in `src/types/agents.ts` and agent domain interfaces.
 - Add update parsing/merge/final-state validation in `agents/service.ts`.
-- Add the explicit deployment-provider model-availability capability and wire
-  it into production agent/session composition.
+- Add one shared production model-catalog owner; inject its exact registry and
+  provider namespace into both `PiSessionRunner` and the explicit
+  deployment-provider model-availability capability used by agent/session
+  admission.
 - Add update, historical retrieve, and version-list routes.
 - Pin the 409, archived-update, missing-version, metadata-patch, null-clear,
   no-op, unavailable-model, and `{data,next_page}` contracts with full response
@@ -374,10 +391,12 @@ them from routes.
 8. After v1 session creation and v2 agent update, v1 session custom tools,
    builtin permissions, MCP declarations/access, skills, model, and system
    remain v1 across warm reuse and runner restart/eviction.
-9. Agent create/update and session creation reject a model unavailable under
-   the configured deployment provider before durable side effects. A migrated
-   durable session whose pinned model later becomes unavailable fails closed on
-   handle recreation and never uses the deployment fallback.
+9. Agent create/update and session creation reject a model unregistered under
+   the configured deployment provider before durable side effects, using the
+   same registry instance that the runner executes against. Missing/transient
+   credentials do not masquerade as catalog rejection. A migrated durable
+   session whose pinned model later becomes unavailable fails closed on handle
+   recreation and never uses the deployment fallback.
 10. A new bare-ID session after the update receives v2; an explicit v1 session
     still receives v1.
 11. Archived agents remain retrievable/listable by version but reject updates
@@ -394,9 +413,10 @@ them from routes.
 - **Parser drift between create/update:** reuse canonical field parsers and
   validate the complete merged configuration.
 - **Unavailable or provider-ambiguous models:** interpret IDs under the explicit
-  deployment provider, inject one availability capability into agent and
-  session admission, revalidate before session side effects, and fail closed
-  during durable-handle recreation without fallback.
+  deployment provider; share one registry instance between admission and the
+  runner; treat catalog registration separately from credential health;
+  revalidate before session side effects; and fail closed during durable-handle
+  recreation without fallback.
 - **Cursor replay/tampering:** store-instance HMAC scoped to workspace+agent;
   explicit lifecycle documentation.
 - **Archived lifecycle copied into history:** keep lifecycle only on owner/head
