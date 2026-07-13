@@ -20,7 +20,6 @@ import { SqliteSessionStore } from "../sessions/store.ts";
 import type { CreateSessionRecord, SessionRow, SessionStore } from "../sessions/types.ts";
 import { STREAM_TEST_TIMEOUT_MS, hasTimedOut } from "./test-timeouts.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
-import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import type {
   ManagedAgentsContentBlock,
@@ -1521,14 +1520,14 @@ class CollidingSessionStore implements SessionStore {
   list(
     workspaceId: string,
     opts: { includeArchived?: boolean } = {},
-  ): ManagedAgentsListPage<SessionRow> {
+  ): import("../sessions/types.ts").SessionListPage<SessionRow> {
     return {
       data: [...this.rows.values()].filter((row) => {
         if (row.workspace_id !== workspaceId) return false;
         return opts.includeArchived === true || row.archived_at === null;
       }),
       next_page: null,
-      has_more: false,
+      prev_page: null,
     };
   }
 

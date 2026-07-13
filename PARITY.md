@@ -37,7 +37,7 @@ claim of blanket superiority over Anthropic's hosted environment.
 2026-07-12) → networking translation/rejection → probe-backed tool config
 validation → reject the inert multi-agent façade (DONE 2026-07-13) →
 `glob`/`grep` honesty boundary (DONE 2026-07-13) → sandbox-backed CMA
-`glob` (PR #184, review pending) → pagination probes/semantics → agent update/versioning → usable
+`glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning → usable
 environment image story → web tools. Provider-owned `grep` remains a separate
 search arc rather than a prerequisite for `glob`.
 
@@ -144,13 +144,13 @@ the risk of silent contradiction, not by how easy they first appear.
     until an agent-update API exists. `grep` remains disabled until providers
     own content search and a deterministic search-binary strategy.
 
-- [ ] **Sandbox-backed CMA `glob` runtime** *(implemented in PR #184; final review pending; plan 0131; probes 65/65b)*
+- [x] **Sandbox-backed CMA `glob` runtime** *(DONE 2026-07-13; PR #184; plan 0131; probes 65/65b)*
   - CMA `[Obs]`: plain and `**` patterns recurse; grammar includes `?`, classes,
     ranges, braces, and backslash escapes; absolute paths yield absolute output
     while relative paths preserve relative output; no match succeeds with
     `No files found`; results silently cap at 100; dotfiles and tested ignored
     paths remain visible.
-  - OMA `[OMA]`: PR #184 implements a separately accounted, NUL-streaming, byte-bounded,
+  - OMA `[OMA]`: ships a separately accounted, NUL-streaming, byte-bounded,
     timed-out, actively cancellable provider `glob` operation. Docker and
     microsandbox guest PID cleanup are verified; model-facing Pi `find` is
     replaced by CMA `glob`, while `grep` and web tools remain disabled.
@@ -160,14 +160,20 @@ the risk of silent contradiction, not by how easy they first appear.
     content search and a deterministic binary/search strategy. Pi's default
     host-process `rg` path is not an acceptable implementation.
 
-- [ ] **Bidirectional pagination / `prev_page`** *(OMA absence verified; CMA cross-resource scope `[Unk]`)*
-  - CMA `[Doc]`: sessions expose `prev_page` and accept it through the ordinary
-    `page` parameter (`session-operations.md:270`). The current snapshot does
-    not establish that every other resource has identical semantics.
-  - OMA: shared page envelopes expose only `{data, has_more, next_page}`.
-  - Next step: probe sessions plus each list resource before declaring a
-    cross-cutting contract. Implementation requires real backward-cursor store
-    semantics and ordering tests; adding a nullable field alone is insufficient.
+- [x] **Bidirectional session pagination / `prev_page`** *(DONE 2026-07-13; plan 0132; probe 66)*
+  - CMA `[Obs]`: session pages are `{data,next_page,prev_page}` without
+    `has_more`; page 2's `prev_page` is submitted through `page` and returns
+    page 1 in the original requested order for both ascending and descending
+    lists. Invalid cursors return `invalid page cursor`; changing cursor order
+    returns `page token order does not match request`.
+  - CMA `[Obs]`: this is not cross-cutting. Agents, environments, and vaults
+    expose forward `next_page`; skills also expose `has_more`; files use
+    `after_id`/`before_id` with `first_id`/`last_id`.
+  - OMA: session lists now use a session-specific `{data,next_page,prev_page}`
+    envelope and versioned opaque cursors bound to order and filters. Forward
+    and backward traversal preserve public order in both directions; malformed
+    and mismatched cursors fail as `invalid_request_error`. Other resource
+    envelopes remain unchanged. Mutation behavior remains `[Unk]`.
 
 - [ ] **File-mount cap is 10, not the documented 100**
   - CMA: up to 100 file mounts per session (`files.md:240`).

@@ -1,5 +1,5 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import type { ManagedAgentsListPage } from "../../types/common.ts";
+import { invalidRequest } from "../errors.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type {
   CreateSessionRecord,
@@ -9,6 +9,7 @@ import type {
   PendingInternalSnapshotDeleteRow,
   SessionFileMountSnapshotRow,
   SessionSkillSnapshotRow,
+  SessionListPage,
   SessionRow,
   SessionStore,
 } from "./types.ts";
@@ -561,28 +562,44 @@ export class SqliteSessionStore implements SessionStore {
   list(
     workspaceId: string,
     opts: ListSessionsOptions = {},
-  ): ManagedAgentsListPage<SessionRow> {
+  ): SessionListPage<SessionRow> {
     if (opts.page === "") {
-      return { data: [], has_more: false, next_page: null };
+      return { data: [], next_page: null, prev_page: null };
     }
     const limit = normalizeLimit(opts.limit);
     const order = opts.order ?? "desc";
-    const queryLimit = limit + 1;
+    const includeArchived = opts.includeArchived ?? false;
+    const cursor = opts.page === undefined
+      ? undefined
+      : decodeSessionCursor(opts.page, { order, agentId: opts.agentId, includeArchived });
+    const direction = cursor?.direction ?? "next";
+    const queryOrder = direction === "prev"
+      ? (order === "asc" ? "desc" : "asc")
+      : order;
     const stmt = this.listStmt({
-      includeArchived: opts.includeArchived ?? false,
+      includeArchived,
       hasAgent: opts.agentId !== undefined,
-      hasPage: opts.page !== undefined,
-      order,
+      hasPage: cursor !== undefined,
+      order: queryOrder,
     });
     const rows = stmt.all(
-      ...selectListArgs(workspaceId, queryLimit, opts.agentId, opts.page),
+      ...selectListArgs(workspaceId, limit + 1, opts.agentId, cursor?.anchor),
     ) as unknown as SessionDbRow[];
-    const pageRows = rows.slice(0, limit);
-    const data = pageRows.map((row) => this.deserialize(row));
+    const hasMoreInQueryDirection = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    if (direction === "prev") selected.reverse();
+    const data = selected.map((row) => this.deserialize(row));
+    const hasNext = direction === "prev" ? cursor !== undefined : hasMoreInQueryDirection;
+    const hasPrev = direction === "prev" ? hasMoreInQueryDirection : cursor !== undefined;
+    const context = { order, agentId: opts.agentId, includeArchived };
     return {
       data,
-      has_more: rows.length > limit,
-      next_page: rows.length > limit ? data[data.length - 1]?.id ?? null : null,
+      next_page: hasNext && data.length > 0
+        ? encodeSessionCursor(data[data.length - 1]!.id, "next", context)
+        : null,
+      prev_page: hasPrev && data.length > 0
+        ? encodeSessionCursor(data[0]!.id, "prev", context)
+        : null,
     };
   }
 
@@ -672,6 +689,71 @@ function parseVaultIds(value: string): string[] {
   return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
     ? [...parsed]
     : [];
+}
+
+interface SessionCursorContext {
+  order: "asc" | "desc";
+  agentId: string | undefined;
+  includeArchived: boolean;
+}
+
+interface SessionCursorPayload {
+  v: 1;
+  anchor: string;
+  direction: "next" | "prev";
+  order: "asc" | "desc";
+  agentId: string | null;
+  includeArchived: boolean;
+}
+
+function encodeSessionCursor(
+  anchor: string,
+  direction: "next" | "prev",
+  context: SessionCursorContext,
+): string {
+  const payload: SessionCursorPayload = {
+    v: 1,
+    anchor,
+    direction,
+    order: context.order,
+    agentId: context.agentId ?? null,
+    includeArchived: context.includeArchived,
+  };
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function decodeSessionCursor(
+  value: string,
+  context: SessionCursorContext,
+): SessionCursorPayload {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    throw invalidRequest("invalid page cursor");
+  }
+  if (!isSessionCursorPayload(payload)) throw invalidRequest("invalid page cursor");
+  if (payload.order !== context.order) {
+    throw invalidRequest("page token order does not match request");
+  }
+  if (
+    payload.agentId !== (context.agentId ?? null) ||
+    payload.includeArchived !== context.includeArchived
+  ) {
+    throw invalidRequest("page token filters do not match request");
+  }
+  return payload;
+}
+
+function isSessionCursorPayload(value: unknown): value is SessionCursorPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const payload = value as Partial<SessionCursorPayload>;
+  return payload.v === 1 &&
+    typeof payload.anchor === "string" && payload.anchor.length > 0 &&
+    (payload.direction === "next" || payload.direction === "prev") &&
+    (payload.order === "asc" || payload.order === "desc") &&
+    (payload.agentId === null || typeof payload.agentId === "string") &&
+    typeof payload.includeArchived === "boolean";
 }
 
 function selectListArgs(

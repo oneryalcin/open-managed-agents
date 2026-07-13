@@ -1,0 +1,169 @@
+{
+  "model": "claude-sonnet-5",
+  "other_list_envelopes": {
+    "agents": {
+      "data_count": 1,
+      "keys": [
+        "data",
+        "next_page"
+      ],
+      "next_page": "cursor_017"
+    },
+    "environments": {
+      "data_count": 1,
+      "keys": [
+        "data",
+        "next_page"
+      ],
+      "next_page": "cursor_018"
+    },
+    "files": {
+      "data_count": 0,
+      "first_id_present": false,
+      "has_more": false,
+      "keys": [
+        "data",
+        "first_id",
+        "has_more",
+        "last_id"
+      ],
+      "last_id_present": false
+    },
+    "skills": {
+      "data_count": 1,
+      "has_more": false,
+      "keys": [
+        "data",
+        "has_more",
+        "next_page"
+      ],
+      "next_page": null
+    },
+    "vaults": {
+      "data_count": 0,
+      "keys": [
+        "data",
+        "next_page"
+      ],
+      "next_page": null
+    }
+  },
+  "run_id": "7f24a52f",
+  "sessions": {
+    "asc": {
+      "back_from_page_2": {
+        "data": [
+          "session_1",
+          "session_2"
+        ],
+        "has_more": null,
+        "keys": [
+          "data",
+          "next_page",
+          "prev_page"
+        ],
+        "next_page": "cursor_010",
+        "prev_page": null
+      },
+      "page_1": {
+        "data": [
+          "session_1",
+          "session_2"
+        ],
+        "has_more": null,
+        "keys": [
+          "data",
+          "next_page",
+          "prev_page"
+        ],
+        "next_page": "cursor_010",
+        "prev_page": null
+      },
+      "page_2": {
+        "data": [
+          "session_3",
+          "session_4"
+        ],
+        "has_more": null,
+        "keys": [
+          "data",
+          "next_page",
+          "prev_page"
+        ],
+        "next_page": "cursor_011",
+        "prev_page": "cursor_012"
+      },
+      "page_3": {
+        "data": [
+          "session_5"
+        ],
+        "has_more": null,
+        "keys": [
+          "data",
+          "next_page",
+          "prev_page"
+        ],
+        "next_page": null,
+        "prev_page": "cursor_013"
+      }
+    },
+    "cursor_reuse_with_opposite_order": {
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "page token order does not match request",
+        "status_code": 400
+      }
+    },
+    "desc": {
+      "back_from_page_2": {
+        "data": [
+          "session_5",
+          "session_4"
+        ],
+        "has_more": null,
+        "keys": [
+          "data",
+          "next_page",
+          "prev_page"
+        ],
+        "next_page": "cursor_014",
+        "prev_page": null
+      },
+      "page_1": {
+        "data": [
+          "session_5",
+          "session_4"
+        ],
+        "has_more": null,
+        "keys": [
+          "data",
+          "next_page",
+          "prev_page"
+        ],
+        "next_page": "cursor_014",
+        "prev_page": null
+      },
+      "page_2": {
+        "data": [
+          "session_3",
+          "session_2"
+        ],
+        "has_more": null,
+        "keys": [
+          "data",
+          "next_page",
+          "prev_page"
+        ],
+        "next_page": "cursor_015",
+        "prev_page": "cursor_016"
+      }
+    },
+    "invalid_cursor": {
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "invalid page cursor",
+        "status_code": 400
+      }
+    }
+  }
+}

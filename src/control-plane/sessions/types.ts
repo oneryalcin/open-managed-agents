@@ -1,4 +1,3 @@
-import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type {
   JsonHttpResponse,
   RequestIdempotencyKey,
@@ -87,6 +86,12 @@ export interface ListSessionsOptions {
   includeArchived?: boolean;
 }
 
+export interface SessionListPage<T> {
+  data: T[];
+  next_page: string | null;
+  prev_page: string | null;
+}
+
 export interface SessionStore {
   create(record: CreateSessionRecord): SessionRow;
   retrieve(
@@ -153,7 +158,7 @@ export interface SessionStore {
   list(
     workspaceId: WorkspaceId,
     opts?: ListSessionsOptions,
-  ): ManagedAgentsListPage<SessionRow>;
+  ): SessionListPage<SessionRow>;
   close?(): void;
 }
 
@@ -179,7 +184,7 @@ export interface SessionService {
   list(
     workspaceId: WorkspaceId,
     opts?: ListSessionsOptions,
-  ): ManagedAgentsListPage<ManagedAgentsSession>;
+  ): SessionListPage<ManagedAgentsSession>;
 }
 
 export type {

@@ -77,8 +77,8 @@ describe("session service/store", () => {
 
     expect(fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { page: "" })).toEqual({
       data: [],
-      has_more: false,
       next_page: null,
+      prev_page: null,
     });
   });
 
