@@ -35,9 +35,9 @@ claim of blanket superiority over Anthropic's hosted environment.
 
 **Recommended pre-v1 sequence:** ~~running-session delete guard~~ (DONE
 2026-07-12) → networking translation/rejection → probe-backed tool config
-validation → reject the inert multi-agent façade → `glob`/`grep` parity slice →
-pagination probes/semantics → agent update/versioning → usable environment image
-story → web tools.
+validation → reject the inert multi-agent façade (DONE 2026-07-13) →
+`glob`/`grep` parity slice → pagination probes/semantics → agent
+update/versioning → usable environment image story → web tools.
 
 ## Legend
 
@@ -117,14 +117,14 @@ the risk of silent contradiction, not by how easy they first appear.
   - Deliberate follow-ups remain separate: Pi's internal `find` name versus
     CMA `glob`/`grep`, and runtime support for the accepted web-tool names.
 
-- [ ] **`multiagent` configuration is accepted but runtime-inert** *(OMA verified)*
+- [x] **`multiagent` configuration is rejected honestly** *(DONE 2026-07-13; plan 0129)*
   - CMA `[Doc]`: coordinator agents delegate through a multi-agent runtime and
     expose thread APIs/events.
-  - OMA: the field round-trips but creates no delegation tool, thread runtime,
-    or thread events. A successful create currently over-promises capability.
-  - Pre-v1 decision: either implement the runtime arc or reject non-null
-    `multiagent` configuration until it exists. Prefer an honest temporary 400
-    over an accepted inert façade; probe the desired error shape before coding.
+  - OMA now rejects every non-null `multiagent` value with a stable 400 before
+    persistence. Absent and explicit `null` remain compatible; legacy rows stay
+    readable. A create request no longer over-promises an inert capability.
+  - The full coordinator runtime, delegation tool, thread routes, and thread
+    events remain post-v1 deferred work.
 
 ### Tier 2 — compatibility work requiring a probe or bounded design slice
 

@@ -35,6 +35,8 @@ const CMA_BUILTIN_TOOL_NAMES = [
   "write",
 ] as const;
 const CMA_PERMISSION_POLICY_TYPES = ["always_allow", "always_ask"] as const;
+const MULTIAGENT_UNSUPPORTED_MESSAGE =
+  "The `multiagent` configuration is not supported by this deployment.";
 
 export class DefaultAgentService implements AgentService {
   constructor(
@@ -151,6 +153,11 @@ function toManagedAgent(row: AgentRow): ManagedAgentsAgent {
 
 function parseCreateAgent(input: unknown): CreateManagedAgentRequest {
   const obj = objectInput(input);
+  if (obj.multiagent !== undefined && obj.multiagent !== null) {
+    // Do this before parsing the other agent fields: a non-null config must
+    // never be accepted as a durable promise for a runtime we do not have.
+    throw invalidRequest(MULTIAGENT_UNSUPPORTED_MESSAGE);
+  }
   const name = stringField(obj, "name", { required: true });
   const system = nullableStringField(obj, "system");
   const description = nullableStringField(obj, "description");
@@ -460,45 +467,9 @@ function metadataField(
 function multiagentField(
   obj: Record<string, unknown>,
 ): ManagedAgentsMultiagent | null | undefined {
-  const value = obj.multiagent;
-  if (value === undefined) return undefined;
-  if (value === null) return null;
-  const multiagent = jsonObjectField(value, "multiagent");
-  const type = stringField(multiagent, "type", { required: true });
-  if (type !== "coordinator") {
-    throw invalidRequest("`multiagent.type` must be `coordinator`");
-  }
-  const agents = multiagent.agents;
-  if (!Array.isArray(agents)) {
-    throw invalidRequest("`multiagent.agents` must be an array");
-  }
-  return {
-    type,
-    agents: agents.map((v) => {
-      const agent = jsonObjectField(v, "multiagent.agents");
-      const agentType = stringField(agent, "type", { required: true });
-      if (agentType !== "agent") {
-        throw invalidRequest("`multiagent.agents[].type` must be `agent`");
-      }
-      const version = agent.version;
-      if (version !== undefined && typeof version !== "number") {
-        throw invalidRequest("`multiagent.agents[].version` must be a number");
-      }
-      if (version !== undefined && (!Number.isSafeInteger(version) || version <= 0)) {
-        throw invalidRequest("`multiagent.agents[].version` must be a positive integer");
-      }
-      return version === undefined
-        ? {
-            type: agentType,
-            id: stringField(agent, "id", { required: true }),
-          }
-        : {
-            type: agentType,
-            id: stringField(agent, "id", { required: true }),
-            version,
-          };
-    }),
-  };
+  // Non-null values are rejected at the start of parseCreateAgent. Retain the
+  // null/absent distinction for the public response and legacy row shape.
+  return obj.multiagent === null ? null : undefined;
 }
 
 function optionalStringField(
