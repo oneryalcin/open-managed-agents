@@ -50,7 +50,7 @@ const VALID_ENVIRONMENT = {
 
 describe("builtin tool confirmations", () => {
   it("emits requires_action, accepts allow, and resumes with a public tool_result", async () => {
-    const runner = new FakeToolPermissionRunner("ask");
+    const runner = new FakeToolPermissionRunner("ask", "glob");
     const app = createInMemoryControlPlaneApp({
       runtime: { runner, translate: translatePiEvent },
     });
@@ -73,8 +73,8 @@ describe("builtin tool confirmations", () => {
     const toolUse = waiting.find((event) => event.type === "agent.tool_use");
     expect(toolUse?.id).toEqual(expect.stringMatching(/^sevt_/));
     expect(toolUse).toMatchObject({
-      name: "bash",
-      input: { command: "touch /workspace/probe" },
+      name: "glob",
+      input: { pattern: "*.md", path: "/workspace" },
       evaluated_permission: "ask",
     });
     expect(toolUse).not.toHaveProperty("tool_use_id");
@@ -752,7 +752,10 @@ class FakeToolPermissionRunner implements RuntimeEventRunner {
     | ((event: ManagedAgentsUserToolConfirmationEventInput) => void)
     | undefined;
 
-  constructor(protected readonly permission: "allow" | "ask" | "deny") {}
+  constructor(
+    protected readonly permission: "allow" | "ask" | "deny",
+    protected readonly toolName: "bash" | "glob" = "bash",
+  ) {}
 
   async *runUserMessage(): AsyncIterable<unknown> {
     yield { type: "agent_start" };
@@ -764,8 +767,10 @@ class FakeToolPermissionRunner implements RuntimeEventRunner {
     yield {
       type: "oma.tool_permission_use",
       piToolCallId: "toolu_builtin",
-      name: "bash",
-      input: { command: "touch /workspace/probe" },
+      name: this.toolName,
+      input: this.toolName === "glob"
+        ? { pattern: "*.md", path: "/workspace" }
+        : { command: "touch /workspace/probe" },
       evaluatedPermission: this.permission,
       bindToolUseId: (id) => {
         this.boundToolUseId = id;
@@ -781,7 +786,7 @@ class FakeToolPermissionRunner implements RuntimeEventRunner {
     yield {
       type: "tool_execution_end",
       toolCallId: "toolu_builtin",
-      toolName: "bash",
+      toolName: this.toolName,
       result: {
         content: [
           {

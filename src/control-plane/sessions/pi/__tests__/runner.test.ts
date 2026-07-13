@@ -967,6 +967,29 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(sandbox.disposed).toBe(true);
   });
 
+  it("accepts public glob events only after a matching glob provider invocation", async () => {
+    const sandbox = new FakeSandboxProvider(["glob"]);
+    const factory = new FakeSessionFactory({
+      activeToolNames: ["glob"],
+      emitSandboxedTool: "glob",
+      emitSandboxedToolCallMessage: true,
+      onSandboxedTool: (_toolName, toolCallId) =>
+        sandbox.recordInvocation("glob", toolCallId),
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => sandbox,
+      idleTtlMs: 0,
+    });
+
+    const events = await collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+
+    expect(messageTexts(events)).toEqual(["reply: one"]);
+    expect(sandbox.invocations.byTool.glob).toBe(1);
+    expect(sandbox.invocations.toolCallIds.glob.has("toolu_fake")).toBe(true);
+    expect(sandbox.disposed).toBe(false);
+  });
+
   it("accepts a sandboxed builtin tool when the matching provider tool was invoked", async () => {
     const sandbox = new FakeSandboxProvider(["bash"]);
     const factory = new FakeSessionFactory({
@@ -1254,7 +1277,7 @@ class FakeSandboxProvider implements SandboxProvider {
   readonly cwd = "/workspace";
   readonly operations = {} as SandboxProvider["operations"];
   readonly tools: SandboxProvider["tools"] = [];
-  readonly toolNames: ReadonlySet<"bash" | "read" | "write" | "edit" | "find" | "ls">;
+  readonly toolNames: ReadonlySet<"bash" | "read" | "write" | "edit" | "find" | "glob" | "ls">;
   readonly invocations = {
     total: 0,
     byTool: {
@@ -1263,6 +1286,7 @@ class FakeSandboxProvider implements SandboxProvider {
       write: 0,
       edit: 0,
       find: 0,
+      glob: 0,
       ls: 0,
     },
     toolCallIds: {
@@ -1271,13 +1295,14 @@ class FakeSandboxProvider implements SandboxProvider {
       write: new Set<string>(),
       edit: new Set<string>(),
       find: new Set<string>(),
+      glob: new Set<string>(),
       ls: new Set<string>(),
     },
   };
   disposed = false;
 
   constructor(
-    toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "ls">,
+    toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "glob" | "ls">,
     toolInstances: string[] = [],
   ) {
     this.toolNames = new Set(toolNames);
@@ -1291,7 +1316,7 @@ class FakeSandboxProvider implements SandboxProvider {
   readonly materialized: Array<readonly PiSessionFileMount[]> = [];
 
   recordInvocation(
-    toolName: "bash" | "read" | "write" | "edit" | "find" | "ls",
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "ls",
     toolCallId = "toolu_fake",
   ): void {
     this.recordLowLevelOperation(toolName);
@@ -1299,14 +1324,14 @@ class FakeSandboxProvider implements SandboxProvider {
   }
 
   recordLowLevelOperation(
-    toolName: "bash" | "read" | "write" | "edit" | "find" | "ls",
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "ls",
   ): void {
     this.invocations.total += 1;
     this.invocations.byTool[toolName] += 1;
   }
 
   recordToolCall(
-    toolName: "bash" | "read" | "write" | "edit" | "find" | "ls",
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "ls",
     toolCallId: string,
   ): void {
     this.invocations.toolCallIds[toolName].add(toolCallId);

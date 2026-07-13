@@ -5,6 +5,7 @@ import {
   access,
   mkdir,
   open,
+  opendir,
   readdir,
   readFile,
   stat,
@@ -21,12 +22,14 @@ import type {
 import {
   createBashToolDefinition,
   createEditToolDefinition,
-  createFindToolDefinition,
   createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  defineTool,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { compileCmaGlob } from "./cma-glob.ts";
 import { globMatcher, toPosix } from "./glob.ts";
 import type { RuntimeSessionFileMount } from "../../../events/types.ts";
 
@@ -36,6 +39,7 @@ export type SandboxedBuiltinToolName =
   | "write"
   | "edit"
   | "find"
+  | "glob"
   | "ls";
 
 export interface SandboxInvocationStats {
@@ -46,12 +50,26 @@ export interface SandboxInvocationStats {
   >;
 }
 
+export interface CmaGlobOperations {
+  glob(input: {
+    pattern: string;
+    cwd: string;
+    signal: AbortSignal;
+    maxMatches: number;
+    maxRawBytes: number;
+    maxOutputBytes: number;
+    outputBase?: string;
+    timeoutMs: number;
+  }): Promise<string[]>;
+}
+
 export interface SandboxOperations {
   readonly bash: BashOperations;
   readonly read: ReadOperations;
   readonly write: WriteOperations;
   readonly edit: EditOperations;
   readonly find: FindOperations;
+  readonly glob: CmaGlobOperations;
   readonly ls: LsOperations;
 }
 
@@ -175,6 +193,22 @@ export function createHostPassthroughSandboxProvider(
       });
     },
   };
+  const globOps: CmaGlobOperations = {
+    glob: async ({ pattern, cwd, signal, maxMatches, maxRawBytes, maxOutputBytes, outputBase, timeoutMs }) => {
+      recordSandboxInvocation(invocations, disposed, "glob");
+      return cmaGlobInsideWorkspace({
+        pattern,
+        cwd: assertInsideWorkspace(cwd, workspaceRoot),
+        workspaceRoot,
+        signal,
+        maxMatches,
+        maxRawBytes,
+        maxOutputBytes,
+        outputBase,
+        timeoutMs,
+      });
+    },
+  };
   const lsOps: LsOperations = {
     exists: (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "ls");
@@ -212,9 +246,10 @@ export function createHostPassthroughSandboxProvider(
       write: writeOps,
       edit: editOps,
       find: findOps,
+      glob: globOps,
       ls: lsOps,
     },
-    toolNames: new Set(["bash", "read", "write", "edit", "find", "ls"]),
+    toolNames: new Set(["bash", "read", "write", "edit", "glob", "ls"]),
     tools: createSandboxToolDefinitions(
       workspaceRoot,
       {
@@ -223,6 +258,7 @@ export function createHostPassthroughSandboxProvider(
         write: writeOps,
         edit: editOps,
         find: findOps,
+        glob: globOps,
         ls: lsOps,
       },
       invocations,
@@ -313,6 +349,56 @@ export function recordSandboxInvocation(
   }
 }
 
+const CMA_GLOB_MAX_MATCHES = 100;
+const CMA_GLOB_MAX_RAW_BYTES = 1024 * 1024;
+const CMA_GLOB_MAX_OUTPUT_BYTES = 64 * 1024;
+const CMA_GLOB_TIMEOUT_MS = 10_000;
+
+function createCmaGlobToolDefinition(
+  cwd: string,
+  operations: CmaGlobOperations,
+): ToolDefinition<any, any, any> {
+  return defineTool({
+    name: "glob",
+    label: "glob",
+    description: "Find files recursively using a glob pattern.",
+    parameters: Type.Object(
+      {
+        pattern: Type.String({ description: "Glob pattern to match" }),
+        path: Type.Optional(Type.String({ description: "Directory to search" })),
+      },
+      { additionalProperties: false },
+    ),
+    execute: async (_toolCallId, input: { pattern: string; path?: string }, signal) => {
+      // Compile before provider execution so malformed/over-complex patterns do
+      // not start a sandbox command.
+      compileCmaGlob(input.pattern);
+      const suppliedPath = input.path;
+      const searchRoot = resolve(cwd, suppliedPath ?? ".");
+      const effectiveSignal = signal ?? new AbortController().signal;
+      const matches = await operations.glob({
+        pattern: input.pattern,
+        cwd: searchRoot,
+        signal: effectiveSignal,
+        maxMatches: CMA_GLOB_MAX_MATCHES,
+        maxRawBytes: CMA_GLOB_MAX_RAW_BYTES,
+        maxOutputBytes: CMA_GLOB_MAX_OUTPUT_BYTES,
+        outputBase: suppliedPath === undefined || !isAbsolute(suppliedPath) ? cwd : undefined,
+        timeoutMs: CMA_GLOB_TIMEOUT_MS,
+      });
+      const formatted = matches.map((match) => {
+        if (suppliedPath === undefined) return toPosix(relative(cwd, match));
+        if (isAbsolute(suppliedPath)) return toPosix(match);
+        return toPosix(relative(cwd, match));
+      });
+      return {
+        content: [{ type: "text", text: formatted.length === 0 ? "No files found" : formatted.join("\n") }],
+        details: undefined,
+      };
+    },
+  });
+}
+
 export function createSandboxToolDefinitions(
   cwd: string,
   operations: SandboxOperations,
@@ -345,8 +431,8 @@ export function createSandboxToolDefinitions(
       disposed,
     ),
     withToolCallAccounting(
-      "find",
-      createFindToolDefinition(cwd, { operations: operations.find }),
+      "glob",
+      createCmaGlobToolDefinition(cwd, operations.glob),
       invocations,
       disposed,
     ),
@@ -366,6 +452,7 @@ function emptyToolCounts(): Record<SandboxedBuiltinToolName, number> {
     write: 0,
     edit: 0,
     find: 0,
+    glob: 0,
     ls: 0,
   };
 }
@@ -377,6 +464,7 @@ function emptyToolCallIds(): Record<SandboxedBuiltinToolName, Set<string>> {
     write: new Set(),
     edit: new Set(),
     find: new Set(),
+    glob: new Set(),
     ls: new Set(),
   };
 }
@@ -482,6 +570,61 @@ function killProcessGroup(pid: number): void {
     // The process may already have exited. Callers may also kill the direct
     // child as a fallback when they own the ChildProcess object.
   }
+}
+
+async function cmaGlobInsideWorkspace(opts: {
+  pattern: string;
+  cwd: string;
+  workspaceRoot: string;
+  signal: AbortSignal;
+  maxMatches: number;
+  maxRawBytes: number;
+  maxOutputBytes: number;
+  outputBase?: string;
+  timeoutMs: number;
+}): Promise<string[]> {
+  const matcher = compileCmaGlob(opts.pattern);
+  const deadline = Date.now() + opts.timeoutMs;
+  const matches: string[] = [];
+  let rawBytes = 0;
+  let outputBytes = 0;
+  const assertActive = (): void => {
+    if (opts.signal.aborted) throw new Error("Operation aborted");
+    if (Date.now() >= deadline) throw new Error("Glob operation timed out");
+  };
+  async function visit(dir: string): Promise<void> {
+    assertActive();
+    const handle = await opendir(dir);
+    for await (const entry of handle) {
+      assertActive();
+      if (matches.length >= opts.maxMatches) return;
+      const fullPath = assertInsideWorkspace(`${dir}${sep}${entry.name}`, opts.workspaceRoot);
+      const relativePath = toPosix(relative(opts.cwd, fullPath));
+      if (entry.isDirectory()) {
+        await visit(fullPath);
+      } else {
+        // Docker/microsandbox enumerate `find -type f`; host raw accounting
+        // therefore counts only equivalent emitted file records.
+        rawBytes += Buffer.byteLength(relativePath, "utf8") + 1;
+        if (rawBytes > opts.maxRawBytes) {
+          throw new Error(`Glob enumeration exceeds ${opts.maxRawBytes} raw bytes`);
+        }
+        if (!matcher.matches(relativePath)) continue;
+        const outputPath = opts.outputBase === undefined
+          ? fullPath
+          : toPosix(relative(opts.outputBase, fullPath));
+        const addedBytes = Buffer.byteLength(outputPath, "utf8") +
+          (matches.length === 0 ? 0 : 1);
+        if (outputBytes + addedBytes > opts.maxOutputBytes) {
+          throw new Error(`Glob output exceeds ${opts.maxOutputBytes} bytes`);
+        }
+        outputBytes += addedBytes;
+        matches.push(fullPath);
+      }
+    }
+  }
+  await visit(opts.cwd);
+  return matches;
 }
 
 async function globInsideWorkspace(

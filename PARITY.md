@@ -20,7 +20,7 @@ post-v1 deferrals, and deliberate architecture-specific divergences.
 | MCP & vaults | ~80% | Connector + `static_bearer`/`mcp_oauth` + `mcp_oauth_validate` ✅; additional SSRF/scrubbing hardening |
 | Sessions & files | ~65% | Create/retrieve/list/archive ✅; update / overrides / `resources.*` missing; sharp edges |
 | API reference & onboarding | ~65% | Auth / betas / error-envelope ✅; bidirectional pagination incomplete; no update/lifecycle endpoints |
-| Tools & permissions | ~65% | Permission state-machine faithful ✅; toolset short 2 tools + `glob`→`find` rename |
+| Tools & permissions | ~75% | Permission state-machine faithful ✅; CMA `glob` wired; `grep` and web tools remain disabled |
 | Agent config & outcomes | ~55% | Create/get/list/archive ✅; **no update/versioning**; outcomes deferred |
 | Events, streaming & webhooks | ~55% | SSE / resume / idempotency ✅; webhooks 0%, deltas 0%, `agent.thinking` dead |
 | Environments & sandboxes | ~35%\* | Thin *resource* (no packages/image/runtimes); strong self-hosted isolation defaults |
@@ -36,9 +36,10 @@ claim of blanket superiority over Anthropic's hosted environment.
 **Recommended pre-v1 sequence:** ~~running-session delete guard~~ (DONE
 2026-07-12) → networking translation/rejection → probe-backed tool config
 validation → reject the inert multi-agent façade (DONE 2026-07-13) →
-`glob`/`grep` honesty boundary (DONE 2026-07-13) → full `glob`/`grep` runtime
-parity → pagination probes/semantics → agent update/versioning → usable
-environment image story → web tools.
+`glob`/`grep` honesty boundary (DONE 2026-07-13) → sandbox-backed CMA
+`glob` (PR #184, review pending) → pagination probes/semantics → agent update/versioning → usable
+environment image story → web tools. Provider-owned `grep` remains a separate
+search arc rather than a prerequisite for `glob`.
 
 ## Legend
 
@@ -115,10 +116,10 @@ the risk of silent contradiction, not by how easy they first appear.
     rejects duplicate builtin configs, materializes the implicit builtin
     defaults, and leaves MCP config names server-defined. The parser rejects
     before an agent row is persisted.
-  - OMA treats omitted `glob`, `grep`, `web_fetch`, and `web_search` as
-    deployment-disabled defaults and persists explicit disabled overrides.
-    Explicit configurations are accepted only when effectively disabled;
-    runtime support for all four names remains follow-up work.
+  - OMA now enables CMA `glob`; omitted `grep`, `web_fetch`, and `web_search`
+    materialize as deployment-disabled overrides and explicit configurations
+    are accepted only when effectively disabled. Rows created during the PR
+    #183 honesty window retain their persisted `glob:false` override.
 
 - [x] **`multiagent` configuration is rejected honestly** *(DONE 2026-07-13; plan 0129)*
   - CMA `[Doc]`: coordinator agents delegate through a multi-agent runtime and
@@ -134,13 +135,30 @@ the risk of silent contradiction, not by how easy they first appear.
 - [x] **Tool parity honesty boundary: CMA `glob`/`grep` vs OMA `find`** *(DONE 2026-07-13; plan 0130, probe 64)*
   - CMA `[Doc]`: built-ins are named `glob` and `grep` (`tools.md:25-26`);
     probe 64 captured their input/output shapes.
-  - OMA does not yet wire them safely: it exposes Pi's `find`, while Pi's
-    default grep implementation spawns `rg` in the control-plane process.
-  - OMA materializes omitted `glob` and `grep` as deployment-disabled and
-    rejects explicit configurations only when effectively enabled. The runtime
-    follow-up is split: adapt the safe glob operations already present in both
-    sandbox providers, while keeping grep rejected until providers own content
-    search and a deterministic search-binary strategy.
+  - OMA subsequently wired CMA `glob` through bounded provider operations and
+    removed Pi `find` from the model-facing surface. Pi's default grep still
+    spawns `rg` in the control-plane process and remains rejected.
+  - OMA initially materialized omitted `glob` and `grep` as disabled. Plan 0131
+    now enables `glob` for new configurations; rows created during the honesty
+    boundary retain their explicit `glob:false` override and must be recreated
+    until an agent-update API exists. `grep` remains disabled until providers
+    own content search and a deterministic search-binary strategy.
+
+- [ ] **Sandbox-backed CMA `glob` runtime** *(implemented in PR #184; final review pending; plan 0131; probes 65/65b)*
+  - CMA `[Obs]`: plain and `**` patterns recurse; grammar includes `?`, classes,
+    ranges, braces, and backslash escapes; absolute paths yield absolute output
+    while relative paths preserve relative output; no match succeeds with
+    `No files found`; results silently cap at 100; dotfiles and tested ignored
+    paths remain visible.
+  - OMA `[OMA]`: PR #184 implements a separately accounted, NUL-streaming, byte-bounded,
+    timed-out, actively cancellable provider `glob` operation. Docker and
+    microsandbox guest PID cleanup are verified; model-facing Pi `find` is
+    replaced by CMA `glob`, while `grep` and web tools remain disabled.
+
+- [ ] **Provider-owned CMA `grep` runtime**
+  - Keep effectively enabled `grep` rejected until Docker and microsandbox own
+    content search and a deterministic binary/search strategy. Pi's default
+    host-process `rg` path is not an acceptable implementation.
 
 - [ ] **Bidirectional pagination / `prev_page`** *(OMA absence verified; CMA cross-resource scope `[Unk]`)*
   - CMA `[Doc]`: sessions expose `prev_page` and accept it through the ordinary
@@ -302,7 +320,7 @@ goal because OMA's deployment model is intentionally different.
 All resolved 2026-07-11:
 
 - [x] `docs/plans/0114-appliance-product-roadmap.md` — skills row corrected from "runtime-inert" to DONE (0126; runtime consumes them via `sessions/pi/runner.ts` `buildSessionSkillsResourceLoader`, smoke `scratch/59-…`).
-- [x] `docs/architecture.md` — `grep` corrected from ✅ to "not yet wired"; `glob` clarified as wired under the name `find`.
+- [x] `docs/architecture.md` — CMA `glob` is wired through provider-owned bounded operations; `grep` remains unwired.
 - [x] `docs/plans/0114-appliance-product-roadmap.md` — added a **Scheduled deployments** row to the capability-gap table (was untracked).
 
 ---

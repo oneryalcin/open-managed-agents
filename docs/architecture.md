@@ -180,7 +180,7 @@ These four invariants make the rules above *correct under concurrency*. Each is 
 
 | Concern | Sandbox | Control plane |
 |---|---|---|
-| `bash`, file ops (`read`/`write`/`edit`), `find` (glob), `ls` | ✅ wired in sandbox | |
+| `bash`, file ops (`read`/`write`/`edit`), CMA `glob`, `ls` | ✅ wired in sandbox | `glob` uses bounded provider-owned NUL streaming; Pi `find` is not model-facing. |
 | `grep` | ❌ not yet wired — Pi ships `createGrepToolDefinition`; unwired in `sessions/pi/sandbox/provider.ts` (see [PARITY.md](../PARITY.md) Pile B) | |
 | `web_fetch`, `web_search` | TBD — could run in sandbox (Pi default) or via control plane (more control); egress boundary now shipped, so unblocked | |
 | Pi `AgentSession` instance | | ✅ |

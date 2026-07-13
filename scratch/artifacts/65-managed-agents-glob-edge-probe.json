@@ -1,0 +1,357 @@
+{
+  "events": [
+    {
+      "type": "session.status_running"
+    },
+    {
+      "type": "session.thread_status_running"
+    },
+    {
+      "content": [
+        {
+          "text": "Run this setup command in one bash call:\n\nset -eu\nroot=/mnt/session/glob65\nrm -rf \"$root\"\nmkdir -p \"$root/nested/deeper\" \"$root/node_modules/pkg\"\nprintf 'alpha' > \"$root/a.md\"\nprintf 'zulu' > \"$root/z.md\"\nprintf 'hidden' > \"$root/.hidden.md\"\nprintf 'nested' > \"$root/nested/b.md\"\nprintf 'deep' > \"$root/nested/deeper/c.md\"\nprintf 'ignored' > \"$root/ignored.md\"\nprintf 'dependency' > \"$root/node_modules/pkg/dependency.md\"\nprintf 'ignored.md\n' > \"$root/.gitignore\"\ni=1\nwhile [ \"$i\" -le 150 ]; do printf x > \"$root/many-$(printf '%03d' \"$i\").txt\"; i=$((i+1)); done\n\n\nThen make these glob calls exactly in order:\n1. {\"pattern\":\"*.md\"}\n2. {\"pattern\":\"*.nomatch\",\"path\":\"/mnt/session/glob65\"}\n3. {\"pattern\":\"*.md\",\"path\":\"/mnt/session/glob65/missing\"}\n4. {\"pattern\":\"**/*.md\",\"path\":\"/mnt/session/glob65\"}\n5. {\"pattern\":\"*.md\",\"path\":\"/mnt/session/glob65\"}\n6. {\"pattern\":\".*\",\"path\":\"/mnt/session/glob65\"}\n7. {\"pattern\":\"many-*.txt\",\"path\":\"/mnt/session/glob65\"}\n8. {\"pattern\":\"[\",\"path\":\"/mnt/session/glob65\"}\n",
+          "type": "text"
+        }
+      ],
+      "type": "user.message"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "type": "agent.thinking"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "command": "set -eu\nroot=/mnt/session/glob65\nrm -rf \"$root\"\nmkdir -p \"$root/nested/deeper\" \"$root/node_modules/pkg\"\nprintf 'alpha' > \"$root/a.md\"\nprintf 'zulu' > \"$root/z.md\"\nprintf 'hidden' > \"$root/.hidden.md\"\nprintf 'nested' > \"$root/nested/b.md\"\nprintf 'deep' > \"$root/nested/deeper/c.md\"\nprintf 'ignored' > \"$root/ignored.md\"\nprintf 'dependency' > \"$root/node_modules/pkg/dependency.md\"\nprintf 'ignored.md\n' > \"$root/.gitignore\"\ni=1\nwhile [ \"$i\" -le 150 ]; do printf x > \"$root/many-$(printf '%03d' \"$i\").txt\"; i=$((i+1)); done"
+      },
+      "name": "bash",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "(no output)",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "pattern": "*.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "mnt/session/glob65/z.md\nmnt/session/glob65/nested/b.md\nmnt/session/glob65/nested/deeper/c.md\nmnt/session/glob65/.hidden.md\nmnt/session/glob65/node_modules/pkg/dependency.md\nmnt/session/glob65/a.md\nmnt/session/glob65/ignored.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/node_modules/phantomjs-prebuilt/lib/phantom/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/react-aria/README.md\nhome/claude/.npm-global/lib/node_modules/react-icons/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/mermaid/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/mermaid/README.zh-CN.md\nhome/claude/.npm-global/lib/node_modules/pdfjs-dist/README.md\nhome/claude/.npm-global/lib/node_modules/pdfjs-dist/CODE_OF_CONDUCT.md\nhome/claude/.npm-global/lib/node_modules/typescript/SECURITY.md\nhome/claude/.npm-global/lib/node_modules/typescript/README.md\nhome/claude/.npm-global/lib/node_modules/sharp/node_modules/@img/sharp-libvips-linux-x64/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/@zenuml/core/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/highlight.js/SECURITY.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/highlight.js/VERSION_10_UPGRADE.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/highlight.js/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/highlight.js/VERSION_11_UPGRADE.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/highlight.js/CHANGES.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/highlight.js/SUPPORTED_LANGUAGES.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/react-stately/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/cytoscape-fcose/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/mermaid-zenuml/README.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/node_modules/highlight.js/README.md\nhome/claude/.npm-global/lib/node_modules/playwright/README.md\nhome/claude/.npm-global/lib/node_modules/playwright/node_modules/playwright-core/README.md\nhome/claude/.npm-global/lib/node_modules/playwright/lib/agents/planner.md\nhome/claude/.npm-global/lib/node_modules/playwright/lib/agents/generator.md\nhome/claude/.npm-global/lib/node_modules/playwright/lib/agents/healer.md\nhome/claude/.npm-global/lib/node_modules/react-dom/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/lodash-es/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/dayjs/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/dayjs/CHANGELOG.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/templates/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/bidi/core/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/src/injected/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/@fortawesome/fontawesome-free/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/elkjs/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/elkjs/LICENSE.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/zod/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/chromium-bidi/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/parser/README.md\nhome/claude/.npm-global/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/@mermaid-js/layout-elk/README.md\nhome/claude/.npm-global/lib/node_modules/tsx/node_modules/@esbuild/linux-x64/README.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/html5bp/doc/usage.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/html5bp/doc/TOC.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/node_modules/autolinker/README.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/node_modules/psl/SECURITY.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/node_modules/sshpk/README.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/node_modules/ajv/README.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/node_modules/ajv/lib/dotjs/README.md\nhome/claude/.npm-global/lib/node_modules/markdown-pdf/node_modules/uri-js/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/micromark/readme.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/katex/contrib/auto-render/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/katex/contrib/copy-tex/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/katex/contrib/mathtex-script-type/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/katex/contrib/mhchem/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/katex/src/metrics/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/katex/dist/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/katex/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/helpers/README.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/schema/ValidatingConfiguration.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md022.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md056.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md021.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md039.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md029.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md044.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md035.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md050.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md058.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md051.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md027.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md020.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md052.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md041.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md028.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md042.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md045.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md037.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md026.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md019.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/Rules.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md049.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md031.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md036.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md030.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md024.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md010.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md012.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md038.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md011.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md034.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md055.md\nhome/claude/.npm-global/lib/node_modules/markdownlint-cli2/node_modules/markdownlint/doc/md014.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "*.nomatch"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "No files found",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65/missing",
+        "pattern": "*.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/bin/sh: 1: cd: can't cd to /mnt/session/glob65/missing",
+          "type": "text"
+        }
+      ],
+      "is_error": true,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "**/*.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65/z.md\n/mnt/session/glob65/nested/b.md\n/mnt/session/glob65/nested/deeper/c.md\n/mnt/session/glob65/.hidden.md\n/mnt/session/glob65/node_modules/pkg/dependency.md\n/mnt/session/glob65/a.md\n/mnt/session/glob65/ignored.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "*.md"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65/z.md\n/mnt/session/glob65/nested/b.md\n/mnt/session/glob65/nested/deeper/c.md\n/mnt/session/glob65/.hidden.md\n/mnt/session/glob65/node_modules/pkg/dependency.md\n/mnt/session/glob65/a.md\n/mnt/session/glob65/ignored.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": ".*"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65/.hidden.md\n/mnt/session/glob65/.gitignore",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "many-*.txt"
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/glob65/many-150.txt\n/mnt/session/glob65/many-148.txt\n/mnt/session/glob65/many-149.txt\n/mnt/session/glob65/many-147.txt\n/mnt/session/glob65/many-146.txt\n/mnt/session/glob65/many-144.txt\n/mnt/session/glob65/many-145.txt\n/mnt/session/glob65/many-142.txt\n/mnt/session/glob65/many-143.txt\n/mnt/session/glob65/many-141.txt\n/mnt/session/glob65/many-140.txt\n/mnt/session/glob65/many-138.txt\n/mnt/session/glob65/many-139.txt\n/mnt/session/glob65/many-137.txt\n/mnt/session/glob65/many-136.txt\n/mnt/session/glob65/many-135.txt\n/mnt/session/glob65/many-134.txt\n/mnt/session/glob65/many-133.txt\n/mnt/session/glob65/many-131.txt\n/mnt/session/glob65/many-132.txt\n/mnt/session/glob65/many-130.txt\n/mnt/session/glob65/many-129.txt\n/mnt/session/glob65/many-127.txt\n/mnt/session/glob65/many-128.txt\n/mnt/session/glob65/many-126.txt\n/mnt/session/glob65/many-125.txt\n/mnt/session/glob65/many-124.txt\n/mnt/session/glob65/many-123.txt\n/mnt/session/glob65/many-122.txt\n/mnt/session/glob65/many-121.txt\n/mnt/session/glob65/many-120.txt\n/mnt/session/glob65/many-119.txt\n/mnt/session/glob65/many-117.txt\n/mnt/session/glob65/many-118.txt\n/mnt/session/glob65/many-115.txt\n/mnt/session/glob65/many-116.txt\n/mnt/session/glob65/many-114.txt\n/mnt/session/glob65/many-113.txt\n/mnt/session/glob65/many-111.txt\n/mnt/session/glob65/many-112.txt\n/mnt/session/glob65/many-109.txt\n/mnt/session/glob65/many-110.txt\n/mnt/session/glob65/many-108.txt\n/mnt/session/glob65/many-107.txt\n/mnt/session/glob65/many-106.txt\n/mnt/session/glob65/many-105.txt\n/mnt/session/glob65/many-104.txt\n/mnt/session/glob65/many-103.txt\n/mnt/session/glob65/many-102.txt\n/mnt/session/glob65/many-100.txt\n/mnt/session/glob65/many-101.txt\n/mnt/session/glob65/many-099.txt\n/mnt/session/glob65/many-098.txt\n/mnt/session/glob65/many-096.txt\n/mnt/session/glob65/many-097.txt\n/mnt/session/glob65/many-095.txt\n/mnt/session/glob65/many-094.txt\n/mnt/session/glob65/many-093.txt\n/mnt/session/glob65/many-092.txt\n/mnt/session/glob65/many-091.txt\n/mnt/session/glob65/many-089.txt\n/mnt/session/glob65/many-090.txt\n/mnt/session/glob65/many-087.txt\n/mnt/session/glob65/many-088.txt\n/mnt/session/glob65/many-085.txt\n/mnt/session/glob65/many-086.txt\n/mnt/session/glob65/many-083.txt\n/mnt/session/glob65/many-084.txt\n/mnt/session/glob65/many-082.txt\n/mnt/session/glob65/many-081.txt\n/mnt/session/glob65/many-080.txt\n/mnt/session/glob65/many-079.txt\n/mnt/session/glob65/many-078.txt\n/mnt/session/glob65/many-077.txt\n/mnt/session/glob65/many-076.txt\n/mnt/session/glob65/many-075.txt\n/mnt/session/glob65/many-074.txt\n/mnt/session/glob65/many-072.txt\n/mnt/session/glob65/many-073.txt\n/mnt/session/glob65/many-070.txt\n/mnt/session/glob65/many-071.txt\n/mnt/session/glob65/many-069.txt\n/mnt/session/glob65/many-068.txt\n/mnt/session/glob65/many-066.txt\n/mnt/session/glob65/many-067.txt\n/mnt/session/glob65/many-065.txt\n/mnt/session/glob65/many-064.txt\n/mnt/session/glob65/many-063.txt\n/mnt/session/glob65/many-061.txt\n/mnt/session/glob65/many-062.txt\n/mnt/session/glob65/many-060.txt\n/mnt/session/glob65/many-059.txt\n/mnt/session/glob65/many-058.txt\n/mnt/session/glob65/many-057.txt\n/mnt/session/glob65/many-056.txt\n/mnt/session/glob65/many-055.txt\n/mnt/session/glob65/many-054.txt\n/mnt/session/glob65/many-053.txt\n/mnt/session/glob65/many-052.txt\n/mnt/session/glob65/many-051.txt",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "["
+      },
+      "name": "glob",
+      "type": "agent.tool_use"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "rg: error parsing glob '[': unclosed character class; missing ']'",
+          "type": "text"
+        }
+      ],
+      "is_error": true,
+      "type": "agent.tool_result"
+    },
+    {
+      "type": "span.model_request_start"
+    },
+    {
+      "content": [
+        {
+          "text": "Setup completed and all eight glob probes executed in the specified order without modification, producing the expected mix of matches, empty results, a missing-path error, and an invalid-pattern error.",
+          "type": "text"
+        }
+      ],
+      "type": "agent.message"
+    },
+    {
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.thread_status_idle"
+    },
+    {
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.status_idle"
+    }
+  ],
+  "glob_call_count": 8,
+  "model": "claude-sonnet-5",
+  "run_id": "114a6db6",
+  "tool_uses": [
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "command": "set -eu\nroot=/mnt/session/glob65\nrm -rf \"$root\"\nmkdir -p \"$root/nested/deeper\" \"$root/node_modules/pkg\"\nprintf 'alpha' > \"$root/a.md\"\nprintf 'zulu' > \"$root/z.md\"\nprintf 'hidden' > \"$root/.hidden.md\"\nprintf 'nested' > \"$root/nested/b.md\"\nprintf 'deep' > \"$root/nested/deeper/c.md\"\nprintf 'ignored' > \"$root/ignored.md\"\nprintf 'dependency' > \"$root/node_modules/pkg/dependency.md\"\nprintf 'ignored.md\n' > \"$root/.gitignore\"\ni=1\nwhile [ \"$i\" -le 150 ]; do printf x > \"$root/many-$(printf '%03d' \"$i\").txt\"; i=$((i+1)); done"
+      },
+      "name": "bash"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "pattern": "*.md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "*.nomatch"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65/missing",
+        "pattern": "*.md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "**/*.md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "*.md"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": ".*"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "many-*.txt"
+      },
+      "name": "glob"
+    },
+    {
+      "evaluated_permission": "allow",
+      "input": {
+        "path": "/mnt/session/glob65",
+        "pattern": "["
+      },
+      "name": "glob"
+    }
+  ]
+}

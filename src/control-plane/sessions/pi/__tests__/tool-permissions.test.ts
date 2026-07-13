@@ -59,6 +59,24 @@ describe("store-backed builtin tool access resolver", () => {
     });
   });
 
+  it("resolves public glob allow, ask, and disabled configurations", () => {
+    const access = (config: { enabled?: boolean; permission_policy?: { type: "always_allow" | "always_ask" } }) =>
+      createStoreBackedBuiltinToolAccessResolver(fixture({
+        tools: [{
+          type: "agent_toolset_20260401",
+          default_config: { enabled: false },
+          configs: [{ name: "glob", ...config }],
+        }],
+      }))("wrk_default", "sesn_1", "glob");
+
+    expect(access({ enabled: true, permission_policy: { type: "always_allow" } }))
+      .toEqual({ enabled: true, permission: "allow" });
+    expect(access({ enabled: true, permission_policy: { type: "always_ask" } }))
+      .toEqual({ enabled: true, permission: "ask" });
+    expect(access({ enabled: false, permission_policy: { type: "always_allow" } }))
+      .toEqual({ enabled: false, permission: "allow" });
+  });
+
   it("can resolve from an agent id while the session row is not inserted yet", () => {
     const resolver = createStoreBackedBuiltinToolAccessResolver(
       fixture(
