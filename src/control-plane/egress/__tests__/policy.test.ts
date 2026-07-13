@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildHooksFromBundle,
   EgressPolicyError,
+  hostMatchesAllowPattern,
   parseNetworkingConfig,
   pathWithinPrefix,
   resolveSessionEgress,
@@ -136,6 +137,131 @@ describe("parseNetworkingConfig", () => {
     const config = structuredClone(base);
     config.networking.credentials[0]!.env = "github_token";
     expect(() => parseNetworkingConfig(config)).toThrow(/UPPER_SNAKE_CASE/);
+  });
+});
+
+describe("hosted CMA networking", () => {
+  const limited = (allowed_hosts: string[], extra: Record<string, unknown> = {}) => ({
+    networking: { type: "limited", allowed_hosts, ...extra },
+  });
+
+  it("translates limited hostnames to HTTPS/443 entries without mutating input", () => {
+    const config = limited(["API.Example.com", "*.Example.org"], {
+      allow_package_managers: false,
+      allow_mcp_servers: false,
+    });
+    const policy = parseNetworkingConfig(config)!;
+    expect(policy).toEqual({
+      allow: [
+        { host: "api.example.com", port: 443, protocol: "https", opaqueTunnel: false },
+        { host: "*.example.org", port: 443, protocol: "https", opaqueTunnel: false },
+      ],
+      credentials: [],
+    });
+    expect(config.networking.allowed_hosts).toEqual(["API.Example.com", "*.Example.org"]);
+  });
+
+  it("matches exact hosts and one-or-more wildcard labels, never the bare suffix", () => {
+    expect(hostMatchesAllowPattern("api.example.com", "API.EXAMPLE.COM")).toBe(true);
+    expect(hostMatchesAllowPattern("api.example.com", "other.example.com")).toBe(false);
+    expect(hostMatchesAllowPattern("*.example.com", "example.com")).toBe(false);
+    expect(hostMatchesAllowPattern("*.example.com", "www.example.com")).toBe(true);
+    expect(hostMatchesAllowPattern("*.example.com", "a.b.example.com")).toBe(true);
+    expect(hostMatchesAllowPattern("*.example.com", ".example.com")).toBe(false);
+    expect(hostMatchesAllowPattern("*.example.com", "foo..example.com")).toBe(false);
+    expect(hostMatchesAllowPattern("*.example.com", "evil.example.net")).toBe(false);
+  });
+
+  it("keeps hosted empty lists default-deny while preserving native empty semantics", () => {
+    expect(parseNetworkingConfig(limited([]))).toBeUndefined();
+    expect(parseNetworkingConfig({ networking: { allow: [] } })).toEqual({
+      allow: [],
+      credentials: [],
+    });
+  });
+
+  it.each([
+    ["unrestricted", { networking: { type: "unrestricted" } }],
+    ["unknown type", { networking: { type: "limited-ish", allowed_hosts: [] } }],
+    ["missing allowed_hosts", { networking: { type: "limited" } }],
+    ["mixed hosted/native", { networking: { type: "limited", allowed_hosts: [], allow: [] } }],
+    ["unknown shape", { networking: { typo: true } }],
+    ["package managers", limited([], { allow_package_managers: true })],
+    ["MCP servers", limited([], { allow_mcp_servers: true })],
+    ["nonboolean package flag", limited([], { allow_package_managers: "false" })],
+    ["nonboolean MCP flag", limited([], { allow_mcp_servers: 0 })],
+  ])("rejects %s", (_what, config) => {
+    expect(() => parseNetworkingConfig(config as never)).toThrow(EgressPolicyError);
+  });
+
+  it.each([
+    ["URL", "https://example.com"],
+    ["port", "example.com:443"],
+    ["IP literal", "127.0.0.1"],
+    ["IPv6 literal", "::1"],
+    ["IDN", "éxample.com"],
+    ["underscore", "foo_bar.example.com"],
+    ["trailing dot", "example.com."],
+    ["one label", "localhost"],
+    ["leading hyphen", "-foo.example.com"],
+    ["trailing hyphen", "foo-.example.com"],
+    ["long label", `${"a".repeat(64)}.com`],
+    ["long hostname", `${"a.".repeat(126)}com`],
+    ["bare wildcard suffix", "*.com"],
+    ["nested wildcard syntax", "foo.*.example.com"],
+    ["bare wildcard", "*"],
+  ])("rejects hosted %s", (_what, host) => {
+    expect(() => parseNetworkingConfig(limited([host]))).toThrow(EgressPolicyError);
+  });
+
+  it("rejects duplicate hosts after lowercase normalization", () => {
+    expect(() => parseNetworkingConfig(limited(["Example.com", "example.com"]))).toThrow(
+      /duplicate entry/,
+    );
+  });
+
+  it("enforces the hosted HTTPS marker at request and opaque-tunnel layers", async () => {
+    const hooks = resolveSessionEgress({
+      environmentConfig: limited(["api.example.com", "*.wild.example.com"]),
+      revealSecret: () => undefined,
+    })!.hooks;
+
+    await expect(
+      hooks.filterRequest!(
+        new Request("https://api.example.com/path"),
+        { leg: "terminated" },
+      ),
+    ).resolves.toEqual({ action: "allow" });
+    await expect(
+      hooks.filterRequest!(
+        new Request("http://api.example.com:443/path"),
+        { leg: "plain" },
+      ),
+    ).resolves.toMatchObject({ action: "deny", reason: /HTTPS transport/ });
+    await expect(
+      hooks.filterRequest!(
+        new Request("https://api.example.com/path"),
+        { leg: "plain" },
+      ),
+    ).resolves.toEqual({ action: "allow" });
+    expect(hooks.shouldTerminateTLS!("api.example.com", 443)).toBe(true);
+    expect(hooks.allowOpaqueTunnel!("api.example.com", 443)).toBe(false);
+    expect(hooks.shouldTerminateTLS!("www.wild.example.com", 443)).toBe(true);
+    expect(hooks.filter!(443, "a.b.wild.example.com", undefined as never)).toBe(true);
+    expect(hooks.filter!(443, "wild.example.com", undefined as never)).toBe(false);
+  });
+
+  it("leaves native entries protocol-agnostic", async () => {
+    const hooks = resolveSessionEgress({
+      environmentConfig: { networking: { allow: [{ host: "api.example.com", port: 443 }] } },
+      revealSecret: () => undefined,
+    })!.hooks;
+    await expect(
+      hooks.filterRequest!(
+        new Request("http://api.example.com:443/path"),
+        { leg: "plain" },
+      ),
+    ).resolves.toEqual({ action: "allow" });
   });
 });
 

@@ -34,7 +34,7 @@ const VALID_AGENT = {
 
 const VALID_ENVIRONMENT = {
   name: "Admission Environment",
-  config: { type: "cloud", networking: { type: "unrestricted" } },
+  config: { type: "cloud" },
 };
 
 describe("admission limits config", () => {

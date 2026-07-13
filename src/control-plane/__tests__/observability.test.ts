@@ -346,7 +346,7 @@ describe("gauges and admission counters", () => {
       headers: V1_HEADERS,
       body: JSON.stringify({
         name: "Obs Environment",
-        config: { type: "cloud", networking: { type: "unrestricted" } },
+        config: { type: "cloud" },
       }),
     });
     expect(envRes.status).toBe(200);
@@ -387,7 +387,7 @@ describe("gauges and admission counters", () => {
       headers: V1_HEADERS,
       body: JSON.stringify({
         name: "Cap Environment",
-        config: { type: "cloud", networking: { type: "unrestricted" } },
+        config: { type: "cloud" },
       }),
     });
     const environment = (await envRes.json()) as { id: string };

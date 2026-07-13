@@ -19,16 +19,19 @@
 //     header (fail closed for the secret) instead of crashing the proxy;
 //   - opaque tunnels (no inspection, no injection) are per-host opt-ins.
 import { randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import type { JsonObject } from "../../types/json.ts";
 import type { EgressProxyOptions } from "./proxy.ts";
 
 export class EgressPolicyError extends Error {}
 
 export interface EgressAllowEntry {
-  /** Exact hostname, lowercase. No wildcards in v1. */
+  /** Exact hostname or a leading `*.` wildcard suffix, lowercase. */
   host: string;
   /** Destination port; defaults to 443. */
   port: number;
+  /** Hosted translations are deliberately HTTPS-only. Native entries omit it. */
+  protocol?: "https";
   /** Optional path restriction (segment-boundary prefix match). */
   pathPrefix?: string;
   /**
@@ -90,27 +93,21 @@ const CREDENTIAL_KEYS = new Set([
   "header",
 ]);
 const NETWORKING_KEYS = new Set(["allow", "credentials"]);
+const HOSTED_NETWORKING_KEYS = new Set([
+  "type",
+  "allowed_hosts",
+  "allow_package_managers",
+  "allow_mcp_servers",
+]);
 
 /**
- * Whether `config.networking` is OMA's egress-policy shape (`allow` /
- * `credentials`), as opposed to absent or the hosted wire shape
- * (`{ type: "unrestricted" }` etc.), which OMA has always ignored — the
- * sandbox stays at --network none. Callers on the session path (0117e) use
- * this to decide whether to strict-parse: routing hosted-shape configs into
- * {@link parseNetworkingConfig} would reject every pre-egress environment.
- */
-export function hasEgressNetworkingConfig(config: JsonObject): boolean {
-  const networking = config["networking"];
-  return (
-    isPlainObject(networking) &&
-    ("allow" in networking || "credentials" in networking)
-  );
-}
-
-/**
- * Parse `config.networking` into an EgressPolicy. Returns undefined when the
- * config has no `networking` key (default deny — no proxy is stood up).
- * Throws EgressPolicyError on any invalid shape.
+ * Parse `config.networking` into OMA's internal egress policy.
+ *
+ * The public networking field has two deliberately disjoint shapes:
+ * OMA-native `{ allow, credentials }` and the CMA-shaped hosted
+ * `{ type, allowed_hosts, ... }`. Every present shape is classified and
+ * validated; an unknown or mixed shape is never treated as absent networking.
+ * Returns undefined only for absent networking or a valid hosted empty list.
  */
 export function parseNetworkingConfig(
   config: JsonObject,
@@ -120,6 +117,84 @@ export function parseNetworkingConfig(
   if (!isPlainObject(networking)) {
     throw new EgressPolicyError("networking must be an object");
   }
+
+  if (isHostedNetworkingShape(networking)) {
+    return parseHostedNetworkingConfig(networking);
+  }
+  if ("allow" in networking || "credentials" in networking) {
+    return parseNativeNetworkingConfig(networking);
+  }
+  throw new EgressPolicyError(
+    'networking must use either the OMA-native {allow, credentials} shape or the hosted {type, allowed_hosts} shape',
+  );
+}
+
+function isHostedNetworkingShape(
+  networking: Record<string, unknown>,
+): boolean {
+  return (
+    "type" in networking ||
+    "allowed_hosts" in networking ||
+    "allow_package_managers" in networking ||
+    "allow_mcp_servers" in networking
+  );
+}
+
+function parseHostedNetworkingConfig(
+  networking: Record<string, unknown>,
+): EgressPolicy | undefined {
+  rejectUnknownKeys(networking, HOSTED_NETWORKING_KEYS, "networking");
+  const type = networking["type"];
+  if (type === "unrestricted") {
+    throw new EgressPolicyError(
+      'networking.type "unrestricted" is not supported; use type "limited" with an allowed_hosts list',
+    );
+  }
+  if (type !== "limited") {
+    throw new EgressPolicyError(
+      'networking.type must be "limited" ("unrestricted" is not supported)',
+    );
+  }
+
+  const rawAllowedHosts = networking["allowed_hosts"];
+  if (!Array.isArray(rawAllowedHosts)) {
+    throw new EgressPolicyError("networking.allowed_hosts must be an array");
+  }
+  for (const flag of ["allow_package_managers", "allow_mcp_servers"] as const) {
+    const value = networking[flag];
+    if (value !== undefined && typeof value !== "boolean") {
+      throw new EgressPolicyError(`networking.${flag} must be a boolean`);
+    }
+    if (value === true) {
+      throw new EgressPolicyError(
+        `networking.${flag}=true is not supported by this deployment`,
+      );
+    }
+  }
+
+  const seen = new Set<string>();
+  const allow: EgressAllowEntry[] = [];
+  rawAllowedHosts.forEach((value, index) => {
+    const host = parseHostedHost(value, `networking.allowed_hosts[${index}]`);
+    if (seen.has(host)) {
+      throw new EgressPolicyError(
+        `networking.allowed_hosts: duplicate entry ${host}`,
+      );
+    }
+    seen.add(host);
+    allow.push({ host, port: 443, protocol: "https", opaqueTunnel: false });
+  });
+
+  // A hosted empty list is an explicit, valid default-deny request. It must
+  // remain distinct from native `{ allow: [] }`, whose existing OMA behavior
+  // returns an empty policy object and therefore still requires egress wiring.
+  if (allow.length === 0) return undefined;
+  return { allow, credentials: [] };
+}
+
+function parseNativeNetworkingConfig(
+  networking: Record<string, unknown>,
+): EgressPolicy {
   rejectUnknownKeys(networking, NETWORKING_KEYS, "networking");
 
   const rawAllow = networking["allow"];
@@ -253,6 +328,39 @@ function parseHost(value: unknown, at: string): string {
     );
   }
   return value;
+}
+
+/**
+ * CMA-hosted hostname grammar. This is intentionally stricter than the
+ * pre-existing native OMA parser: hosted values are a closed, safe subset and
+ * are normalized only for the internal policy, never in persisted JSON.
+ */
+function parseHostedHost(value: unknown, at: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new EgressPolicyError(`${at} must be a hostname`);
+  }
+  const wildcard = value.startsWith("*.");
+  const hostname = wildcard ? value.slice(2) : value;
+  if (value.includes("*") && !wildcard) {
+    throw new EgressPolicyError(
+      `${at} must use only a leading *. wildcard`,
+    );
+  }
+  if (value.length > 253 || hostname.length === 0 || isIP(hostname) !== 0) {
+    throw new EgressPolicyError(`${at} is not a valid DNS hostname`);
+  }
+  const labels = hostname.split(".");
+  if (labels.length < 2) {
+    throw new EgressPolicyError(
+      `${at} must contain at least two hostname labels`,
+    );
+  }
+  for (const label of labels) {
+    if (!isHostnameLabel(label)) {
+      throw new EgressPolicyError(`${at} contains an invalid hostname label`);
+    }
+  }
+  return `${wildcard ? "*." : ""}${hostname.toLowerCase()}`;
 }
 
 function parsePort(value: unknown, at: string): number {
@@ -468,6 +576,29 @@ export function buildHooksFromBundle(
   );
 }
 
+/**
+ * Match one policy hostname against a request hostname. A hosted `*.` entry
+ * matches one or more labels before its suffix, never the bare suffix itself.
+ * Native entries never contain wildcards, but use this same matcher so every
+ * proxy enforcement layer shares one rule.
+ */
+export function hostMatchesAllowPattern(pattern: string, host: string): boolean {
+  const normalizedHost = host.toLowerCase();
+  if (!pattern.startsWith("*.")) return pattern === normalizedHost;
+  const suffix = pattern.slice(2);
+  if (!normalizedHost.endsWith(`.${suffix}`)) return false;
+  const prefix = normalizedHost.slice(0, -(suffix.length + 1));
+  return prefix.length > 0 && prefix.split(".").every(isHostnameLabel);
+}
+
+function isHostnameLabel(label: string): boolean {
+  return (
+    label.length >= 1 &&
+    label.length <= 63 &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)
+  );
+}
+
 function buildHooks(
   policy: EgressPolicy,
   grants: SentinelGrant[],
@@ -475,7 +606,7 @@ function buildHooks(
 ): EgressPolicyHooks {
   const findAllow = (host: string, port: number): EgressAllowEntry | undefined =>
     policy.allow.find(
-      (entry) => entry.host === host.toLowerCase() && entry.port === port,
+      (entry) => entry.port === port && hostMatchesAllowPattern(entry.host, host),
     );
 
   const grantInScope = (
@@ -513,6 +644,12 @@ function buildHooks(
         // The connection filter already gates hosts; this fires only if the
         // two ever disagree. Fail closed.
         return { action: "deny", reason: `${host}:${port} is not allowlisted` };
+      }
+      if (entry.protocol !== undefined && url.protocol !== `${entry.protocol}:`) {
+        return {
+          action: "deny",
+          reason: `${host}:${port} requires ${entry.protocol.toUpperCase()} transport`,
+        };
       }
       if (entry.pathPrefix && !pathWithinPrefix(url.pathname, entry.pathPrefix)) {
         return {

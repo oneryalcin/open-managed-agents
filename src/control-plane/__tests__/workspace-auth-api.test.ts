@@ -48,7 +48,6 @@ const VALID_ENVIRONMENT = {
   name: "Auth Test Environment",
   config: {
     type: "cloud",
-    networking: { type: "unrestricted" },
   },
 };
 

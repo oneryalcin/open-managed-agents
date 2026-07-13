@@ -32,7 +32,6 @@ const VALID_ENVIRONMENT = {
   name: "Idempotency Environment",
   config: {
     type: "cloud",
-    networking: { type: "unrestricted" },
   },
 };
 

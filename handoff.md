@@ -12,8 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-12 (`arc-c-networking`, probe commit `8344271`). `main`
-is synced at `ff2ae54` after PR #179._
+_Last updated 2026-07-13 (`arc-c-networking`, networking parity implementation
+in the current worktree; validation: typecheck + full Vitest)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -34,11 +34,12 @@ is synced at `ff2ae54` after PR #179._
 - Running-session deletion parity is shipped (PR #179, merge `ff2ae54`): the
   hosted 400 contract is probed, and `DefaultSessionService` requires the
   liveness guard at construction before deletion can mutate state.
-- Active work is the networking parity slice on `arc-c-networking`. Probe 60
-  established unrestricted vs limited behavior; probe 61 covered wildcards,
-  package managers, MCP-access gating, and invalid host formats. The next code
-  change must translate or explicitly reject CMA-shaped networking rather than
-  accept and silently ignore it.
+- The networking parity slice is implemented on `arc-c-networking`: CMA
+  `limited` host lists translate to normalized HTTPS/443 exact or `*.` wildcard
+  allow entries; hosted empty lists remain dark; unsupported unrestricted,
+  package-manager, and MCP flags are explicit 400s. Environment creation and
+  session admission validate before side effects, while legacy malformed rows
+  fail closed in the resolver. Native OMA networking remains unchanged.
 - Issues `#16`, `#107`, `#113`, and `#121` are closed. `#103`, `#118`, and `#119`
   remain open follow-up work; PR #169 / issue #164 is the events-service split.
 
@@ -344,26 +345,22 @@ Full detail lives in-repo; this is the index + the one invariant to carry from e
 - **Running-session delete parity** (PR #179, `ff2ae54`) is probe-backed and
   constructor-guarded. A direct service caller cannot omit the liveness
   preflight without failing construction/typecheck.
+- **CMA networking parity** (plan `0127`, probe 62) is implemented in the
+  current networking worktree: bounded hosted translation, fail-closed parsing,
+  HTTPS transport enforcement, API-400 mapping, and Docker/in-process policy
+  coverage are in place.
 
 ## Immediate Next Work
 
-1. **Networking parity** — implement the next slice on `arc-c-networking`.
-   Probe 61 shows that CMA accepts empty allowlists, subdomain-only wildcards,
-   package-manager access, and MCP-access gating as separate capabilities;
-   URL/port entries are rejected while uppercase hostnames are preserved. Do
-   not map this into OMA's policy engine until wildcard matching, registry
-   allowlists, MCP URL resolution, and the unsafe `unrestricted` case have
-   explicit semantics. The minimum acceptable interim behavior is a clear 400,
-   never accept-and-ignore.
-2. **Probe-backed tool-config validation** — settle unknown tool names,
+1. **Probe-backed tool-config validation** — settle unknown tool names,
    permission-policy values, duplicate/cap precedence, and the `glob`/`grep`
    vocabulary before changing the wire contract. Track the result in
    `PARITY.md` and the relevant plan/probe artifact.
-3. **Finish the pre-v1 trust pass** — next candidates are rejecting the inert
+2. **Finish the pre-v1 trust pass** — next candidates are rejecting the inert
    `multiagent` façade or implementing the `glob`/`grep` slice, followed by
    pagination semantics and agent update/versioning. Use `PARITY.md` for the
    current ordering rather than this handoff as an independent backlog.
-4. **Standing queue (evidence-gated):** `#103` deployment hardening and
+3. **Standing queue (evidence-gated):** `#103` deployment hardening and
    `#118/#119` upload + streaming idempotency. Postgres/async-store work remains
    gated on a concrete multi-process need per ADR 0014; do not merge it
    speculatively. PR #169 / issue #164 (events-service split) is parallelizable.

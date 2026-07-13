@@ -90,13 +90,19 @@ the risk of silent contradiction, not by how easy they first appear.
   - CMA `[Obs]`: probe 38 (`scratch/artifacts/38-managed-agents-delete-running-probe.json`) — DELETE while running → HTTP 400 `invalid_request_error`, message `"Cannot delete session while it is running. Send an interrupt event or wait for the session to complete."`; the rejected DELETE leaves the session running; a concurrent interrupt succeeds asynchronously while DELETE stays rejected.
   - Fix (shipped): `assertSessionDeletable` (`events/service.ts`) mirrors the archive running-detection and `sessionNotDeletable()` (`events/session-guards.ts`) returns the verbatim hosted message; `DefaultSessionService` requires this guard at construction and runs it before any deletion mutation. Regression + mutation-checked in `session-lifecycle-api.test.ts`; the delete-vs-indexing race in `runtime-events-api.test.ts` is now closed by the guard (delete refused until the turn settles).
 
-- [ ] **`networking` accept-and-ignore trap** *(verified)*
+- [x] **`networking` accept-and-ignore trap** *(DONE 2026-07-13)*
   - CMA `[Doc]`: `config.networking: {type:"unrestricted"}` / `{type:"limited", allowed_hosts:[…]}` grants the documented access (`environments.md:379`).
-  - OMA: a CMA-shaped body is accepted and stored but silently yields the *opposite* — the sandbox stays `--network none` (`egress/policy.ts:97` comment states this explicitly). A client believes it enabled egress and gets full isolation.
-  - Fix direction: prefer translating the CMA shape into OMA's policy engine.
-    If a safe translation is not possible, reject it with a clear 400. Never
-    retain accept-and-ignore behavior. Translation requires an explicit review
-    of `limited`, package-manager, MCP-server, wildcard, port, and path semantics.
+  - OMA now translates the bounded `limited` host-list subset into its
+    default-deny egress proxy: exact and leading-`*.` wildcard hosts are
+    normalized internally and granted HTTPS/443 only. Hosted empty lists stay
+    dark; the caller's original config is preserved in the environment row.
+  - Invalid hosted/native networking is rejected as `400 invalid_request_error`
+    before persistence, and legacy malformed or unsupported rows fail closed at
+    session admission and egress-bundle resolution.
+  - Deliberate scope: `unrestricted`, `allow_package_managers: true`, and
+    `allow_mcp_servers: true` remain explicit 400s until bounded OMA semantics
+    exist. The HTTPS-only mapping is OMA's conservative supported subset, not a
+    universal claim about all CMA transport behavior.
 
 - [ ] **Unknown tool configs and policy types can silently no-op** *(`[Unk]` hosted rejection behavior; OMA behavior verified)*
   - CMA: documented tool names and permission-policy values are closed sets,

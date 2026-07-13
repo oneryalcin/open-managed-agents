@@ -27,7 +27,6 @@ const VALID_ENVIRONMENT = {
   name: "C3 Environment",
   config: {
     type: "cloud",
-    networking: { type: "unrestricted" },
   },
 };
 
