@@ -93,7 +93,8 @@ def create_agent(name: str = "OMA SRE Agent") -> str:
 def create_environment(name: str | None = None) -> str:
     env = client.beta.environments.create(
         name=name or f"oma-sre-agent-{uuid.uuid4().hex[:6]}",
-        config={"type": "cloud", "networking": {"type": "unrestricted"}},
+        # This example does not need network access; OMA defaults to deny.
+        config={"type": "cloud"},
     )
     return env.id
 
