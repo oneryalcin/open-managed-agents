@@ -12,8 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-13 (`arc-d-tool-config-validation`, probe 63 complete;
-validation: typecheck + full Vitest)._
+_Last updated 2026-07-13 (`arc-e-multiagent-rejection`, multiagent honesty
+slice in the current worktree; validation: focused tests)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -40,10 +40,13 @@ validation: typecheck + full Vitest)._
   package-manager, and MCP flags are explicit 400s. Environment creation and
   session admission validate before side effects, while legacy malformed rows
   fail closed in the resolver. Native OMA networking remains unchanged.
-- The next tool-config slice is active on `arc-d-tool-config-validation`.
-  Probe 63 established the hosted builtin vocabulary, accepted policies,
-  duplicate rejection, implicit defaults, and validation precedence; the OMA
-  closed-set implementation and tests are in the current worktree.
+- Tool-config validation is merged to `main` via PR #181. Probe 63 established
+  the hosted builtin vocabulary, accepted policies, duplicate rejection,
+  implicit defaults, and validation precedence; OMA now enforces those closed
+  sets while keeping MCP names server-defined.
+- The multiagent honesty slice is active on `arc-e-multiagent-rejection`.
+  Non-null `multiagent` configurations now reject before persistence with a
+  stable 400; the full coordinator runtime remains deferred.
 - Issues `#16`, `#107`, `#113`, and `#121` are closed. `#103`, `#118`, and `#119`
   remain open follow-up work; PR #169 / issue #164 is the events-service split.
 
@@ -352,17 +355,20 @@ Full detail lives in-repo; this is the index + the one invariant to carry from e
 - **CMA networking parity** (plan `0127`, probe 62) is merged via PR #180:
   bounded hosted translation, fail-closed parsing, HTTPS transport enforcement,
   API-400 mapping, and Docker/in-process policy coverage are in place.
-- **Tool-config validation** (plan `0128`, probe 63) is implemented in the
-  current branch: hosted builtin names and permission policies are closed sets,
-  duplicate builtin configs are rejected, implicit defaults are materialized,
-  and MCP names remain server-defined.
+- **Tool-config validation** (plan `0128`, probe 63) is merged via PR #181:
+  hosted builtin names and permission policies are closed sets, duplicate
+  builtin configs are rejected, implicit defaults are materialized, and MCP
+  names remain server-defined.
+- **Multiagent honesty** (plan `0129`) is implemented in the current branch:
+  every non-null configuration is rejected before persistence; null/absent
+  values remain compatible and legacy rows remain readable.
 
 ## Immediate Next Work
 
-1. **Finish the pre-v1 trust pass** — reject the inert `multiagent` façade
-   honestly until runtime delegation exists, then implement the `glob`/`grep`
-   parity slice. Use `PARITY.md` for the current ordering rather than this
-   handoff as an independent backlog.
+1. **Finish the pre-v1 trust pass** — resolve the `glob`/`grep` parity slice.
+   Either wire both end-to-end or reject unsupported names honestly until they
+   work. Use `PARITY.md` for the current ordering rather than this handoff as
+   an independent backlog.
 2. **Pagination and agent update/versioning** — probe pagination semantics,
    then add the highest-value missing core workflow: agent update plus
    versioning.

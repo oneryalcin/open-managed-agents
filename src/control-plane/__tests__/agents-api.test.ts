@@ -194,6 +194,54 @@ describe("agents API", () => {
     });
   });
 
+  it("rejects every non-null multiagent configuration before persistence", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const values = [
+      {
+        type: "coordinator",
+        agents: [{ type: "agent", id: "agent_child" }],
+      },
+      {},
+      "not-an-object",
+      0,
+    ];
+    for (const [index, multiagent] of values.entries()) {
+      const res = await app.request("/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: `Unsupported multiagent ${index}`,
+          model: "claude-opus-4-7",
+          multiagent,
+        }),
+      });
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toMatchObject({
+        error: {
+          type: "invalid_request_error",
+          message: "The `multiagent` configuration is not supported by this deployment.",
+        },
+      });
+    }
+    const listed = await app.request("/v1/agents?limit=10");
+    await expect(listed.json()).resolves.toMatchObject({ data: [] });
+  });
+
+  it("preserves an explicit null multiagent value", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const res = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Null multiagent",
+        model: "claude-opus-4-7",
+        multiagent: null,
+      }),
+    });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ multiagent: null });
+  });
+
   it("materializes the hosted default builtin tool config when omitted", async () => {
     const app = createInMemoryControlPlaneApp();
     const res = await app.request("/v1/agents", {
