@@ -19,7 +19,6 @@ const VALID_ENVIRONMENT = {
   name: "Interrupt Environment",
   config: {
     type: "cloud",
-    networking: { type: "unrestricted" },
   },
 };
 

@@ -39,7 +39,6 @@ const VALID_ENVIRONMENT = {
   name: "C2 Environment",
   config: {
     type: "cloud",
-    networking: { type: "unrestricted" },
   },
 };
 

@@ -1,0 +1,289 @@
+{
+  "create_cases": {
+    "empty_allowlist": {
+      "body": {
+        "archived_at": null,
+        "config": {
+          "networking": {
+            "allow_mcp_servers": false,
+            "allow_package_managers": false,
+            "allowed_hosts": [],
+            "type": "limited"
+          },
+          "packages": {
+            "apt": [],
+            "cargo": [],
+            "gem": [],
+            "go": [],
+            "npm": [],
+            "pip": [],
+            "type": "packages"
+          },
+          "type": "cloud"
+        },
+        "created_at": "2026-07-12T17:39:14.250169Z",
+        "description": "",
+        "id": "env_01LjjiYcMZyX2ExU3R4NQRbD",
+        "metadata": {},
+        "name": "oma-networking-edge-empty_allowlist-1783877954-89596",
+        "scope": "organization",
+        "state": "active",
+        "type": "environment",
+        "updated_at": "2026-07-12T17:39:14.250169Z"
+      },
+      "id": "env_01LjjiYcMZyX2ExU3R4NQRbD",
+      "status": 200
+    },
+    "mcp_servers": {
+      "body": {
+        "archived_at": null,
+        "config": {
+          "networking": {
+            "allow_mcp_servers": true,
+            "allow_package_managers": false,
+            "allowed_hosts": [],
+            "type": "limited"
+          },
+          "packages": {
+            "apt": [],
+            "cargo": [],
+            "gem": [],
+            "go": [],
+            "npm": [],
+            "pip": [],
+            "type": "packages"
+          },
+          "type": "cloud"
+        },
+        "created_at": "2026-07-12T17:39:15.880806Z",
+        "description": "",
+        "id": "env_01C83Lu3a5vrV7nmugDai5qZ",
+        "metadata": {},
+        "name": "oma-networking-edge-mcp_servers-1783877954-89596",
+        "scope": "organization",
+        "state": "active",
+        "type": "environment",
+        "updated_at": "2026-07-12T17:39:15.880806Z"
+      },
+      "id": "env_01C83Lu3a5vrV7nmugDai5qZ",
+      "status": 200
+    },
+    "package_managers": {
+      "body": {
+        "archived_at": null,
+        "config": {
+          "networking": {
+            "allow_mcp_servers": false,
+            "allow_package_managers": true,
+            "allowed_hosts": [],
+            "type": "limited"
+          },
+          "packages": {
+            "apt": [],
+            "cargo": [],
+            "gem": [],
+            "go": [],
+            "npm": [],
+            "pip": [],
+            "type": "packages"
+          },
+          "type": "cloud"
+        },
+        "created_at": "2026-07-12T17:39:15.448393Z",
+        "description": "",
+        "id": "env_017UjU2Q2228YnVsiDLJUEzf",
+        "metadata": {},
+        "name": "oma-networking-edge-package_managers-1783877954-89596",
+        "scope": "organization",
+        "state": "active",
+        "type": "environment",
+        "updated_at": "2026-07-12T17:39:15.448393Z"
+      },
+      "id": "env_017UjU2Q2228YnVsiDLJUEzf",
+      "status": 200
+    },
+    "wildcard": {
+      "body": {
+        "archived_at": null,
+        "config": {
+          "networking": {
+            "allow_mcp_servers": false,
+            "allow_package_managers": false,
+            "allowed_hosts": [
+              "*.example.com"
+            ],
+            "type": "limited"
+          },
+          "packages": {
+            "apt": [],
+            "cargo": [],
+            "gem": [],
+            "go": [],
+            "npm": [],
+            "pip": [],
+            "type": "packages"
+          },
+          "type": "cloud"
+        },
+        "created_at": "2026-07-12T17:39:14.589427Z",
+        "description": "",
+        "id": "env_016SFFNhJts8ZYHYN13zJqFH",
+        "metadata": {},
+        "name": "oma-networking-edge-wildcard-1783877954-89596",
+        "scope": "organization",
+        "state": "active",
+        "type": "environment",
+        "updated_at": "2026-07-12T17:39:14.589427Z"
+      },
+      "id": "env_016SFFNhJts8ZYHYN13zJqFH",
+      "status": 200
+    }
+  },
+  "invalid_cases": {
+    "port_in_allowed_hosts": {
+      "body": {
+        "error": {
+          "message": "`allowed_hosts` entry \"example.com:443\" contains a port. Entries must be bare hostnames without ports.",
+          "type": "invalid_request_error"
+        },
+        "request_id": "req_011Ccxa8yRyq4mu36gL9CMyM",
+        "type": "error"
+      },
+      "status": 400
+    },
+    "uppercase_allowed_host": {
+      "body": {
+        "archived_at": null,
+        "config": {
+          "networking": {
+            "allow_mcp_servers": false,
+            "allow_package_managers": false,
+            "allowed_hosts": [
+              "EXAMPLE.COM"
+            ],
+            "type": "limited"
+          },
+          "packages": {
+            "apt": [],
+            "cargo": [],
+            "gem": [],
+            "go": [],
+            "npm": [],
+            "pip": [],
+            "type": "packages"
+          },
+          "type": "cloud"
+        },
+        "created_at": "2026-07-12T17:39:16.951836Z",
+        "description": "",
+        "id": "env_01CTttra1AyayMtffc2QN9Zc",
+        "metadata": {},
+        "name": "oma-networking-edge-invalid-uppercase_allowed_host-1783877954-89596",
+        "scope": "organization",
+        "state": "active",
+        "type": "environment",
+        "updated_at": "2026-07-12T17:39:16.951836Z"
+      },
+      "status": 200
+    },
+    "url_in_allowed_hosts": {
+      "body": {
+        "error": {
+          "message": "`allowed_hosts` entry \"https://example.com\" contains a URL scheme. Entries must be bare hostnames like \"google.com\".",
+          "type": "invalid_request_error"
+        },
+        "request_id": "req_011Ccxa8xL15Pi63933HReUW",
+        "type": "error"
+      },
+      "status": 400
+    }
+  },
+  "model": "claude-sonnet-4-6",
+  "run_id": "1783877954-89596",
+  "runtime_cases": {
+    "empty_allowlist": {
+      "events": [
+        "session.status_running",
+        "session.thread_status_running",
+        "user.message",
+        "span.model_request_start",
+        "agent.tool_use",
+        "span.model_request_end",
+        "agent.tool_result",
+        "span.model_request_start",
+        "agent.message",
+        "span.model_request_end",
+        "session.thread_status_idle",
+        "session.status_idle"
+      ],
+      "label": "empty_allowlist",
+      "messages": [
+        "Here is the output verbatim:\n\n```\nhost=example.com http_code=403 exit_code=0\n```"
+      ],
+      "session_id": "sesn_015vNB2g8Fk9hq42mU8jZF7F"
+    },
+    "mcp_servers": {
+      "events": [
+        "session.status_running",
+        "session.thread_status_running",
+        "user.message",
+        "span.model_request_start",
+        "agent.tool_use",
+        "span.model_request_end",
+        "agent.tool_result",
+        "span.model_request_start",
+        "agent.message",
+        "span.model_request_end",
+        "session.thread_status_idle",
+        "session.status_idle"
+      ],
+      "label": "mcp_servers",
+      "messages": [
+        "Here is the output verbatim:\n\n```\nhost=mcp.linear.app http_code=403 exit_code=0\n```"
+      ],
+      "session_id": "sesn_015bkA7WRt338SHL7eTivy1s"
+    },
+    "package_managers": {
+      "events": [
+        "session.status_running",
+        "session.thread_status_running",
+        "user.message",
+        "span.model_request_start",
+        "agent.tool_use",
+        "span.model_request_end",
+        "agent.tool_result",
+        "span.model_request_start",
+        "agent.message",
+        "span.model_request_end",
+        "session.thread_status_idle",
+        "session.status_idle"
+      ],
+      "label": "package_managers",
+      "messages": [
+        "Here is the output verbatim:\n\n```\nhost=pypi.org http_code=200 exit_code=0\n```"
+      ],
+      "session_id": "sesn_01AZ45uN93cCXDDaYLrxuVac"
+    },
+    "wildcard": {
+      "events": [
+        "session.status_running",
+        "session.thread_status_running",
+        "user.message",
+        "span.model_request_start",
+        "agent.tool_use",
+        "span.model_request_end",
+        "agent.tool_result",
+        "span.model_request_start",
+        "agent.message",
+        "span.model_request_end",
+        "session.thread_status_idle",
+        "session.status_idle"
+      ],
+      "label": "wildcard",
+      "messages": [
+        "Here are the output lines verbatim:\n\n```\nhost=example.com http_code=403 exit_code=0\nhost=www.example.com http_code=200 exit_code=0\n```"
+      ],
+      "session_id": "sesn_01VTSCTwBqDd7EBgzwr4q6Lo"
+    }
+  }
+}

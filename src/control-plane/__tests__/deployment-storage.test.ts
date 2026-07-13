@@ -78,7 +78,7 @@ describe("deployment storage", () => {
     });
     const environment = environments.create("wrk_default", {
       name: "Durable Environment",
-      config: { type: "cloud", networking: { type: "unrestricted" } },
+      config: { type: "cloud" },
     });
     const session = await sessions.create("wrk_default", {
       agent: agent.id,

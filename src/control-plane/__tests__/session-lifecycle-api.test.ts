@@ -47,7 +47,6 @@ const VALID_ENVIRONMENT = {
   name: "Lifecycle Environment",
   config: {
     type: "cloud",
-    networking: { type: "unrestricted" },
   },
 };
 

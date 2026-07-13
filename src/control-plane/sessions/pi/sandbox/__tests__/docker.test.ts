@@ -701,7 +701,8 @@ describe("Docker sandbox egress confinement (plan 0117d, ADR 0016 §2/§3)", () 
     const resolved = resolveSessionEgressBundle({
       environmentConfig: {
         networking: {
-          allow: [{ host: "example.com", port: 443 }],
+          type: "limited",
+          allowed_hosts: ["example.com"],
         },
       },
       revealSecret: () => undefined,

@@ -76,9 +76,13 @@ function makeDurableEgressPlane(): DeploymentControlPlane & { key: string } {
 }
 
 describe("createSessionEgressBundleResolver", () => {
-  it("returns undefined for absent and hosted-shape networking", async () => {
+  it("returns undefined for absent and hosted-empty networking, but rejects unrestricted legacy rows", async () => {
     const fixture = makeResolverFixture();
     const plain = fixture.seedSession({ type: "cloud" });
+    const hostedEmpty = fixture.seedSession({
+      type: "cloud",
+      networking: { type: "limited", allowed_hosts: [] },
+    });
     const unrestricted = fixture.seedSession({
       type: "cloud",
       networking: { type: "unrestricted" },
@@ -86,8 +90,31 @@ describe("createSessionEgressBundleResolver", () => {
 
     await expect(fixture.resolve("wrk_default", plain)).resolves.toBeUndefined();
     await expect(
-      fixture.resolve("wrk_default", unrestricted),
+      fixture.resolve("wrk_default", hostedEmpty),
     ).resolves.toBeUndefined();
+    await expect(fixture.resolve("wrk_default", unrestricted)).rejects.toThrow(
+      /unrestricted.*not supported/,
+    );
+    fixture.close();
+  });
+
+  it("builds a bundle for a persisted hosted limited environment", async () => {
+    const fixture = makeResolverFixture();
+    const sessionId = fixture.seedSession({
+      networking: {
+        type: "limited",
+        allowed_hosts: ["API.Example.com", "*.Example.org"],
+      },
+    });
+    const resolved = await fixture.resolve("wrk_default", sessionId);
+    expect(resolved).toBeDefined();
+    expect(resolved!.bundle.policy).toEqual({
+      allow: [
+        { host: "api.example.com", port: 443, protocol: "https", opaqueTunnel: false },
+        { host: "*.example.org", port: 443, protocol: "https", opaqueTunnel: false },
+      ],
+      credentials: [],
+    });
     fixture.close();
   });
 
@@ -157,17 +184,69 @@ describe("fail-closed session-create gate", () => {
     plane.stores.close();
   });
 
-  it("keeps hosted-shape and absent networking creating sessions as before", async () => {
+  it("keeps absent and hosted-empty networking at default deny", async () => {
     const plane = createDeploymentControlPlane({});
     const configs: JsonObject[] = [
       { type: "cloud" },
-      { type: "cloud", networking: { type: "unrestricted" } },
+      { type: "cloud", networking: { type: "limited", allowed_hosts: [] } },
     ];
     for (const config of configs) {
       const env = await createEnvironment(plane.app, config);
       const res = await createSession(plane.app, env.id);
       expect(res.status, JSON.stringify(config)).toBe(200);
     }
+    plane.stores.close();
+  });
+
+  it("accepts limited hosted networking and preserves the caller's config", async () => {
+    const plane = createDeploymentControlPlane({});
+    const config = {
+      type: "cloud",
+      networking: {
+        type: "limited",
+        allowed_hosts: ["API.Example.com", "*.Example.org"],
+        allow_package_managers: false,
+        allow_mcp_servers: false,
+      },
+    } as JsonObject;
+    const res = await request(plane.app, "/v1/environments", {
+      method: "POST",
+      body: { name: "Limited networking", config },
+    });
+    expect(res.status).toBe(200);
+    const environment = (await res.json()) as ManagedAgentsEnvironment;
+    expect(environment.config).toEqual(config);
+    const listed = await request(plane.app, "/v1/environments");
+    expect(((await listed.json()) as { data: unknown[] }).data).toHaveLength(1);
+    plane.stores.close();
+  });
+
+  it("rejects a non-empty hosted limited environment when egress cannot be honored", async () => {
+    const plane = createDeploymentControlPlane({});
+    const env = await createEnvironment(plane.app, {
+      networking: { type: "limited", allowed_hosts: ["example.com"] },
+    });
+    const res = await createSession(plane.app, env.id);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error.message).toContain("cannot honor");
+    plane.stores.close();
+  });
+
+  it("rejects unsupported hosted networking before persisting the environment", async () => {
+    const plane = createDeploymentControlPlane({});
+    const res = await request(plane.app, "/v1/environments", {
+      method: "POST",
+      body: {
+        name: "Unsupported networking",
+        config: { type: "cloud", networking: { type: "unrestricted" } },
+      },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error.type).toBe("invalid_request_error");
+    const listed = await request(plane.app, "/v1/environments");
+    expect(((await listed.json()) as { data: unknown[] }).data).toHaveLength(0);
     plane.stores.close();
   });
 
@@ -219,15 +298,23 @@ describe("fail-closed session-create gate", () => {
     plane.stores.close();
   });
 
-  it("rejects a malformed egress-shape networking config at session create", async () => {
+  it("rejects a malformed egress-shape networking config before persistence", async () => {
     const plane = createDeploymentControlPlane({});
-    const env = await createEnvironment(plane.app, {
-      networking: { allow: [{ host: "api.github.com", bogus: true }] },
+    const res = await request(plane.app, "/v1/environments", {
+      method: "POST",
+      body: {
+        name: "Malformed networking",
+        config: {
+          type: "cloud",
+          networking: { allow: [{ host: "api.github.com", bogus: true }] },
+        },
+      },
     });
-    const res = await createSession(plane.app, env.id);
     expect(res.status).toBe(400);
     const body = (await res.json()) as ApiErrorBody;
-    expect(body.error.message).toContain("invalid networking config");
+    expect(body.error.message).toContain("Invalid environment networking config");
+    const listed = await request(plane.app, "/v1/environments");
+    expect(((await listed.json()) as { data: unknown[] }).data).toHaveLength(0);
     plane.stores.close();
   });
 });

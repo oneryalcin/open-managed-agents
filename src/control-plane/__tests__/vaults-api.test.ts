@@ -1252,7 +1252,7 @@ async function createEnvironment(
     key,
     body: {
       name: "Vault Environment",
-      config: { type: "cloud", networking: { type: "unrestricted" } },
+      config: { type: "cloud" },
     },
   });
   expect(res.status).toBe(200);

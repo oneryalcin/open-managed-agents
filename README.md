@@ -49,7 +49,7 @@ client = anthropic.Anthropic(
 
 agent = client.beta.agents.create(name="helper", model="claude-sonnet-5")
 env = client.beta.environments.create(
-    name="dev", config={"type": "cloud", "networking": {"type": "unrestricted"}}
+    name="dev", config={"type": "cloud"}  # default-deny networking
 )
 session = client.beta.sessions.create(agent=agent.id, environment_id=env.id)
 

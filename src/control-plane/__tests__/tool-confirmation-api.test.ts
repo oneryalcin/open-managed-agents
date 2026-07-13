@@ -45,7 +45,6 @@ const VALID_ENVIRONMENT = {
   name: "Tool Confirmation Environment",
   config: {
     type: "cloud",
-    networking: { type: "unrestricted" },
   },
 };
 

@@ -1,10 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { ManagedAgentsCustomTool } from "../types/agents.ts";
 import { SqliteAgentStore } from "./agents/store.ts";
-import {
-  hasEgressNetworkingConfig,
-  resolveSessionEgressBundle,
-} from "./egress/policy.ts";
+import { resolveSessionEgressBundle } from "./egress/policy.ts";
 import { SqliteEnvironmentStore } from "./environments/store.ts";
 import type { FileStorage } from "./files/types.ts";
 import type { SecretsStore } from "./secrets/types.ts";
@@ -17,9 +14,9 @@ import type { SessionFileMountSnapshotRow } from "./sessions/types.ts";
 /**
  * Per-session egress bundle resolution (plan 0117e-3, Option A): session ->
  * environment -> networking config -> secrets, resolved at sandbox-create
- * time inside the docker factory closure. Returns undefined for a session
- * whose environment grants no egress — including hosted-shape networking
- * (`{type:"unrestricted"}`), which OMA has always ignored. Mints a fresh
+ * time inside the docker factory closure. Returns undefined only when the
+ * environment has no networking or a valid hosted empty allowlist. Every
+ * other present networking shape is parsed and fails closed. Mints a fresh
  * URL-safe proxy-auth token per session.
  */
 export function createSessionEgressBundleResolver(stores: {
@@ -44,7 +41,6 @@ export function createSessionEgressBundleResolver(stores: {
       resolvedEnvironmentId,
     );
     if (!environment) return undefined;
-    if (!hasEgressNetworkingConfig(environment.config)) return undefined;
     const resolved = resolveSessionEgressBundle({
       environmentConfig: environment.config,
       revealSecret: (name) => stores.secrets?.reveal(workspaceId, name),

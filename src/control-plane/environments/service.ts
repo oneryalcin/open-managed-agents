@@ -1,5 +1,6 @@
 import { newEnvironmentId } from "../ids.ts";
 import { invalidRequest, notFound } from "../errors.ts";
+import { EgressPolicyError, parseNetworkingConfig } from "../egress/policy.ts";
 import type { ManagedAgentsListPage } from "../../types/common.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
 import { isJsonObject, isJsonValue } from "../../types/json.ts";
@@ -67,6 +68,16 @@ function parseCreateEnvironment(input: unknown): CreateManagedEnvironmentRequest
   }
   if (!isJsonValue(config)) {
     throw invalidRequest("`config` must be JSON-compatible");
+  }
+  try {
+    // Validate before the row is built or handed to the store. This keeps
+    // unsupported hosted shapes from becoming durable, silently inert config.
+    parseNetworkingConfig(config);
+  } catch (error) {
+    if (error instanceof EgressPolicyError) {
+      throw invalidRequest(`Invalid environment networking config: ${error.message}`);
+    }
+    throw error;
   }
   return { name, config };
 }

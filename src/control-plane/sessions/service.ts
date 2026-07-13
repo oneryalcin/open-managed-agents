@@ -10,7 +10,6 @@ import { log } from "../logging.ts";
 import type { AgentStore } from "../agents/types.ts";
 import {
   EgressPolicyError,
-  hasEgressNetworkingConfig,
   parseNetworkingConfig,
 } from "../egress/policy.ts";
 import type { EnvironmentRow, EnvironmentStore } from "../environments/types.ts";
@@ -321,14 +320,10 @@ export class DefaultSessionService implements SessionService {
   }
 
   // Fail-closed egress gate (plan 0117e-3, the slice's key safety property):
-  // an environment granting egress (OMA `networking.allow`/`.credentials`
-  // shape) must be REJECTED at session create when the deployment cannot
-  // honor it — silently running such a session at --network none (or worse,
-  // with credentials it cannot inject) hides a broken boundary from the
-  // operator. Hosted-shape networking (`{type:"unrestricted"}`) stays what it
-  // has always been in OMA: ignored, --network none.
+  // every present networking shape is parsed before any file/skill/runtime
+  // preparation. Unsupported hosted networking and malformed legacy rows must
+  // not silently turn into a --network none session.
   private assertEgressHonorable(environment: EnvironmentRow): void {
-    if (!hasEgressNetworkingConfig(environment.config)) return;
     let policy;
     try {
       policy = parseNetworkingConfig(environment.config);

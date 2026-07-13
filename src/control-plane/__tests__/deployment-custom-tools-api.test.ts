@@ -178,7 +178,7 @@ async function createEnvironment(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       name: "Deployment Custom Tool Environment",
-      config: { type: "cloud", networking: { type: "unrestricted" } },
+      config: { type: "cloud" },
     }),
   });
   expect(res.status).toBe(200);

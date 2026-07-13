@@ -539,7 +539,7 @@ async function setupSession(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       name: "MCP e2e Environment",
-      config: { type: "cloud", networking: { type: "unrestricted" } },
+      config: { type: "cloud" },
     }),
   });
   expect(envRes.status).toBe(200);

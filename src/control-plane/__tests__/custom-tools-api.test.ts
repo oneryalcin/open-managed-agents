@@ -49,7 +49,6 @@ const VALID_ENVIRONMENT = {
   name: "D Environment",
   config: {
     type: "cloud",
-    networking: { type: "unrestricted" },
   },
 };
 
