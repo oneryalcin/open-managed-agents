@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { invalidRequest } from "../errors.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
@@ -133,6 +134,7 @@ interface SessionDbRow {
 
 export class SqliteSessionStore implements SessionStore {
   private readonly db: DatabaseSync;
+  private readonly cursorSigningKey = randomBytes(32);
   private readonly insertStmt: StatementSync;
   private readonly insertResourceStmt: StatementSync;
   private readonly insertSnapshotStmt: StatementSync;
@@ -571,7 +573,12 @@ export class SqliteSessionStore implements SessionStore {
     const includeArchived = opts.includeArchived ?? false;
     const cursor = opts.page === undefined
       ? undefined
-      : decodeSessionCursor(opts.page, { order, agentId: opts.agentId, includeArchived });
+      : decodeSessionCursor(
+        opts.page,
+        { order, agentId: opts.agentId, includeArchived },
+        workspaceId,
+        this.cursorSigningKey,
+      );
     const direction = cursor?.direction ?? "next";
     const queryOrder = direction === "prev"
       ? (order === "asc" ? "desc" : "asc")
@@ -595,10 +602,22 @@ export class SqliteSessionStore implements SessionStore {
     return {
       data,
       next_page: hasNext && data.length > 0
-        ? encodeSessionCursor(data[data.length - 1]!.id, "next", context)
+        ? encodeSessionCursor(
+          data[data.length - 1]!.id,
+          "next",
+          context,
+          workspaceId,
+          this.cursorSigningKey,
+        )
         : null,
       prev_page: hasPrev && data.length > 0
-        ? encodeSessionCursor(data[0]!.id, "prev", context)
+        ? encodeSessionCursor(
+          data[0]!.id,
+          "prev",
+          context,
+          workspaceId,
+          this.cursorSigningKey,
+        )
         : null,
     };
   }
@@ -710,6 +729,8 @@ function encodeSessionCursor(
   anchor: string,
   direction: "next" | "prev",
   context: SessionCursorContext,
+  workspaceId: string,
+  signingKey: Buffer,
 ): string {
   const payload: SessionCursorPayload = {
     v: 1,
@@ -719,21 +740,30 @@ function encodeSessionCursor(
     agentId: context.agentId ?? null,
     includeArchived: context.includeArchived,
   };
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = signSessionCursor(encodedPayload, workspaceId, signingKey);
+  return `${encodedPayload}.${signature.toString("base64url")}`;
 }
 
 function decodeSessionCursor(
   value: string,
   context: SessionCursorContext,
+  workspaceId: string,
+  signingKey: Buffer,
 ): SessionCursorPayload {
   let payload: unknown;
   try {
-    if (!/^[A-Za-z0-9_-]+$/.test(value)) {
-      throw new Error("non-canonical base64url");
-    }
-    const decoded = Buffer.from(value, "base64url");
-    if (decoded.toString("base64url") !== value) {
-      throw new Error("non-canonical base64url");
+    const parts = value.split(".");
+    if (parts.length !== 2) throw new Error("invalid signed cursor");
+    const [encodedPayload, encodedSignature] = parts as [string, string];
+    const decoded = decodeCanonicalBase64url(encodedPayload);
+    const signature = decodeCanonicalBase64url(encodedSignature);
+    const expected = signSessionCursor(encodedPayload, workspaceId, signingKey);
+    if (
+      signature.length !== expected.length ||
+      !timingSafeEqual(signature, expected)
+    ) {
+      throw new Error("invalid cursor signature");
     }
     payload = JSON.parse(decoded.toString("utf8"));
   } catch {
@@ -750,6 +780,30 @@ function decodeSessionCursor(
     throw invalidRequest("page token filters do not match request");
   }
   return payload;
+}
+
+function signSessionCursor(
+  encodedPayload: string,
+  workspaceId: string,
+  signingKey: Buffer,
+): Buffer {
+  return createHmac("sha256", signingKey)
+    .update("oma-session-page-v1\0", "utf8")
+    .update(workspaceId, "utf8")
+    .update("\0", "utf8")
+    .update(encodedPayload, "utf8")
+    .digest();
+}
+
+function decodeCanonicalBase64url(value: string): Buffer {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error("non-canonical base64url");
+  }
+  const decoded = Buffer.from(value, "base64url");
+  if (decoded.toString("base64url") !== value) {
+    throw new Error("non-canonical base64url");
+  }
+  return decoded;
 }
 
 function isSessionCursorPayload(value: unknown): value is SessionCursorPayload {

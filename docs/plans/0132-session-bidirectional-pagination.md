@@ -20,7 +20,9 @@ change those resources or session-event pagination.
 
 - Replace the session list envelope's `has_more` field with `prev_page`.
 - Use an opaque, versioned base64url cursor containing the anchor session ID,
-  traversal direction, order, and normalized session-list filters.
+  traversal direction, order, and normalized session-list filters. Authenticate
+  the payload with a workspace-bound HMAC so clients cannot rewrite that
+  context and re-encode a valid cursor.
 - Reject malformed cursors and cursors whose order or filters do not match the
   request.
 - For forward traversal, seek after the previous page's final row.
@@ -31,9 +33,10 @@ change those resources or session-event pagination.
   terminal boundary.
 - Preserve workspace isolation and existing limit validation.
 
-Cursor contents are implementation details, not a client API or authentication
+Cursor contents are implementation details, not a client API or authorization
 mechanism. Workspace identity remains server context and is not trusted from the
-cursor.
+cursor. The signing key is random and stable for the session-store process
+lifetime; outstanding cursors intentionally become invalid after restart.
 
 ## Tests before implementation
 

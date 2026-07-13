@@ -226,6 +226,33 @@ describe("Core control-plane API", () => {
       "invalid_request_error",
       "invalid page cursor",
     );
+    const tamperedOrder = tamperSessionCursor(descPage.next_page!, (payload) => {
+      payload.order = "asc";
+    });
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${agent.id}&order=asc&limit=1&page=${tamperedOrder}`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    const tamperedAgent = tamperSessionCursor(descPage.next_page!, (payload) => {
+      payload.agentId = otherAgent.id;
+    });
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${otherAgent.id}&order=desc&limit=1&page=${tamperedAgent}`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
+    const tamperedArchived = tamperSessionCursor(descPage.next_page!, (payload) => {
+      payload.includeArchived = true;
+    });
+    await expectError(
+      await app.request(`/v1/sessions?agent_id=${agent.id}&order=desc&include_archived=true&limit=1&page=${tamperedArchived}`),
+      400,
+      "invalid_request_error",
+      "invalid page cursor",
+    );
     await expectError(
       await app.request(`/v1/sessions?agent_id=${agent.id}&order=asc&limit=1&page=${descPage.next_page}`),
       400,
@@ -542,4 +569,18 @@ async function expectError(
     request_id: expect.stringMatching(/^req_/),
   });
   expect(body.request_id).toBe(requestId);
+}
+
+function tamperSessionCursor(
+  cursor: string,
+  mutate: (payload: Record<string, unknown>) => void,
+): string {
+  const [encodedPayload, signature] = cursor.split(".");
+  expect(encodedPayload).toEqual(expect.any(String));
+  expect(signature).toEqual(expect.any(String));
+  const payload = JSON.parse(
+    Buffer.from(encodedPayload!, "base64url").toString("utf8"),
+  ) as Record<string, unknown>;
+  mutate(payload);
+  return `${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}.${signature}`;
 }
