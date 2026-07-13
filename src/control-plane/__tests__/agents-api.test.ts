@@ -179,7 +179,7 @@ describe("agents API", () => {
           },
           {
             type: "agent_toolset_20260401",
-            default_config: { permission_policy: { type: "never_allow" } },
+            default_config: { permission_policy: { type: "always_ask" } },
           },
         ],
       }),
@@ -192,6 +192,139 @@ describe("agents API", () => {
         message: "`tools` may contain at most one `agent_toolset_20260401` entry",
       },
     });
+  });
+
+  it("materializes the hosted default builtin tool config when omitted", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const res = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Implicit Defaults",
+        model: "claude-opus-4-7",
+        tools: [{ type: "agent_toolset_20260401" }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const agent = (await res.json()) as ManagedAgentsAgent;
+    expect(agent.tools).toEqual([{
+      type: "agent_toolset_20260401",
+      default_config: {
+        enabled: true,
+        permission_policy: { type: "always_allow" },
+      },
+      configs: [],
+    }]);
+  });
+
+  it("rejects unknown builtin names, policies, and duplicate configs before persistence", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const cases = [
+      {
+        name: "unknown name",
+        configs: [{ name: "find" }],
+        message: "not a valid value",
+      },
+      {
+        name: "unknown policy",
+        configs: [{ name: "bash", permission_policy: { type: "never_allow" } }],
+        message: "permission_policy.type",
+      },
+      {
+        name: "duplicate config",
+        configs: [{ name: "bash" }, { name: "bash" }],
+        message: "duplicate builtin tool config",
+      },
+    ];
+    for (const item of cases) {
+      const res = await app.request("/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: `Invalid ${item.name}`,
+          model: "claude-opus-4-7",
+          tools: [{ type: "agent_toolset_20260401", configs: item.configs }],
+        }),
+      });
+      expect(res.status, item.name).toBe(400);
+      await expect(res.text()).resolves.toContain(item.message);
+    }
+    const listed = await app.request("/v1/agents?limit=10");
+    await expect(listed.json()).resolves.toMatchObject({ data: [] });
+  });
+
+  it("matches probe 63 precedence for mixed-invalid builtin configs", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const cases = [
+      {
+        name: "unknown config name wins over malformed default policy",
+        configs: [{ name: "oma_probe_unknown_tool" }],
+        default_config: { permission_policy: { type: 42 } },
+        message: "`configs[].name`",
+      },
+      {
+        name: "unknown default policy wins over unknown config name",
+        configs: [{ name: "oma_probe_unknown_tool" }],
+        default_config: { permission_policy: { type: "oma_probe_unknown_policy" } },
+        message: "`permission_policy.type`",
+      },
+      {
+        name: "unknown default policy wins over malformed config name",
+        configs: [{ name: 42 }],
+        default_config: { permission_policy: { type: "oma_probe_unknown_policy" } },
+        message: "`permission_policy.type`",
+      },
+      {
+        name: "unknown per-config policy wins over unknown config name",
+        configs: [{ name: "oma_probe_unknown_tool", permission_policy: { type: "oma_probe_unknown_policy" } }],
+        default_config: undefined,
+        message: "`permission_policy.type`",
+      },
+    ];
+
+    for (const item of cases) {
+      const res = await app.request("/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: `Mixed invalid ${item.name}`,
+          model: "claude-opus-4-7",
+          tools: [{
+            type: "agent_toolset_20260401",
+            configs: item.configs,
+            ...(item.default_config === undefined
+              ? {}
+              : { default_config: item.default_config }),
+          }],
+        }),
+      });
+      expect(res.status, item.name).toBe(400);
+      await expect(res.text(), item.name).resolves.toContain(item.message);
+    }
+  });
+
+  it("accepts the hosted builtin vocabulary and both hosted policies", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const names = ["bash", "edit", "glob", "grep", "read", "web_fetch", "web_search", "write"];
+    const res = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Hosted Vocabulary",
+        model: "claude-opus-4-7",
+        tools: [{
+          type: "agent_toolset_20260401",
+          default_config: { permission_policy: { type: "always_ask" } },
+          configs: names.map((name, index) => ({
+            name,
+            permission_policy: { type: index % 2 === 0 ? "always_allow" : "always_ask" },
+          })),
+        }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const agent = (await res.json()) as ManagedAgentsAgent;
+    expect((agent.tools[0] as { configs: unknown[] }).configs).toHaveLength(names.length);
   });
 
   it("returns the public notFound envelope for unregistered routes", async () => {

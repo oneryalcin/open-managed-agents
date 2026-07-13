@@ -12,8 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-13 (`arc-c-networking`, networking parity implementation
-in the current worktree; validation: typecheck + full Vitest)._
+_Last updated 2026-07-13 (`arc-d-tool-config-validation`, probe 63 complete;
+validation: typecheck + full Vitest)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -34,12 +34,16 @@ in the current worktree; validation: typecheck + full Vitest)._
 - Running-session deletion parity is shipped (PR #179, merge `ff2ae54`): the
   hosted 400 contract is probed, and `DefaultSessionService` requires the
   liveness guard at construction before deletion can mutate state.
-- The networking parity slice is implemented on `arc-c-networking`: CMA
-  `limited` host lists translate to normalized HTTPS/443 exact or `*.` wildcard
-  allow entries; hosted empty lists remain dark; unsupported unrestricted,
+- The networking parity slice is merged to `main` via PR #180: CMA `limited`
+  host lists translate to normalized HTTPS/443 exact or `*.` wildcard allow
+  entries; hosted empty lists remain dark; unsupported unrestricted,
   package-manager, and MCP flags are explicit 400s. Environment creation and
   session admission validate before side effects, while legacy malformed rows
   fail closed in the resolver. Native OMA networking remains unchanged.
+- The next tool-config slice is active on `arc-d-tool-config-validation`.
+  Probe 63 established the hosted builtin vocabulary, accepted policies,
+  duplicate rejection, implicit defaults, and validation precedence; the OMA
+  closed-set implementation and tests are in the current worktree.
 - Issues `#16`, `#107`, `#113`, and `#121` are closed. `#103`, `#118`, and `#119`
   remain open follow-up work; PR #169 / issue #164 is the events-service split.
 
@@ -345,21 +349,23 @@ Full detail lives in-repo; this is the index + the one invariant to carry from e
 - **Running-session delete parity** (PR #179, `ff2ae54`) is probe-backed and
   constructor-guarded. A direct service caller cannot omit the liveness
   preflight without failing construction/typecheck.
-- **CMA networking parity** (plan `0127`, probe 62) is implemented in the
-  current networking worktree: bounded hosted translation, fail-closed parsing,
-  HTTPS transport enforcement, API-400 mapping, and Docker/in-process policy
-  coverage are in place.
+- **CMA networking parity** (plan `0127`, probe 62) is merged via PR #180:
+  bounded hosted translation, fail-closed parsing, HTTPS transport enforcement,
+  API-400 mapping, and Docker/in-process policy coverage are in place.
+- **Tool-config validation** (plan `0128`, probe 63) is implemented in the
+  current branch: hosted builtin names and permission policies are closed sets,
+  duplicate builtin configs are rejected, implicit defaults are materialized,
+  and MCP names remain server-defined.
 
 ## Immediate Next Work
 
-1. **Probe-backed tool-config validation** — settle unknown tool names,
-   permission-policy values, duplicate/cap precedence, and the `glob`/`grep`
-   vocabulary before changing the wire contract. Track the result in
-   `PARITY.md` and the relevant plan/probe artifact.
-2. **Finish the pre-v1 trust pass** — next candidates are rejecting the inert
-   `multiagent` façade or implementing the `glob`/`grep` slice, followed by
-   pagination semantics and agent update/versioning. Use `PARITY.md` for the
-   current ordering rather than this handoff as an independent backlog.
+1. **Finish the pre-v1 trust pass** — reject the inert `multiagent` façade
+   honestly until runtime delegation exists, then implement the `glob`/`grep`
+   parity slice. Use `PARITY.md` for the current ordering rather than this
+   handoff as an independent backlog.
+2. **Pagination and agent update/versioning** — probe pagination semantics,
+   then add the highest-value missing core workflow: agent update plus
+   versioning.
 3. **Standing queue (evidence-gated):** `#103` deployment hardening and
    `#118/#119` upload + streaming idempotency. Postgres/async-store work remains
    gated on a concrete multi-process need per ADR 0014; do not merge it

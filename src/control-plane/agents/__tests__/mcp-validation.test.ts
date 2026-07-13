@@ -34,6 +34,18 @@ describe("mcp_servers validation (plan 0122 §4.1)", () => {
     expect(agent.tools).toContainEqual(TOOLSET);
   });
 
+  it("keeps MCP config names server-defined rather than applying builtin vocabulary", () => {
+    const toolset = {
+      ...TOOLSET,
+      configs: [{ name: "server_defined_tool", permission_policy: { type: "always_ask" } }],
+    };
+    const agent = service().create("wrk_a", agentWithMcp({
+      mcp_servers: [SERVER],
+      tools: [{ type: "agent_toolset_20260401" }, toolset],
+    }));
+    expect(agent.tools).toContainEqual(toolset);
+  });
+
   it("rejects a dangling mcp_toolset referencing an undeclared server", () => {
     expect(() =>
       service().create("wrk_a", agentWithMcp({ tools: [TOOLSET] })),

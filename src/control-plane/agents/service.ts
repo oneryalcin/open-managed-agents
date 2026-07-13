@@ -24,6 +24,17 @@ import { isJsonObject, isJsonValue, type JsonObject } from "../../types/json.ts"
 import type { SkillsStore } from "../skills/types.ts";
 
 const MAX_SKILLS = 20;
+const CMA_BUILTIN_TOOL_NAMES = [
+  "bash",
+  "edit",
+  "glob",
+  "grep",
+  "read",
+  "web_fetch",
+  "web_search",
+  "write",
+] as const;
+const CMA_PERMISSION_POLICY_TYPES = ["always_allow", "always_ask"] as const;
 
 export class DefaultAgentService implements AgentService {
   constructor(
@@ -235,10 +246,23 @@ function parseTool(value: unknown): ManagedAgentsTool {
   const tool = jsonObjectField(value, "tools");
   const type = stringField(tool, "type", { required: true });
   if (type === "agent_toolset_20260401") {
+    // Probe 63 shows a narrow precedence distinction: a structurally
+    // malformed default policy yields to config validation, while a
+    // semantically unknown default policy wins before configs are inspected.
+    const parseConfigsFirst = hasStructurallyMalformedDefaultPolicy(tool);
+    const defaultConfig = parseConfigsFirst
+      ? undefined
+      : optionalDefaultConfigSpread(tool, { materialize: true });
+    const configs = optionalToolConfigsSpread(tool, {
+      builtin: true,
+      materialize: true,
+    });
     return {
       type,
-      ...optionalDefaultConfigSpread(tool),
-      ...optionalToolConfigsSpread(tool),
+      ...(parseConfigsFirst
+        ? optionalDefaultConfigSpread(tool, { materialize: true })
+        : defaultConfig),
+      ...configs,
     };
   }
   if (type === "mcp_toolset") {
@@ -510,6 +534,7 @@ function jsonObjectRequired(
 
 function optionalDefaultConfigSpread(
   obj: Record<string, unknown>,
+  opts: { materialize?: boolean } = {},
 ): {
   default_config?: {
     enabled?: boolean;
@@ -517,7 +542,16 @@ function optionalDefaultConfigSpread(
   };
 } {
   const value = obj.default_config;
-  if (value === undefined) return {};
+  if (value === undefined) {
+    return opts.materialize
+      ? {
+          default_config: {
+            enabled: true,
+            permission_policy: { type: "always_allow" },
+          },
+        }
+      : {};
+  }
   const config = jsonObjectField(value, "default_config");
   const enabled = config.enabled;
   if (enabled !== undefined && typeof enabled !== "boolean") {
@@ -537,44 +571,84 @@ function optionalDefaultConfigSpread(
   };
 }
 
+function hasStructurallyMalformedDefaultPolicy(
+  obj: Record<string, unknown>,
+): boolean {
+  const defaultConfig = obj.default_config;
+  if (!isJsonObject(defaultConfig)) return defaultConfig !== undefined;
+  const policy = defaultConfig.permission_policy;
+  if (policy === undefined) return false;
+  if (typeof policy === "string") return policy.length === 0;
+  if (!isJsonObject(policy)) return true;
+  return typeof policy.type !== "string" || policy.type.length === 0;
+}
+
 function optionalToolConfigsSpread(
   obj: Record<string, unknown>,
+  opts: { builtin?: boolean; materialize?: boolean } = {},
 ): { configs?: ManagedAgentsToolConfig[] } {
   const value = obj.configs;
-  if (value === undefined) return {};
+  if (value === undefined) return opts.materialize ? { configs: [] } : {};
   if (!Array.isArray(value)) {
     throw invalidRequest("`configs` must be an array");
   }
-  return {
-    configs: value.map((v) => {
-      const config = jsonObjectField(v, "configs");
-      const enabled = config.enabled;
-      if (enabled !== undefined && typeof enabled !== "boolean") {
-        throw invalidRequest("`configs[].enabled` must be a boolean");
+  const configs = value.map((v) => {
+    const config = jsonObjectField(v, "configs");
+    const enabled = config.enabled;
+    if (enabled !== undefined && typeof enabled !== "boolean") {
+      throw invalidRequest("`configs[].enabled` must be a boolean");
+    }
+    // Parse policy before the name so an unknown policy wins over an unknown
+    // name in the same config, matching the observed hosted precedence.
+    const permissionPolicy =
+      config.permission_policy === undefined
+        ? undefined
+        : parsePermissionPolicy(config.permission_policy);
+    const name = stringField(config, "name", { required: true });
+    if (opts.builtin && !isCmaBuiltinToolName(name)) {
+      throw invalidRequest(
+        `\`configs[].name\` "${name}" is not a valid value; expected one of ${CMA_BUILTIN_TOOL_NAMES.join(", ")}`,
+      );
+    }
+    return {
+      name,
+      ...(enabled === undefined ? {} : { enabled }),
+      ...(permissionPolicy === undefined
+        ? {}
+        : { permission_policy: permissionPolicy }),
+    };
+  });
+  if (opts.builtin) {
+    const seen = new Set<string>();
+    for (const config of configs) {
+      if (seen.has(config.name)) {
+        throw invalidRequest(
+          `\`configs\` contains duplicate builtin tool config: ${config.name}`,
+        );
       }
-      const permissionPolicy =
-        config.permission_policy === undefined
-          ? undefined
-          : parsePermissionPolicy(config.permission_policy);
-      return {
-        name: stringField(config, "name", { required: true }),
-        ...(enabled === undefined ? {} : { enabled }),
-        ...(permissionPolicy === undefined
-          ? {}
-          : { permission_policy: permissionPolicy }),
-      };
-    }),
-  };
+      seen.add(config.name);
+    }
+  }
+  return { configs };
+}
+
+function isCmaBuiltinToolName(value: string): boolean {
+  return (CMA_BUILTIN_TOOL_NAMES as readonly string[]).includes(value);
 }
 
 function parsePermissionPolicy(value: unknown): ManagedAgentsPermissionPolicy {
-  if (typeof value === "string" && value.length > 0) {
-    return { type: value };
+  const type =
+    typeof value === "string" && value.length > 0
+      ? value
+      : stringField(jsonObjectField(value, "permission_policy"), "type", {
+          required: true,
+        });
+  if (!(CMA_PERMISSION_POLICY_TYPES as readonly string[]).includes(type)) {
+    throw invalidRequest(
+      `\`permission_policy.type\` "${type}" is not a valid value; expected one of ${CMA_PERMISSION_POLICY_TYPES.join(", ")}`,
+    );
   }
-  const obj = jsonObjectField(value, "permission_policy");
-  return {
-    type: stringField(obj, "type", { required: true }),
-  };
+  return { type: type as ManagedAgentsPermissionPolicy["type"] };
 }
 
 function normalizeModel(model: ManagedAgentsModel): ManagedAgentsModelConfig {
