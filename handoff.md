@@ -12,8 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-14 (`arc-i-agent-versioning-probe`; probe 67 complete;
-plan 0133 implementation-ready)._
+_Last updated 2026-07-14 (`arc-i-agent-versioning-probe`; plan 0133
+implemented and awaiting review)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -28,10 +28,10 @@ plan 0133 implementation-ready)._
   remains disabled until providers own content search.
 - PR #185 shipped session-specific `{data,next_page,prev_page}` pagination with
   signed, workspace-bound cursors and preserved ascending/descending order.
-- Probe 67 now establishes hosted agent update/version behavior: immutable
-  integer revisions, expected-version concurrency, newest-first history,
-  historical session pinning, and archive restrictions. Plan 0133 defines the
-  storage migration, update API, and exact-version runtime-pinning work.
+- Probe 67 established hosted agent update/version behavior. Plan 0133 now
+  implements immutable revisions, optimistic updates, authenticated version
+  history, exact-version runtime pinning, and shared model-catalog admission;
+  final review is pending.
 - Standing follow-ups remain `#103`, `#118`, and `#119`; consult GitHub rather
   than this file for their current status.
 
@@ -333,15 +333,14 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Review probe 67 and write the bounded agent update/versioning plan. Do not
-   invent behavior for the probe's explicit evidence boundaries.
-2. Add failing contract/store tests before implementing immutable agent
-   revisions, optimistic updates, version history, and session version choice.
-3. Implement and review the slice, then return to the pre-v1 sequence in
-   [PARITY.md](PARITY.md): usable environment images, followed by web tools.
-4. Keep provider-owned `grep` separate and disabled until its execution and
+1. Review plan 0133's implementation, especially migration atomicity,
+   exact-version runtime resolution, model-catalog ownership, and no-fallback
+   behavior. Merge only after the focused/full gates remain green.
+2. After merge, return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
+   environment images, followed by web tools.
+3. Keep provider-owned `grep` separate and disabled until its execution and
    deterministic search-binary strategy are designed.
-5. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

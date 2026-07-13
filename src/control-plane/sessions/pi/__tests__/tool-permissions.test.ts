@@ -95,10 +95,37 @@ describe("store-backed builtin tool access resolver", () => {
     );
 
     expect(
-      resolver("wrk_default", "sesn_pending", "bash", { agentId: "agent_1" }),
+      resolver("wrk_default", "sesn_pending", "bash", {
+        agentId: "agent_1",
+        agentVersion: 1,
+      }),
     ).toEqual({
       enabled: true,
       permission: "ask",
+    });
+  });
+
+  it("resolves the session's pinned revision instead of the latest agent", () => {
+    const v1 = agentRowWithTools([{
+      type: "agent_toolset_20260401",
+      default_config: { enabled: false },
+    }], 1);
+    const v2 = agentRowWithTools([{
+      type: "agent_toolset_20260401",
+      default_config: { enabled: true },
+    }], 2);
+    const session = sessionRow(1);
+    const resolver = createStoreBackedBuiltinToolAccessResolver({
+      sessions: { retrieveAny: () => session },
+      agents: {
+        retrieveVersion: (_workspaceId, _agentId, version) =>
+          version === 1 ? v1 : version === 2 ? v2 : undefined,
+      },
+    });
+
+    expect(resolver("wrk_default", "sesn_1", "bash")).toEqual({
+      enabled: false,
+      permission: "allow",
     });
   });
 
@@ -242,6 +269,27 @@ describe("PiToolPermissionBridge rollback", () => {
   });
 });
 
+function sessionRow(version: number): SessionRow {
+  return {
+    id: "sesn_1", workspace_id: "wrk_default", type: "session",
+    agent: { type: "agent", id: "agent_1", version },
+    environment_id: "env_1", status: "idle", title: null, metadata: {},
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    archived_at: null, usage: null, resources: [],
+  };
+}
+
+function agentRowWithTools(tools: AgentRow["tools"], version: number): AgentRow {
+  return {
+    id: "agent_1", workspace_id: "wrk_default", type: "agent", name: "Agent",
+    model: { id: "claude-opus-4-7", speed: "standard" }, system: null,
+    description: null, tools, skills: [], mcp_servers: [], metadata: {},
+    multiagent: null, version, created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z", archived_at: null,
+  };
+}
+
 function fixture(
   agent: Pick<AgentRow, "tools">,
   opts: { sessionVisible?: boolean } = {},
@@ -289,8 +337,10 @@ function fixture(
           : undefined,
     },
     agents: {
-      retrieveAny: (workspaceId: string, agentId: string) =>
-        workspaceId === row.workspace_id && agentId === row.id ? row : undefined,
+      retrieveVersion: (workspaceId: string, agentId: string, version: number) =>
+        workspaceId === row.workspace_id && agentId === row.id && version === row.version
+          ? row
+          : undefined,
     },
   };
 }

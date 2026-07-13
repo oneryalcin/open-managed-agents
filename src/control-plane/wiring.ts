@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { ManagedAgentsCustomTool } from "../types/agents.ts";
-import { SqliteAgentStore } from "./agents/store.ts";
+import type { AgentStore } from "./agents/types.ts";
 import { resolveSessionEgressBundle } from "./egress/policy.ts";
 import { SqliteEnvironmentStore } from "./environments/store.ts";
 import type { FileStorage } from "./files/types.ts";
@@ -9,7 +9,10 @@ import { DEFAULT_SIDECAR_PORT } from "./sessions/pi/sandbox/docker-egress.ts";
 import type { EgressBundleResolver } from "./sessions/pi/sandbox/docker.ts";
 import type { PiSessionFileMountResolver } from "./sessions/pi/runner.ts";
 import { SqliteSessionStore } from "./sessions/store.ts";
-import type { SessionFileMountSnapshotRow } from "./sessions/types.ts";
+import type {
+  SessionFileMountSnapshotRow,
+  SessionStore,
+} from "./sessions/types.ts";
 
 /**
  * Per-session egress bundle resolution (plan 0117e-3, Option A): session ->
@@ -20,7 +23,7 @@ import type { SessionFileMountSnapshotRow } from "./sessions/types.ts";
  * URL-safe proxy-auth token per session.
  */
 export function createSessionEgressBundleResolver(stores: {
-  sessions: Pick<SqliteSessionStore, "retrieveAny">;
+  sessions: Pick<SessionStore, "retrieveAny">;
   environments: Pick<SqliteEnvironmentStore, "retrieve">;
   secrets?: Pick<SecretsStore, "reveal">;
 }): EgressBundleResolver {
@@ -100,19 +103,41 @@ async function snapshotToRuntimeMount(
   };
 }
 
-export function createStoreBackedCustomToolsProvider(opts: {
-  sessions: Pick<SqliteSessionStore, "retrieveAny">;
-  agents: Pick<SqliteAgentStore, "retrieveAny">;
+export function createStoreBackedAgentRevisionProvider(opts: {
+  sessions: Pick<SessionStore, "retrieveAny">;
+  agents: Pick<AgentStore, "retrieveVersion">;
 }): (
   workspaceId: string,
   sessionId: string,
-  context?: { agentId?: string },
+  context?: { agentId?: string; agentVersion?: number },
+) => { model: { id: string }; system: string | null } | undefined {
+  return (workspaceId, sessionId, context) => {
+    const session = opts.sessions.retrieveAny(workspaceId, sessionId);
+    const agentId = session?.agent.id ?? context?.agentId;
+    const version = session?.agent.version ?? context?.agentVersion;
+    if (!agentId || version === undefined) return undefined;
+    const agent = opts.agents.retrieveVersion(workspaceId, agentId, version);
+    if (!agent) {
+      throw new Error(`Pinned agent revision not found: ${agentId}@${version}`);
+    }
+    return { model: agent.model, system: agent.system };
+  };
+}
+
+export function createStoreBackedCustomToolsProvider(opts: {
+  sessions: Pick<SessionStore, "retrieveAny">;
+  agents: Pick<AgentStore, "retrieveVersion">;
+}): (
+  workspaceId: string,
+  sessionId: string,
+  context?: { agentId?: string; agentVersion?: number },
 ) => readonly ManagedAgentsCustomTool[] {
   return (workspaceId, sessionId, context) => {
     const session = opts.sessions.retrieveAny(workspaceId, sessionId);
     const agentId = session?.agent.id ?? context?.agentId;
-    if (!agentId) return [];
-    const agent = opts.agents.retrieveAny(workspaceId, agentId);
+    const agentVersion = session?.agent.version ?? context?.agentVersion;
+    if (!agentId || agentVersion === undefined) return [];
+    const agent = opts.agents.retrieveVersion(workspaceId, agentId, agentVersion);
     if (!agent) return [];
     const tools = agent.tools.filter(
       (tool): tool is ManagedAgentsCustomTool => tool.type === "custom",

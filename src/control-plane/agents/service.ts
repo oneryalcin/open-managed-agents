@@ -1,15 +1,18 @@
+import { isDeepStrictEqual } from "node:util";
 import { newAgentId } from "../ids.ts";
-import { invalidRequest, notFound } from "../errors.ts";
+import { conflict, invalidRequest, notFound } from "../errors.ts";
 import type {
   AgentService,
   AgentRow,
   AgentStore,
   CreateManagedAgentRequest,
+  ListAgentVersionsOptions,
   ListAgentsOptions,
   WorkspaceId,
 } from "./types.ts";
 import type {
   ManagedAgentsAgent,
+  ManagedAgentsAgentVersionsPage,
   ManagedAgentsListPage,
   ManagedAgentsModel,
   ManagedAgentsModelConfig,
@@ -22,6 +25,11 @@ import type {
 } from "../../types/agents.ts";
 import { isJsonObject, isJsonValue, type JsonObject } from "../../types/json.ts";
 import type { SkillsStore } from "../skills/types.ts";
+import {
+  AgentUpdateArchivedError,
+  AgentUpdateConflictError,
+  AgentUpdateMissingError,
+} from "./store.ts";
 
 const MAX_SKILLS = 20;
 const CMA_BUILTIN_TOOL_NAMES = [
@@ -43,10 +51,17 @@ const OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES = [
 const MULTIAGENT_UNSUPPORTED_MESSAGE =
   "The `multiagent` configuration is not supported by this deployment.";
 
+export interface AgentModelAvailability {
+  assertAvailable(modelId: string): void;
+}
+
+const ACCEPT_ANY_MODEL: AgentModelAvailability = { assertAvailable: () => {} };
+
 export class DefaultAgentService implements AgentService {
   constructor(
     private readonly store: AgentStore,
     private readonly skills: Pick<SkillsStore, "getSkill" | "getVersion"> | undefined,
+    private readonly models: AgentModelAvailability = ACCEPT_ANY_MODEL,
   ) {}
 
   create(
@@ -54,6 +69,8 @@ export class DefaultAgentService implements AgentService {
     input: unknown,
   ): ManagedAgentsAgent {
     const req = parseCreateAgent(input);
+    const model = normalizeModel(req.model);
+    this.models.assertAvailable(model.id);
     this.assertSkillAttachments(workspaceId, req.skills ?? []);
     const now = new Date().toISOString();
     const id = newAgentId();
@@ -62,7 +79,7 @@ export class DefaultAgentService implements AgentService {
       workspace_id: workspaceId,
       type: "agent",
       name: req.name,
-      model: normalizeModel(req.model),
+      model,
       system: req.system ?? null,
       description: req.description ?? null,
       tools: req.tools ?? [],
@@ -76,6 +93,85 @@ export class DefaultAgentService implements AgentService {
       archived_at: null,
     };
     return toManagedAgent(this.store.create({ row }));
+  }
+
+  update(
+    workspaceId: WorkspaceId,
+    agentId: string,
+    input: unknown,
+  ): ManagedAgentsAgent {
+    const current = this.store.retrieveAny(workspaceId, agentId);
+    if (!current) throw notFound(`Agent ${agentId} not found`);
+    if (current.archived_at !== null) {
+      throw invalidRequest("Cannot modify archived agent");
+    }
+    const patch = objectInput(input);
+    const expectedVersion = positiveIntegerField(patch, "version");
+    if (expectedVersion !== current.version) {
+      throw conflict(
+        "Concurrent modification detected. Please fetch the latest version and retry.",
+      );
+    }
+    const mergedMetadata = patchMetadata(current.metadata, patch.metadata);
+    const mergedInput: Record<string, unknown> = {
+      name: patch.name === undefined ? current.name : patch.name,
+      model: patch.model === undefined ? current.model : patch.model,
+      system: patch.system === undefined ? current.system : patch.system,
+      description: patch.description === undefined
+        ? current.description
+        : patch.description,
+      tools: patch.tools === undefined ? current.tools : (patch.tools ?? []),
+      skills: patch.skills === undefined ? current.skills : (patch.skills ?? []),
+      mcp_servers: patch.mcp_servers === undefined
+        ? current.mcp_servers
+        : (patch.mcp_servers ?? []),
+      metadata: mergedMetadata,
+      multiagent: patch.multiagent === undefined
+        ? current.multiagent
+        : patch.multiagent,
+    };
+    const req = parseCreateAgent(mergedInput, {
+      allowUnsupportedMultiagent:
+        patch.multiagent === undefined && current.multiagent !== null,
+    });
+    const model = normalizeModel(req.model);
+    this.models.assertAvailable(model.id);
+    this.assertSkillAttachments(workspaceId, req.skills ?? []);
+    const candidate = {
+      ...current,
+      name: req.name,
+      model,
+      system: req.system ?? null,
+      description: req.description ?? null,
+      tools: req.tools ?? [],
+      skills: req.skills ?? [],
+      mcp_servers: req.mcp_servers ?? [],
+      metadata: req.metadata ?? {},
+      multiagent: req.multiagent ?? null,
+    };
+    if (sameAgentConfiguration(current, candidate)) return toManagedAgent(current);
+    const now = new Date().toISOString();
+    const next: AgentRow = {
+      ...candidate,
+      version: current.version + 1,
+      updated_at: now,
+    };
+    try {
+      return toManagedAgent(this.store.update({ expectedVersion, row: next }));
+    } catch (error) {
+      if (error instanceof AgentUpdateMissingError) {
+        throw notFound(`Agent ${agentId} not found`);
+      }
+      if (error instanceof AgentUpdateArchivedError) {
+        throw invalidRequest("Cannot modify archived agent");
+      }
+      if (error instanceof AgentUpdateConflictError) {
+        throw conflict(
+          "Concurrent modification detected. Please fetch the latest version and retry.",
+        );
+      }
+      throw error;
+    }
   }
 
   private assertSkillAttachments(
@@ -103,12 +199,33 @@ export class DefaultAgentService implements AgentService {
   retrieve(
     workspaceId: WorkspaceId,
     agentId: string,
+    version?: number,
   ): ManagedAgentsAgent {
-    const row = this.store.retrieveAny(workspaceId, agentId);
-    if (!row) {
-      throw notFound(`Agent ${agentId} not found`);
-    }
+    const owner = this.store.retrieveAny(workspaceId, agentId);
+    if (!owner) throw notFound(`Agent ${agentId} not found`);
+    if (version === undefined) return toManagedAgent(owner);
+    const row = this.store.retrieveVersion(workspaceId, agentId, version);
+    if (!row) throw notFound("Agent version not found.");
     return toManagedAgent(row);
+  }
+
+  listVersions(
+    workspaceId: WorkspaceId,
+    agentId: string,
+    opts: ListAgentVersionsOptions = {},
+  ): ManagedAgentsAgentVersionsPage {
+    try {
+      const page = this.store.listVersions(workspaceId, agentId, opts);
+      return { data: page.data.map(toManagedAgent), next_page: page.next_page };
+    } catch (error) {
+      if (error instanceof AgentUpdateMissingError) {
+        throw notFound(`Agent ${agentId} not found`);
+      }
+      if (error instanceof Error && error.message === "invalid page cursor") {
+        throw invalidRequest("invalid page cursor");
+      }
+      throw error;
+    }
   }
 
   archive(
@@ -156,9 +273,16 @@ function toManagedAgent(row: AgentRow): ManagedAgentsAgent {
   };
 }
 
-function parseCreateAgent(input: unknown): CreateManagedAgentRequest {
+function parseCreateAgent(
+  input: unknown,
+  opts: { allowUnsupportedMultiagent?: boolean } = {},
+): CreateManagedAgentRequest {
   const obj = objectInput(input);
-  if (obj.multiagent !== undefined && obj.multiagent !== null) {
+  if (
+    obj.multiagent !== undefined &&
+    obj.multiagent !== null &&
+    opts.allowUnsupportedMultiagent !== true
+  ) {
     // Do this before parsing the other agent fields: a non-null config must
     // never be accepted as a durable promise for a runtime we do not have.
     throw invalidRequest(MULTIAGENT_UNSUPPORTED_MESSAGE);
@@ -668,6 +792,44 @@ function parsePermissionPolicy(value: unknown): ManagedAgentsPermissionPolicy {
     );
   }
   return { type: type as ManagedAgentsPermissionPolicy["type"] };
+}
+
+function positiveIntegerField(obj: Record<string, unknown>, field: string): number {
+  const value = obj[field];
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+    throw invalidRequest(`\`${field}\` must be a positive integer`);
+  }
+  return value as number;
+}
+
+function patchMetadata(
+  current: Record<string, string>,
+  patch: unknown,
+): Record<string, string> {
+  if (patch === undefined) return { ...current };
+  if (!isJsonObject(patch)) throw invalidRequest("`metadata` must be an object");
+  const next = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key];
+    else if (typeof value === "string") next[key] = value;
+    else throw invalidRequest("`metadata` values must be strings or null");
+  }
+  return next;
+}
+
+function sameAgentConfiguration(a: AgentRow, b: AgentRow): boolean {
+  return isDeepStrictEqual(
+    {
+      name: a.name, model: a.model, system: a.system, description: a.description,
+      tools: a.tools, skills: a.skills, mcp_servers: a.mcp_servers,
+      metadata: a.metadata, multiagent: a.multiagent,
+    },
+    {
+      name: b.name, model: b.model, system: b.system, description: b.description,
+      tools: b.tools, skills: b.skills, mcp_servers: b.mcp_servers,
+      metadata: b.metadata, multiagent: b.multiagent,
+    },
+  );
 }
 
 function normalizeModel(model: ManagedAgentsModel): ManagedAgentsModelConfig {

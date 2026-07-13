@@ -88,6 +88,19 @@ export interface CreateManagedAgentRequest {
   multiagent?: ManagedAgentsMultiagent | null;
 }
 
+export interface UpdateManagedAgentRequest {
+  version: number;
+  name?: string;
+  model?: ManagedAgentsModel;
+  system?: string | null;
+  description?: string | null;
+  tools?: ManagedAgentsTool[] | null;
+  skills?: ManagedAgentsSkill[] | null;
+  mcp_servers?: ManagedAgentsMcpServer[] | null;
+  metadata?: Record<string, string | null>;
+  multiagent?: ManagedAgentsMultiagent | null;
+}
+
 export interface ManagedAgentsAgent {
   id: string;
   type: "agent";
@@ -104,6 +117,11 @@ export interface ManagedAgentsAgent {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+}
+
+export interface ManagedAgentsAgentVersionsPage {
+  data: ManagedAgentsAgent[];
+  next_page: string | null;
 }
 
 export type { ManagedAgentsListPage } from "./common.ts";

@@ -123,6 +123,7 @@ export interface DefaultSessionServiceOptions {
   pendingSnapshotCleanupMaxAttempts?: number;
   /** 0121 C2: telemetry-only, fired when the active-sessions cap rejects. */
   onAdmissionRejected?: () => void;
+  modelAvailability?: { assertAvailable(modelId: string): void };
 }
 
 export class DefaultSessionService implements SessionService {
@@ -158,6 +159,9 @@ export class DefaultSessionService implements SessionService {
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly onAdmissionRejected: (() => void) | undefined;
+  private readonly modelAvailability:
+    | { assertAvailable(modelId: string): void }
+    | undefined;
   private readonly pendingSessionCreates = new Map<WorkspaceId, number>();
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
     string,
@@ -183,6 +187,7 @@ export class DefaultSessionService implements SessionService {
     this.assertDeletable = opts.assertDeletable;
     this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
     this.onAdmissionRejected = opts.onAdmissionRejected;
+    this.modelAvailability = opts.modelAvailability;
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.egressCapability = opts.egressCapability;
@@ -357,20 +362,22 @@ export class DefaultSessionService implements SessionService {
   ): Promise<ManagedAgentsSession> {
     const req = parseCreateSession(input);
     const agentRef = parseAgentRef(req.agent);
-    const agent = this.agents.retrieveAny(workspaceId, agentRef.id);
-    if (!agent) {
+    const owner = this.agents.retrieveAny(workspaceId, agentRef.id);
+    if (!owner) {
       throw invalidRequest(`Agent ${agentRef.id} not found`);
     }
-    if (agent.archived_at !== null) {
+    if (owner.archived_at !== null) {
       throw invalidRequest(
         `agent ${agentRef.id} is archived and cannot be used to create a session`,
       );
     }
-    if (agentRef.version !== undefined && agentRef.version !== agent.version) {
-      throw invalidRequest(
-        `Agent ${agentRef.id} has version ${agent.version}; requested version ${agentRef.version} not found`,
-      );
+    const agent = agentRef.version === undefined
+      ? owner
+      : this.agents.retrieveVersion(workspaceId, agentRef.id, agentRef.version);
+    if (!agent) {
+      throw notFound(`agent.version: ${agentRef.version} not found`);
     }
+    this.modelAvailability?.assertAvailable(agent.model.id);
     if (agent.skills.length > 0) {
       const read = resolveBuiltinToolAccessForAgent(agent, "read");
       if (!read.enabled || read.permission === "deny") {

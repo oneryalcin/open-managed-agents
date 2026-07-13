@@ -25,7 +25,7 @@ export type BuiltinToolAccessResolver = (
   workspaceId: WorkspaceId,
   sessionId: string,
   toolName: SandboxedBuiltinToolName,
-  opts?: { agentId?: string },
+  opts?: { agentId?: string; agentVersion?: number },
 ) => BuiltinToolAccess;
 
 interface PendingToolConfirmation {
@@ -494,13 +494,16 @@ export class PiToolPermissionBridge {
 
 export function createStoreBackedBuiltinToolAccessResolver(opts: {
   sessions: Pick<SessionStore, "retrieveAny">;
-  agents: Pick<AgentStore, "retrieveAny">;
+  agents: Pick<AgentStore, "retrieveVersion">;
 }): BuiltinToolAccessResolver {
   return (workspaceId, sessionId, toolName, context) => {
     const session = opts.sessions.retrieveAny(workspaceId, sessionId);
     const agentId = session?.agent.id ?? context?.agentId;
-    if (!agentId) return { enabled: false, permission: "deny" };
-    const agent = opts.agents.retrieveAny(workspaceId, agentId);
+    const agentVersion = session?.agent.version ?? context?.agentVersion;
+    if (!agentId || agentVersion === undefined) {
+      return { enabled: false, permission: "deny" };
+    }
+    const agent = opts.agents.retrieveVersion(workspaceId, agentId, agentVersion);
     if (!agent) return { enabled: false, permission: "deny" };
     return resolveBuiltinToolAccessForAgent(agent, toolName);
   };

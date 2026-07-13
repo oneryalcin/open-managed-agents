@@ -830,7 +830,7 @@ describe("createStoreBackedMcpToolAccessResolver (plan 0122 §4.4)", () => {
           ({ agent: { type: "agent", id: "agent_1", version: 1 } }) as never,
       },
       agents: {
-        retrieveAny: () => ({ tools }) as never,
+        retrieveVersion: () => ({ tools }) as never,
       },
     });
   }

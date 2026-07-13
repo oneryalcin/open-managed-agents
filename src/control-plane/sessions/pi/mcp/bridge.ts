@@ -67,7 +67,7 @@ export type McpToolAccessResolver = (
   sessionId: string,
   mcpServerName: string,
   toolName: string,
-  context?: { agentId?: string },
+  context?: { agentId?: string; agentVersion?: number },
 ) => McpToolAccess;
 
 // Upstream default for MCP toolsets is always_ask (mcp-connector.md Tip) —
@@ -101,7 +101,7 @@ export interface McpToolDefinitionOptions {
   permissionBridge: PiToolPermissionBridge;
   getEmitter: () => McpEmitter | undefined;
   access?: McpToolAccessResolver;
-  agentContext?: { agentId?: string };
+  agentContext?: { agentId?: string; agentVersion?: number };
   outputCapBytes?: number;
   onToolCall?: (outcome: McpToolCallOutcomeLabel) => void;
   /**
@@ -430,13 +430,16 @@ function textOf(blocks: ManagedAgentsContentBlock[]): string {
  */
 export function createStoreBackedMcpToolAccessResolver(opts: {
   sessions: Pick<SessionStore, "retrieveAny">;
-  agents: Pick<AgentStore, "retrieveAny">;
+  agents: Pick<AgentStore, "retrieveVersion">;
 }): McpToolAccessResolver {
   return (workspaceId, sessionId, mcpServerName, toolName, context) => {
     const session = opts.sessions.retrieveAny(workspaceId, sessionId);
     const agentId = session?.agent.id ?? context?.agentId;
-    if (!agentId) return { enabled: false, permission: "deny" };
-    const agent = opts.agents.retrieveAny(workspaceId, agentId);
+    const agentVersion = session?.agent.version ?? context?.agentVersion;
+    if (!agentId || agentVersion === undefined) {
+      return { enabled: false, permission: "deny" };
+    }
+    const agent = opts.agents.retrieveVersion(workspaceId, agentId, agentVersion);
     if (!agent) return { enabled: false, permission: "deny" };
     const toolset = agent.tools.find(
       (tool): tool is ManagedAgentsMcpToolset =>
@@ -466,18 +469,19 @@ function mcpPolicyToPermission(policy: string): BuiltinToolPermission {
 export type McpServersProvider = (
   workspaceId: WorkspaceId,
   sessionId: string,
-  context?: { agentId?: string },
+  context?: { agentId?: string; agentVersion?: number },
 ) => readonly { name: string; url: string }[];
 
 export function createStoreBackedMcpServersProvider(opts: {
   sessions: Pick<SessionStore, "retrieveAny">;
-  agents: Pick<AgentStore, "retrieveAny">;
+  agents: Pick<AgentStore, "retrieveVersion">;
 }): McpServersProvider {
   return (workspaceId, sessionId, context) => {
     const session = opts.sessions.retrieveAny(workspaceId, sessionId);
     const agentId = session?.agent.id ?? context?.agentId;
-    if (!agentId) return [];
-    const agent = opts.agents.retrieveAny(workspaceId, agentId);
+    const agentVersion = session?.agent.version ?? context?.agentVersion;
+    if (!agentId || agentVersion === undefined) return [];
+    const agent = opts.agents.retrieveVersion(workspaceId, agentId, agentVersion);
     if (!agent) return [];
     // Only servers referenced by an mcp_toolset are connectable; validation
     // guarantees the cross-reference for new agents, and pre-0122 rows with
