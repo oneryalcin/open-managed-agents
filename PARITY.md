@@ -36,8 +36,9 @@ claim of blanket superiority over Anthropic's hosted environment.
 **Recommended pre-v1 sequence:** ~~running-session delete guard~~ (DONE
 2026-07-12) → networking translation/rejection → probe-backed tool config
 validation → reject the inert multi-agent façade (DONE 2026-07-13) →
-`glob`/`grep` parity slice → pagination probes/semantics → agent
-update/versioning → usable environment image story → web tools.
+`glob`/`grep` honesty boundary (DONE 2026-07-13) → full `glob`/`grep` runtime
+parity → pagination probes/semantics → agent update/versioning → usable
+environment image story → web tools.
 
 ## Legend
 
@@ -114,8 +115,10 @@ the risk of silent contradiction, not by how easy they first appear.
     rejects duplicate builtin configs, materializes the implicit builtin
     defaults, and leaves MCP config names server-defined. The parser rejects
     before an agent row is persisted.
-  - Deliberate follow-ups remain separate: Pi's internal `find` name versus
-    CMA `glob`/`grep`, and runtime support for the accepted web-tool names.
+  - OMA treats omitted `glob`, `grep`, `web_fetch`, and `web_search` as
+    deployment-disabled defaults and persists explicit disabled overrides.
+    Explicit configurations are accepted only when effectively disabled;
+    runtime support for all four names remains follow-up work.
 
 - [x] **`multiagent` configuration is rejected honestly** *(DONE 2026-07-13; plan 0129)*
   - CMA `[Doc]`: coordinator agents delegate through a multi-agent runtime and
@@ -128,15 +131,16 @@ the risk of silent contradiction, not by how easy they first appear.
 
 ### Tier 2 — compatibility work requiring a probe or bounded design slice
 
-- [ ] **Tool parity slice: CMA `glob`/`grep` vs OMA `find`**
-  - CMA `[Doc]`: built-ins are named `glob` and `grep` (`tools.md:25-26`).
-  - OMA: exposes Pi's `find` and does not wire `grep`; a `glob` config silently
-    misses the runtime tool. Pi 0.80.6 exports grep support, but wiring it is not
-    only an import: both sandbox providers need operations, permission/event
-    naming must match CMA, and the default image needs a deterministic `rg`
-    strategy without host execution or uncontrolled download.
-  - Fix: treat `glob` aliasing and sandboxed `grep` as one reviewed slice with
-    real Docker/microsandbox tests and hosted probes for input/output shapes.
+- [x] **Tool parity honesty boundary: CMA `glob`/`grep` vs OMA `find`** *(DONE 2026-07-13; plan 0130, probe 64)*
+  - CMA `[Doc]`: built-ins are named `glob` and `grep` (`tools.md:25-26`);
+    probe 64 captured their input/output shapes.
+  - OMA does not yet wire them safely: it exposes Pi's `find`, while Pi's
+    default grep implementation spawns `rg` in the control-plane process.
+  - OMA materializes omitted `glob` and `grep` as deployment-disabled and
+    rejects explicit configurations only when effectively enabled. The runtime
+    follow-up is split: adapt the safe glob operations already present in both
+    sandbox providers, while keeping grep rejected until providers own content
+    search and a deterministic search-binary strategy.
 
 - [ ] **Bidirectional pagination / `prev_page`** *(OMA absence verified; CMA cross-resource scope `[Unk]`)*
   - CMA `[Doc]`: sessions expose `prev_page` and accept it through the ordinary

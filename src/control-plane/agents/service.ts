@@ -35,6 +35,12 @@ const CMA_BUILTIN_TOOL_NAMES = [
   "write",
 ] as const;
 const CMA_PERMISSION_POLICY_TYPES = ["always_allow", "always_ask"] as const;
+const OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES = [
+  "glob",
+  "grep",
+  "web_fetch",
+  "web_search",
+] as const;
 const MULTIAGENT_UNSUPPORTED_MESSAGE =
   "The `multiagent` configuration is not supported by this deployment.";
 
@@ -260,17 +266,28 @@ function parseTool(value: unknown): ManagedAgentsTool {
     const defaultConfig = parseConfigsFirst
       ? undefined
       : optionalDefaultConfigSpread(tool, { materialize: true });
-    const configs = optionalToolConfigsSpread(tool, {
+    const configsSpread = optionalToolConfigsSpread(tool, {
       builtin: true,
       materialize: true,
     });
-    return {
+    const defaultConfigSpread = parseConfigsFirst
+      ? optionalDefaultConfigSpread(tool, { materialize: true })
+      : defaultConfig;
+    const explicitConfigs = configsSpread.configs ?? [];
+    const builtinToolset = {
       type,
-      ...(parseConfigsFirst
-        ? optionalDefaultConfigSpread(tool, { materialize: true })
-        : defaultConfig),
-      ...configs,
+      ...defaultConfigSpread,
+      configs: materializeDeploymentBuiltinDefaults(explicitConfigs),
+    } as ManagedAgentsTool & {
+      type: "agent_toolset_20260401";
+      default_config: { enabled?: boolean };
+      configs: ManagedAgentsToolConfig[];
     };
+    assertUnsupportedBuiltinToolsDisabled({
+      default_config: builtinToolset.default_config,
+      configs: explicitConfigs,
+    });
+    return builtinToolset;
   }
   if (type === "mcp_toolset") {
     return {
@@ -605,6 +622,38 @@ function optionalToolConfigsSpread(
 
 function isCmaBuiltinToolName(value: string): boolean {
   return (CMA_BUILTIN_TOOL_NAMES as readonly string[]).includes(value);
+}
+
+function assertUnsupportedBuiltinToolsDisabled(toolset: {
+  default_config: { enabled?: boolean };
+  configs: ManagedAgentsToolConfig[];
+}): void {
+  const enabledByDefault = toolset.default_config.enabled ?? true;
+  for (const name of OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES) {
+    const override = toolset.configs.find((config) => config.name === name);
+    // Omitted unsupported tools use deployment defaults (disabled). An explicit
+    // config opts into CMA inheritance and therefore follows default_config.
+    const effectivelyEnabled = override === undefined
+      ? false
+      : override.enabled ?? enabledByDefault;
+    if (effectivelyEnabled) {
+      throw invalidRequest(
+        `Builtin tool \`${name}\` is not supported by this deployment yet; explicitly disable it to use this toolset`,
+      );
+    }
+  }
+}
+
+function materializeDeploymentBuiltinDefaults(
+  configs: ManagedAgentsToolConfig[],
+): ManagedAgentsToolConfig[] {
+  const names = new Set(configs.map((config) => config.name));
+  return [
+    ...configs,
+    ...OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES
+      .filter((name) => !names.has(name))
+      .map((name) => ({ name, enabled: false })),
+  ];
 }
 
 function parsePermissionPolicy(value: unknown): ManagedAgentsPermissionPolicy {
