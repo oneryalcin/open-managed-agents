@@ -106,6 +106,10 @@ tests and docs rather than presented as hosted observations.
 - `PiSessionRunner` currently retains only an agent ID during pre-commit setup
   (`src/control-plane/sessions/pi/runner.ts:239-267`) and selects its model from
   deployment defaults rather than the agent revision (`:979-1023`).
+- Agent parsing accepts any non-empty model ID, while Pi resolves models inside
+  a deployment provider namespace. Switching execution to the revision model
+  without an explicit availability boundary would turn previously ignored
+  values into late runtime failures.
 
 ## 4. Design decisions
 
@@ -178,10 +182,28 @@ and optional mutable fields. Preserve absence vs explicit null:
   null clears it; omission preserves a legacy stored value.
 
 Validate the final merged configuration, not fields independently. In
-particular, tool/MCP cross-references and skill-version existence must be
-checked after applying the patch. Refactor the existing field parsers only as
-needed so create and update cannot drift on tool, skill, MCP, model, and
-multiagent admission.
+particular, tool/MCP cross-references, skill-version existence, and model
+availability must be checked after applying the patch. Refactor the existing
+field parsers only as needed so create and update cannot drift on tool, skill,
+MCP, model, and multiagent admission.
+
+Model IDs are interpreted inside the configured deployment provider namespace
+(the same `provider` currently used by `PiSessionRunner`); the CMA model object
+does not select a provider. Introduce an explicit injected
+`AgentModelAvailability` capability, backed in production by Pi's
+`ModelRegistry.find(provider, modelId)`. Require it at production composition
+for agent create/update and session admission rather than inspecting optional
+methods at call time. Unit-only service fixtures may inject a deterministic
+accept-all or finite-set fake.
+
+Create and update reject an unavailable final model before persistence with a
+stable OMA `invalid_request_error`, e.g.
+`Model <id> is not available on this deployment`. Session creation revalidates
+the pinned revision before any session row, snapshots, mounts, or runtime setup
+is created. This second check covers migrated rows and deployment/provider
+changes after agent creation. It uses the same error contract. Never fall back
+to the deployment default: that would make persisted version identity disagree
+with execution.
 
 ### D5 — Historical retrieval overlays shared lifecycle state
 
@@ -240,12 +262,20 @@ Fail closed if the pinned revision cannot be resolved.
 
 Also resolve the agent revision when constructing the Pi handle:
 
-- select `agent.model.id` instead of the runner's fallback model when an agent
-  revision is available;
+- resolve `agent.model.id` under the configured deployment provider and select
+  that exact registry model instead of the runner fallback;
 - provide a non-null `agent.system` through the real Pi 0.80.6
   `DefaultResourceLoader.systemPrompt` seam;
-- preserve the existing deployment provider selection and current behavior for
-  tests/internal runners that intentionally omit an agent provider.
+- preserve current fallback behavior only for tests/internal runners that
+  intentionally provide no agent context. A production session carrying an
+  agent revision must never fall back.
+
+For a durable session that predates this admission rule, or whose configured
+provider/model disappears after a deployment change, warm-handle recreation
+fails closed before model invocation or tool/MCP setup. The existing runtime
+turn error boundary records a terminal session error; no alternate model is
+selected. Add a regression for this restart case as well as the new-session API
+rejection.
 
 The model `speed` tier remains stored/wire-visible but is not mapped to a
 separate self-hosted execution class in this slice.
@@ -298,9 +328,12 @@ them from routes.
 
 - Add request/page types in `src/types/agents.ts` and agent domain interfaces.
 - Add update parsing/merge/final-state validation in `agents/service.ts`.
+- Add the explicit deployment-provider model-availability capability and wire
+  it into production agent/session composition.
 - Add update, historical retrieve, and version-list routes.
 - Pin the 409, archived-update, missing-version, metadata-patch, null-clear,
-  no-op, and `{data,next_page}` contracts with full response equality.
+  no-op, unavailable-model, and `{data,next_page}` contracts with full response
+  equality.
 
 ### Slice 3 — Session selection and runtime pinning
 
@@ -341,11 +374,15 @@ them from routes.
 8. After v1 session creation and v2 agent update, v1 session custom tools,
    builtin permissions, MCP declarations/access, skills, model, and system
    remain v1 across warm reuse and runner restart/eviction.
-9. A new bare-ID session after the update receives v2; an explicit v1 session
-   still receives v1.
-10. Archived agents remain retrievable/listable by version but reject updates
+9. Agent create/update and session creation reject a model unavailable under
+   the configured deployment provider before durable side effects. A migrated
+   durable session whose pinned model later becomes unavailable fails closed on
+   handle recreation and never uses the deployment fallback.
+10. A new bare-ID session after the update receives v2; an explicit v1 session
+    still receives v1.
+11. Archived agents remain retrievable/listable by version but reject updates
     and new sessions.
-11. Full suite, focused store/API/runtime tests, typecheck, and
+12. Full suite, focused store/API/runtime tests, typecheck, and
     `git diff --check` pass.
 
 ## 8. Risks and mitigations
@@ -356,6 +393,10 @@ them from routes.
   warm/restart regressions across every runtime resolver.
 - **Parser drift between create/update:** reuse canonical field parsers and
   validate the complete merged configuration.
+- **Unavailable or provider-ambiguous models:** interpret IDs under the explicit
+  deployment provider, inject one availability capability into agent and
+  session admission, revalidate before session side effects, and fail closed
+  during durable-handle recreation without fallback.
 - **Cursor replay/tampering:** store-instance HMAC scoped to workspace+agent;
   explicit lifecycle documentation.
 - **Archived lifecycle copied into history:** keep lifecycle only on owner/head
@@ -398,3 +439,5 @@ revision lookup with latest lookup” fails at least one runtime pinning test.
 - Pi 0.80.6 model/system seams:
   `node_modules/@earendil-works/pi-coding-agent/dist/core/sdk.d.ts:11-57` and
   `dist/core/resource-loader.d.ts:65-112`
+- Current deployment-provider/model lookup:
+  `src/control-plane/sessions/pi/runner.ts:979-995`
