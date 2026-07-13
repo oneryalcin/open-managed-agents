@@ -24,6 +24,7 @@ up its temporary CMA resources.
   `a.b.1.1.1.1.nip.io` over HTTPS (the upstream returned 503, which still
   proves the request passed the egress filter); `nip.io` itself returned 403.
 - The same one-label and nested hosts returned 403 over HTTP. For this slice,
-  CMA's limited allowlist is therefore translated as HTTPS/443-only.
+  OMA deliberately maps the observed behavior to HTTPS/443-only; this single
+  probe is not treated as universal proof of every CMA transport rule.
 
 Artifact: [`scratch/artifacts/62-managed-agents-networking-depth-probe.json`](artifacts/62-managed-agents-networking-depth-probe.json)
