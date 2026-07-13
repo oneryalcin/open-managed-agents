@@ -83,6 +83,12 @@ export interface SandboxProvider {
     mounts: readonly RuntimeSessionFileMount[],
   ): Promise<void> | void;
   collectOutputFiles?(): Promise<readonly SandboxOutputFile[]>;
+  /**
+   * A poisoned provider has destroyed its isolation boundary after an
+   * ambiguous operation dispatch and must not remain attached to a warm
+   * runtime handle.
+   */
+  isPoisoned?(): boolean;
   dispose(): void;
 }
 

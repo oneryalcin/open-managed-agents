@@ -990,6 +990,43 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(sandbox.disposed).toBe(false);
   });
 
+  it("evicts a poisoned sandbox and recreates it for the next message", async () => {
+    const sandboxes: FakeSandboxProvider[] = [];
+    let currentSandbox: FakeSandboxProvider | undefined;
+    const factory = new FakeSessionFactory({
+      activeToolNames: ["glob"],
+      emitSandboxedTool: "glob",
+      emitSandboxedToolCallMessage: true,
+      onSandboxedTool: (_toolName, toolCallId) => {
+        currentSandbox?.recordInvocation("glob", toolCallId);
+        if (sandboxes.length === 1) currentSandbox?.poison();
+      },
+    });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      sandboxProviderFactory: async () => {
+        const sandbox = new FakeSandboxProvider(["glob"]);
+        sandboxes.push(sandbox);
+        currentSandbox = sandbox;
+        return sandbox;
+      },
+      idleTtlMs: 0,
+    });
+
+    await expect(
+      collect(runner.runUserMessage("wrk", "sesn_poison", "one")),
+    ).rejects.toThrow("Sandbox provider was poisoned");
+    expect(sandboxes).toHaveLength(1);
+    expect(sandboxes[0]?.disposed).toBe(true);
+
+    const events = await collect(
+      runner.runUserMessage("wrk", "sesn_poison", "two"),
+    );
+    expect(messageTexts(events)).toEqual(["reply: two"]);
+    expect(sandboxes).toHaveLength(2);
+    expect(sandboxes[1]?.disposed).toBe(false);
+  });
+
   it("accepts a sandboxed builtin tool when the matching provider tool was invoked", async () => {
     const sandbox = new FakeSandboxProvider(["bash"]);
     const factory = new FakeSessionFactory({
@@ -1300,6 +1337,7 @@ class FakeSandboxProvider implements SandboxProvider {
     },
   };
   disposed = false;
+  private poisoned = false;
 
   constructor(
     toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "glob" | "ls">,
@@ -1335,6 +1373,14 @@ class FakeSandboxProvider implements SandboxProvider {
     toolCallId: string,
   ): void {
     this.invocations.toolCallIds[toolName].add(toolCallId);
+  }
+
+  poison(): void {
+    this.poisoned = true;
+  }
+
+  isPoisoned(): boolean {
+    return this.poisoned;
   }
 
   dispose(): void {

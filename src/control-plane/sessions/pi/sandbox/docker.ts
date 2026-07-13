@@ -330,14 +330,32 @@ export async function createDockerSandboxProvider(
   const invocations = createSandboxInvocationStats();
   const disposed: SandboxDisposedFlag = { value: false };
   const activeDockerExecPids = new Set<number>();
-  let infrastructureDisposed = false;
+  let disposeAttempted = false;
+  let poisoned = false;
+  let poisonPromise: Promise<void> | undefined;
   const disposeInfrastructure = (): void => {
-    if (infrastructureDisposed) return;
-    infrastructureDisposed = true;
+    if (disposeAttempted) return;
+    disposeAttempted = true;
     disposed.value = true;
     for (const pid of activeDockerExecPids) killProcessGroup(pid);
     forceRemoveDockerContainer(resolved.dockerCommand, containerName);
     opts.egress?.dispose();
+  };
+  const poisonInfrastructure = (): Promise<void> => {
+    poisoned = true;
+    disposed.value = true;
+    if (poisonPromise) return poisonPromise;
+    poisonPromise = (async () => {
+      for (const pid of activeDockerExecPids) killProcessGroup(pid);
+      await removeDockerContainerChecked(
+        resolved.dockerCommand,
+        containerName,
+        resolved.operationTimeoutMs,
+      );
+      disposeAttempted = true;
+      opts.egress?.dispose();
+    })();
+    return poisonPromise;
   };
 
   const dockerShell = (
@@ -563,8 +581,12 @@ export async function createDockerSandboxProvider(
           guestTimeout: false,
           // Transport framing is bounded separately; the collector applies the
           // caller-visible raw filename limit after removing readiness bytes.
-          maxStdoutBytes: maxRawBytes + protocolBytes,
-          maxCombinedBytes: maxRawBytes + protocolBytes + 64 * 1024,
+          // Node may deliver readiness plus more than the public raw allowance
+          // in one pipe chunk. Leave one bounded chunk of transport slack so
+          // the readiness filter and collector, rather than the transport,
+          // classify that data. The collector still enforces maxRawBytes.
+          maxStdoutBytes: maxRawBytes + protocolBytes + 64 * 1024,
+          maxCombinedBytes: maxRawBytes + protocolBytes + 128 * 1024,
           onStdout: (chunk) => {
             try {
               const filenames = readiness.push(chunk);
@@ -584,17 +606,29 @@ export async function createDockerSandboxProvider(
         if (signal.aborted) throw new Error("Operation aborted");
         if (!collector.limitReached) throw error;
       } finally {
-        if (controller.signal.aborted && !readiness.ready) {
-          // Dispatch has no positive acknowledgement. Destroy the isolation
-          // boundary so delayed guest work cannot appear after cancellation.
-          disposeInfrastructure();
-        } else {
-          await dockerShell(buildDockerCmaGlobCleanupCommand(ownershipToken), {
-            timeoutMs: 3_000,
-            guestTimeout: false,
-          });
+        try {
+          if (!readiness.ready) {
+            // Any terminal path before a positive dispatch acknowledgement is
+            // ambiguous. Verified container removal is the only fail-closed
+            // guarantee that delayed guest work cannot appear afterward.
+            await poisonInfrastructure();
+          } else {
+            try {
+              await dockerShell(buildDockerCmaGlobCleanupCommand(ownershipToken), {
+                timeoutMs: 3_000,
+                guestTimeout: false,
+              });
+            } catch (cleanupError) {
+              // Readiness proves dispatch, not successful termination. If the
+              // token-scoped cleanup cannot prove the guest process is gone,
+              // destroy the isolation boundary before returning the error.
+              await poisonInfrastructure();
+              throw cleanupError;
+            }
+          }
+        } finally {
+          signal.removeEventListener("abort", abortFromCaller);
         }
-        signal.removeEventListener("abort", abortFromCaller);
       }
       if (signal.aborted) throw new Error("Operation aborted");
       return collector.matches;
@@ -731,6 +765,7 @@ export async function createDockerSandboxProvider(
       invocations,
       disposed,
     ),
+    isPoisoned: () => poisoned,
     dispose: disposeInfrastructure,
   };
 }
@@ -1028,16 +1063,31 @@ export function buildDockerCmaGlobCleanupCommand(
       "pids=''",
       "for f in /proc/[0-9]*/environ; do",
       "  pid=${f#/proc/}; pid=${pid%/environ}",
-      "  if tr '\\0' '\\n' < \"$f\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then pids=\"$pids $pid\"; fi",
+      "  if tr '\\0' '\\n' < \"$f\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then",
+      "    start=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    case \"$start\" in ''|*[!0-9]*) :;; *) pids=\"$pids $pid:$start\";; esac",
+      "  fi",
       "done",
-      "for pid in $pids; do kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; done",
+      "for entry in $pids; do",
+      "  pid=${entry%%:*}; start=${entry#*:}",
+      "  current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "  if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then",
+      "    kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+      "  fi",
+      "done",
       "attempt=0",
       "while [ -n \"$pids\" ] && [ \"$attempt\" -lt 40 ]; do",
-      "  alive=0; for pid in $pids; do [ -e \"/proc/$pid\" ] && alive=1; done",
-      "  [ \"$alive\" -eq 0 ] && break",
+      "  remaining=''",
+      "  for entry in $pids; do",
+      "    pid=${entry%%:*}; start=${entry#*:}",
+      "    current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then remaining=\"$remaining $entry\"; fi",
+      "  done",
+      "  pids=$remaining",
+      "  [ -z \"$pids\" ] && break",
       "  attempt=$((attempt + 1)); sleep 0.05",
       "done",
-      "[ \"${alive:-0}\" -eq 0 ]",
+      "[ -z \"$pids\" ]",
     ].join("\n"),
     args: [ownershipToken],
   };
@@ -1050,8 +1100,9 @@ export function buildDockerCmaGlobEnumerationCommand(
   return {
     script: [
       "set -eu",
-      "cd \"$1\"",
-      "setsid env \"OMA_GLOB_OWNER=$2\" sh -c 'printf \"%s\\0\" __OMA_GLOB_READY__; exec find . -type f -print0' \"$2\"",
+      "setsid env \"OMA_GLOB_OWNER=$2\" sh -c 'set -eu; printf \"%s\\0\" __OMA_GLOB_READY__; cd \"$1\"; exec find . -type f -print0' \"$2\" \"$1\" &",
+      "child=$!",
+      "wait \"$child\"",
     ].join("\n"),
     args: [root, ownershipToken],
   };
@@ -1789,4 +1840,33 @@ function forceRemoveDockerContainer(
   containerName: string,
 ): void {
   spawnSync(dockerCommand, ["rm", "-f", containerName], { stdio: "ignore" });
+}
+
+async function removeDockerContainerChecked(
+  dockerCommand: string,
+  containerName: string,
+  timeoutMs: number,
+): Promise<void> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = await dockerExec(
+        dockerCommand,
+        ["rm", "-f", containerName],
+        { timeoutMs },
+      );
+      if (result.exitCode === 0) return;
+      const detail = Buffer.concat([result.stderr, result.stdout]).toString("utf8");
+      if (/no such (?:container|object)/i.test(detail)) return;
+      lastError = new Error(
+        `docker rm -f ${containerName} failed with ${result.exitCode}: ${detail}`,
+      );
+    } catch (error) {
+      lastError = error as Error;
+    }
+  }
+  throw new Error(
+    `Failed to remove poisoned Docker sandbox ${containerName}`,
+    { cause: lastError },
+  );
 }

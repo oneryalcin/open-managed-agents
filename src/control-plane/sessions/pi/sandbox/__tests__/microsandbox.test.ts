@@ -727,7 +727,7 @@ describe("microsandbox sandbox provider", () => {
       error.name = "AbortError";
       throw error;
     });
-    cli.queueExecSync(ok("removed-sandbox"));
+    cli.queueExec(ok("removed-sandbox"));
     cli.queueExecSync(ok("removed-volume"));
     const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
       cli,
@@ -746,7 +746,104 @@ describe("microsandbox sandbox provider", () => {
     })).rejects.toThrow("Operation aborted");
     await expect(provider.operations.read.readFile("/workspace/a.md"))
       .rejects.toThrow("disposed");
+    expect(cli.calls.filter((call) => call.mode === "sync")).toHaveLength(1);
+  });
+
+  it("poisons pre-readiness timeouts and retries failed checked removal on dispose", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    cli.queueExec(fail("transport timeout before readiness"));
+    cli.queueExec(() => okResult("", "remove failed", 1));
+    cli.queueExecSync(ok("removed-sandbox-on-retry"));
+    cli.queueExecSync(ok("removed-volume-on-retry"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 1,
+    })).rejects.toThrow("Failed to remove poisoned microsandbox");
+    expect(provider.isPoisoned?.()).toBe(true);
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .rejects.toThrow("disposed");
+
+    provider.dispose();
     expect(cli.calls.filter((call) => call.mode === "sync")).toHaveLength(2);
+  });
+
+  it("poisons the provider when post-readiness glob cleanup fails", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    cli.queueExec((opts) => {
+      opts?.onStdout?.(Buffer.from("__OMA_GLOB_READY__\0"));
+      return okResult("");
+    });
+    cli.queueExec(fail("cleanup failed"));
+    cli.queueExec(ok("removed-sandbox"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("cleanup failed");
+    expect(provider.isPoisoned?.()).toBe(true);
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .rejects.toThrow("disposed");
+
+    provider.dispose();
+    expect(cli.calls.filter((call) => call.mode === "sync")).toHaveLength(1);
+  });
+
+  it("keeps the sandbox healthy when a missing glob path fails after readiness", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    cli.queueExec((opts) => {
+      opts?.onStdout?.(Buffer.from("__OMA_GLOB_READY__\0"));
+      return okResult("", "missing path", 1);
+    });
+    cli.queueExec(ok("cleaned"));
+    cli.queueExec(ok("after"));
+    cli.queueExecSync(ok("removed-sandbox"));
+    cli.queueExecSync(ok("removed-volume"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    await expect(provider.operations.glob.glob({
+      pattern: "*.md",
+      cwd: "/workspace/missing",
+      signal: new AbortController().signal,
+      maxMatches: 100,
+      maxRawBytes: 1024,
+      maxOutputBytes: 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("missing path");
+    expect(provider.isPoisoned?.()).toBe(false);
+    await expect(provider.operations.read.readFile("/workspace/a.md"))
+      .resolves.toEqual(Buffer.from("after"));
+    provider.dispose();
   });
 
   it("normalizes bash streaming results without forwarding guest env", async () => {

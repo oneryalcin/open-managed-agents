@@ -83,8 +83,16 @@ Provider tests must prove the underlying command is terminated, not merely that
 its eventual result is ignored. The per-call UUID is a correlation token, not
 a secret or authentication credential: sandbox processes can read and copy it.
 Cleanup therefore targets only process groups carrying the exact token, while a
-pre-readiness cancellation poisons and disposes the entire sandbox boundary so
-delayed dispatch cannot outlive the operation.
+pre-readiness failure poisons the provider and requires checked removal of the
+entire sandbox boundary so delayed dispatch cannot outlive the operation. A
+poisoned provider is fatal to its warm runtime handle: the runner evicts it and
+recreates the sandbox on the next message. Ordinary terminal disposal remains
+best-effort, but the safety poison path does not report completion until removal
+is confirmed. Readiness is emitted by the tagged guest process before path
+validation, so ordinary missing-path errors preserve the sandbox; only failures
+without a positive guest acknowledgement trigger poison. After readiness, a
+failure of the token-scoped termination check also poisons and removes the
+sandbox because guest-process cleanup can no longer be proven.
 
 The unsafe host-passthrough provider is an explicit test/development exception
 to the no-host-read invariant. It still needs bounded traversal, timeout, byte

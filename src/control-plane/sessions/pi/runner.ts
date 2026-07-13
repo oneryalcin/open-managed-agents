@@ -591,6 +591,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
               toolCallId: sandboxedEnd.toolCallId,
               isError: sandboxedEnd.isError,
             });
+            assertSandboxProviderHealthy(handle.sandbox);
             activeSandboxedToolCalls.delete(sandboxedEnd.toolCallId);
             if (activeSandboxedToolCalls.size === 0) {
               const releasableEvents = gatedEvents.splice(0);
@@ -611,6 +612,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
             toolCallId: sandboxedEnd.toolCallId,
             isError: sandboxedEnd.isError,
           });
+          assertSandboxProviderHealthy(handle.sandbox);
           yield event;
           continue;
         }
@@ -1437,4 +1439,11 @@ function assertSandboxProviderHandledToolCall(opts: {
   throw new Error(
     `Sandboxed builtin tool ${opts.toolName} executed without invoking the sandbox provider`,
   );
+}
+
+function assertSandboxProviderHealthy(
+  sandbox: SandboxProvider | undefined,
+): void {
+  if (sandbox?.isPoisoned?.() !== true) return;
+  throw new Error("Sandbox provider was poisoned during tool execution");
 }

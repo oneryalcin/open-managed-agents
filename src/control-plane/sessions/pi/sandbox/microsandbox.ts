@@ -313,13 +313,30 @@ export async function createMicrosandboxSandboxProvider(
 
   const invocations = createSandboxInvocationStats();
   const disposed: SandboxDisposedFlag = { value: false };
-  let infrastructureDisposed = false;
+  let disposeAttempted = false;
+  let poisoned = false;
+  let poisonPromise: Promise<void> | undefined;
   const disposeInfrastructure = (): void => {
-    if (infrastructureDisposed) return;
-    infrastructureDisposed = true;
+    if (disposeAttempted) return;
+    disposeAttempted = true;
     disposed.value = true;
     forceRemoveMicrosandboxSandbox(resolved.cli, sandboxName, resolved);
     forceRemoveMicrosandboxVolume(resolved.cli, volumeName, resolved);
+  };
+  const poisonInfrastructure = (): Promise<void> => {
+    poisoned = true;
+    disposed.value = true;
+    if (poisonPromise) return poisonPromise;
+    poisonPromise = (async () => {
+      await removeMicrosandboxSandboxChecked(
+        resolved.cli,
+        sandboxName,
+        resolved.operationTimeoutMs,
+      );
+      disposeAttempted = true;
+      forceRemoveMicrosandboxVolume(resolved.cli, volumeName, resolved);
+    })();
+    return poisonPromise;
   };
 
   const shell = (
@@ -605,18 +622,26 @@ export async function createMicrosandboxSandboxProvider(
         if (signal.aborted) throw new Error("Operation aborted");
         if (!collector.limitReached) throw error;
       } finally {
-        if (controller.signal.aborted && !readiness.ready) {
-          disposeInfrastructure();
-        } else {
-          await shell(
-            buildMicrosandboxCmaGlobCleanupCommand(ownershipToken),
-            {
-              timeoutMs: 3_000,
-              guestTimeout: false,
-            },
-          );
+        try {
+          if (!readiness.ready) {
+            await poisonInfrastructure();
+          } else {
+            try {
+              await shell(
+                buildMicrosandboxCmaGlobCleanupCommand(ownershipToken),
+                {
+                  timeoutMs: 3_000,
+                  guestTimeout: false,
+                },
+              );
+            } catch (cleanupError) {
+              await poisonInfrastructure();
+              throw cleanupError;
+            }
+          }
+        } finally {
+          signal.removeEventListener("abort", abortFromCaller);
         }
-        signal.removeEventListener("abort", abortFromCaller);
       }
       if (signal.aborted) throw new Error("Operation aborted");
       return collector.matches;
@@ -762,6 +787,7 @@ export async function createMicrosandboxSandboxProvider(
       invocations,
       disposed,
     ),
+    isPoisoned: () => poisoned,
     dispose: disposeInfrastructure,
   };
 }
@@ -1012,16 +1038,31 @@ export function buildMicrosandboxCmaGlobCleanupCommand(
       "pids=''",
       "for f in /proc/[0-9]*/environ; do",
       "  pid=${f#/proc/}; pid=${pid%/environ}",
-      "  if tr '\\0' '\\n' < \"$f\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then pids=\"$pids $pid\"; fi",
+      "  if tr '\\0' '\\n' < \"$f\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then",
+      "    start=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    case \"$start\" in ''|*[!0-9]*) :;; *) pids=\"$pids $pid:$start\";; esac",
+      "  fi",
       "done",
-      "for pid in $pids; do kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; done",
+      "for entry in $pids; do",
+      "  pid=${entry%%:*}; start=${entry#*:}",
+      "  current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "  if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then",
+      "    kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+      "  fi",
+      "done",
       "attempt=0",
       "while [ -n \"$pids\" ] && [ \"$attempt\" -lt 40 ]; do",
-      "  alive=0; for pid in $pids; do [ -e \"/proc/$pid\" ] && alive=1; done",
-      "  [ \"$alive\" -eq 0 ] && break",
+      "  remaining=''",
+      "  for entry in $pids; do",
+      "    pid=${entry%%:*}; start=${entry#*:}",
+      "    current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GLOB_OWNER=$1\"; then remaining=\"$remaining $entry\"; fi",
+      "  done",
+      "  pids=$remaining",
+      "  [ -z \"$pids\" ] && break",
       "  attempt=$((attempt + 1)); sleep 0.05",
       "done",
-      "[ \"${alive:-0}\" -eq 0 ]",
+      "[ -z \"$pids\" ]",
     ].join("\n"),
     args: [ownershipToken],
   };
@@ -1034,8 +1075,9 @@ export function buildMicrosandboxCmaGlobEnumerationCommand(
   return {
     script: [
       "set -eu",
-      "cd \"$1\"",
-      "setsid env \"OMA_GLOB_OWNER=$2\" sh -c 'printf \"%s\\0\" __OMA_GLOB_READY__; exec find . -type f -print0' \"$2\"",
+      "setsid env \"OMA_GLOB_OWNER=$2\" sh -c 'set -eu; printf \"%s\\0\" __OMA_GLOB_READY__; cd \"$1\"; exec find . -type f -print0' \"$2\" \"$1\" &",
+      "child=$!",
+      "wait \"$child\"",
     ].join("\n"),
     args: [root, ownershipToken],
   };
@@ -1520,6 +1562,22 @@ function forceRemoveMicrosandboxSandbox(
     // terminal hook, while create-time partial cleanup preserves the original
     // construction error.
   }
+}
+
+async function removeMicrosandboxSandboxChecked(
+  cli: MicrosandboxCli,
+  sandboxName: string,
+  timeoutMs: number,
+): Promise<void> {
+  const result = await cli.exec(buildMicrosandboxRemoveArgs(sandboxName), {
+    timeoutMs,
+  });
+  if (result.signal === null && result.status === 0) return;
+  const detail = errorText(result);
+  if (/not found|does not exist|no such/i.test(detail)) return;
+  throw new Error(
+    `Failed to remove poisoned microsandbox ${sandboxName}: ${detail}`,
+  );
 }
 
 function forceRemoveMicrosandboxVolume(
