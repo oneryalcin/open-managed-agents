@@ -174,6 +174,22 @@ def main() -> None:
     finally:
         if session_id:
             try:
+                client.beta.sessions.events.send(
+                    session_id,
+                    events=[{"type": "user.interrupt"}],
+                )
+            except Exception:
+                pass
+            cleanup_deadline = time.monotonic() + 60
+            while time.monotonic() < cleanup_deadline:
+                try:
+                    status = client.beta.sessions.retrieve(session_id).status
+                    if status != "running":
+                        break
+                except Exception:
+                    break
+                time.sleep(2)
+            try:
                 client.beta.sessions.delete(session_id)
             except Exception:
                 pass
@@ -196,8 +212,9 @@ def main() -> None:
                 except Exception:
                     pass
     ARTIFACT.parent.mkdir(exist_ok=True)
-    ARTIFACT.write_text(json.dumps(result, indent=2, sort_keys=True))
-    print(json.dumps(result, indent=2, sort_keys=True))
+    redacted = public(result)
+    ARTIFACT.write_text(json.dumps(redacted, indent=2, sort_keys=True))
+    print(json.dumps(redacted, indent=2, sort_keys=True))
     print(f"\nwrote {ARTIFACT}")
 
 
