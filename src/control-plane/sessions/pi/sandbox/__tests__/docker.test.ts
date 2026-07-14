@@ -10,6 +10,10 @@ import {
   buildDockerExtractIntoContainerArgs,
   buildDockerExecShellArgs,
   buildDockerFileAccessCommand,
+  buildDockerCmaGrepPreflightCommand,
+  buildDockerCmaGrepPatternCheckCommand,
+  buildDockerCmaGrepCandidateEnumerationCommand,
+  buildDockerCmaGrepSearchCommand,
   buildDockerGlobEnumerationCommand,
   buildDockerMkdirCommand,
   buildDockerNormalizeUploadsArgs,
@@ -214,6 +218,25 @@ describe("Docker sandbox provider command construction", () => {
       "cat \"$1\"",
       "/workspace/a.txt",
     ]);
+  });
+
+  it("builds CMA grep commands with LC_ALL=C and token ownership", () => {
+    const preflight = buildDockerCmaGrepPreflightCommand();
+    expect(preflight.script).toContain("LC_ALL=C grep -E -q");
+    expect(preflight.script).toContain("grep -Iq");
+    expect(preflight.script).toContain("read -r -d");
+    expect(buildDockerCmaGrepPatternCheckCommand("[abc]").script).toContain("LC_ALL=C grep -E -q");
+    expect(buildDockerCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
+      .toContain("find \"$1\" -type f -print0");
+    expect(buildDockerCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
+      .toContain("[ -f \"$1\" ]");
+    const command = buildDockerCmaGrepSearchCommand("/workspace", "oma-grep-token", "needle");
+    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle"]);
+    expect(command.script).toContain("OMA_GREP_OWNER=$2");
+    expect(command.script).toContain("__OMA_GREP_READY__");
+    expect(command.script).toContain("while IFS= read -r -d");
+    expect(command.script).toContain("grep -Iq");
+    expect(command.script).toContain("grep -E -q");
   });
 
   it("builds root-owned upload materialization commands explicitly", () => {
@@ -577,6 +600,8 @@ case "$1" in
     ;;
   run)
     ;;
+  exec)
+    ;;
   *)
     printf 'unexpected docker command: %s\\n' "$1" >&2
     exit 1
@@ -641,6 +666,8 @@ case "$1" in
   run)
     ;;
   rm)
+    ;;
+  exec)
     ;;
   *)
     printf 'unexpected docker command: %s\\n' "$1" >&2
@@ -1168,7 +1195,19 @@ describe("Docker sandbox provider integration", () => {
         maxOutputBytes: 64 * 1024,
         timeoutMs: 10_000,
       })).resolves.toEqual(["/workspace/src/index.ts"]);
+      await expect(provider.operations.grep.grep({
+        pattern: "value = 2",
+        cwd: "/workspace",
+        glob: "*.ts",
+        context: 1,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/workspace/src/index.ts"]);
       expect(provider.invocations.byTool.glob).toBe(1);
+      expect(provider.invocations.byTool.grep).toBe(1);
       expect(provider.invocations.byTool.find).toBe(2);
 
       const chunks: Buffer[] = [];
@@ -1264,6 +1303,85 @@ describe("Docker sandbox provider integration", () => {
         ),
       ).resolves.toEqual({ exitCode: 0 });
       expect(Buffer.concat(chunks).toString("utf8")).toContain("hello\nok\n");
+      await expect(provider.operations.grep.grep({
+        pattern: "hello",
+        cwd: "/mnt/session/uploads",
+        glob: "*.txt",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/mnt/session/uploads/data/probe.txt"]);
+      await expect(provider.operations.grep.grep({
+        pattern: "hello",
+        cwd: "/mnt/session/uploads/data/probe.txt",
+        glob: "*.txt",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/mnt/session/uploads/data/probe.txt"]);
+    } finally {
+      provider.dispose();
+    }
+    expect(containersForLabel(label)).toEqual([]);
+  }, 60_000);
+
+  dockerIt("bounds Docker grep and cleans token-owned guest processes", async () => {
+    const label = `oma-docker-grep-limits-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      extraLabels: { "open-managed-agents.test-id": label },
+      operationTimeoutMs: 15_000,
+    });
+    try {
+      await provider.operations.write.mkdir("/workspace/src");
+      await provider.operations.write.writeFile("/workspace/src/a.md", "needle\n");
+      await provider.operations.write.writeFile("/workspace/src/b.md", "needle\n");
+
+      await expect(provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace",
+        glob: "*.md",
+        context: 0,
+        headLimit: 1,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toHaveLength(1);
+      await expectNoDockerGrepOwners(provider);
+
+      await expect(provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace",
+        glob: "*.md",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).rejects.toThrow("raw bytes");
+      await expectNoDockerGrepOwners(provider);
+
+      await expect(provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace/src/a.md",
+        glob: "*.md",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 1,
+        timeoutMs: 10_000,
+      })).rejects.toThrow("output exceeds");
+      await expectNoDockerGrepOwners(provider);
     } finally {
       provider.dispose();
     }
@@ -1276,7 +1394,7 @@ describe("Docker sandbox provider integration", () => {
       .slice(2, 8)}`;
     const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
       extraLabels: { "open-managed-agents.test-id": label },
-      operationTimeoutMs: 500,
+      operationTimeoutMs: 2_000,
     });
     try {
       await expect(
@@ -1293,7 +1411,7 @@ describe("Docker sandbox provider integration", () => {
           env: {},
           onData: () => {},
         }),
-      ).rejects.toThrow("timeout:0.5");
+      ).rejects.toThrow("timeout:2");
       await expect(containerHasSleepProcess(label)).resolves.toBe(false);
 
       const abort = new AbortController();
@@ -1719,4 +1837,20 @@ async function containerHasSleepProcess(label: string): Promise<boolean> {
   );
   expect(result.status).toBe(0);
   return result.stdout.trim().length > 0;
+}
+
+async function expectNoDockerGrepOwners(
+  provider: Awaited<ReturnType<typeof createDockerSandboxProvider>>,
+): Promise<void> {
+  const chunks: Buffer[] = [];
+  await expect(provider.operations.bash.exec(
+    "for f in /proc/[0-9]*/environ; do { tr '\\0' '\\n' < \"$f\"; } 2>/dev/null | grep -q '^OMA_GREP_OWNER=' && exit 1; done; exit 0",
+    "/workspace",
+    {
+      env: {},
+      onData: (chunk) => chunks.push(chunk),
+      timeout: 1,
+    },
+  )).resolves.toEqual({ exitCode: 0 });
+  expect(Buffer.concat(chunks).toString("utf8")).toBe("");
 }

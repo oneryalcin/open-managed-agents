@@ -17,12 +17,19 @@ import {
   CmaGlobStreamCollector,
   compileCmaGlob,
 } from "./cma-glob.ts";
+import {
+  CMA_GREP_READY_MARKER,
+  CmaGrepCandidateCollector,
+  CmaGrepStreamCollector,
+  createCmaGrepDeadline,
+} from "./cma-grep.ts";
 import { matchGlob } from "./glob.ts";
 import {
   createSandboxInvocationStats,
   createSandboxToolDefinitions,
   recordSandboxInvocation,
   type CmaGlobOperations,
+  type CmaGrepOperations,
   type SandboxDisposedFlag,
   type SandboxOperations,
   type SandboxOutputFile,
@@ -385,6 +392,10 @@ export async function createMicrosandboxSandboxProvider(
       `msb exists failed with ${result.status}: ${errorText(result)}`,
     );
   };
+  await shell(buildMicrosandboxCmaGrepPreflightCommand(), {
+    timeoutMs: 3_000,
+    guestTimeout: false,
+  });
   const materializeFileResources = async (
     mounts: readonly RuntimeSessionFileMount[],
   ): Promise<void> => {
@@ -647,6 +658,159 @@ export async function createMicrosandboxSandboxProvider(
       return collector.matches;
     },
   };
+  const grepOps: CmaGrepOperations = {
+    grep: async ({ pattern, cwd, signal, glob, headLimit, maxRawBytes, maxOutputBytes, outputBase, timeoutMs }) => {
+      recordSandboxInvocation(invocations, disposed, "grep");
+      const root = assertInsideMicrosandboxSearchRoot(cwd, [
+        resolved.workspacePath,
+        resolved.uploadsPath,
+        "/workspace/skills",
+      ]);
+      if (signal.aborted) throw new Error("Operation aborted");
+      const controller = new AbortController();
+      const protocolBytes = Buffer.byteLength(CMA_GREP_READY_MARKER, "utf8") + 1;
+      const abortFromCaller = () => controller.abort();
+      signal.addEventListener("abort", abortFromCaller, { once: true });
+      const remainingTimeoutMs = createCmaGrepDeadline(timeoutMs);
+      let streamError: Error | undefined;
+      let sawStdout = false;
+      const matcher = glob === undefined ? undefined : compileCmaGlob(glob);
+      const candidates = new CmaGrepCandidateCollector({ root, maxRawBytes, matcher });
+      const enumerationToken = `oma-grep-${randomUUID()}`;
+      const enumerationReady = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
+      try {
+        await shell(buildMicrosandboxCmaGrepPatternCheckCommand(pattern), {
+          signal: controller.signal,
+          timeoutMs: remainingTimeoutMs(),
+          guestTimeout: false,
+        });
+
+        try {
+          const result = await shell(
+            buildMicrosandboxCmaGrepCandidateEnumerationCommand(root, enumerationToken),
+            {
+              signal: controller.signal,
+              timeoutMs: remainingTimeoutMs(),
+              guestTimeout: false,
+              maxBuffer: maxRawBytes + protocolBytes + 64 * 1024,
+              onStdout: (chunk) => {
+                sawStdout = true;
+                try {
+                  const filenames = enumerationReady.push(chunk);
+                  if (filenames) candidates.push(filenames);
+                } catch (error) {
+                  streamError = error as Error;
+                  controller.abort();
+                }
+              },
+            },
+          );
+          if (!sawStdout && result.stdout.length > 0) {
+            const filenames = enumerationReady.push(result.stdout);
+            if (filenames) candidates.push(filenames);
+          }
+          if (streamError) throw streamError;
+          if (signal.aborted) throw new Error("Operation aborted");
+          enumerationReady.assertReady();
+          candidates.finish();
+        } catch (error) {
+          if (streamError) throw streamError;
+          if (signal.aborted) throw new Error("Operation aborted");
+          throw error;
+        } finally {
+          if (!enumerationReady.ready) {
+            await poisonInfrastructure();
+          } else {
+            try {
+              await shell(
+                buildMicrosandboxCmaGrepCleanupCommand(enumerationToken),
+                {
+                  timeoutMs: 3_000,
+                  guestTimeout: false,
+                },
+              );
+            } catch (cleanupError) {
+              await poisonInfrastructure();
+              throw cleanupError;
+            }
+          }
+        }
+        if (signal.aborted) throw new Error("Operation aborted");
+        if (candidates.candidates.length === 0) return [];
+
+        const searchToken = `oma-grep-${randomUUID()}`;
+        const readiness = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
+        const collector = new CmaGrepStreamCollector({
+          root,
+          maxMatches: headLimit,
+          maxRawBytes,
+          maxOutputBytes,
+          join: posix.join,
+          formatForOutput: outputBase === undefined
+            ? undefined
+            : (absolutePath) => posix.relative(outputBase, absolutePath),
+          onLimit: () => controller.abort(),
+        });
+        streamError = undefined;
+        sawStdout = false;
+        try {
+          const result = await shell(
+            buildMicrosandboxCmaGrepSearchCommand(root, searchToken, pattern),
+            {
+              input: Buffer.from(`${candidates.candidates.join("\0")}\0`, "utf8"),
+              signal: controller.signal,
+              timeoutMs: remainingTimeoutMs(),
+              guestTimeout: false,
+              maxBuffer: maxRawBytes + protocolBytes + 64 * 1024,
+              onStdout: (chunk) => {
+                sawStdout = true;
+                try {
+                  const filenames = readiness.push(chunk);
+                  if (filenames) collector.push(filenames);
+                } catch (error) {
+                  streamError = error as Error;
+                  controller.abort();
+                }
+              },
+            },
+          );
+          if (!sawStdout && result.stdout.length > 0) {
+            const filenames = readiness.push(result.stdout);
+            if (filenames) collector.push(filenames);
+          }
+          if (streamError) throw streamError;
+          if (signal.aborted) throw new Error("Operation aborted");
+          readiness.assertReady();
+          collector.finish();
+        } catch (error) {
+          if (streamError) throw streamError;
+          if (signal.aborted) throw new Error("Operation aborted");
+          if (!collector.limitReached) throw error;
+        } finally {
+          if (!readiness.ready) {
+            await poisonInfrastructure();
+          } else {
+            try {
+              await shell(
+                buildMicrosandboxCmaGrepCleanupCommand(searchToken),
+                {
+                  timeoutMs: 3_000,
+                  guestTimeout: false,
+                },
+              );
+            } catch (cleanupError) {
+              await poisonInfrastructure();
+              throw cleanupError;
+            }
+          }
+        }
+        if (signal.aborted) throw new Error("Operation aborted");
+        return collector.matches;
+      } finally {
+        signal.removeEventListener("abort", abortFromCaller);
+      }
+    },
+  };
   const lsOps: LsOperations = {
     exists: async (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "ls");
@@ -771,6 +935,7 @@ export async function createMicrosandboxSandboxProvider(
     edit: editOps,
     find: findOps,
     glob: globOps,
+    grep: grepOps,
     ls: lsOps,
   };
 
@@ -780,7 +945,7 @@ export async function createMicrosandboxSandboxProvider(
     invocations,
     materializeFileResources,
     operations,
-    toolNames: new Set(["bash", "read", "write", "edit", "glob", "ls"]),
+    toolNames: new Set(["bash", "read", "write", "edit", "glob", "grep", "ls"]),
     tools: createSandboxToolDefinitions(
       resolved.workspacePath,
       operations,
@@ -1065,6 +1230,127 @@ export function buildMicrosandboxCmaGlobCleanupCommand(
       "[ -z \"$pids\" ]",
     ].join("\n"),
     args: [ownershipToken],
+  };
+}
+
+export function buildMicrosandboxCmaGrepCleanupCommand(
+  ownershipToken: string,
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "pids=''",
+      "for f in /proc/[0-9]*/environ; do",
+      "  pid=${f#/proc/}; pid=${pid%/environ}",
+      "  if tr '\\0' '\\n' < \"$f\" 2>/dev/null | grep -Fqx \"OMA_GREP_OWNER=$1\"; then",
+      "    start=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    case \"$start\" in ''|*[!0-9]*) :;; *) pids=\"$pids $pid:$start\";; esac",
+      "  fi",
+      "done",
+      "for entry in $pids; do",
+      "  pid=${entry%%:*}; start=${entry#*:}",
+      "  current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "  if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GREP_OWNER=$1\"; then",
+      "    kill -KILL \"-$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true",
+      "  fi",
+      "done",
+      "attempt=0",
+      "while [ -n \"$pids\" ] && [ \"$attempt\" -lt 40 ]; do",
+      "  remaining=''",
+      "  for entry in $pids; do",
+      "    pid=${entry%%:*}; start=${entry#*:}",
+      "    current=$(awk '{print $22}' \"/proc/$pid/stat\" 2>/dev/null || true)",
+      "    if [ \"$current\" = \"$start\" ] && tr '\\0' '\\n' < \"/proc/$pid/environ\" 2>/dev/null | grep -Fqx \"OMA_GREP_OWNER=$1\"; then remaining=\"$remaining $entry\"; fi",
+      "  done",
+      "  pids=$remaining",
+      "  [ -z \"$pids\" ] && break",
+      "  attempt=$((attempt + 1)); sleep 0.05",
+      "done",
+      "[ -z \"$pids\" ]",
+    ].join("\n"),
+    args: [ownershipToken],
+  };
+}
+
+export function buildMicrosandboxCmaGrepPatternCheckCommand(
+  pattern: string,
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "set +e",
+      "LC_ALL=C grep -E -q -- \"$1\" /dev/null >/dev/null 2>&1",
+      "code=$?",
+      "[ \"$code\" -eq 1 ]",
+    ].join("\n"),
+    args: [pattern],
+  };
+}
+
+export function buildMicrosandboxCmaGrepPreflightCommand(): MicrosandboxShellCommand {
+  return {
+    script: [
+      "set -eu",
+      "dir=\".oma-grep-preflight-$$\"",
+      "mkdir \"$dir\"",
+      "trap 'rm -rf \"$dir\"' EXIT",
+      "printf 'needle\\n' > \"$dir/text.txt\"",
+      "printf 'other\\n' > \"$dir/no-match.txt\"",
+      "printf 'a\\0b' > \"$dir/binary.bin\"",
+      "LC_ALL=C grep -E -q -- 'needle' \"$dir/text.txt\"",
+      "set +e",
+      "LC_ALL=C grep -E -q -- 'needle' \"$dir/no-match.txt\" >/dev/null 2>&1",
+      "code=$?",
+      "set -e",
+      "[ \"$code\" -eq 1 ]",
+      "set +e",
+      "LC_ALL=C grep -E -q -- '[' \"$dir/text.txt\" >/dev/null 2>&1",
+      "code=$?",
+      "set -e",
+      "[ \"$code\" -ne 0 ] && [ \"$code\" -ne 1 ]",
+      "out=$(LC_ALL=C grep -E -q -- 'needle' \"$dir/text.txt\" 2>/dev/null || true)",
+      "[ -z \"$out\" ]",
+      "LC_ALL=C grep -Iq . \"$dir/text.txt\"",
+      "! LC_ALL=C grep -Iq . \"$dir/binary.bin\"",
+      "printf 'x\\0' | while IFS= read -r -d '' item; do [ \"$item\" = x ]; done",
+    ].join("\n"),
+    args: [],
+  };
+}
+
+export function buildMicrosandboxCmaGrepSearchCommand(
+  root: string,
+  ownershipToken: string,
+  pattern: string,
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "set -eu",
+      "exec setsid env \"OMA_GREP_OWNER=$2\" sh -c '",
+      "set -eu",
+      "printf \"%s\\0\" __OMA_GREP_READY__",
+      "while IFS= read -r -d \"\" file; do",
+      "  if LC_ALL=C grep -Iq . \"$file\" 2>/dev/null && LC_ALL=C grep -E -q -- \"$2\" \"$file\" 2>/dev/null; then",
+      "    printf \"%s\\0\" \"$file\"",
+      "  fi",
+      "done",
+      "' \"$2\" \"$1\" \"$3\"",
+    ].join("\n"),
+    args: [root, ownershipToken, pattern],
+    input: "",
+  };
+}
+
+export function buildMicrosandboxCmaGrepCandidateEnumerationCommand(
+  root: string,
+  ownershipToken: string,
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "set -eu",
+      "setsid env \"OMA_GREP_OWNER=$2\" sh -c 'set -eu; printf \"%s\\0\" __OMA_GREP_READY__; if [ -f \"$1\" ]; then printf \"%s\\0\" \"$1\"; elif [ -d \"$1\" ]; then exec find \"$1\" -type f -print0; else cd \"$1\"; fi' \"$2\" \"$1\" &",
+      "child=$!",
+      "wait \"$child\"",
+    ].join("\n"),
+    args: [root, ownershipToken],
   };
 }
 
@@ -1382,6 +1668,24 @@ export function assertInsideMicrosandboxWorkspace(
     return path;
   }
   throw new Error(`Sandbox path escapes workspace: ${absolutePath}`);
+}
+
+export function assertInsideMicrosandboxSearchRoot(
+  absolutePath: string,
+  roots: readonly string[],
+): string {
+  if (!posix.isAbsolute(absolutePath)) {
+    throw new Error(`Sandbox search path must be absolute: ${absolutePath}`);
+  }
+  const path = posix.resolve(absolutePath);
+  for (const rootPath of roots) {
+    const root = posix.resolve(rootPath);
+    const rel = posix.relative(root, path);
+    if (rel === "" || (!rel.startsWith("..") && !posix.isAbsolute(rel))) {
+      return path;
+    }
+  }
+  throw new Error(`Sandbox search path escapes approved roots: ${absolutePath}`);
 }
 
 export function assertInsideMicrosandboxUploadsPath(

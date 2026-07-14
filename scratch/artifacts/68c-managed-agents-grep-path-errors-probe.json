@@ -1,0 +1,197 @@
+{
+  "cases": [
+    {
+      "case": "absolute_nested_path",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads/nested",
+        "pattern": "NESTED68C"
+      }
+    },
+    {
+      "case": "missing_path",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "path": "/mnt/session/uploads/missing",
+        "pattern": "NESTED68C"
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "id_001",
+      "type": "session.status_running"
+    },
+    {
+      "id": "id_002",
+      "type": "session.thread_status_running"
+    },
+    {
+      "content": [
+        {
+          "text": "1. case=absolute_nested_path input={\"context\": 0, \"glob\": \"*.md\", \"head_limit\": 5, \"path\": \"/mnt/session/uploads/nested\", \"pattern\": \"NESTED68C\"}\n2. case=missing_path input={\"context\": 0, \"head_limit\": 5, \"path\": \"/mnt/session/uploads/missing\", \"pattern\": \"NESTED68C\"}",
+          "type": "text"
+        }
+      ],
+      "id": "id_003",
+      "type": "user.message"
+    },
+    {
+      "id": "id_004",
+      "type": "span.model_request_start"
+    },
+    {
+      "id": "id_005",
+      "type": "agent.thinking"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_006",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads/nested",
+        "pattern": "NESTED68C"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "id": "id_007",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/nested/nested.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_008",
+      "is_error": false,
+      "tool_use_id": "id_006",
+      "type": "agent.tool_result"
+    },
+    {
+      "id": "id_009",
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_010",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "path": "/mnt/session/uploads/missing",
+        "pattern": "NESTED68C"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "id": "id_011",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "rg: /mnt/session/uploads/missing: No such file or directory (os error 2)\n",
+          "type": "text"
+        }
+      ],
+      "id": "id_012",
+      "is_error": true,
+      "tool_use_id": "id_010",
+      "type": "agent.tool_result"
+    },
+    {
+      "id": "id_013",
+      "type": "span.model_request_start"
+    },
+    {
+      "content": [
+        {
+          "text": "Both grep calls completed as instructed:\n\n1. **absolute_nested_path**: Searching for `NESTED68C` in `*.md` files under `/mnt/session/uploads/nested` found a match in `/mnt/session/uploads/nested/nested.md`.\n2. **missing_path**: Searching under `/mnt/session/uploads/missing` failed with error: `rg: /mnt/session/uploads/missing: No such file or directory (os error 2)` \u2014 the path does not exist.",
+          "type": "text"
+        }
+      ],
+      "id": "id_014",
+      "type": "agent.message"
+    },
+    {
+      "id": "id_015",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "id": "id_016",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.thread_status_idle"
+    },
+    {
+      "id": "id_017",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.status_idle"
+    }
+  ],
+  "expected_grep_calls": 2,
+  "model": "claude-sonnet-5",
+  "run_id": "8a8c59f2",
+  "tool_results": [
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/nested/nested.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "tool_use_id": "id_006"
+    },
+    {
+      "content": [
+        {
+          "text": "rg: /mnt/session/uploads/missing: No such file or directory (os error 2)\n",
+          "type": "text"
+        }
+      ],
+      "is_error": true,
+      "tool_use_id": "id_010"
+    }
+  ],
+  "tool_uses": [
+    {
+      "evaluated_permission": "allow",
+      "id": "id_006",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads/nested",
+        "pattern": "NESTED68C"
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_010",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "path": "/mnt/session/uploads/missing",
+        "pattern": "NESTED68C"
+      },
+      "name": "grep"
+    }
+  ]
+}

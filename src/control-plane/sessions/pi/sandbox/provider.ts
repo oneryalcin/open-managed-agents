@@ -30,6 +30,18 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { compileCmaGlob } from "./cma-glob.ts";
+import {
+  CMA_GREP_MAX_OUTPUT_BYTES,
+  CMA_GREP_MAX_RAW_BYTES,
+  CMA_GREP_TIMEOUT_MS,
+  CmaGrepInputError,
+  assertCmaGrepContext,
+  assertCmaGrepHeadLimit,
+  assertCmaGrepPath,
+  assertCmaGrepPattern,
+  formatCmaGrepOutput,
+  outputRelativeTo,
+} from "./cma-grep.ts";
 import { globMatcher, toPosix } from "./glob.ts";
 import type { RuntimeSessionFileMount } from "../../../events/types.ts";
 
@@ -40,6 +52,7 @@ export type SandboxedBuiltinToolName =
   | "edit"
   | "find"
   | "glob"
+  | "grep"
   | "ls";
 
 export interface SandboxInvocationStats {
@@ -63,6 +76,21 @@ export interface CmaGlobOperations {
   }): Promise<string[]>;
 }
 
+export interface CmaGrepOperations {
+  grep(input: {
+    pattern: string;
+    cwd: string;
+    signal: AbortSignal;
+    glob?: string;
+    context: number;
+    headLimit: number;
+    maxRawBytes: number;
+    maxOutputBytes: number;
+    outputBase?: string;
+    timeoutMs: number;
+  }): Promise<string[]>;
+}
+
 export interface SandboxOperations {
   readonly bash: BashOperations;
   readonly read: ReadOperations;
@@ -70,6 +98,7 @@ export interface SandboxOperations {
   readonly edit: EditOperations;
   readonly find: FindOperations;
   readonly glob: CmaGlobOperations;
+  readonly grep: CmaGrepOperations;
   readonly ls: LsOperations;
 }
 
@@ -215,6 +244,23 @@ export function createHostPassthroughSandboxProvider(
       });
     },
   };
+  const grepOps: CmaGrepOperations = {
+    grep: async ({ pattern, cwd, signal, glob, headLimit, maxRawBytes, maxOutputBytes, outputBase, timeoutMs }) => {
+      recordSandboxInvocation(invocations, disposed, "grep");
+      return cmaGrepInsideWorkspace({
+        pattern,
+        cwd: assertInsideWorkspace(cwd, workspaceRoot),
+        workspaceRoot,
+        signal,
+        glob,
+        headLimit,
+        maxRawBytes,
+        maxOutputBytes,
+        outputBase,
+        timeoutMs,
+      });
+    },
+  };
   const lsOps: LsOperations = {
     exists: (absolutePath) => {
       recordSandboxInvocation(invocations, disposed, "ls");
@@ -253,8 +299,13 @@ export function createHostPassthroughSandboxProvider(
       edit: editOps,
       find: findOps,
       glob: globOps,
+      grep: grepOps,
       ls: lsOps,
     },
+    // Host passthrough is explicitly unsafe and is not a production isolation
+    // boundary. Do not expose model-facing grep here: its implementation uses
+    // JavaScript regexes and control-plane file reads, not the provider-owned
+    // in-guest POSIX grep contract Docker/microsandbox expose.
     toolNames: new Set(["bash", "read", "write", "edit", "glob", "ls"]),
     tools: createSandboxToolDefinitions(
       workspaceRoot,
@@ -265,11 +316,12 @@ export function createHostPassthroughSandboxProvider(
         edit: editOps,
         find: findOps,
         glob: globOps,
+        grep: grepOps,
         ls: lsOps,
       },
       invocations,
       disposed,
-    ),
+    ).filter((tool) => tool.name !== "grep"),
     dispose: () => {
       disposed.value = true;
       for (const pid of activeProcessGroups) {
@@ -405,6 +457,63 @@ function createCmaGlobToolDefinition(
   });
 }
 
+function createCmaGrepToolDefinition(
+  _cwd: string,
+  operations: CmaGrepOperations,
+): ToolDefinition<any, any, any> {
+  return defineTool({
+    name: "grep",
+    label: "grep",
+    description: "Search file contents and return matching file paths.",
+    parameters: Type.Object(
+      {
+        pattern: Type.String({ description: "POSIX extended regular expression to search for" }),
+        path: Type.String({ description: "Absolute directory or file path to search" }),
+        glob: Type.Optional(Type.String({ description: "Optional glob filter for files to search" })),
+        context: Type.Optional(Type.Number({ description: "Accepted for CMA compatibility; output remains matching paths" })),
+        head_limit: Type.Optional(Type.Number({ description: "Maximum matching paths to return" })),
+      },
+      { additionalProperties: false },
+    ),
+    execute: async (_toolCallId, input: {
+      pattern: unknown;
+      path: unknown;
+      glob?: unknown;
+      context?: unknown;
+      head_limit?: unknown;
+    }, signal) => {
+      const pattern = assertCmaGrepPattern(input.pattern);
+      const path = assertCmaGrepPath(input.path);
+      const context = assertCmaGrepContext(input.context);
+      const headLimit = assertCmaGrepHeadLimit(input.head_limit);
+      let glob: string | undefined;
+      if (input.glob !== undefined) {
+        if (typeof input.glob !== "string" || input.glob.length === 0) {
+          throw new CmaGrepInputError("grep glob must be a non-empty string");
+        }
+        compileCmaGlob(input.glob);
+        glob = input.glob;
+      }
+      const effectiveSignal = signal ?? new AbortController().signal;
+      const matches = await operations.grep({
+        pattern,
+        cwd: path,
+        signal: effectiveSignal,
+        glob,
+        context,
+        headLimit,
+        maxRawBytes: CMA_GREP_MAX_RAW_BYTES,
+        maxOutputBytes: CMA_GREP_MAX_OUTPUT_BYTES,
+        timeoutMs: CMA_GREP_TIMEOUT_MS,
+      });
+      return {
+        content: [{ type: "text", text: formatCmaGrepOutput(matches) }],
+        details: undefined,
+      };
+    },
+  });
+}
+
 export function createSandboxToolDefinitions(
   cwd: string,
   operations: SandboxOperations,
@@ -443,6 +552,12 @@ export function createSandboxToolDefinitions(
       disposed,
     ),
     withToolCallAccounting(
+      "grep",
+      createCmaGrepToolDefinition(cwd, operations.grep),
+      invocations,
+      disposed,
+    ),
+    withToolCallAccounting(
       "ls",
       createLsToolDefinition(cwd, { operations: operations.ls }),
       invocations,
@@ -459,6 +574,7 @@ function emptyToolCounts(): Record<SandboxedBuiltinToolName, number> {
     edit: 0,
     find: 0,
     glob: 0,
+    grep: 0,
     ls: 0,
   };
 }
@@ -471,6 +587,7 @@ function emptyToolCallIds(): Record<SandboxedBuiltinToolName, Set<string>> {
     edit: new Set(),
     find: new Set(),
     glob: new Set(),
+    grep: new Set(),
     ls: new Set(),
   };
 }
@@ -628,6 +745,68 @@ async function cmaGlobInsideWorkspace(opts: {
         matches.push(fullPath);
       }
     }
+  }
+  await visit(opts.cwd);
+  return matches;
+}
+
+async function cmaGrepInsideWorkspace(opts: {
+  pattern: string;
+  cwd: string;
+  workspaceRoot: string;
+  signal: AbortSignal;
+  glob?: string;
+  headLimit: number;
+  maxRawBytes: number;
+  maxOutputBytes: number;
+  outputBase?: string;
+  timeoutMs: number;
+}): Promise<string[]> {
+  let regex: RegExp;
+  try {
+    regex = new RegExp(opts.pattern);
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : "Invalid regex pattern");
+  }
+  const matcher = opts.glob === undefined ? undefined : compileCmaGlob(opts.glob);
+  const deadline = Date.now() + opts.timeoutMs;
+  const matches: string[] = [];
+  let rawBytes = 0;
+  let outputBytes = 0;
+  const assertActive = (): void => {
+    if (opts.signal.aborted) throw new Error("Operation aborted");
+    if (Date.now() >= deadline) throw new Error("Grep operation timed out");
+  };
+  async function visit(path: string): Promise<void> {
+    assertActive();
+    const stats = await stat(path);
+    if (stats.isDirectory()) {
+      const handle = await opendir(path);
+      for await (const entry of handle) {
+        assertActive();
+        if (matches.length >= opts.headLimit) return;
+        await visit(assertInsideWorkspace(`${path}${sep}${entry.name}`, opts.workspaceRoot));
+      }
+      return;
+    }
+    if (!stats.isFile()) return;
+    const relativePath = toPosix(relative(opts.cwd, path));
+    rawBytes += Buffer.byteLength(relativePath, "utf8") + 1;
+    if (rawBytes > opts.maxRawBytes) {
+      throw new Error(`Grep enumeration exceeds ${opts.maxRawBytes} raw bytes`);
+    }
+    if (matcher !== undefined && !matcher.matches(relativePath)) return;
+    const bytes = await readFile(path);
+    if (bytes.includes(0)) return;
+    if (!regex.test(bytes.toString("utf8"))) return;
+    const outputPath = opts.outputBase === undefined ? path : outputRelativeTo(opts.outputBase, path);
+    const addedBytes = Buffer.byteLength(outputPath, "utf8") +
+      (matches.length === 0 ? 0 : 1);
+    if (outputBytes + addedBytes > opts.maxOutputBytes) {
+      throw new Error(`Grep output exceeds ${opts.maxOutputBytes} bytes`);
+    }
+    outputBytes += addedBytes;
+    matches.push(path);
   }
   await visit(opts.cwd);
   return matches;

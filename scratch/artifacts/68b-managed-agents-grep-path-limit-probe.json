@@ -1,0 +1,222 @@
+{
+  "completed": false,
+  "cases": [
+    {
+      "case": "head_limit_two_across_files",
+      "input": {
+        "context": 0,
+        "glob": "multi*.md",
+        "head_limit": 2,
+        "path": "/mnt/session/uploads",
+        "pattern": "MULTI68B"
+      }
+    },
+    {
+      "case": "no_glob",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "MULTI68B"
+      }
+    },
+    {
+      "case": "omitted_path",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "pattern": "MULTI68B"
+      }
+    },
+    {
+      "case": "absolute_nested_path",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads/nested",
+        "pattern": "NESTED68B"
+      }
+    },
+    {
+      "case": "missing_path",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "path": "/mnt/session/uploads/missing",
+        "pattern": "MULTI68B"
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "id_001",
+      "type": "session.status_running"
+    },
+    {
+      "id": "id_002",
+      "type": "session.thread_status_running"
+    },
+    {
+      "content": [
+        {
+          "text": "1. case=head_limit_two_across_files input={\"context\": 0, \"glob\": \"multi*.md\", \"head_limit\": 2, \"path\": \"/mnt/session/uploads\", \"pattern\": \"MULTI68B\"}\n2. case=no_glob input={\"context\": 0, \"head_limit\": 5, \"path\": \"/mnt/session/uploads\", \"pattern\": \"MULTI68B\"}\n3. case=omitted_path input={\"context\": 0, \"head_limit\": 5, \"pattern\": \"MULTI68B\"}\n4. case=absolute_nested_path input={\"context\": 0, \"glob\": \"*.md\", \"head_limit\": 5, \"path\": \"/mnt/session/uploads/nested\", \"pattern\": \"NESTED68B\"}\n5. case=missing_path input={\"context\": 0, \"head_limit\": 5, \"path\": \"/mnt/session/uploads/missing\", \"pattern\": \"MULTI68B\"}",
+          "type": "text"
+        }
+      ],
+      "id": "id_003",
+      "type": "user.message"
+    },
+    {
+      "id": "id_004",
+      "type": "span.model_request_start"
+    },
+    {
+      "id": "id_005",
+      "type": "agent.thinking"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_006",
+      "input": {
+        "context": 0,
+        "glob": "multi*.md",
+        "head_limit": 2,
+        "path": "/mnt/session/uploads",
+        "pattern": "MULTI68B"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "id": "id_007",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/multi1.md\n/mnt/session/uploads/multi3.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_008",
+      "is_error": false,
+      "tool_use_id": "id_006",
+      "type": "agent.tool_result"
+    },
+    {
+      "id": "id_009",
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_010",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "MULTI68B"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "id": "id_011",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/multi3.md\n/mnt/session/uploads/multi1.md\n/mnt/session/uploads/multi2.md\n/mnt/session/uploads/multi4.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_012",
+      "is_error": false,
+      "tool_use_id": "id_010",
+      "type": "agent.tool_result"
+    },
+    {
+      "id": "id_013",
+      "type": "span.model_request_start"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_014",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "pattern": "MULTI68B"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "id": "id_015",
+      "is_error": false,
+      "type": "span.model_request_end"
+    }
+  ],
+  "expected_grep_calls": 5,
+  "model": "claude-sonnet-5",
+  "run_id": "2a498753",
+  "tool_results": [
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/multi1.md\n/mnt/session/uploads/multi3.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "tool_use_id": "id_006"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/multi3.md\n/mnt/session/uploads/multi1.md\n/mnt/session/uploads/multi2.md\n/mnt/session/uploads/multi4.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "tool_use_id": "id_010"
+    }
+  ],
+  "tool_uses": [
+    {
+      "evaluated_permission": "allow",
+      "id": "id_006",
+      "input": {
+        "context": 0,
+        "glob": "multi*.md",
+        "head_limit": 2,
+        "path": "/mnt/session/uploads",
+        "pattern": "MULTI68B"
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_010",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "MULTI68B"
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_014",
+      "input": {
+        "context": 0,
+        "head_limit": 5,
+        "pattern": "MULTI68B"
+      },
+      "name": "grep"
+    }
+  ]
+}

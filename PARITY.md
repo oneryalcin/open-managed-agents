@@ -20,7 +20,7 @@ post-v1 deferrals, and deliberate architecture-specific divergences.
 | MCP & vaults | ~80% | Connector + `static_bearer`/`mcp_oauth` + `mcp_oauth_validate` ✅; additional SSRF/scrubbing hardening |
 | Sessions & files | ~65% | Create/retrieve/list/archive ✅; update / overrides / `resources.*` missing; sharp edges |
 | API reference & onboarding | ~65% | Auth / betas / error-envelope and bidirectional session pagination ✅; no update/lifecycle endpoints |
-| Tools & permissions | ~75% | Permission state-machine faithful ✅; CMA `glob` wired; `grep` and web tools remain disabled |
+| Tools & permissions | ~75% | Permission state-machine faithful ✅; CMA `glob` wired; provider-owned `grep` implemented/review-pending; web tools remain disabled |
 | Agent config & outcomes | ~55% | Create/get/list/archive and update/versioning ✅; outcomes deferred |
 | Events, streaming & webhooks | ~55% | SSE / resume / idempotency ✅; webhooks 0%, deltas 0%, `agent.thinking` dead |
 | Environments & sandboxes | ~35%\* | Thin *resource* (no packages/image/runtimes); strong self-hosted isolation defaults |
@@ -37,9 +37,8 @@ claim of blanket superiority over Anthropic's hosted environment.
 2026-07-12) → networking translation/rejection → probe-backed tool config
 validation → reject the inert multi-agent façade (DONE 2026-07-13) →
 `glob`/`grep` honesty boundary (DONE 2026-07-13) → sandbox-backed CMA
-`glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning (DONE 2026-07-14) → usable
-environment image story → web tools. Provider-owned `grep` remains a separate
-search arc rather than a prerequisite for `glob`.
+`glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning (DONE 2026-07-14) → provider-owned CMA `grep` (implemented, review pending) → usable
+environment image story → web tools.
 
 ## Legend
 
@@ -116,10 +115,11 @@ the risk of silent contradiction, not by how easy they first appear.
     rejects duplicate builtin configs, materializes the implicit builtin
     defaults, and leaves MCP config names server-defined. The parser rejects
     before an agent row is persisted.
-  - OMA now enables CMA `glob`; omitted `grep`, `web_fetch`, and `web_search`
-    materialize as deployment-disabled overrides and explicit configurations
-    are accepted only when effectively disabled. Rows created during the PR
-    #183 honesty window retain their persisted `glob:false` override.
+  - OMA now enables CMA `glob` and provider-owned CMA `grep`; omitted
+    `web_fetch` and `web_search` materialize as deployment-disabled overrides
+    and explicit configurations are accepted only when effectively disabled.
+    Rows created during the PR #183 honesty window retain their persisted
+    `glob:false`/`grep:false` overrides.
 
 - [x] **`multiagent` configuration is rejected honestly** *(DONE 2026-07-13; plan 0129)*
   - CMA `[Doc]`: coordinator agents delegate through a multi-agent runtime and
@@ -136,13 +136,11 @@ the risk of silent contradiction, not by how easy they first appear.
   - CMA `[Doc]`: built-ins are named `glob` and `grep` (`tools.md:25-26`);
     probe 64 captured their input/output shapes.
   - OMA subsequently wired CMA `glob` through bounded provider operations and
-    removed Pi `find` from the model-facing surface. Pi's default grep still
-    spawns `rg` in the control-plane process and remains rejected.
+    removed Pi `find` from the model-facing surface. Provider-owned `grep` now
+    executes inside Docker/microsandbox instead of Pi's host-process `rg` path.
   - OMA initially materialized omitted `glob` and `grep` as disabled. Plan 0131
     now enables `glob` for new configurations; rows created during the honesty
-    boundary retain their explicit `glob:false` override and must be recreated
-    until an agent-update API exists. `grep` remains disabled until providers
-    own content search and a deterministic search-binary strategy.
+    boundary retain their explicit `glob:false`/`grep:false` overrides.
 
 - [x] **Sandbox-backed CMA `glob` runtime** *(DONE 2026-07-13; PR #184; plan 0131; probes 65/65b)*
   - CMA `[Obs]`: plain and `**` patterns recurse; grammar includes `?`, classes,
@@ -153,12 +151,21 @@ the risk of silent contradiction, not by how easy they first appear.
   - OMA `[OMA]`: ships a separately accounted, NUL-streaming, byte-bounded,
     timed-out, actively cancellable provider `glob` operation. Docker and
     microsandbox guest PID cleanup are verified; model-facing Pi `find` is
-    replaced by CMA `glob`, while `grep` and web tools remain disabled.
+    replaced by CMA `glob`; provider-owned CMA `grep` now ships separately,
+    while web tools remain disabled.
 
-- [ ] **Provider-owned CMA `grep` runtime**
-  - Keep effectively enabled `grep` rejected until Docker and microsandbox own
-    content search and a deterministic binary/search strategy. Pi's default
-    host-process `rg` path is not an acceptable implementation.
+- [ ] **Provider-owned CMA `grep` runtime** *(IMPLEMENTED, REVIEW PENDING 2026-07-14; plan 0134; probes 68/68b/68c)*
+  - Docker and microsandbox now own content search, limits, cancellation,
+    cleanup, accounting, and events. Pi's default host-process `rg` path is not
+    registered.
+  - Probe 68 established the bounded runtime contract: hosted returns matching
+    file paths, `head_limit` caps paths, invalid regex/missing path are tool
+    errors, and omitted-path semantics remain unclaimed. Implementation plan:
+    [`docs/plans/0134-cma-grep-runtime.md`](docs/plans/0134-cma-grep-runtime.md).
+  - OMA chooses in-guest BusyBox/POSIX `grep -E` under `LC_ALL=C` for v1,
+    with bounded inputs and semantic provider preflight. Ripgrep-compatible Rust
+    regex parity is deferred to avoid coupling this slice to image and
+    supply-chain work.
 
 - [x] **Bidirectional session pagination / `prev_page`** *(DONE 2026-07-13; PR #185; plan 0132; probe 66)*
   - CMA `[Obs]`: session pages are `{data,next_page,prev_page}` without

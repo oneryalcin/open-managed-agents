@@ -1314,7 +1314,7 @@ class FakeSandboxProvider implements SandboxProvider {
   readonly cwd = "/workspace";
   readonly operations = {} as SandboxProvider["operations"];
   readonly tools: SandboxProvider["tools"] = [];
-  readonly toolNames: ReadonlySet<"bash" | "read" | "write" | "edit" | "find" | "glob" | "ls">;
+  readonly toolNames: ReadonlySet<"bash" | "read" | "write" | "edit" | "find" | "glob" | "grep" | "ls">;
   readonly invocations = {
     total: 0,
     byTool: {
@@ -1324,6 +1324,7 @@ class FakeSandboxProvider implements SandboxProvider {
       edit: 0,
       find: 0,
       glob: 0,
+      grep: 0,
       ls: 0,
     },
     toolCallIds: {
@@ -1333,6 +1334,7 @@ class FakeSandboxProvider implements SandboxProvider {
       edit: new Set<string>(),
       find: new Set<string>(),
       glob: new Set<string>(),
+      grep: new Set<string>(),
       ls: new Set<string>(),
     },
   };
@@ -1340,7 +1342,7 @@ class FakeSandboxProvider implements SandboxProvider {
   private poisoned = false;
 
   constructor(
-    toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "glob" | "ls">,
+    toolNames: Array<"bash" | "read" | "write" | "edit" | "find" | "glob" | "grep" | "ls">,
     toolInstances: string[] = [],
   ) {
     this.toolNames = new Set(toolNames);
@@ -1354,7 +1356,7 @@ class FakeSandboxProvider implements SandboxProvider {
   readonly materialized: Array<readonly PiSessionFileMount[]> = [];
 
   recordInvocation(
-    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "ls",
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "grep" | "ls",
     toolCallId = "toolu_fake",
   ): void {
     this.recordLowLevelOperation(toolName);
@@ -1362,14 +1364,14 @@ class FakeSandboxProvider implements SandboxProvider {
   }
 
   recordLowLevelOperation(
-    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "ls",
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "grep" | "ls",
   ): void {
     this.invocations.total += 1;
     this.invocations.byTool[toolName] += 1;
   }
 
   recordToolCall(
-    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "ls",
+    toolName: "bash" | "read" | "write" | "edit" | "find" | "glob" | "grep" | "ls",
     toolCallId: string,
   ): void {
     this.invocations.toolCallIds[toolName].add(toolCallId);

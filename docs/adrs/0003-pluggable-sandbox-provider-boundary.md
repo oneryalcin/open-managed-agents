@@ -292,7 +292,7 @@ const { session } = await createAgentSession({
 });
 ```
 
-`grep` remains disabled. The current Pi `createGrepToolDefinition` still delegates part of its behavior to host `rg`, so grep-like capability stays routed through policed `bash` until we own or upstream a fully delegated grep implementation.
+`grep` is now provider-owned. OMA does not use Pi's host-process `createGrepToolDefinition`; Docker and microsandbox execute bounded `grep -E` inside the guest, with provider-owned limits, cancellation, cleanup, and accounting. Ripgrep-compatible regex parity remains deferred.
 
 ## Findings (Cycle E.2.0 Docker Operations probe, 2026-05-27)
 

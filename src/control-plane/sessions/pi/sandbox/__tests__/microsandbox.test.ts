@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_MICROSANDBOX_MAX_BUFFER,
   DEFAULT_MICROSANDBOX_IMAGE,
@@ -12,6 +12,10 @@ import {
   assertInsideMicrosandboxWorkspace,
   buildMicrosandboxBashCommand,
   buildMicrosandboxFileAccessCommand,
+  buildMicrosandboxCmaGrepPreflightCommand,
+  buildMicrosandboxCmaGrepPatternCheckCommand,
+  buildMicrosandboxCmaGrepCandidateEnumerationCommand,
+  buildMicrosandboxCmaGrepSearchCommand,
   buildMicrosandboxGlobEnumerationCommand,
   buildMicrosandboxKillProcessGroupCommand,
   buildMicrosandboxMkdirCommand,
@@ -201,6 +205,25 @@ describe("microsandbox command builders", () => {
         "oma.owner=open-managed-agents",
       ],
     );
+  });
+
+  it("builds CMA grep commands with LC_ALL=C and token ownership", () => {
+    const preflight = buildMicrosandboxCmaGrepPreflightCommand();
+    expect(preflight.script).toContain("LC_ALL=C grep -E -q");
+    expect(preflight.script).toContain("grep -Iq");
+    expect(preflight.script).toContain("read -r -d");
+    expect(buildMicrosandboxCmaGrepPatternCheckCommand("[abc]").script).toContain("LC_ALL=C grep -E -q");
+    expect(buildMicrosandboxCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
+      .toContain("find \"$1\" -type f -print0");
+    expect(buildMicrosandboxCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
+      .toContain("[ -f \"$1\" ]");
+    const command = buildMicrosandboxCmaGrepSearchCommand("/workspace", "oma-grep-token", "needle");
+    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle"]);
+    expect(command.script).toContain("OMA_GREP_OWNER=$2");
+    expect(command.script).toContain("__OMA_GREP_READY__");
+    expect(command.script).toContain("while IFS= read -r -d");
+    expect(command.script).toContain("grep -Iq");
+    expect(command.script).toContain("grep -E -q");
   });
 
   it("generates stable provider-owned resource names with a uniqueness suffix", () => {
@@ -570,6 +593,12 @@ describe("microsandbox sandbox provider", () => {
     cli.queueExec(ok("README.md\nsrc\n"));
     cli.queueExec(ok("src/index.ts\n"));
     cli.queueExec(ok("__OMA_GLOB_READY__\0src/index.ts\0"));
+    cli.queueExec(ok(""));
+    cli.queueExec(ok(""));
+    cli.queueExec(ok("__OMA_GREP_READY__\0src/index.ts\0"));
+    cli.queueExec(ok(""));
+    cli.queueExec(ok("__OMA_GREP_READY__\0src/index.ts\0"));
+    cli.queueExec(ok(""));
     cli.queueExecSync(ok(""));
     cli.queueExecSync(ok(""));
     const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
@@ -606,6 +635,17 @@ describe("microsandbox sandbox provider", () => {
       maxOutputBytes: 64 * 1024,
       timeoutMs: 10_000,
     })).resolves.toEqual(["/workspace/src/index.ts"]);
+    await expect(provider.operations.grep.grep({
+      pattern: "value",
+      cwd: "/workspace",
+      glob: "*.ts",
+      context: 1,
+      headLimit: 100,
+      signal: new AbortController().signal,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    })).resolves.toEqual(["/workspace/src/index.ts"]);
     provider.dispose();
 
     expect(cli.calls.slice(2, 8).map((call) => call.args[0])).toEqual([
@@ -624,6 +664,7 @@ describe("microsandbox sandbox provider", () => {
     expect(provider.invocations.byTool.ls).toBe(2);
     expect(provider.invocations.byTool.find).toBe(1);
     expect(provider.invocations.byTool.glob).toBe(1);
+    expect(provider.invocations.byTool.grep).toBe(1);
     const globCall = cli.calls.find((call) =>
       call.args.some((arg) => arg.includes("find . -type f -print0"))
     );
@@ -713,6 +754,227 @@ describe("microsandbox sandbox provider", () => {
       timeoutMs: 10_000,
     })).rejects.toThrow("Operation aborted");
     expect(cli.calls).toHaveLength(12);
+    provider.dispose();
+  });
+
+  it("bounds and cleans up CMA grep lifecycle paths", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+
+    const enqueueGrep = (opts: {
+      candidates?: string;
+      search?: string | ((opts: MicrosandboxCliExecOptions | undefined) => MicrosandboxCliResult);
+      enumCleanup?: string | ((opts: MicrosandboxCliExecOptions | undefined) => MicrosandboxCliResult);
+      searchCleanup?: string | ((opts: MicrosandboxCliExecOptions | undefined) => MicrosandboxCliResult);
+    }) => {
+      cli.queueExec(ok(""));
+      cli.queueExec(typeof opts.candidates === "string"
+        ? ok(`__OMA_GREP_READY__\0${opts.candidates}`)
+        : ok("__OMA_GREP_READY__\0./a.md\0"));
+      cli.queueExec(typeof opts.enumCleanup === "function"
+        ? opts.enumCleanup
+        : ok(opts.enumCleanup ?? ""));
+      cli.queueExec(typeof opts.search === "function"
+        ? opts.search
+        : ok(`__OMA_GREP_READY__\0${opts.search ?? "./a.md\0"}`));
+      cli.queueExec(typeof opts.searchCleanup === "function"
+        ? opts.searchCleanup
+        : ok(opts.searchCleanup ?? ""));
+    };
+    const enqueueGrepEnumerationOnly = (candidates: string) => {
+      cli.queueExec(ok(""));
+      cli.queueExec(ok(`__OMA_GREP_READY__\0${candidates}`));
+      cli.queueExec(ok(""));
+    };
+    const invoke = (overrides: Partial<Parameters<typeof provider.operations.grep.grep>[0]> = {}) =>
+      provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace",
+        glob: "*.md",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+        ...overrides,
+      });
+
+    enqueueGrep({ candidates: "./a.md\0./b.txt\0", search: "./a.md\0" });
+    await expect(invoke()).resolves.toEqual(["/workspace/a.md"]);
+    expect(cli.calls.find((call) => call.opts?.input instanceof Buffer)?.opts?.input)
+      .toEqual(Buffer.from("a.md\0"));
+
+    enqueueGrepEnumerationOnly(`./${"x".repeat(32)}.md\0`);
+    await expect(invoke({ maxRawBytes: 8 })).rejects.toThrow("raw bytes");
+
+    enqueueGrep({ candidates: "./long-name.md\0", search: "./long-name.md\0" });
+    await expect(invoke({ maxOutputBytes: 8 })).rejects.toThrow("output exceeds");
+
+    enqueueGrep({
+      candidates: "./a.md\0",
+      search: (opts) => {
+        opts?.onStdout?.(Buffer.from("__OMA_GREP_READY__\0"));
+        throw new Error("microsandbox grep timeout");
+      },
+    });
+    await expect(invoke({ timeoutMs: 1 })).rejects.toThrow("grep timeout");
+
+    const abortDuringCleanup = new AbortController();
+    enqueueGrep({
+      candidates: "./a.md\0",
+      search: "__OMA_GREP_READY__\0./a.md\0",
+      searchCleanup: () => {
+        abortDuringCleanup.abort();
+        return okResult("");
+      },
+    });
+    await expect(invoke({ signal: abortDuringCleanup.signal }))
+      .rejects.toThrow("Operation aborted");
+
+    const poisoned = new RecordingMicrosandboxCli();
+    poisoned.queueExec(ok("volume"));
+    poisoned.queueExec(ok("sandbox"));
+    poisoned.queueExec(ok(""));
+    poisoned.queueExec(failAbort());
+    poisoned.queueExec(ok("removed-sandbox"));
+    const poisonedProvider = await createMicrosandboxSandboxProvider("wrk", "sesn_poison", {
+      cli: poisoned,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+    await expect(poisonedProvider.operations.grep.grep({
+      pattern: "needle",
+      cwd: "/workspace",
+      context: 0,
+      headLimit: 100,
+      signal: new AbortController().signal,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("aborted");
+    expect(poisonedProvider.isPoisoned?.()).toBe(true);
+
+    const cleanupFail = new RecordingMicrosandboxCli();
+    cleanupFail.queueExec(ok("volume"));
+    cleanupFail.queueExec(ok("sandbox"));
+    cleanupFail.queueExec(ok(""));
+    cleanupFail.queueExec(ok("__OMA_GREP_READY__\0./a.md\0"));
+    cleanupFail.queueExec(ok(""));
+    cleanupFail.queueExec(ok("__OMA_GREP_READY__\0./a.md\0"));
+    cleanupFail.queueExec(fail("cleanup failed"));
+    cleanupFail.queueExec(ok("removed-sandbox"));
+    const cleanupProvider = await createMicrosandboxSandboxProvider("wrk", "sesn_cleanup", {
+      cli: cleanupFail,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+    await expect(cleanupProvider.operations.grep.grep({
+      pattern: "needle",
+      cwd: "/workspace",
+      context: 0,
+      headLimit: 100,
+      signal: new AbortController().signal,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("cleanup failed");
+    expect(cleanupProvider.isPoisoned?.()).toBe(true);
+
+    provider.dispose();
+  });
+
+  it("uses one CMA grep deadline across validation, enumeration, and search", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    let nowMs = 1_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      const provider = await createMicrosandboxSandboxProvider("wrk", "sesn_deadline", {
+        cli,
+        now: () => 1_779_999_000_000,
+        random: () => 0.123456789,
+      });
+      cli.queueExec(() => {
+        nowMs = 1_250;
+        return okResult("");
+      });
+      cli.queueExec((opts) => {
+        opts?.onStdout?.(Buffer.from("__OMA_GREP_READY__\0./a.md\0"));
+        nowMs = 3_000;
+        return okResult("");
+      });
+      cli.queueExec(() => {
+        nowMs = 4_000;
+        return okResult("");
+      });
+      cli.queueExec((opts) => {
+        opts?.onStdout?.(Buffer.from("__OMA_GREP_READY__\0./a.md\0"));
+        return okResult("");
+      });
+      cli.queueExec(ok(""));
+
+      await expect(provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/workspace/a.md"]);
+      expect(cli.calls.slice(2, 7).map((call) => call.opts?.timeoutMs)).toEqual([
+        12_000,
+        11_750,
+        5_000,
+        9_000,
+        5_000,
+      ]);
+      provider.dispose();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("honors caller aborts between CMA grep enumeration and search", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn_abort_gap", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+    const abort = new AbortController();
+    cli.queueExec(ok(""));
+    cli.queueExec(ok("__OMA_GREP_READY__\0./a.md\0"));
+    cli.queueExec(() => {
+      abort.abort();
+      return okResult("");
+    });
+
+    await expect(provider.operations.grep.grep({
+      pattern: "needle",
+      cwd: "/workspace",
+      context: 0,
+      headLimit: 100,
+      signal: abort.signal,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("Operation aborted");
+    expect(cli.calls).toHaveLength(5);
+    expect(cli.calls.some((call) =>
+      call.args.some((arg) => arg.includes("while IFS= read -r -d"))
+    )).toBe(false);
     provider.dispose();
   });
 
@@ -1224,6 +1486,17 @@ describe("microsandbox sandbox provider live smoke", () => {
             "/workspace/../mnt/session/uploads/data/probe.txt",
           ),
         ).rejects.toThrow("escapes workspace");
+        await expect(provider.operations.grep.grep({
+          pattern: "hello",
+          cwd: "/mnt/session/uploads",
+          glob: "*.txt",
+          context: 0,
+          headLimit: 100,
+          signal: new AbortController().signal,
+          maxRawBytes: 1024 * 1024,
+          maxOutputBytes: 64 * 1024,
+          timeoutMs: 10_000,
+        })).resolves.toEqual(["/mnt/session/uploads/data/probe.txt"]);
 
         await expect(
           provider.operations.bash.exec(
@@ -1350,6 +1623,9 @@ class RecordingMicrosandboxCli implements MicrosandboxCli {
     args: readonly string[],
     opts?: MicrosandboxCliExecOptions,
   ): Promise<MicrosandboxCliResult> {
+    if (args.some((arg) => arg.includes(".oma-grep-preflight-"))) {
+      return okResult("");
+    }
     this.calls.push({ mode: "async", args: [...args], opts });
     const action = this.execQueue.shift() ?? ok("");
     return action(opts);
