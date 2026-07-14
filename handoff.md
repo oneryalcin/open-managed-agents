@@ -357,19 +357,15 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Merge PR #189 and close plan 0135's OpenAPI/docs slice. Independent contract
-   and adversarial reviews are complete, and live screenshots verified the
-   vendored Swagger UI renders the full grouped route catalog, authentication
-   controls, and schemas from a local appliance.
-2. Run the screenshot-derived task-parity audit against the bundled console
-   (`ui/managed-agents-console`) and define the minimum alpha happy path.
-3. Implement the minimum safe console mutations and session transcript/debug
-   timeline needed for create-agent → create-session → prompt → inspect events.
-4. Add event honesty around unsupported `event_deltas[]`, `agent.thinking`, and
+1. Implement plan 0136's independently reviewed, narrowly capability-gated
+   console mutations and live
+   timeline: create agent → create environment → create session → prompt →
+   inspect events/tools/files, including interrupt and tool confirmation.
+2. Add event honesty around unsupported `event_deltas[]`, `agent.thinking`, and
    `system.message`.
-5. Then return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
+3. Then return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
    environment image story, followed by web tools.
-6. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

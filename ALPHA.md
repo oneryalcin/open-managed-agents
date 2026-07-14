@@ -10,11 +10,12 @@ Alpha success means a new user can:
 2. install and start OMA;
 3. authenticate a workspace;
 4. create an agent;
-5. create a session;
-6. send a prompt;
-7. watch tool/session events;
-8. inspect tool inputs, results, files, and failures;
-9. understand which CMA features are unsupported or intentionally deferred.
+5. create an environment;
+6. create a session;
+7. send a prompt;
+8. watch tool/session events;
+9. inspect tool inputs, results, files, and failures;
+10. understand which CMA features are unsupported or intentionally deferred.
 
 ## Current status
 
@@ -102,8 +103,8 @@ sandbox provider and skips local Docker/microsandbox prerequisite checks.
 
 Implementation plan: [0135](docs/plans/0135-alpha-openapi-docs.md).
 
-Status: implemented and independently reviewed on `dev/alpha-openapi-docs`;
-live browser rendering verified; PR #189 is ready for merge.
+Status: shipped in PR #189 (`e2bc6a3`); independent reviews and live browser
+rendering verification complete.
 
 Goal: provide FastAPI-like discovery without publishing a hand-maintained spec
 that can drift from runtime behavior.
@@ -131,6 +132,11 @@ Implementation notes:
 
 ### 3. Console task-parity audit
 
+Implementation plan: [0136](docs/plans/0136-alpha-console-task-parity.md).
+
+Status: audit complete and independently reviewed on
+`dev/alpha-console-task-audit`; plan 0136 is implementation-ready.
+
 OMA already has a bundled console. The alpha question is therefore narrower
 than "build a UI": identify the minimum guided workflow the existing console
 must support.
@@ -157,6 +163,12 @@ Output:
 - should-have after alpha;
 - defer / not pursuing pixel parity.
 
+Audit conclusion: the existing console is already a strong read-only inspector.
+Alpha requires API-backed agent/environment/session creation, prompt and
+interrupt actions, authenticated live SSE, and real tool-confirmation handling.
+CMA's conversational Quickstart, deployments, analytics, and pixel parity are
+deferred.
+
 ### 4. Minimum safe console mutations
 
 The console currently supports browsing/admin surfaces better than end-to-end
@@ -164,6 +176,7 @@ mutation flows. For alpha, enable only the safe minimum needed for the happy
 path:
 
 - create agent;
+- create environment;
 - create session;
 - send prompt;
 - interrupt a running session;
