@@ -13,7 +13,8 @@ files, and sandboxes live on your machines, under your policies.
 > runtime, memory stores,
 > scheduled deployments, webhooks, outcomes) is deliberately deferred. See
 > **[PARITY.md](PARITY.md)** for the full domain-by-domain scorecard and the
-> active parity worklist.
+> active parity worklist, and **[ALPHA.md](ALPHA.md)** for the first-user
+> alpha readiness plan.
 
 ## Quickstart
 

@@ -12,7 +12,7 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-14 (`main`; PR #186 and plan 0133 complete)._
+_Last updated 2026-07-14 (`main`; PR #188 and plan 0134 complete)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -23,8 +23,8 @@ _Last updated 2026-07-14 (`main`; PR #186 and plan 0133 complete)._
   Docker/microsandbox providers, tools, skills, MCP, vault credentials, SSE,
   CMA `glob`, and bidirectional session pagination. Sandbox and egress controls
   intentionally exceed the hosted self-hosted baseline in several areas.
-- PR #184 shipped provider-owned, bounded, cancellable CMA `glob`. Provider-owned
-  CMA `grep` is implemented on `arc-j-cma-grep-probe` and review-pending.
+- PR #184 shipped provider-owned, bounded, cancellable CMA `glob`; PR #188
+  shipped provider-owned CMA `grep`.
 - PR #185 shipped session-specific `{data,next_page,prev_page}` pagination with
   signed, workspace-bound cursors and preserved ascending/descending order.
 - Probe 67 established hosted agent update/version behavior. Plan 0133 now
@@ -348,24 +348,26 @@ load-bearing additions are:
 - **Immutable agent versioning** (PR #186; plan 0133; probe 67): transactional
   revisions, optimistic updates, authenticated history, exact-version session
   and runtime pinning, and shared model-catalog admission are shipped.
+- **Provider-owned CMA `grep`** (PR #188; plan 0134; probes 68/68b/68c):
+  Docker and microsandbox own content search, limits, cancellation, cleanup,
+  accounting, and events. Pi's host-process `rg` path is not exposed.
 
 Older shipped arcs remain documented in their ADRs, plans, and merge history;
 they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Provider-owned CMA `grep` is implemented on `arc-j-cma-grep-probe` and is
-   review-pending. Probe 64 established the happy-path wire shape; probe 68
-   established edge behavior for path-list output, no-match, `head_limit`, glob
-   filtering, invalid regex, missing path, binary-ish files, and the unclaimed
-   omitted-path case. OMA v1 uses in-guest BusyBox/POSIX `grep -E` under
-   `LC_ALL=C`; ripgrep-compatible regex parity is tracked for pre-v1 in #187.
-   Public inputs are rejected before dispatch under plan 0134's explicit
-   byte/integer/glob bounds, and provider preflight proves required ERE,
-   quiet-output, `read -d`, and binary-detection behavior.
-2. Next, return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
-   environment images, followed by web tools.
-3. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+1. Follow [ALPHA.md](ALPHA.md): clean-checkout onboarding and a local smoke
+   path are now the top priority before inviting external tinkering.
+2. Run the screenshot-derived task-parity audit against the bundled console
+   (`ui/managed-agents-console`) and define the minimum alpha happy path.
+3. Implement the minimum safe console mutations and session transcript/debug
+   timeline needed for create-agent → create-session → prompt → inspect events.
+4. Add event honesty around unsupported `event_deltas[]`, `agent.thinking`, and
+   `system.message`.
+5. Then return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
+   environment image story, followed by web tools.
+6. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

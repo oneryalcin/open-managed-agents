@@ -20,7 +20,7 @@ post-v1 deferrals, and deliberate architecture-specific divergences.
 | MCP & vaults | ~80% | Connector + `static_bearer`/`mcp_oauth` + `mcp_oauth_validate` ✅; additional SSRF/scrubbing hardening |
 | Sessions & files | ~65% | Create/retrieve/list/archive ✅; update / overrides / `resources.*` missing; sharp edges |
 | API reference & onboarding | ~65% | Auth / betas / error-envelope and bidirectional session pagination ✅; no update/lifecycle endpoints |
-| Tools & permissions | ~75% | Permission state-machine faithful ✅; CMA `glob` wired; provider-owned `grep` implemented/review-pending; web tools remain disabled |
+| Tools & permissions | ~75% | Permission state-machine faithful ✅; CMA `glob` and provider-owned `grep` wired; web tools remain disabled |
 | Agent config & outcomes | ~55% | Create/get/list/archive and update/versioning ✅; outcomes deferred |
 | Events, streaming & webhooks | ~55% | SSE / resume / idempotency ✅; webhooks 0%, deltas 0%, `agent.thinking` dead |
 | Environments & sandboxes | ~35%\* | Thin *resource* (no packages/image/runtimes); strong self-hosted isolation defaults |
@@ -37,8 +37,8 @@ claim of blanket superiority over Anthropic's hosted environment.
 2026-07-12) → networking translation/rejection → probe-backed tool config
 validation → reject the inert multi-agent façade (DONE 2026-07-13) →
 `glob`/`grep` honesty boundary (DONE 2026-07-13) → sandbox-backed CMA
-`glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning (DONE 2026-07-14) → provider-owned CMA `grep` (implemented, review pending) → usable
-environment image story → web tools.
+`glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning (DONE 2026-07-14) → provider-owned CMA `grep` (DONE 2026-07-14; PR #188) → alpha
+readiness ([ALPHA.md](ALPHA.md)) → usable environment image story → web tools.
 
 ## Legend
 
@@ -154,7 +154,7 @@ the risk of silent contradiction, not by how easy they first appear.
     replaced by CMA `glob`; provider-owned CMA `grep` now ships separately,
     while web tools remain disabled.
 
-- [ ] **Provider-owned CMA `grep` runtime** *(IMPLEMENTED, REVIEW PENDING 2026-07-14; plan 0134; probes 68/68b/68c)*
+- [x] **Provider-owned CMA `grep` runtime** *(DONE 2026-07-14; PR #188; plan 0134; probes 68/68b/68c)*
   - Docker and microsandbox now own content search, limits, cancellation,
     cleanup, accounting, and events. Pi's default host-process `rg` path is not
     registered.

@@ -1,0 +1,178 @@
+# Alpha Readiness Roadmap
+
+OMA is pre-v1 alpha software. The alpha goal is not full Claude Managed Agents
+parity; it is a reliable first tinkering experience for users who want to run
+Managed Agents on their own machine.
+
+Alpha success means a new user can:
+
+1. clone the repository;
+2. install and start OMA;
+3. authenticate a workspace;
+4. create an agent;
+5. create a session;
+6. send a prompt;
+7. watch tool/session events;
+8. inspect tool inputs, results, files, and failures;
+9. understand which CMA features are unsupported or intentionally deferred.
+
+## Current status
+
+The synchronous single-agent core is now the strongest part of the project:
+
+```text
+agent -> versioned config -> session -> sandbox -> tools -> skills -> MCP/vaults -> SSE
+```
+
+This path includes Docker and microsandbox execution, file/search tools
+(`bash`, `read`, `write`, `edit`, CMA `glob`, provider-owned CMA `grep`),
+permission confirmations, skills, MCP, vault credentials, session pagination,
+and agent update/versioning.
+
+The remaining alpha work is about first-run reliability, console task flow, and
+honest unsupported-feature boundaries.
+
+## Alpha worklist
+
+### 1. Clean-checkout onboarding and smoke test
+
+Goal: prove the documented setup works from a fresh checkout.
+
+Deliverables:
+
+- Verify the README quickstart from a clean checkout.
+- Add one canonical "hello managed agent" flow.
+- Add a local smoke command, for example `npm run smoke:local`, that:
+  - verifies Docker/runtime prerequisites;
+  - starts or checks the control plane;
+  - creates an agent;
+  - creates a session;
+  - sends a prompt;
+  - observes at least one tool call/result or successful assistant response;
+  - cleans up created resources where safe.
+- Document required environment variables and model/provider assumptions in one
+  place.
+- Document common first-run failures:
+  - Docker not running;
+  - missing or invalid model credentials;
+  - default-deny networking;
+  - port already in use;
+  - custom image missing expected tools.
+
+### 2. Console task-parity audit
+
+OMA already has a bundled console. The alpha question is therefore narrower
+than "build a UI": identify the minimum guided workflow the existing console
+must support.
+
+Use local CMA screenshots as private reference captures only. They are ignored
+by git under `ui/CMA_screenshots/`.
+
+Audit task parity against these jobs:
+
+- workspace authentication / readiness;
+- agent create, list, and detail;
+- environment readiness;
+- credential/vault readiness;
+- session create / test run;
+- prompt send and interrupt;
+- transcript/debug event viewer;
+- tool input/result/error inspection;
+- file/output inspection;
+- loading, empty, and failure states.
+
+Output:
+
+- must-have for alpha;
+- should-have after alpha;
+- defer / not pursuing pixel parity.
+
+### 3. Minimum safe console mutations
+
+The console currently supports browsing/admin surfaces better than end-to-end
+mutation flows. For alpha, enable only the safe minimum needed for the happy
+path:
+
+- create agent;
+- create session;
+- send prompt;
+- interrupt a running session;
+- optionally archive/delete only where service guards already make the action
+  safe.
+
+Do not attempt full hosted-console parity in this slice.
+
+### 4. Session transcript and debug timeline
+
+The console must make a session understandable without tailing logs or querying
+SQLite.
+
+Minimum timeline requirements:
+
+- session running / idle / failed state transitions;
+- user messages;
+- assistant messages;
+- tool use;
+- tool result;
+- tool error;
+- rendered and raw detail panes for tool inputs/results;
+- clear interrupt state.
+
+This should use the real SSE event stream rather than a separate polling-only
+debug path.
+
+### 5. Event honesty
+
+Make unsupported event behavior explicit before alpha users build against it.
+
+Required:
+
+- reject or clearly validate unsupported `event_deltas[]` values;
+- either emit `agent.thinking` correctly or stop presenting it as supported;
+- either emit `system.message` correctly or mark it unsupported/deferred;
+- document that streaming text-preview parity is not complete unless/until it is
+  implemented.
+
+Full token-by-token preview streaming can be deferred if buffered
+`agent.message` remains correct and the console timeline is usable.
+
+### 6. Default environment image story
+
+The current default images are intentionally thin. For alpha users, the sandbox
+should be useful without immediately requiring a custom image.
+
+Near-term target:
+
+- define a minimal OMA-owned default image;
+- include the tools needed by the documented smoke path;
+- strongly consider pinned `ripgrep` in this image for future grep parity
+  (#187);
+- keep Python/Node/package-rich images as a later environment arc unless the
+  smoke path requires them.
+
+### 7. Alpha release checklist
+
+Before inviting external tinkering:
+
+- README quickstart passes from clean checkout.
+- Local smoke command passes.
+- Docker provider path works.
+- Microsandbox support level is documented honestly.
+- Console happy path works for create-agent -> create-session -> prompt -> event
+  inspection.
+- Unsupported CMA features fail closed or are clearly documented.
+- [PARITY.md](PARITY.md) is current.
+- Known limitations are short, visible, and accurate.
+
+## Explicit non-goals for alpha
+
+- Pixel-perfect CMA console clone.
+- Full multi-agent runtime.
+- Memory stores / dreams.
+- Scheduled deployments.
+- GitHub repo mounts.
+- Webhooks.
+- Outcomes/evaluation.
+- Full hosted environment provisioning parity.
+- Full ripgrep regex parity before the OMA-owned image work.
+
