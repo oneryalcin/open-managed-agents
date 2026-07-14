@@ -1,4 +1,4 @@
-import { relative } from "node:path";
+import { posix } from "node:path";
 import type { CompiledCmaGlob } from "./cma-glob.ts";
 import { toPosix } from "./glob.ts";
 
@@ -10,6 +10,22 @@ export const CMA_GREP_MAX_MATCHES = 100;
 export const CMA_GREP_MAX_RAW_BYTES = 1024 * 1024;
 export const CMA_GREP_MAX_OUTPUT_BYTES = 64 * 1024;
 export const CMA_GREP_TIMEOUT_MS = 10_000;
+
+export class CmaGrepTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Grep operation timed out after ${timeoutMs}ms`);
+    this.name = "CmaGrepTimeoutError";
+  }
+}
+
+export function createCmaGrepDeadline(timeoutMs: number): () => number {
+  const expiresAt = Date.now() + timeoutMs;
+  return () => {
+    const remainingMs = expiresAt - Date.now();
+    if (remainingMs <= 0) throw new CmaGrepTimeoutError(timeoutMs);
+    return remainingMs;
+  };
+}
 
 export class CmaGrepInputError extends Error {
   constructor(message: string) {
@@ -63,11 +79,14 @@ export class CmaGrepStreamCollector {
 
   private accept(record: Buffer): void {
     if (record.includes(0)) throw new Error("Grep filename contains NUL");
-    let relativePath = record.toString("utf8");
-    if (relativePath.startsWith("./")) relativePath = relativePath.slice(2);
-    if (relativePath.length === 0) return;
+    let path = record.toString("utf8");
+    if (path.startsWith("./")) path = path.slice(2);
+    if (path.length === 0) return;
+    const absolutePath = posix.isAbsolute(path) ? path : this.opts.join(this.opts.root, path);
+    const relativePath = posix.isAbsolute(path)
+      ? relativeToSearchRoot(this.opts.root, absolutePath)
+      : path;
     if (this.opts.matcher !== undefined && !this.opts.matcher.matches(relativePath)) return;
-    const absolutePath = this.opts.join(this.opts.root, relativePath);
     const outputPath = this.opts.formatForOutput?.(absolutePath, relativePath) ?? absolutePath;
     const addedBytes = Buffer.byteLength(outputPath, "utf8") +
       (this.matches.length === 0 ? 0 : 1);
@@ -90,6 +109,7 @@ export class CmaGrepCandidateCollector {
 
   constructor(
     private readonly opts: {
+      root?: string;
       maxRawBytes: number;
       matcher?: CompiledCmaGlob;
     },
@@ -118,12 +138,20 @@ export class CmaGrepCandidateCollector {
 
   private accept(record: Buffer): void {
     if (record.includes(0)) throw new Error("Grep filename contains NUL");
-    let relativePath = record.toString("utf8");
-    if (relativePath.startsWith("./")) relativePath = relativePath.slice(2);
-    if (relativePath.length === 0) return;
+    let path = record.toString("utf8");
+    if (path.startsWith("./")) path = path.slice(2);
+    if (path.length === 0) return;
+    const relativePath = posix.isAbsolute(path) && this.opts.root !== undefined
+      ? relativeToSearchRoot(this.opts.root, path)
+      : path;
     if (this.opts.matcher !== undefined && !this.opts.matcher.matches(relativePath)) return;
-    this.candidates.push(relativePath);
+    this.candidates.push(path);
   }
+}
+
+function relativeToSearchRoot(root: string, absolutePath: string): string {
+  const relativePath = posix.relative(root, absolutePath);
+  return relativePath === "" ? posix.basename(absolutePath) : relativePath;
 }
 
 export function assertCmaGrepPattern(pattern: unknown): string {
@@ -170,5 +198,5 @@ export function formatCmaGrepOutput(matches: readonly string[]): string {
 }
 
 export function outputRelativeTo(base: string, absolutePath: string): string {
-  return toPosix(relative(base, absolutePath));
+  return toPosix(posix.relative(base, absolutePath));
 }

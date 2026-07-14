@@ -214,7 +214,9 @@ describe("microsandbox command builders", () => {
     expect(preflight.script).toContain("read -r -d");
     expect(buildMicrosandboxCmaGrepPatternCheckCommand("[abc]").script).toContain("LC_ALL=C grep -E -q");
     expect(buildMicrosandboxCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
-      .toContain("find . -type f -print0");
+      .toContain("find \"$1\" -type f -print0");
+    expect(buildMicrosandboxCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
+      .toContain("[ -f \"$1\" ]");
     const command = buildMicrosandboxCmaGrepSearchCommand("/workspace", "oma-grep-token", "needle");
     expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle"]);
     expect(command.script).toContain("OMA_GREP_OWNER=$2");
@@ -806,6 +808,8 @@ describe("microsandbox sandbox provider", () => {
 
     enqueueGrep({ candidates: "./a.md\0./b.txt\0", search: "./a.md\0" });
     await expect(invoke()).resolves.toEqual(["/workspace/a.md"]);
+    expect(cli.calls.find((call) => call.opts?.input instanceof Buffer)?.opts?.input)
+      .toEqual(Buffer.from("a.md\0"));
 
     enqueueGrepEnumerationOnly(`./${"x".repeat(32)}.md\0`);
     await expect(invoke({ maxRawBytes: 8 })).rejects.toThrow("raw bytes");
