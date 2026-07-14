@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_MICROSANDBOX_MAX_BUFFER,
   DEFAULT_MICROSANDBOX_IMAGE,
@@ -887,6 +887,94 @@ describe("microsandbox sandbox provider", () => {
     })).rejects.toThrow("cleanup failed");
     expect(cleanupProvider.isPoisoned?.()).toBe(true);
 
+    provider.dispose();
+  });
+
+  it("uses one CMA grep deadline across validation, enumeration, and search", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    let nowMs = 1_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      const provider = await createMicrosandboxSandboxProvider("wrk", "sesn_deadline", {
+        cli,
+        now: () => 1_779_999_000_000,
+        random: () => 0.123456789,
+      });
+      cli.queueExec(() => {
+        nowMs = 1_250;
+        return okResult("");
+      });
+      cli.queueExec((opts) => {
+        opts?.onStdout?.(Buffer.from("__OMA_GREP_READY__\0./a.md\0"));
+        nowMs = 3_000;
+        return okResult("");
+      });
+      cli.queueExec(() => {
+        nowMs = 4_000;
+        return okResult("");
+      });
+      cli.queueExec((opts) => {
+        opts?.onStdout?.(Buffer.from("__OMA_GREP_READY__\0./a.md\0"));
+        return okResult("");
+      });
+      cli.queueExec(ok(""));
+
+      await expect(provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/workspace/a.md"]);
+      expect(cli.calls.slice(2, 7).map((call) => call.opts?.timeoutMs)).toEqual([
+        12_000,
+        11_750,
+        5_000,
+        9_000,
+        5_000,
+      ]);
+      provider.dispose();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("honors caller aborts between CMA grep enumeration and search", async () => {
+    const cli = new RecordingMicrosandboxCli();
+    cli.queueExec(ok("volume"));
+    cli.queueExec(ok("sandbox"));
+    const provider = await createMicrosandboxSandboxProvider("wrk", "sesn_abort_gap", {
+      cli,
+      now: () => 1_779_999_000_000,
+      random: () => 0.123456789,
+    });
+    const abort = new AbortController();
+    cli.queueExec(ok(""));
+    cli.queueExec(ok("__OMA_GREP_READY__\0./a.md\0"));
+    cli.queueExec(() => {
+      abort.abort();
+      return okResult("");
+    });
+
+    await expect(provider.operations.grep.grep({
+      pattern: "needle",
+      cwd: "/workspace",
+      context: 0,
+      headLimit: 100,
+      signal: abort.signal,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    })).rejects.toThrow("Operation aborted");
+    expect(cli.calls).toHaveLength(5);
+    expect(cli.calls.some((call) =>
+      call.args.some((arg) => arg.includes("while IFS= read -r -d"))
+    )).toBe(false);
     provider.dispose();
   });
 
