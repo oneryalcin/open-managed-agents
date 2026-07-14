@@ -26,12 +26,21 @@ npm run alpha:smoke
 ```
 
 The alpha smoke starts an isolated temporary OMA server, mints a workspace API
-key, creates an agent/environment/session, sends a prompt, waits for the
-assistant response, and cleans up. It requires a working Docker daemon and a
-model available to the local Pi/model registry. Override the model with:
+key, creates an agent/environment/session, sends a prompt that must run the
+`bash` sandbox tool, waits for the public tool/result/message events, and
+cleans up. Temporary-server mode explicitly enables Docker-local
+(`OMA_SANDBOX_PROVIDER=docker-local`, `OMA_ALLOW_DOCKER_LOCAL=true`), so it
+requires a working Docker daemon and a model available to the local Pi/model
+registry. Override the model with:
 
 ```bash
 OMA_ALPHA_MODEL=claude-sonnet-5 npm run alpha:smoke
+```
+
+To use microsandbox for the temporary smoke instead:
+
+```bash
+OMA_ALPHA_SANDBOX_PROVIDER=microsandbox-local npm run alpha:smoke
 ```
 
 To smoke an already-running OMA instance instead of a temporary one:
@@ -41,6 +50,10 @@ OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 \
 OMA_ALPHA_API_KEY=oma_... \
 npm run alpha:smoke
 ```
+
+Existing-server mode assumes that server has already been started with an
+explicit sandbox provider; the local Docker/microsandbox prerequisite check is
+skipped.
 
 To run the server manually:
 

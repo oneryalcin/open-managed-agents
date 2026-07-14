@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const BETA = "managed-agents-2026-04-01";
 const DEFAULT_MODEL = "claude-sonnet-5";
+const DEFAULT_SANDBOX_PROVIDER = "docker-local";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const KEY_LINE = /x-api-key: (oma_[A-Za-z0-9_-]+)/;
 const URL_LINE = /open-managed-agents listening on (http:\/\/[^\s]+)/;
@@ -38,12 +39,12 @@ async function main() {
   heading("OMA alpha smoke");
   step("Checking local prerequisites");
   checkNode();
-  checkDocker();
 
   const configuredBaseUrl = process.env.OMA_ALPHA_BASE_URL;
   const configuredApiKey = process.env.OMA_ALPHA_API_KEY;
   let baseUrl;
   let apiKey;
+  let sandboxProvider = "existing-server";
 
   if (configuredBaseUrl || configuredApiKey) {
     if (!configuredBaseUrl || !configuredApiKey) {
@@ -52,8 +53,11 @@ async function main() {
     baseUrl = trimTrailingSlash(configuredBaseUrl);
     apiKey = configuredApiKey;
     ok(`Using existing OMA server at ${baseUrl}`);
+    ok("Skipping local sandbox prerequisite check for existing-server mode");
   } else {
-    const started = await startTemporaryOma();
+    sandboxProvider = process.env.OMA_ALPHA_SANDBOX_PROVIDER ?? DEFAULT_SANDBOX_PROVIDER;
+    checkSandboxPrerequisites(sandboxProvider);
+    const started = await startTemporaryOma(sandboxProvider);
     baseUrl = started.baseUrl;
     apiKey = started.apiKey;
   }
@@ -71,7 +75,9 @@ async function main() {
       model,
       system: [
         "You are running the Open Managed Agents alpha smoke test.",
-        "Reply with the exact token OMA_ALPHA_SMOKE_OK and no extra prose.",
+        "You must use the bash tool exactly once.",
+        "Run this exact command: printf OMA_ALPHA_SMOKE_OK.",
+        "After the tool result, reply with the exact token OMA_ALPHA_SMOKE_OK and no extra prose.",
       ].join(" "),
       tools: [
         {
@@ -120,7 +126,7 @@ async function main() {
           content: [
             {
               type: "text",
-              text: "Reply with exactly OMA_ALPHA_SMOKE_OK and no other text.",
+              text: "Use bash exactly once and run: printf OMA_ALPHA_SMOKE_OK",
             },
           ],
         },
@@ -133,6 +139,18 @@ async function main() {
   const timeoutMs = parsePositiveInt(process.env.OMA_ALPHA_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
   const result = await waitForResult(baseUrl, apiKey, session.id, timeoutMs);
   ok(`Observed ${result.eventCount} session events`);
+  if (result.sawBashToolUse) {
+    ok("Observed bash tool_use");
+  } else {
+    throw new Error(`Session completed without an agent.tool_use for bash. Last event types: ${result.eventTypes.join(", ")}`);
+  }
+  if (result.toolResultText.includes("OMA_ALPHA_SMOKE_OK")) {
+    ok("Observed expected bash tool_result output");
+  } else {
+    throw new Error(
+      `Session completed, but no bash agent.tool_result included OMA_ALPHA_SMOKE_OK. Last tool result: ${JSON.stringify(result.toolResultText)}`,
+    );
+  }
   if (result.agentText.includes("OMA_ALPHA_SMOKE_OK")) {
     ok("Received expected agent.message token");
   } else {
@@ -148,6 +166,7 @@ async function main() {
 
   console.log("");
   console.log("Alpha smoke passed.");
+  console.log(`Sandbox provider: ${sandboxProvider}`);
   console.log(`Console: ${baseUrl}/console`);
 }
 
@@ -161,6 +180,20 @@ function checkNode() {
   ok(`Node ${process.versions.node}`);
 }
 
+function checkSandboxPrerequisites(provider) {
+  if (provider === "docker-local") {
+    checkDocker();
+    return;
+  }
+  if (provider === "microsandbox-local") {
+    checkMicrosandbox();
+    return;
+  }
+  throw new Error(
+    `Unsupported OMA_ALPHA_SANDBOX_PROVIDER ${JSON.stringify(provider)}. Use "docker-local" or "microsandbox-local".`,
+  );
+}
+
 function checkDocker() {
   const result = spawnSync("docker", ["info"], { encoding: "utf8" });
   if (result.status !== 0) {
@@ -170,8 +203,24 @@ function checkDocker() {
   ok("Docker daemon reachable");
 }
 
-async function startTemporaryOma() {
+function checkMicrosandbox() {
+  const command = process.env.OMA_MICROSANDBOX_COMMAND ?? "msb";
+  const result = spawnSync(command, ["--version"], { encoding: "utf8" });
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || `${command} --version failed`).trim();
+    throw new Error(
+      `Microsandbox is required for OMA_ALPHA_SANDBOX_PROVIDER=microsandbox-local. Install msb or set OMA_MICROSANDBOX_COMMAND. Detail: ${detail}`,
+    );
+  }
+  ok(`Microsandbox CLI reachable (${command})`);
+}
+
+async function startTemporaryOma(sandboxProvider) {
   state.home = await mkdtemp(join(tmpdir(), "oma-alpha-smoke-"));
+  const sandboxEnv =
+    sandboxProvider === "docker-local"
+      ? { OMA_SANDBOX_PROVIDER: "docker-local", OMA_ALLOW_DOCKER_LOCAL: "true" }
+      : { OMA_SANDBOX_PROVIDER: "microsandbox-local", OMA_ALLOW_MICROSANDBOX_LOCAL: "true" };
   const child = spawn(
     process.execPath,
     ["bin/open-managed-agents.mjs"],
@@ -182,6 +231,7 @@ async function startTemporaryOma() {
         OMA_HOME: state.home,
         OMA_HOST: "127.0.0.1",
         OMA_PORT: "0",
+        ...sandboxEnv,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -209,6 +259,7 @@ async function startTemporaryOma() {
     }
     if (baseUrl && apiKey) {
       ok(`Started temporary OMA at ${baseUrl}`);
+      ok(`Temporary sandbox provider: ${sandboxProvider}`);
       ok(`Temporary data: ${state.home}`);
       return { baseUrl: trimTrailingSlash(baseUrl), apiKey };
     }
@@ -256,10 +307,17 @@ async function waitForResult(baseUrl, apiKey, sessionId, timeoutMs) {
       throw new Error(`Session emitted session.error: ${JSON.stringify(error)}`);
     }
     const message = [...events].reverse().find((event) => event.type === "agent.message");
+    const bashToolUse = events.find(
+      (event) => event.type === "agent.tool_use" && event.name === "bash",
+    );
+    const toolResults = events.filter((event) => event.type === "agent.tool_result");
     const idle = events.some((event) => event.type === "session.status_idle");
     if (message && idle) {
       return {
         eventCount: events.length,
+        eventTypes: lastTypes,
+        sawBashToolUse: bashToolUse !== undefined,
+        toolResultText: toolResults.map((event) => contentText(event.content)).join("\n"),
         agentText: contentText(message.content),
       };
     }

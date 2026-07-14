@@ -43,12 +43,18 @@ Deliverables:
 - Verify the README quickstart from a clean checkout.
 - Add one canonical "hello managed agent" flow.
 - Add a local smoke command, `npm run alpha:smoke`, that:
-  - verifies Docker/runtime prerequisites;
+  - verifies local sandbox/runtime prerequisites when it starts its own server;
   - starts an isolated temporary control plane by default, or targets an
     existing server via `OMA_ALPHA_BASE_URL` + `OMA_ALPHA_API_KEY`;
+  - explicitly enables Docker-local for the temporary server by default
+    (`OMA_SANDBOX_PROVIDER=docker-local`,
+    `OMA_ALLOW_DOCKER_LOCAL=true`);
   - creates an agent;
+  - creates a default-deny environment;
   - creates a session;
-  - sends a prompt;
+  - sends a prompt that must invoke the `bash` sandbox tool;
+  - observes the public `agent.tool_use`, `agent.tool_result`, and
+    `agent.message` events;
   - observes a successful assistant response;
   - cleans up created resources where safe.
 - Document required environment variables and model/provider assumptions in one
@@ -71,8 +77,13 @@ Useful overrides:
 ```bash
 OMA_ALPHA_MODEL=claude-sonnet-5 npm run alpha:smoke
 OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 OMA_ALPHA_API_KEY=oma_... npm run alpha:smoke
+OMA_ALPHA_SANDBOX_PROVIDER=microsandbox-local npm run alpha:smoke
 OMA_ALPHA_KEEP_HOME=1 npm run alpha:smoke
 ```
+
+`OMA_ALPHA_SANDBOX_PROVIDER` applies only when the smoke starts a temporary
+server. Existing-server mode assumes the operator has already configured a
+sandbox provider and skips local Docker/microsandbox prerequisite checks.
 
 ### 2. Console task-parity audit
 
