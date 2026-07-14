@@ -159,6 +159,10 @@ the risk of silent contradiction, not by how easy they first appear.
   - Keep effectively enabled `grep` rejected until Docker and microsandbox own
     content search and a deterministic binary/search strategy. Pi's default
     host-process `rg` path is not an acceptable implementation.
+  - Probe 68 established the bounded runtime contract: hosted returns matching
+    file paths, `head_limit` caps paths, invalid regex/missing path are tool
+    errors, and omitted-path semantics remain unclaimed. Implementation plan:
+    [`docs/plans/0134-cma-grep-runtime.md`](docs/plans/0134-cma-grep-runtime.md).
 
 - [x] **Bidirectional session pagination / `prev_page`** *(DONE 2026-07-13; PR #185; plan 0132; probe 66)*
   - CMA `[Obs]`: session pages are `{data,next_page,prev_page}` without

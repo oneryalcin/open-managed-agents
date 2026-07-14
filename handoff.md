@@ -354,9 +354,10 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Build provider-owned CMA `grep` as the next explicitly selected arc. Probe
-   64 established the happy-path wire shape; add a bounded edge probe before
-   freezing regex, context, no-match, error, binary-file, and truncation rules.
+1. Build provider-owned CMA `grep` from plan 0134. Probe 64 established the
+   happy-path wire shape; probe 68 established edge behavior for path-list
+   output, no-match, `head_limit`, glob filtering, invalid regex, missing path,
+   binary-ish files, and the unclaimed omitted-path case.
 2. Keep `grep` disabled until Docker and microsandbox own execution, limits,
    cancellation, cleanup, accounting, permissions, and tests. Never expose Pi's
    host-process `rg` path.

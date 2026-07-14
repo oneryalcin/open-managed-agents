@@ -1,0 +1,476 @@
+{
+  "cases": [
+    {
+      "case": "no_match",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "ABSENT68"
+      }
+    },
+    {
+      "case": "context",
+      "input": {
+        "context": 1,
+        "glob": "context.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "CTX68"
+      }
+    },
+    {
+      "case": "head_limit",
+      "input": {
+        "context": 0,
+        "glob": "many.txt",
+        "head_limit": 2,
+        "path": "/mnt/session/uploads",
+        "pattern": "LIMIT68"
+      }
+    },
+    {
+      "case": "glob_filter",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "FILTER68"
+      }
+    },
+    {
+      "case": "invalid_regex",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "["
+      }
+    },
+    {
+      "case": "binaryish",
+      "input": {
+        "context": 0,
+        "glob": "*.bin",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "BINARY68"
+      }
+    },
+    {
+      "case": "relative_path",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "relative",
+        "pattern": "REL68"
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "id_002",
+      "type": "session.status_running"
+    },
+    {
+      "id": "id_003",
+      "type": "session.thread_status_running"
+    },
+    {
+      "content": [
+        {
+          "text": "Run these grep calls exactly in order:\n1. case=no_match input={\"context\": 0, \"glob\": \"*.md\", \"head_limit\": 5, \"path\": \"/mnt/session/uploads\", \"pattern\": \"ABSENT68\"}\n2. case=context input={\"context\": 1, \"glob\": \"context.md\", \"head_limit\": 5, \"path\": \"/mnt/session/uploads\", \"pattern\": \"CTX68\"}\n3. case=head_limit input={\"context\": 0, \"glob\": \"many.txt\", \"head_limit\": 2, \"path\": \"/mnt/session/uploads\", \"pattern\": \"LIMIT68\"}\n4. case=glob_filter input={\"context\": 0, \"glob\": \"*.md\", \"head_limit\": 5, \"path\": \"/mnt/session/uploads\", \"pattern\": \"FILTER68\"}\n5. case=invalid_regex input={\"context\": 0, \"glob\": \"*.md\", \"head_limit\": 5, \"path\": \"/mnt/session/uploads\", \"pattern\": \"[\"}\n6. case=binaryish input={\"context\": 0, \"glob\": \"*.bin\", \"head_limit\": 5, \"path\": \"/mnt/session/uploads\", \"pattern\": \"BINARY68\"}\n7. case=relative_path input={\"context\": 0, \"glob\": \"*.md\", \"head_limit\": 5, \"path\": \"relative\", \"pattern\": \"REL68\"}",
+          "type": "text"
+        }
+      ],
+      "id": "id_001",
+      "type": "user.message"
+    },
+    {
+      "id": "id_004",
+      "type": "span.model_request_start"
+    },
+    {
+      "id": "id_005",
+      "type": "agent.thinking"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_006",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "ABSENT68"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_007",
+      "input": {
+        "context": 1,
+        "glob": "context.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "CTX68"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_008",
+      "input": {
+        "context": 0,
+        "glob": "many.txt",
+        "head_limit": 2,
+        "path": "/mnt/session/uploads",
+        "pattern": "LIMIT68"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_009",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "FILTER68"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_010",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "["
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_011",
+      "input": {
+        "context": 0,
+        "glob": "*.bin",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "BINARY68"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_012",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "relative",
+        "pattern": "REL68"
+      },
+      "name": "grep",
+      "type": "agent.tool_use"
+    },
+    {
+      "id": "id_013",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "content": [
+        {
+          "text": "No matches found",
+          "type": "text"
+        }
+      ],
+      "id": "id_014",
+      "is_error": false,
+      "tool_use_id": "id_006",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/context.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_015",
+      "is_error": false,
+      "tool_use_id": "id_007",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/many.txt",
+          "type": "text"
+        }
+      ],
+      "id": "id_016",
+      "is_error": false,
+      "tool_use_id": "id_008",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/filter.md",
+          "type": "text"
+        }
+      ],
+      "id": "id_017",
+      "is_error": false,
+      "tool_use_id": "id_009",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "rg: regex parse error:\n    (?:[)\n       ^\nerror: unclosed character class\n",
+          "type": "text"
+        }
+      ],
+      "id": "id_018",
+      "is_error": true,
+      "tool_use_id": "id_010",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "No matches found",
+          "type": "text"
+        }
+      ],
+      "id": "id_019",
+      "is_error": false,
+      "tool_use_id": "id_011",
+      "type": "agent.tool_result"
+    },
+    {
+      "content": [
+        {
+          "text": "rg: relative: No such file or directory (os error 2)\n",
+          "type": "text"
+        }
+      ],
+      "id": "id_020",
+      "is_error": true,
+      "tool_use_id": "id_012",
+      "type": "agent.tool_result"
+    },
+    {
+      "id": "id_021",
+      "type": "span.model_request_start"
+    },
+    {
+      "content": [
+        {
+          "text": "## Summary\n\n1. **no_match** \u2014 No matches found for `ABSENT68` in `*.md` files under uploads.\n2. **context** \u2014 Match found in `context.md` (file path returned).\n3. **head_limit** \u2014 Match found in `many.txt` (file path returned, limited to 2).\n4. **glob_filter** \u2014 Match found in `filter.md` (glob correctly filtered to `*.md`).\n5. **invalid_regex** \u2014 Error: invalid pattern `[` caused a regex parse error (unclosed character class).\n6. **binaryish** \u2014 No matches found for `BINARY68` in `*.bin` files.\n7. **relative_path** \u2014 Error: path `relative` does not exist (No such file or directory).",
+          "type": "text"
+        }
+      ],
+      "id": "id_022",
+      "type": "agent.message"
+    },
+    {
+      "id": "id_023",
+      "is_error": false,
+      "type": "span.model_request_end"
+    },
+    {
+      "id": "id_024",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.thread_status_idle"
+    },
+    {
+      "id": "id_025",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.status_idle"
+    }
+  ],
+  "expected_grep_calls": 7,
+  "model": "claude-sonnet-5",
+  "run_id": "6e3ee30c",
+  "tool_results": [
+    {
+      "content": [
+        {
+          "text": "No matches found",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "tool_use_id": "id_006"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/context.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "tool_use_id": "id_007"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/many.txt",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "tool_use_id": "id_008"
+    },
+    {
+      "content": [
+        {
+          "text": "/mnt/session/uploads/filter.md",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "tool_use_id": "id_009"
+    },
+    {
+      "content": [
+        {
+          "text": "rg: regex parse error:\n    (?:[)\n       ^\nerror: unclosed character class\n",
+          "type": "text"
+        }
+      ],
+      "is_error": true,
+      "tool_use_id": "id_010"
+    },
+    {
+      "content": [
+        {
+          "text": "No matches found",
+          "type": "text"
+        }
+      ],
+      "is_error": false,
+      "tool_use_id": "id_011"
+    },
+    {
+      "content": [
+        {
+          "text": "rg: relative: No such file or directory (os error 2)\n",
+          "type": "text"
+        }
+      ],
+      "is_error": true,
+      "tool_use_id": "id_012"
+    }
+  ],
+  "tool_uses": [
+    {
+      "evaluated_permission": "allow",
+      "id": "id_006",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "ABSENT68"
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_007",
+      "input": {
+        "context": 1,
+        "glob": "context.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "CTX68"
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_008",
+      "input": {
+        "context": 0,
+        "glob": "many.txt",
+        "head_limit": 2,
+        "path": "/mnt/session/uploads",
+        "pattern": "LIMIT68"
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_009",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "FILTER68"
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_010",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "["
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_011",
+      "input": {
+        "context": 0,
+        "glob": "*.bin",
+        "head_limit": 5,
+        "path": "/mnt/session/uploads",
+        "pattern": "BINARY68"
+      },
+      "name": "grep"
+    },
+    {
+      "evaluated_permission": "allow",
+      "id": "id_012",
+      "input": {
+        "context": 0,
+        "glob": "*.md",
+        "head_limit": 5,
+        "path": "relative",
+        "pattern": "REL68"
+      },
+      "name": "grep"
+    }
+  ]
+}
