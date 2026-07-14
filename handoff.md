@@ -12,8 +12,7 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-14 (`arc-i-agent-versioning-probe`; plan 0133
-implemented and awaiting review)._
+_Last updated 2026-07-14 (`main`; PR #186 and plan 0133 complete)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -31,7 +30,7 @@ implemented and awaiting review)._
 - Probe 67 established hosted agent update/version behavior. Plan 0133 now
   implements immutable revisions, optimistic updates, authenticated version
   history, exact-version runtime pinning, and shared model-catalog admission in
-  PR #186; final review is pending.
+  PR #186. The final warmup-version blocker was fixed before merge.
 - Standing follow-ups remain `#103`, `#118`, and `#119`; consult GitHub rather
   than this file for their current status.
 
@@ -346,22 +345,23 @@ load-bearing additions are:
 - **Session bidirectional pagination** (PR #185; plan 0132; probe 66): exact
   session envelope, signed workspace-bound cursors, and order-preserving
   backward traversal.
-- **Agent versioning evidence** (probe 67): hosted update, concurrency,
-  immutable history, session selection, and archive semantics are captured but
-  not yet implemented.
+- **Immutable agent versioning** (PR #186; plan 0133; probe 67): transactional
+  revisions, optimistic updates, authenticated history, exact-version session
+  and runtime pinning, and shared model-catalog admission are shipped.
 
 Older shipped arcs remain documented in their ADRs, plans, and merge history;
 they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Review plan 0133's implementation, especially migration atomicity,
-   exact-version runtime resolution, model-catalog ownership, and no-fallback
-   behavior. Merge only after the focused/full gates remain green.
-2. After merge, return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
+1. Build provider-owned CMA `grep` as the next explicitly selected arc. Probe
+   64 established the happy-path wire shape; add a bounded edge probe before
+   freezing regex, context, no-match, error, binary-file, and truncation rules.
+2. Keep `grep` disabled until Docker and microsandbox own execution, limits,
+   cancellation, cleanup, accounting, permissions, and tests. Never expose Pi's
+   host-process `rg` path.
+3. After `grep`, return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
    environment images, followed by web tools.
-3. Keep provider-owned `grep` separate and disabled until its execution and
-   deterministic search-binary strategy are designed.
 4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
