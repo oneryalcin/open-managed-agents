@@ -248,6 +248,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
             this.preparingSessionAgents.get(sessionId)?.workspaceId === workspaceId
               ? this.preparingSessionAgents.get(sessionId)?.agentId
               : undefined,
+          agentVersion:
+            this.preparingSessionAgents.get(sessionId)?.workspaceId === workspaceId
+              ? this.preparingSessionAgents.get(sessionId)?.agentVersion
+              : undefined,
         }) ?? { enabled: true, permission: "allow" },
       timeoutMs: opts.toolConfirmationTimeoutMs,
     });

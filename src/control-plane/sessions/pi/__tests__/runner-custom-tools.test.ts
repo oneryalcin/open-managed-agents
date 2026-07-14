@@ -738,6 +738,60 @@ describe("PiSessionRunner custom-tool bridge", () => {
       "bash",
     ]);
   });
+
+  it("uses the prepared agent version for builtin tools before the session row exists", async () => {
+    const bashTool = {
+      name: "bash",
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const runner = new PiSessionRunner({
+      sandboxProviderFactory: async () =>
+        ({
+          cwd: "/workspace",
+          operations: {},
+          tools: [bashTool] as unknown as SandboxProvider["tools"],
+          toolNames: new Set(["bash"]),
+          invocations: {
+            total: 0,
+            byTool: {
+              bash: 0,
+              read: 0,
+              write: 0,
+              edit: 0,
+              find: 0,
+              glob: 0,
+              ls: 0,
+            },
+            toolCallIds: {
+              bash: new Set(),
+              read: new Set(),
+              write: new Set(),
+              edit: new Set(),
+              find: new Set(),
+              glob: new Set(),
+              ls: new Set(),
+            },
+          },
+          dispose: vi.fn(),
+        }) as unknown as SandboxProvider,
+      builtinToolAccess: (_workspaceId, _sessionId, toolName, context) => ({
+        enabled: toolName === "bash" && context?.agentVersion === 1,
+        permission: "allow",
+      }),
+      customToolTimeoutMs: 0,
+      idleTtlMs: 0,
+    });
+
+    await runner.prepareSession("wrk_default", "sesn_precommit_builtin", {
+      agent: { type: "agent", id: "agent_1", version: 1 },
+    });
+
+    expect(sdk.lastCreateOptions()?.tools).toEqual(["bash"]);
+    expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
+      "bash",
+    ]);
+    await runner.closeSession("wrk_default", "sesn_precommit_builtin");
+  });
 });
 
 const ASK_USER: ManagedAgentsCustomTool = {
