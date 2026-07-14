@@ -42,13 +42,14 @@ Deliverables:
 
 - Verify the README quickstart from a clean checkout.
 - Add one canonical "hello managed agent" flow.
-- Add a local smoke command, for example `npm run smoke:local`, that:
+- Add a local smoke command, `npm run alpha:smoke`, that:
   - verifies Docker/runtime prerequisites;
-  - starts or checks the control plane;
+  - starts an isolated temporary control plane by default, or targets an
+    existing server via `OMA_ALPHA_BASE_URL` + `OMA_ALPHA_API_KEY`;
   - creates an agent;
   - creates a session;
   - sends a prompt;
-  - observes at least one tool call/result or successful assistant response;
+  - observes a successful assistant response;
   - cleans up created resources where safe.
 - Document required environment variables and model/provider assumptions in one
   place.
@@ -58,6 +59,20 @@ Deliverables:
   - default-deny networking;
   - port already in use;
   - custom image missing expected tools.
+
+Current command:
+
+```bash
+npm run alpha:smoke
+```
+
+Useful overrides:
+
+```bash
+OMA_ALPHA_MODEL=claude-sonnet-5 npm run alpha:smoke
+OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 OMA_ALPHA_API_KEY=oma_... npm run alpha:smoke
+OMA_ALPHA_KEEP_HOME=1 npm run alpha:smoke
+```
 
 ### 2. Console task-parity audit
 
@@ -175,4 +190,3 @@ Before inviting external tinkering:
 - Outcomes/evaluation.
 - Full hosted environment provisioning parity.
 - Full ripgrep regex parity before the OMA-owned image work.
-

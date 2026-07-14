@@ -22,6 +22,29 @@ From a checkout (Node ≥ 22.19):
 
 ```bash
 npm install
+npm run alpha:smoke
+```
+
+The alpha smoke starts an isolated temporary OMA server, mints a workspace API
+key, creates an agent/environment/session, sends a prompt, waits for the
+assistant response, and cleans up. It requires a working Docker daemon and a
+model available to the local Pi/model registry. Override the model with:
+
+```bash
+OMA_ALPHA_MODEL=claude-sonnet-5 npm run alpha:smoke
+```
+
+To smoke an already-running OMA instance instead of a temporary one:
+
+```bash
+OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 \
+OMA_ALPHA_API_KEY=oma_... \
+npm run alpha:smoke
+```
+
+To run the server manually:
+
+```bash
 node bin/open-managed-agents.mjs
 ```
 
@@ -50,7 +73,8 @@ client = anthropic.Anthropic(
 
 agent = client.beta.agents.create(name="helper", model="claude-sonnet-5")
 env = client.beta.environments.create(
-    name="dev", config={"type": "cloud"}  # default-deny networking
+    name="dev",
+    config={"networking": {"type": "limited", "allowed_hosts": []}},  # default-deny
 )
 session = client.beta.sessions.create(agent=agent.id, environment_id=env.id)
 
