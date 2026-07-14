@@ -32,11 +32,13 @@ function Labeled({ label, opt, hint, children }) {
 }
 
 // ─────────── Create session ───────────
-function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAgent, onClose, onCreate, apiMode = 'demo', api = window.OmaConsoleApi }) {
+function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAgent, onClose, onCreate, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
   // active agents, plus the preset agent even if archived/just-created
   const choices = agents.filter((a) => a.status === 'active' || (presetAgent && a.id === presetAgent.id));
   const [agentId, setAgentId] = useStateF((presetAgent && presetAgent.id) || (choices[0] && choices[0].id));
-  const [env, setEnv] = useStateF(environments[0]?.id || ENVIRONMENTS[0].id);
+  const [env, setEnv] = useStateF(() => apiMode === 'api'
+    ? (environments[0]?.id || '')
+    : (environments[0]?.id || ENVIRONMENTS[0].id));
   const [customEnv, setCustomEnv] = useStateF('');
   const [title, setTitle] = useStateF('');
   const [msg, setMsg] = useStateF('');
@@ -97,9 +99,11 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
       } catch (messageError) {
         setPartial({ session, error: messageError.message || 'First message failed.' });
         setError(`Session ${session.short || session.id} was created, but the first message was not accepted: ${messageError.message || 'Request failed'}`);
+        if (messageError.status === 401 && onAuthExpired) onAuthExpired();
       }
     } catch (createError) {
       setError(createError.message || 'Session creation failed.');
+      if (createError.status === 401 && onAuthExpired) onAuthExpired();
     } finally {
       setBusy(false);
     }
@@ -116,6 +120,7 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
       onCreate({ ...partial.session, status:'running', firstMessage: { status:'sent_after_retry', response:firstMessage } });
     } catch (messageError) {
       setError(`Session ${partial.session.short || partial.session.id} exists, but the first message retry failed: ${messageError.message || 'Request failed'}`);
+      if (messageError.status === 401 && onAuthExpired) onAuthExpired();
     } finally {
       setBusy(false);
     }
@@ -143,10 +148,14 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
 
       <Labeled label="Environment" hint="Pick an existing environment or enter an ID manually.">
         <select className="selectbox" value={env} onChange={(e) => setEnv(e.target.value)}>
+          {live && environments.length === 0 && <option value="" disabled>Create an environment first…</option>}
           {environments.map((en) => <option key={en.id} value={en.id}>{en.label} — {en.image}</option>)}
           <option value="__custom">Enter an environment ID manually…</option>
         </select>
       </Labeled>
+      {live && environments.length === 0 && !usingCustom && (
+        <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>No live environments exist yet. Close this dialog and create one, or select “Enter an environment ID manually”.</span></div>
+      )}
       {usingCustom && (
         <Labeled label="Environment ID">
           <input className="input mono" placeholder="env_…" value={customEnv} onChange={(e) => setCustomEnv(e.target.value)} />
@@ -166,7 +175,7 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
 }
 
 // ─────────── Create agent ───────────
-function CreateAgent({ onClose, onCreate, apiMode = 'demo', api = window.OmaConsoleApi }) {
+function CreateAgent({ onClose, onCreate, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
   const [name, setName] = useStateF('');
   const [model, setModel] = useStateF(MODELS[0]);
   const [prompt, setPrompt] = useStateF('');
@@ -201,7 +210,11 @@ function CreateAgent({ onClose, onCreate, apiMode = 'demo', api = window.OmaCons
       ...(prompt.trim() ? { system: prompt.trim() } : {}),
       tools: [{
         type: 'agent_toolset_20260401',
-        configs: TOOL_OPTIONS.map((tool) => ({ name:tool, enabled:tools.includes(tool) })),
+        configs: TOOL_OPTIONS.map((tool) => ({
+          name:tool,
+          enabled:tools.includes(tool),
+          ...(tools.includes(tool) ? { permission_policy:{ type:'always_ask' } } : {}),
+        })),
       }],
     };
     try {
@@ -209,6 +222,7 @@ function CreateAgent({ onClose, onCreate, apiMode = 'demo', api = window.OmaCons
       onCreate(agent);
     } catch (createError) {
       setError(createError.message || 'Agent creation failed. Refresh the agent list before retrying if the request may have reached the server.');
+      if (createError.status === 401 && onAuthExpired) onAuthExpired();
     } finally {
       setBusy(false);
     }

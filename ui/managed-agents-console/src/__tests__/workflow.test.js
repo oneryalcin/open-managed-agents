@@ -26,6 +26,12 @@ describe("alpha console workflow", () => {
     expect(forms).toContain("api.createSession(body");
     expect(forms).toContain("api.sendSessionEvents(session.id");
     expect(forms).toContain("status:'sent_after_retry'");
+    expect(forms).toContain("permission_policy:{ type:'always_ask' }");
+    expect(forms).toContain("createError.status === 401 && onAuthExpired");
+    expect(forms).toContain("messageError.status === 401 && onAuthExpired");
+    expect(forms).toContain("apiMode === 'api'");
+    expect(forms).toContain("? (environments[0]?.id || '')");
+    expect(forms).toContain("Create an environment first…");
   });
 
   it("wires authenticated SSE, prompt, interrupt, and tool confirmation without synthetic live rows", () => {
@@ -36,6 +42,7 @@ describe("alpha console workflow", () => {
     expect(detail).toContain("type:'user.interrupt'");
     expect(detail).toContain("type:'user.tool_confirmation'");
     expect(detail).toContain("result:decision");
+    expect(detail).toContain("event.type === 'agent.mcp_tool_use'");
     expect(detail).toContain("if (apiMode === 'api')");
   });
 

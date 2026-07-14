@@ -299,6 +299,23 @@ function App() {
     setRoute(next);
     writeRouteHash(next);
   };
+  const onSessionStateChange = (sessionId, patch) => {
+    setSessions((current) => current.map((session) => session.id === sessionId
+      ? { ...session, ...patch }
+      : session));
+  };
+  const refreshOpenSession = (session) => {
+    if (apiState.mode !== 'api') return;
+    OmaConsoleApi.hydrateSession(session)
+      .then((hydrated) => {
+        setRoute((current) => current.name === 'session' && current.session.id === session.id
+          ? { name:'session', session:hydrated }
+          : current);
+      })
+      .catch((error) => setRoute((current) => current.name === 'session' && current.session.id === session.id
+        ? { name:'session', session:{ ...current.session, refreshError:error } }
+        : current));
+  };
 
   const archiveSession = (s) => {
     if (lifecycleReadOnly) return;
@@ -346,7 +363,7 @@ function App() {
   else if (route.name === 'credentialHealth') view = <CredentialHealthView workspaceId={route.workspaceId} onBack={() => go('admin')} onReauth={reauth} />;
   else if (route.name === 'start') view = <ReadinessView agents={agents} environments={environments} mode={apiState.mode} workspaceLoaded={workspaceLoaded || demoMode} go={go} onCreateAgent={() => go('agents')} onCreateEnvironment={createEnvironment} />;
   else if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={mutationReadOnly} />;
-  else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={dataState} apiMode={apiState.mode} readOnly={mutationReadOnly} lifecycleReadOnly={lifecycleReadOnly} onAuthExpired={workspaceReauth} />;
+  else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} onSessionStateChange={onSessionStateChange} onRefreshSession={refreshOpenSession} dataState={dataState} apiMode={apiState.mode} readOnly={mutationReadOnly} lifecycleReadOnly={lifecycleReadOnly} onAuthExpired={workspaceReauth} />;
   else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={dataState} readOnly={mutationReadOnly} />;
   else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} createSessionReadOnly={mutationReadOnly} archiveReadOnly={lifecycleReadOnly} />;
   else if (route.name === 'environments') view = <EnvironmentsView environments={environments} mode={apiState.mode} dataState={dataState} onCreate={createEnvironment} createdEnvironmentId={createdEnvironmentId} />;
@@ -362,9 +379,9 @@ function App() {
       </main>
 
       {modal && modal.kind === 'session' &&
-        <CreateSession agents={agents} environments={environments} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} apiMode={apiState.mode} />}
+        <CreateSession agents={agents} environments={environments} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
       {modal && modal.kind === 'agent' &&
-        <CreateAgent onClose={() => setModal(null)} onCreate={onAgentCreated} apiMode={apiState.mode} />}
+        <CreateAgent onClose={() => setModal(null)} onCreate={onAgentCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
       {modal && modal.kind === 'environment' &&
         <CreateEnvironmentModal mode={apiState.mode}
           onClose={() => setModal(null)} onCreated={onEnvironmentCreated}

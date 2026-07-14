@@ -15,6 +15,7 @@ import {
   mintKey,
   sendSessionEvents,
   setWorkspaceKey,
+  toUiSessionEvent,
   validateMcpOauthCredential,
 } from "../api.js";
 
@@ -318,7 +319,7 @@ describe("workspace write capability", () => {
       expect.objectContaining({
         method:"GET",
         headers:expect.objectContaining({
-          accept:"application/json",
+          accept:"text/event-stream",
           "x-api-key":"oma_workspace",
           "anthropic-beta":expect.stringContaining("managed-agents-2026-04-01"),
           "last-event-id":"sevt_1",
@@ -340,5 +341,27 @@ describe("workspace write capability", () => {
     expect(urls[0]).toContain("include_archived=true");
     expect(urls[1]).toContain("/v1/vaults/vlt%2F1/credentials?");
     expect(urls[1]).toContain("include_archived=true");
+  });
+});
+
+describe("session event UI mapping", () => {
+  it("keeps MCP confirmation metadata actionable", () => {
+    const event = toUiSessionEvent({
+      id:"sevt_mcp",
+      type:"agent.mcp_tool_use",
+      processed_at:"2026-07-14T10:00:00Z",
+      mcp_server_name:"github",
+      name:"create_issue",
+      input:{ title:"Alpha" },
+      evaluated_permission:"ask",
+    });
+    expect(event).toMatchObject({
+      id:"sevt_mcp",
+      role:"tool",
+      transcript:true,
+      confirm:true,
+      tool:"create_issue",
+    });
+    expect(event.cmd).toContain("Alpha");
   });
 });

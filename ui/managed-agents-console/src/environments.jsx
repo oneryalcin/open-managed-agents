@@ -39,7 +39,7 @@ function CreateEnvironmentModal({ mode, onClose, onCreated, onAuthExpired, api =
   };
 
   return (
-    <Modal icon="database" title="Create environment" sub="Create a default-deny Docker-local alpha environment." onClose={busy ? () => {} : onClose}
+    <Modal icon="database" title="Create environment" sub="Create a default-deny alpha environment for the configured sandbox provider." onClose={busy ? () => {} : onClose}
       footer={<>
         <span className="left">Sends to <span className="mono">POST /v1/environments</span></span>
         <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
@@ -58,10 +58,10 @@ function CreateEnvironmentModal({ mode, onClose, onCreated, onAuthExpired, api =
           disabled={busy} onChange={(e) => { setName(e.target.value); setError(null); }} />
       </Labeled>
       <Labeled label="Preset" hint="Default-deny networking is the only field sent; model and sandbox-provider readiness are reported by action-time server errors.">
-        <div className="env-preset" aria-label="Default-deny Docker-local alpha preset">
+        <div className="env-preset" aria-label="Default-deny alpha preset">
           <div className="tool-ico"><Icon name="database" size={18} /></div>
           <div>
-            <div className="cell-strong">Docker-local alpha · default-deny networking</div>
+            <div className="cell-strong">Deployment sandbox · default-deny networking</div>
             <div className="mono env-config">{JSON.stringify({ config: DEFAULT_ENV_CONFIG })}</div>
           </div>
         </div>
@@ -154,7 +154,7 @@ function EnvironmentsView({ environments = [], mode = "api", dataState = "loaded
       {loading ? <SkeletonTable rows={4} cols={[150, 'grow', 210, 90]} lead={false} />
        : error ? <ErrorState resource="environments" onRetry={() => {}} />
        : empty ? <EmptyState icon="database" title="No environments yet"
-            message="Create a default-deny Docker-local alpha environment before starting a session."
+            message="Create a default-deny alpha environment before starting a session."
             actionLabel={!readOnly ? "Create environment" : null} onAction={onCreate} />
        : <>
       <div className="panel">

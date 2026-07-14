@@ -357,10 +357,12 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Finish independent review and the real-browser gate for plan 0136's
-   narrowly capability-gated console workflow. The implementation covers
-   create agent → create environment → create session → prompt → live
-   events/tools/files, including interrupt and tool confirmation.
+1. Run the remaining real-browser gate for plan 0136's independently reviewed
+   console workflow when a browser backend is available. Static rendering,
+   API integration, the full suite, and the Docker-local alpha smoke are
+   already green. The implementation covers create agent → create environment
+   → create session → prompt → live events/tools/files, including interrupt
+   and tool confirmation.
 2. Add event honesty around unsupported `event_deltas[]`, `agent.thinking`, and
    `system.message`.
 3. Then return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable

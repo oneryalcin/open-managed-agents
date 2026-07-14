@@ -137,7 +137,7 @@ function ModeBar({ mode, warnings = [] }) {
     ? 'Local interactions mutate bundled demo data only.'
     : mode === 'mock'
       ? 'The API is unavailable; writes are disabled and demo data is clearly marked.'
-      : 'Live API data is inspectable; environment creation is enabled while unsupported writes stay disabled.';
+      : 'Live agent, environment, session, prompt, interrupt, and confirmation actions are enabled; unsupported writes stay disabled.';
   return (
     <div className={'modebar mode-' + mode}>
       <Icon name={mode === 'api' ? 'database' : 'alert'} size={14} />

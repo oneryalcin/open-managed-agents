@@ -250,7 +250,7 @@ export function followSessionEvents(sessionId, {
   const path = `/v1/sessions/${encodeURIComponent(sessionId)}/events/stream`;
   return followEventStream({
     url: path,
-    headers: buildRequestHeaders(path, credentials),
+    headers: { ...buildRequestHeaders(path, credentials), accept:"text/event-stream" },
     signal,
     onEvent,
     onState,
@@ -443,7 +443,7 @@ function toUiEnvironment(environment) {
   const allowedHosts = Array.isArray(networking?.allowed_hosts)
     ? networking.allowed_hosts.length
     : 0;
-  const provider = environment.config?.sandbox_provider ?? "docker-local";
+  const provider = environment.config?.sandbox_provider ?? "deployment provider";
   return {
     id: environment.id,
     label: environment.name || environment.id,
@@ -505,7 +505,7 @@ function toUiEvent(event, firstTime) {
     pairedStart: event.model_request_start_id,
     usage,
     source: event,
-    confirm: event.type === "agent.tool_use" && event.evaluated_permission === "ask",
+    confirm: (event.type === "agent.tool_use" || event.type === "agent.mcp_tool_use") && event.evaluated_permission === "ask",
     tool: event.name,
     cmd: event.input?.command ?? event.input?.cmd ?? JSON.stringify(event.input ?? {}),
   };
@@ -565,6 +565,8 @@ function eventRole(type) {
 function eventTag(event) {
   if (event.type === "agent.tool_use") return event.name ?? "tool";
   if (event.type === "agent.tool_result") return event.is_error ? "error" : "exit 0";
+  if (event.type === "agent.mcp_tool_use") return event.name ?? "mcp tool";
+  if (event.type === "agent.mcp_tool_result") return event.is_error ? "error" : "mcp result";
   if (event.type === "span.model_request_end") return event.is_error ? "error" : "model";
   if (event.type === "session.error") return "error";
   if (event.type.startsWith("session.status_")) return event.type.slice("session.status_".length);
@@ -576,6 +578,8 @@ function eventSummary(event, content) {
   if (event.type === "session.error") return event.error?.message ?? event.message ?? "session.error";
   if (event.type === "agent.tool_use") return `agent.tool_use · ${event.name ?? "tool"}`;
   if (event.type === "agent.tool_result") return `agent.tool_result · ${event.is_error ? "error" : "ok"}`;
+  if (event.type === "agent.mcp_tool_use") return `agent.mcp_tool_use · ${event.name ?? "tool"}`;
+  if (event.type === "agent.mcp_tool_result") return `agent.mcp_tool_result · ${event.is_error ? "error" : "ok"}`;
   if (event.type === "span.model_request_start") return "model_request_start";
   if (event.type === "span.model_request_end") return "model_request_end";
   return event.type;
@@ -590,6 +594,8 @@ function isTranscriptEvent(event) {
     "agent.message",
     "agent.tool_use",
     "agent.tool_result",
+    "agent.mcp_tool_use",
+    "agent.mcp_tool_result",
     "agent.custom_tool_use",
   ].includes(event.type);
 }

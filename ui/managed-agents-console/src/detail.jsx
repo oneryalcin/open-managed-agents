@@ -127,7 +127,7 @@ function FilesPanel({ files = FILES }) {
   );
 }
 
-function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = 'loaded', apiMode = 'mock', readOnly = false, lifecycleReadOnly = readOnly, onAuthExpired }) {
+function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStateChange, onRefreshSession, dataState = 'loaded', apiMode = 'mock', readOnly = false, lifecycleReadOnly = readOnly, onAuthExpired }) {
   const s = session;
   const displayStatus = s.status === 'action' ? 'idle' : s.status;
   const isLive = displayStatus === 'running';
@@ -228,14 +228,19 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
           setStatus('running');
           setWorking(true);
           setConfirmState(null);
+          if (onSessionStateChange) onSessionStateChange(s.id, { status:'running', requiresAction:false });
         } else if (event.type === 'session.status_idle') {
+          const requiresAction = event.stop_reason?.type === 'requires_action';
           setStatus('idle');
           setWorking(false);
-          setConfirmState(event.stop_reason?.type === 'requires_action' ? 'pending' : null);
+          setConfirmState(requiresAction ? 'pending' : null);
+          if (onSessionStateChange) onSessionStateChange(s.id, { status:'idle', requiresAction });
+          if (onRefreshSession) onRefreshSession({ ...s, status:'idle' });
         } else if (event.type === 'session.status_terminated') {
           setStatus('terminated');
           setWorking(false);
           setConfirmState(null);
+          if (onSessionStateChange) onSessionStateChange(s.id, { status:'terminated', requiresAction:false });
         } else if (event.type === 'session.error') {
           setWorking(false);
         } else if (event.type === 'user.tool_confirmation') {
@@ -381,7 +386,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
     ?.source?.stop_reason?.event_ids;
   const pendingTool = apiMode === 'api'
     ? [...pool].reverse().find((event) =>
-        event.type === 'agent.tool_use' &&
+        (event.type === 'agent.tool_use' || event.type === 'agent.mcp_tool_use') &&
+        (event.confirm || event.source?.evaluated_permission === 'ask') &&
         !confirmedToolIds.has(event.id) &&
         (!Array.isArray(latestRequiredIds) || latestRequiredIds.includes(event.id)))
     : (isConfirm ? CONFIRM_EVENTS.find((e) => e.confirm) : null);
@@ -433,6 +439,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
       setMessage('');
       setStatus('running');
       setWorking(true);
+      if (onSessionStateChange) onSessionStateChange(s.id, { status:'running', requiresAction:false });
     } catch (error) {
       setActionError(error.message || 'Message submission failed.');
       if (error.status === 401 && onAuthExpired) onAuthExpired();
@@ -627,6 +634,11 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
       {actionError && (
         <div className="inline-warn" role="alert">
           <Icon name="alert" size={14} /><span>{actionError}</span>
+        </div>
+      )}
+      {s.refreshError && (
+        <div className="inline-warn" role="alert">
+          <Icon name="alert" size={14} /><span>Session finished, but files/history refresh failed: {s.refreshError.message}</span>
         </div>
       )}
 
