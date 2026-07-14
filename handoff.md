@@ -357,7 +357,9 @@ they are intentionally no longer repeated here.
 1. Build provider-owned CMA `grep` from plan 0134. Probe 64 established the
    happy-path wire shape; probe 68 established edge behavior for path-list
    output, no-match, `head_limit`, glob filtering, invalid regex, missing path,
-   binary-ish files, and the unclaimed omitted-path case.
+   binary-ish files, and the unclaimed omitted-path case. Plan 0134 chooses
+   in-guest BusyBox/POSIX `grep -E` for v1; ripgrep-compatible regex parity is
+   deferred.
 2. Keep `grep` disabled until Docker and microsandbox own execution, limits,
    cancellation, cleanup, accounting, permissions, and tests. Never expose Pi's
    host-process `rg` path.

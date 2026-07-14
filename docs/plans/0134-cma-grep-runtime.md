@@ -88,18 +88,32 @@ evidence shows line-context output. Keep this explicit in tests.
 
 ### D2 -- Deterministic search engine
 
-Use `rg` only if it is executed inside the provider boundary. The implementation
-must not depend on an accidental host binary. For Docker/microsandbox, choose
-one of these during implementation:
+Use **in-guest BusyBox/POSIX `grep -E` for v1**. This is an explicit OMA
+decision, not an accidental fallback:
 
-1. execute an available in-guest `rg`/`grep` with a deterministic preflight and
-   fail closed if missing; or
-2. implement content search in the provider by streaming file bytes from the
-   guest.
+- the current default Docker image (`bash:5.2`) and microsandbox image
+  (`alpine:latest`) expose `/bin/grep`;
+- neither default image exposes `rg`;
+- shipping a pinned `rg` binary would couple this slice to image/platform and
+  supply-chain work that belongs in the later environment-image arc.
 
-The first implementation may use in-guest `rg` if tests prove the default
-runtime image has it. If not, use provider-owned traversal plus bounded file
-reads instead of broadening the image story in this slice.
+This creates a documented regex divergence from hosted CMA: hosted error text
+shows `rg`, while OMA v1 uses POSIX extended regular expressions through
+`grep -E`. The safety boundary is the product requirement for this slice:
+provider-owned, bounded search inside the guest. Ripgrep-compatible Rust regex
+parity is deferred.
+
+Provider creation must preflight that the guest supports the required behavior
+before exposing `grep`:
+
+- `grep` exists and is executable;
+- `grep -E` accepts a valid extended regex;
+- `grep -q` is supported;
+- invalid regex produces a non-success status before traversal starts.
+
+An incompatible custom image fails closed before model-facing `grep` is
+available. Do not silently fall back to host `rg`, host `grep`, or Pi's
+host-process grep path.
 
 ### D3 -- Bounds and lifecycle
 
@@ -126,17 +140,19 @@ needed:
 ### D4 -- Path, glob, and regex semantics
 
 - Resolve explicit absolute paths inside the sandbox boundary.
-- Treat explicit relative paths conservatively: either reject as unsupported or
-  resolve from provider `cwd`; do not silently pretend it means
-  `/mnt/session/uploads`.
-- Omitted path is unprobed because hosted did not complete in probe 68b. Start
-  with provider `cwd` only if bounded tests prove it cannot scan outside the
-  session workspace.
+- Treat explicit relative paths conservatively. For v1, reject them with a tool
+  error instead of guessing a hosted base directory.
+- Omitted path is unprobed because hosted emitted a `grep` tool use but no tool
+  result before the bounded probe timed out. For v1, require `path` and return
+  a tool error when it is omitted. This is a deliberate OMA safety policy, not a
+  parity claim.
 - Apply `glob` as a file filter before content search.
-- Pass regex syntax through to the chosen engine. Invalid patterns must become
-  tool errors.
-- Treat binary files consistently: initial behavior may skip binary-ish files,
-  matching the hosted observation.
+- Validate regex syntax before file traversal using the in-guest `grep -E`
+  preflight path. Invalid patterns must become tool errors.
+- Skip binary-ish files containing NUL bytes, matching the hosted observation
+  that a NUL-containing `*.bin` file returned `No matches found`.
+- Traverse filenames NUL-safely and emit paths exactly as public output. Do not
+  normalize result ordering; hosted ordering was not stable.
 
 ### D5 -- Public exposure
 
@@ -156,8 +172,11 @@ After those pass, remove only `grep` from deployment-disabled defaults.
   `head_limit`; unknown fields rejected.
 - Formatting: match paths, no-match text, `head_limit`, glob filtering,
   invalid regex error, missing path error.
+- Engine preflight: provider exposes `grep` only when guest `grep`, `grep -E`,
+  and `grep -q` behavior is available; incompatible custom images fail closed.
 - Provider boundaries: search cannot read host files; absolute paths must stay
-  inside the sandbox; relative/omitted path behavior pinned.
+  inside the sandbox; relative/omitted path rejection pinned.
+- Binary handling: files containing NUL bytes are skipped.
 - Docker lifecycle: success, no match, invalid regex, raw limit, output limit,
   timeout, caller abort, cleanup failure/poison.
 - Microsandbox lifecycle: same coverage as Docker, with a real smoke if the

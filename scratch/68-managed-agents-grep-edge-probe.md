@@ -59,4 +59,6 @@ uv run --with anthropic python scratch/68c-managed-agents-grep-path-errors-probe
 - `head_limit` should limit matched files, not matched lines.
 - Exact hosted `rg` error strings are not portable requirements, but invalid
   regex and missing path must be tool errors.
+- OMA v1 intentionally uses in-guest BusyBox/POSIX `grep -E`; hosted `rg` regex
+  parity is deferred.
 - Do not use Pi's host-process `rg` implementation.

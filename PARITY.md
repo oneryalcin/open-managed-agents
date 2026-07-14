@@ -163,6 +163,9 @@ the risk of silent contradiction, not by how easy they first appear.
     file paths, `head_limit` caps paths, invalid regex/missing path are tool
     errors, and omitted-path semantics remain unclaimed. Implementation plan:
     [`docs/plans/0134-cma-grep-runtime.md`](docs/plans/0134-cma-grep-runtime.md).
+  - Plan 0134 chooses in-guest BusyBox/POSIX `grep -E` for v1. Ripgrep-compatible
+    Rust regex parity is deferred to avoid coupling this slice to image and
+    supply-chain work.
 
 - [x] **Bidirectional session pagination / `prev_page`** *(DONE 2026-07-13; PR #185; plan 0132; probe 66)*
   - CMA `[Obs]`: session pages are `{data,next_page,prev_page}` without
