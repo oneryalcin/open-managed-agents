@@ -44,6 +44,28 @@ describe("OpenAPI and interactive documentation", () => {
     expect(document.paths["/v1/sessions"].get.responses["200"]).toBeDefined();
     expect(document.paths).not.toHaveProperty("/v1/deployments");
     expect(document.paths).not.toHaveProperty("/v1/memory");
+    expect(document.components.schemas.CreateAgentRequest).toMatchObject({
+      properties: { multiagent: { type: "null" } },
+    });
+    expect(document.components.schemas.UpdateAgentRequest).toMatchObject({
+      properties: { multiagent: { type: "null" } },
+    });
+    for (const name of [
+      "ForwardAgentPage",
+      "ForwardEnvironmentPage",
+      "ForwardVaultPage",
+      "ForwardCredentialPage",
+      "SkillPage",
+      "SkillVersionPage",
+    ]) {
+      expect(document.components.schemas[name], name).toMatchObject({
+        required: expect.arrayContaining(["data", "has_more", "next_page"]),
+        properties: { has_more: { type: "boolean" } },
+      });
+    }
+    expect(document.components.schemas.AgentVersionsPage).not.toHaveProperty(
+      "properties.has_more",
+    );
 
     assertDocumentInternallyValid(document);
   });
@@ -86,6 +108,8 @@ describe("OpenAPI and interactive documentation", () => {
     const initializer = await (await app.request("/docs/swagger-initializer.js")).text();
     expect(initializer).toContain("validatorUrl: null");
     expect(initializer).toContain("persistAuthorization: false");
+    expect(initializer).toContain("queryConfigEnabled: false");
+    expect(initializer).toContain("withCredentials: false");
     expect(initializer).not.toMatch(/localStorage|sessionStorage|document\.cookie/);
 
     const bundle = await app.request("/docs/vendor/swagger-ui-bundle.js");

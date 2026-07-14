@@ -46,6 +46,7 @@ export interface OpenApiRouteContract {
   operationId: string;
   tag: OpenApiTag;
   summary: string;
+  description?: string;
   auth: "workspace" | "admin" | "none" | "metrics";
   beta?: "managed" | "files" | "skills";
   parameters?: OpenApiParameter[];
@@ -160,7 +161,7 @@ const sessionId = pathParam("sessionId", "Session ID.");
 
 export const OPENAPI_ROUTE_CONTRACTS: readonly OpenApiRouteContract[] = [
   route({ method: "get", path: "/health", operationId: "getHealth", tag: "Operations (OMA)", summary: "Check appliance health", auth: "none", success: { schema: ref("Health") } }),
-  route({ method: "get", path: "/metrics", operationId: "getMetrics", tag: "Operations (OMA)", summary: "Read Prometheus metrics when enabled", auth: "metrics", success: { schema: { type: "string" }, mediaType: "text/plain", description: "Prometheus exposition" } }),
+  route({ method: "get", path: "/metrics", operationId: "getMetrics", tag: "Operations (OMA)", summary: "Read Prometheus metrics", description: "This route is registered only when metrics are enabled and the deployment exposure policy permits it. Otherwise it returns 404.", auth: "metrics", success: { schema: { type: "string" }, mediaType: "text/plain", description: "Prometheus exposition" } }),
 
   route({ method: "post", path: "/v1/agents", operationId: "createAgent", tag: "Agents", summary: "Create an agent", auth: "workspace", beta: "managed", requestBody: jsonBody(ref("CreateAgentRequest"), true, { name: "Coding agent", model: "claude-sonnet-5" }), success: { schema: ref("Agent") } }),
   route({ method: "get", path: "/v1/agents", operationId: "listAgents", tag: "Agents", summary: "List agents", auth: "workspace", beta: "managed", parameters: [limit, page, includeArchived], success: { schema: ref("ForwardAgentPage") } }),
@@ -231,8 +232,8 @@ const schemas: Record<string, JsonSchema> = {
   StringMap: { type: "object", additionalProperties: { type: "string" } },
   NullableString: { type: ["string", "null"] },
   ModelInput: { oneOf: [{ type: "string" }, { type: "object", required: ["id"], properties: { id: { type: "string" }, speed: { type: "string", enum: ["standard", "fast"] } }, additionalProperties: false }] },
-  CreateAgentRequest: { type: "object", required: ["name", "model"], properties: { name: { type: "string", minLength: 1 }, model: ref("ModelInput"), system: ref("NullableString"), description: ref("NullableString"), tools: { type: "array", items: ref("JsonObject") }, skills: { type: "array", items: ref("JsonObject") }, mcp_servers: { type: "array", items: ref("JsonObject") }, metadata: ref("StringMap"), multiagent: { type: ["object", "null"] } }, additionalProperties: false },
-  UpdateAgentRequest: { type: "object", required: ["version"], properties: { version: { type: "integer", minimum: 1 }, name: { type: "string", minLength: 1 }, model: ref("ModelInput"), system: ref("NullableString"), description: ref("NullableString"), tools: { type: ["array", "null"], items: ref("JsonObject") }, skills: { type: ["array", "null"], items: ref("JsonObject") }, mcp_servers: { type: ["array", "null"], items: ref("JsonObject") }, metadata: { type: "object", additionalProperties: { type: ["string", "null"] } }, multiagent: { type: ["object", "null"] } }, additionalProperties: false },
+  CreateAgentRequest: { type: "object", required: ["name", "model"], properties: { name: { type: "string", minLength: 1 }, model: ref("ModelInput"), system: ref("NullableString"), description: ref("NullableString"), tools: { type: "array", items: ref("JsonObject") }, skills: { type: "array", items: ref("JsonObject") }, mcp_servers: { type: "array", items: ref("JsonObject") }, metadata: ref("StringMap"), multiagent: { type: "null", description: "Full multi-agent runtime is not implemented. Omit this field or send null." } }, additionalProperties: false },
+  UpdateAgentRequest: { type: "object", required: ["version"], properties: { version: { type: "integer", minimum: 1 }, name: { type: "string", minLength: 1 }, model: ref("ModelInput"), system: ref("NullableString"), description: ref("NullableString"), tools: { type: ["array", "null"], items: ref("JsonObject") }, skills: { type: ["array", "null"], items: ref("JsonObject") }, mcp_servers: { type: ["array", "null"], items: ref("JsonObject") }, metadata: { type: "object", additionalProperties: { type: ["string", "null"] } }, multiagent: { type: "null", description: "Full multi-agent runtime is not implemented. Omit this field or send null." } }, additionalProperties: false },
   Agent: { type: "object", required: ["id", "type", "name", "model", "version", "created_at", "updated_at", "archived_at"], properties: { id: { type: "string" }, type: { const: "agent" }, name: { type: "string" }, model: { type: "object", required: ["id", "speed"], properties: { id: { type: "string" }, speed: { enum: ["standard", "fast"] } } }, system: ref("NullableString"), description: ref("NullableString"), tools: { type: "array", items: ref("JsonObject") }, skills: { type: "array", items: ref("JsonObject") }, mcp_servers: { type: "array", items: ref("JsonObject") }, metadata: ref("StringMap"), multiagent: { type: ["object", "null"] }, version: { type: "integer", minimum: 1 }, created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" }, archived_at: { type: ["string", "null"], format: "date-time" } }, additionalProperties: false },
   CreateEnvironmentRequest: { type: "object", required: ["name", "config"], properties: { name: { type: "string", minLength: 1 }, config: ref("JsonObject") }, additionalProperties: false },
   Environment: { type: "object", required: ["id", "type", "name", "config", "created_at", "updated_at", "archived_at"], properties: { id: { type: "string" }, type: { const: "environment" }, name: { type: "string" }, config: ref("JsonObject"), created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" }, archived_at: { type: ["string", "null"], format: "date-time" } } },
@@ -274,13 +275,14 @@ for (const [name, item] of [
   ["ForwardVaultPage", "Vault"],
   ["ForwardCredentialPage", "VaultCredential"],
 ] as const) {
+  const hasMore = name !== "AgentVersionsPage";
   schemas[name] = {
     type: "object",
-    required: ["data", "next_page"],
+    required: ["data", "next_page", ...(hasMore ? ["has_more"] : [])],
     properties: {
       data: { type: "array", items: ref(item) },
       next_page: { type: ["string", "null"] },
-      ...(name === "SkillPage" || name === "SkillVersionPage" ? { has_more: { type: "boolean" } } : {}),
+      ...(hasMore ? { has_more: { type: "boolean" } } : {}),
     },
     additionalProperties: false,
   };
@@ -312,6 +314,7 @@ export function createOpenApiDocument(): Record<string, unknown> {
       operationId: contract.operationId,
       tags: [contract.tag],
       summary: contract.summary,
+      ...(contract.description === undefined ? {} : { description: contract.description }),
       security: contract.auth === "none"
         ? []
         : contract.auth === "metrics"

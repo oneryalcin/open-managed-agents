@@ -6,6 +6,8 @@ window.addEventListener("load", () => {
     displayRequestDuration: true,
     validatorUrl: null,
     persistAuthorization: false,
+    queryConfigEnabled: false,
+    withCredentials: false,
     presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
     layout: "StandaloneLayout",
   });
