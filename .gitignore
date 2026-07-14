@@ -16,6 +16,9 @@ coverage/
 # Local tool artifacts (not part of the project)
 .omx/
 
+# Local CMA UI reference captures
+ui/CMA_screenshots/
+
 # Generated smoke-probe output
 scratch/artifacts/deployment-docker-smoke/
 scratch/artifacts/parallel-docker-smoke/
