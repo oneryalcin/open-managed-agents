@@ -19,6 +19,7 @@ import {
 } from "./cma-glob.ts";
 import {
   CMA_GREP_READY_MARKER,
+  CmaGrepCandidateCollector,
   CmaGrepStreamCollector,
 } from "./cma-grep.ts";
 import { matchGlob } from "./glob.ts";
@@ -659,36 +660,104 @@ export async function createMicrosandboxSandboxProvider(
   const grepOps: CmaGrepOperations = {
     grep: async ({ pattern, cwd, signal, glob, headLimit, maxRawBytes, maxOutputBytes, outputBase, timeoutMs }) => {
       recordSandboxInvocation(invocations, disposed, "grep");
-      const root = assertInsideMicrosandboxWorkspace(cwd, resolved.workspacePath);
+      const root = assertInsideMicrosandboxSearchRoot(cwd, [
+        resolved.workspacePath,
+        resolved.uploadsPath,
+        "/workspace/skills",
+      ]);
       if (signal.aborted) throw new Error("Operation aborted");
       await shell(buildMicrosandboxCmaGrepPatternCheckCommand(pattern), {
         timeoutMs: 3_000,
         guestTimeout: false,
       });
       const controller = new AbortController();
-      const ownershipToken = `oma-grep-${randomUUID()}`;
       const protocolBytes = Buffer.byteLength(CMA_GREP_READY_MARKER, "utf8") + 1;
       const abortFromCaller = () => controller.abort();
       signal.addEventListener("abort", abortFromCaller, { once: true });
       let streamError: Error | undefined;
       let sawStdout = false;
+      const matcher = glob === undefined ? undefined : compileCmaGlob(glob);
+      const candidates = new CmaGrepCandidateCollector({ maxRawBytes, matcher });
+      const enumerationToken = `oma-grep-${randomUUID()}`;
+      const enumerationReady = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
+      try {
+        const result = await shell(
+          buildMicrosandboxCmaGrepCandidateEnumerationCommand(root, enumerationToken),
+          {
+            signal: controller.signal,
+            timeoutMs,
+            guestTimeout: false,
+            maxBuffer: maxRawBytes + protocolBytes + 64 * 1024,
+            onStdout: (chunk) => {
+              sawStdout = true;
+              try {
+                const filenames = enumerationReady.push(chunk);
+                if (filenames) candidates.push(filenames);
+              } catch (error) {
+                streamError = error as Error;
+                controller.abort();
+              }
+            },
+          },
+        );
+        if (!sawStdout && result.stdout.length > 0) {
+          const filenames = enumerationReady.push(result.stdout);
+          if (filenames) candidates.push(filenames);
+        }
+        if (streamError) throw streamError;
+        if (signal.aborted) throw new Error("Operation aborted");
+        enumerationReady.assertReady();
+        candidates.finish();
+      } catch (error) {
+        if (streamError) throw streamError;
+        if (signal.aborted) throw new Error("Operation aborted");
+        throw error;
+      } finally {
+        try {
+          if (!enumerationReady.ready) {
+            await poisonInfrastructure();
+          } else {
+            try {
+              await shell(
+                buildMicrosandboxCmaGrepCleanupCommand(enumerationToken),
+                {
+                  timeoutMs: 3_000,
+                  guestTimeout: false,
+                },
+              );
+            } catch (cleanupError) {
+              await poisonInfrastructure();
+              throw cleanupError;
+            }
+          }
+        } finally {
+          signal.removeEventListener("abort", abortFromCaller);
+        }
+      }
+      if (signal.aborted) throw new Error("Operation aborted");
+      if (candidates.candidates.length === 0) return [];
+
+      const searchToken = `oma-grep-${randomUUID()}`;
       const readiness = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
       const collector = new CmaGrepStreamCollector({
         root,
         maxMatches: headLimit,
         maxRawBytes,
         maxOutputBytes,
-        matcher: glob === undefined ? undefined : compileCmaGlob(glob),
         join: posix.join,
         formatForOutput: outputBase === undefined
           ? undefined
           : (absolutePath) => posix.relative(outputBase, absolutePath),
         onLimit: () => controller.abort(),
       });
+      signal.addEventListener("abort", abortFromCaller, { once: true });
+      streamError = undefined;
+      sawStdout = false;
       try {
         const result = await shell(
-          buildMicrosandboxCmaGrepSearchCommand(root, ownershipToken, pattern),
+          buildMicrosandboxCmaGrepSearchCommand(root, searchToken, pattern),
           {
+            input: Buffer.from(`${candidates.candidates.join("\0")}\0`, "utf8"),
             signal: controller.signal,
             timeoutMs,
             guestTimeout: false,
@@ -724,7 +793,7 @@ export async function createMicrosandboxSandboxProvider(
           } else {
             try {
               await shell(
-                buildMicrosandboxCmaGrepCleanupCommand(ownershipToken),
+                buildMicrosandboxCmaGrepCleanupCommand(searchToken),
                 {
                   timeoutMs: 3_000,
                   guestTimeout: false,
@@ -1256,20 +1325,34 @@ export function buildMicrosandboxCmaGrepSearchCommand(
   return {
     script: [
       "set -eu",
-      "setsid env \"OMA_GREP_OWNER=$2\" sh -c '",
+      "exec setsid env \"OMA_GREP_OWNER=$2\" sh -c '",
       "set -eu",
       "printf \"%s\\0\" __OMA_GREP_READY__",
       "cd \"$1\"",
-      "find . -type f -print0 | while IFS= read -r -d \"\" file; do",
+      "while IFS= read -r -d \"\" file; do",
       "  if LC_ALL=C grep -Iq . \"$file\" 2>/dev/null && LC_ALL=C grep -E -q -- \"$2\" \"$file\" 2>/dev/null; then",
       "    printf \"%s\\0\" \"$file\"",
       "  fi",
       "done",
-      "' \"$2\" \"$1\" \"$3\" &",
+      "' \"$2\" \"$1\" \"$3\"",
+    ].join("\n"),
+    args: [root, ownershipToken, pattern],
+    input: "",
+  };
+}
+
+export function buildMicrosandboxCmaGrepCandidateEnumerationCommand(
+  root: string,
+  ownershipToken: string,
+): MicrosandboxShellCommand {
+  return {
+    script: [
+      "set -eu",
+      "setsid env \"OMA_GREP_OWNER=$2\" sh -c 'set -eu; printf \"%s\\0\" __OMA_GREP_READY__; cd \"$1\"; exec find . -type f -print0' \"$2\" \"$1\" &",
       "child=$!",
       "wait \"$child\"",
     ].join("\n"),
-    args: [root, ownershipToken, pattern],
+    args: [root, ownershipToken],
   };
 }
 
@@ -1587,6 +1670,24 @@ export function assertInsideMicrosandboxWorkspace(
     return path;
   }
   throw new Error(`Sandbox path escapes workspace: ${absolutePath}`);
+}
+
+export function assertInsideMicrosandboxSearchRoot(
+  absolutePath: string,
+  roots: readonly string[],
+): string {
+  if (!posix.isAbsolute(absolutePath)) {
+    throw new Error(`Sandbox search path must be absolute: ${absolutePath}`);
+  }
+  const path = posix.resolve(absolutePath);
+  for (const rootPath of roots) {
+    const root = posix.resolve(rootPath);
+    const rel = posix.relative(root, path);
+    if (rel === "" || (!rel.startsWith("..") && !posix.isAbsolute(rel))) {
+      return path;
+    }
+  }
+  throw new Error(`Sandbox search path escapes approved roots: ${absolutePath}`);
 }
 
 export function assertInsideMicrosandboxUploadsPath(

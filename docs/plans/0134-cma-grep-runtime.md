@@ -1,12 +1,12 @@
 # Plan 0134 -- Provider-owned CMA `grep`
 
-Status: implemented 2026-07-14 on `arc-j-cma-grep-probe`. The implementation
+Status: implemented on `arc-j-cma-grep-probe`, review pending. The implementation
 uses provider-owned Docker/microsandbox execution with semantic preflight,
 bounded public inputs, NUL-safe path streaming, and POSIX `grep -E` under
-`LC_ALL=C`. Hosted ripgrep regex parity remains a documented future divergence.
+`LC_ALL=C`. Hosted ripgrep regex parity remains a documented pre-v1 issue
+(#187) rather than a final parity claim.
 
 Date: 2026-07-14
-Status: ready for implementation
 Branch: `arc-j-cma-grep-probe`
 Evidence: [probe 64](../../scratch/64-managed-agents-tool-glob-grep-probe.md),
 [probe 68](../../scratch/68-managed-agents-grep-edge-probe.md)
@@ -16,7 +16,8 @@ Evidence: [probe 64](../../scratch/64-managed-agents-tool-glob-grep-probe.md),
 Expose CMA's `grep` builtin through a bounded, cancellable, provider-owned
 operation. Do not wire Pi's host-process `rg` path. `grep` must search the
 session filesystem inside Docker or microsandbox, respect OMA permission and
-event accounting, and remain disabled until both providers own execution.
+event accounting, and remain review-pending until the provider lifecycle gates
+and independent review pass.
 
 ## Hosted behavior observed
 

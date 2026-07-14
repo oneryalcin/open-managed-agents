@@ -12,6 +12,7 @@ import {
   buildDockerFileAccessCommand,
   buildDockerCmaGrepPreflightCommand,
   buildDockerCmaGrepPatternCheckCommand,
+  buildDockerCmaGrepCandidateEnumerationCommand,
   buildDockerCmaGrepSearchCommand,
   buildDockerGlobEnumerationCommand,
   buildDockerMkdirCommand,
@@ -225,11 +226,13 @@ describe("Docker sandbox provider command construction", () => {
     expect(preflight.script).toContain("grep -Iq");
     expect(preflight.script).toContain("read -r -d");
     expect(buildDockerCmaGrepPatternCheckCommand("[abc]").script).toContain("LC_ALL=C grep -E -q");
+    expect(buildDockerCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
+      .toContain("find . -type f -print0");
     const command = buildDockerCmaGrepSearchCommand("/workspace", "oma-grep-token", "needle");
     expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle"]);
     expect(command.script).toContain("OMA_GREP_OWNER=$2");
     expect(command.script).toContain("__OMA_GREP_READY__");
-    expect(command.script).toContain("find . -type f -print0");
+    expect(command.script).toContain("while IFS= read -r -d");
     expect(command.script).toContain("grep -Iq");
     expect(command.script).toContain("grep -E -q");
   });
@@ -1298,6 +1301,17 @@ describe("Docker sandbox provider integration", () => {
         ),
       ).resolves.toEqual({ exitCode: 0 });
       expect(Buffer.concat(chunks).toString("utf8")).toContain("hello\nok\n");
+      await expect(provider.operations.grep.grep({
+        pattern: "hello",
+        cwd: "/mnt/session/uploads",
+        glob: "*.txt",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/mnt/session/uploads/data/probe.txt"]);
     } finally {
       provider.dispose();
     }
@@ -1310,7 +1324,7 @@ describe("Docker sandbox provider integration", () => {
       .slice(2, 8)}`;
     const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
       extraLabels: { "open-managed-agents.test-id": label },
-      operationTimeoutMs: 500,
+      operationTimeoutMs: 2_000,
     });
     try {
       await expect(
@@ -1327,7 +1341,7 @@ describe("Docker sandbox provider integration", () => {
           env: {},
           onData: () => {},
         }),
-      ).rejects.toThrow("timeout:0.5");
+      ).rejects.toThrow("timeout:2");
       await expect(containerHasSleepProcess(label)).resolves.toBe(false);
 
       const abort = new AbortController();

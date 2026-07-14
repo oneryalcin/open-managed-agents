@@ -23,8 +23,8 @@ _Last updated 2026-07-14 (`main`; PR #186 and plan 0133 complete)._
   Docker/microsandbox providers, tools, skills, MCP, vault credentials, SSE,
   CMA `glob`, and bidirectional session pagination. Sandbox and egress controls
   intentionally exceed the hosted self-hosted baseline in several areas.
-- PR #184 shipped provider-owned, bounded, cancellable CMA `glob`; `grep`
-  remains disabled until providers own content search.
+- PR #184 shipped provider-owned, bounded, cancellable CMA `glob`. Provider-owned
+  CMA `grep` is implemented on `arc-j-cma-grep-probe` and review-pending.
 - PR #185 shipped session-specific `{data,next_page,prev_page}` pagination with
   signed, workspace-bound cursors and preserved ascending/descending order.
 - Probe 67 established hosted agent update/version behavior. Plan 0133 now
@@ -354,14 +354,15 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Provider-owned CMA `grep` is now implemented from plan 0134. Probe 64
-   established the happy-path wire shape; probe 68 established edge behavior
-   for path-list output, no-match, `head_limit`, glob filtering, invalid regex,
-   missing path, binary-ish files, and the unclaimed omitted-path case. OMA v1
-   uses in-guest BusyBox/POSIX `grep -E` under `LC_ALL=C`; ripgrep-compatible
-   regex parity is deferred. Public inputs are rejected before dispatch under
-   plan 0134's explicit byte/integer/glob bounds, and provider preflight proves
-   required ERE, quiet-output, `read -d`, and binary-detection behavior.
+1. Provider-owned CMA `grep` is implemented on `arc-j-cma-grep-probe` and is
+   review-pending. Probe 64 established the happy-path wire shape; probe 68
+   established edge behavior for path-list output, no-match, `head_limit`, glob
+   filtering, invalid regex, missing path, binary-ish files, and the unclaimed
+   omitted-path case. OMA v1 uses in-guest BusyBox/POSIX `grep -E` under
+   `LC_ALL=C`; ripgrep-compatible regex parity is tracked for pre-v1 in #187.
+   Public inputs are rejected before dispatch under plan 0134's explicit
+   byte/integer/glob bounds, and provider preflight proves required ERE,
+   quiet-output, `read -d`, and binary-detection behavior.
 2. Next, return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
    environment images, followed by web tools.
 3. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains

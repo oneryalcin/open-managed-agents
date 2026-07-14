@@ -361,7 +361,7 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
     }
   });
 
-  it("exposes bounded CMA grep and accounts public calls", async () => {
+  it("keeps host-passthrough grep non-model-facing", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
     try {
       const provider = createHostPassthroughSandboxProvider({
@@ -374,7 +374,8 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
       await writeFile(join(workspace, "nested", "c.md"), "needle\n");
       await writeFile(join(workspace, "binary.md"), Buffer.from([0x6e, 0x65, 0x00, 0x64]));
 
-      expect(provider.toolNames.has("grep")).toBe(true);
+      expect(provider.toolNames.has("grep")).toBe(false);
+      expect(provider.tools.some((tool) => tool.name === "grep")).toBe(false);
       const results = await provider.operations.grep.grep({
         pattern: "needle",
         cwd: workspace,
@@ -402,30 +403,8 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
         maxOutputBytes: 64 * 1024,
         timeoutMs: 10_000,
       })).rejects.toThrow();
-      const grep = provider.tools.find((tool) => tool.name === "grep");
-      expect(grep).toBeDefined();
-      const publicResult = await grep!.execute(
-        "toolu_grep_test",
-        { pattern: "needle", path: workspace, glob: "*.md", context: 1, head_limit: 1 },
-        new AbortController().signal,
-        undefined,
-        {} as never,
-      );
-      expect(publicResult.content[0]).toMatchObject({
-        type: "text",
-        text: expect.stringMatching(
-          new RegExp(`^${realWorkspace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(?:a|nested/c)\\.md$`),
-        ),
-      });
-      await expect(grep!.execute(
-        "toolu_grep_relative",
-        { pattern: "needle", path: "." },
-        new AbortController().signal,
-        undefined,
-        {} as never,
-      )).rejects.toThrow("grep path must be absolute");
-      expect(provider.invocations.byTool.grep).toBe(3);
-      expect(provider.invocations.toolCallIds.grep.has("toolu_grep_test")).toBe(true);
+      expect(provider.invocations.byTool.grep).toBe(2);
+      expect(provider.invocations.toolCallIds.grep.size).toBe(0);
     } finally {
       await rm(workspace, { force: true, recursive: true });
     }

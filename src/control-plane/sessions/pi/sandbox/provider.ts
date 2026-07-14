@@ -302,7 +302,11 @@ export function createHostPassthroughSandboxProvider(
       grep: grepOps,
       ls: lsOps,
     },
-    toolNames: new Set(["bash", "read", "write", "edit", "glob", "grep", "ls"]),
+    // Host passthrough is explicitly unsafe and is not a production isolation
+    // boundary. Do not expose model-facing grep here: its implementation uses
+    // JavaScript regexes and control-plane file reads, not the provider-owned
+    // in-guest POSIX grep contract Docker/microsandbox expose.
+    toolNames: new Set(["bash", "read", "write", "edit", "glob", "ls"]),
     tools: createSandboxToolDefinitions(
       workspaceRoot,
       {
@@ -317,7 +321,7 @@ export function createHostPassthroughSandboxProvider(
       },
       invocations,
       disposed,
-    ),
+    ).filter((tool) => tool.name !== "grep"),
     dispose: () => {
       disposed.value = true;
       for (const pid of activeProcessGroups) {
