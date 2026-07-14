@@ -179,7 +179,8 @@ and optional mutable fields. Preserve absence vs explicit null:
   explicit OMA choice until hosted behavior is observed;
 - `name`/`model`: cannot be null;
 - explicit non-null `multiagent`: retain the existing deployment-level 400;
-  null clears it; omission preserves a legacy stored value.
+  null clears it. Omission does not need compatibility shims for unreleased
+  legacy OMA rows under the pre-v1 compatibility posture.
 
 Validate the final merged configuration, not fields independently. In
 particular, tool/MCP cross-references, skill-version existence, and model

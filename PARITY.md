@@ -21,7 +21,7 @@ post-v1 deferrals, and deliberate architecture-specific divergences.
 | Sessions & files | ~65% | Create/retrieve/list/archive ✅; update / overrides / `resources.*` missing; sharp edges |
 | API reference & onboarding | ~65% | Auth / betas / error-envelope and bidirectional session pagination ✅; no update/lifecycle endpoints |
 | Tools & permissions | ~75% | Permission state-machine faithful ✅; CMA `glob` wired; `grep` and web tools remain disabled |
-| Agent config & outcomes | ~55% | Create/get/list/archive ✅; update/versioning implemented in PR #186, review pending; outcomes deferred |
+| Agent config & outcomes | ~55% | Create/get/list/archive and update/versioning ✅; outcomes deferred |
 | Events, streaming & webhooks | ~55% | SSE / resume / idempotency ✅; webhooks 0%, deltas 0%, `agent.thinking` dead |
 | Environments & sandboxes | ~35%\* | Thin *resource* (no packages/image/runtimes); strong self-hosted isolation defaults |
 | Multi-agent / GitHub / scheduled | ~5 / 0 / 0% | `multiagent` is an inert façade; GitHub & cron absent |
@@ -37,7 +37,7 @@ claim of blanket superiority over Anthropic's hosted environment.
 2026-07-12) → networking translation/rejection → probe-backed tool config
 validation → reject the inert multi-agent façade (DONE 2026-07-13) →
 `glob`/`grep` honesty boundary (DONE 2026-07-13) → sandbox-backed CMA
-`glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning (PR #186, review pending) → usable
+`glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning (DONE 2026-07-14) → usable
 environment image story → web tools. Provider-owned `grep` remains a separate
 search arc rather than a prerequisite for `glob`.
 
@@ -238,13 +238,12 @@ the risk of silent contradiction, not by how easy they first appear.
 These are larger than the wire-honesty pass but directly affect whether an
 early adopter can build and iterate a credible single-agent product.
 
-1. **Agent update + versioning** *(implemented in PR #186; review pending; probe 67; plan 0133)* — `POST /v1/agents/{id}`
+1. **Agent update + versioning** *(DONE 2026-07-14; PR #186; probe 67; plan 0133)* — `POST /v1/agents/{id}`
    with optimistic version checks plus `GET /v1/agents/{id}/versions`. Hosted
    updates allocate immutable integer revisions, reject stale expected versions
    with 409, retain historical retrieval after archive, and select latest or an
    explicitly pinned version at session creation. OMA now implements immutable
-   revisions and exact-version runtime pinning; final review remains before the
-   item is marked done. Implementation plan: [`docs/plans/0133-cma-agent-update-versioning.md`](docs/plans/0133-cma-agent-update-versioning.md).
+   revisions and exact-version runtime pinning. Implementation plan: [`docs/plans/0133-cma-agent-update-versioning.md`](docs/plans/0133-cma-agent-update-versioning.md).
 2. **Usable environment image story** — provide a batteries-included default
    runtime and a reviewed per-environment image override. Today the minimal
    `bash:5.2` / Alpine defaults require operators to build an image before a
