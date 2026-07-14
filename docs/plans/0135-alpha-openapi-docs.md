@@ -1,6 +1,6 @@
 # Plan 0135 -- Alpha OpenAPI and interactive API documentation
 
-Status: ready for implementation
+Status: implemented; independent review and browser rendering check pending
 
 Date: 2026-07-14
 

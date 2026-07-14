@@ -22,6 +22,10 @@ import {
   registerConsoleRoutes,
   type ConsoleStaticConfig,
 } from "./console/static.ts";
+import {
+  registerOpenApiRoutes,
+  type OpenApiRoutesConfig,
+} from "./openapi/routes.ts";
 import { adminRoutes } from "./admin/routes.ts";
 import { DefaultAdminService, type AdminService } from "./admin/service.ts";
 import { agentsRoutes } from "./agents/routes.ts";
@@ -108,12 +112,15 @@ import { DEFAULT_MCP_OPERATION_TIMEOUT_MS } from "./sessions/pi/mcp/client.ts";
 import { createOauthRefreshTicker } from "./vaults/oauth-refresh-ticker.ts";
 import type { WakeLoop } from "./wake-loop.ts";
 import { translatePiEvent } from "./sessions/pi/translator.ts";
+import {
+  FILES_API_BETA,
+  MANAGED_AGENTS_BETA,
+  SKILLS_API_BETA,
+} from "./api-constants.ts";
+
+export { FILES_API_BETA, MANAGED_AGENTS_BETA, SKILLS_API_BETA } from "./api-constants.ts";
 
 export const MAX_REQUEST_BODY_BYTES = 1_048_576;
-export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
-export const FILES_API_BETA = "files-api-2025-04-14";
-export const SKILLS_API_BETA = "skills-2025-10-02";
-
 type AppEnv = ControlPlaneRouteEnv;
 
 export interface ControlPlaneAuth {
@@ -128,6 +135,8 @@ export interface ControlPlaneServices {
   // Absent = no console shipped alongside this process (in-memory test
   // assemblies); the deployment assembly passes the bundled ui/ dir.
   console?: ConsoleStaticConfig;
+  /** Absent only in minimal test/library assemblies that do not ship UI assets. */
+  openapi?: OpenApiRoutesConfig;
   agents: AgentService;
   environments: EnvironmentService;
   files?: FileService;
@@ -325,6 +334,10 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     }
     return defaultBodyLimit(c, next);
   });
+
+  if (services.openapi) {
+    registerOpenApiRoutes(app, services.openapi);
+  }
 
   app.route("/v1/agents", agentsRoutes(services.agents));
   app.route("/v1/environments", environmentsRoutes(services.environments));
@@ -694,6 +707,7 @@ export function createDeploymentControlPlane(
   );
   sessionEvents.recoverAllAbandonedRuntimeTurns();
   const consoleRoot = bundledConsoleRoot();
+  const openapiRoot = bundledOpenApiDocsRoot();
   const app = createControlPlaneApp({
     ...(adminKey === undefined
       ? {}
@@ -707,6 +721,7 @@ export function createDeploymentControlPlane(
     // deliberately not coupled to admin being enabled (0120 §3.1): a
     // read-only /v1 browser is useful without an admin key.
     ...(consoleRoot === undefined ? {} : { console: { root: consoleRoot } }),
+    ...(openapiRoot === undefined ? {} : { openapi: { root: openapiRoot } }),
     ...(authMode === "api-key"
       ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
       : {}),
@@ -844,6 +859,11 @@ function bundledConsoleRoot(): string | undefined {
   return existsSync(join(root, "index.html")) ? root : undefined;
 }
 
+function bundledOpenApiDocsRoot(): string | undefined {
+  const root = fileURLToPath(new URL("../../ui/openapi-docs", import.meta.url));
+  return existsSync(join(root, "index.html")) ? root : undefined;
+}
+
 export function createInMemoryControlPlaneApp(
   opts: InMemoryControlPlaneAppOptions = {},
 ): Hono<AppEnv> {
@@ -873,7 +893,9 @@ export function createInMemoryControlPlaneApp(
       ? { ...opts.runtime, sessionOutputCoordinator, runtimeEventCoordinator }
       : undefined,
   );
+  const openapiRoot = bundledOpenApiDocsRoot();
   return createControlPlaneApp({
+    ...(openapiRoot === undefined ? {} : { openapi: { root: openapiRoot } }),
     agents: new DefaultAgentService(agentStore, skillsStore),
     environments: new DefaultEnvironmentService(environmentStore),
     files: new DefaultFileService(fileStorage),
