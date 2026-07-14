@@ -30,11 +30,11 @@ function LoginView({ onAdminLogin, onWorkspaceLogin, error, busy }) {
               ))}
             </div>
           </Labeled>
-          <Labeled label={tier === 'admin' ? 'OMA_ADMIN_KEY' : 'x-api-key'}
+          <Labeled label={tier === 'admin' ? 'OMA_ADMIN_KEY' : 'x-api-key'} htmlFor="console-credential-key"
             hint={tier === 'admin'
               ? 'Manage workspaces and API keys via /admin.'
               : 'Browse this workspace’s agents, sessions, and files via /v1.'}>
-            <input className="input mono" type="password" autoComplete="off"
+            <input id="console-credential-key" name="credential" className="input mono" type="password" autoComplete="off"
               placeholder={tier === 'admin' ? 'base64 admin key…' : 'oma_…'}
               value={key} onChange={(e) => setKey(e.target.value)} autoFocus />
           </Labeled>

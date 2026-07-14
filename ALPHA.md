@@ -136,9 +136,10 @@ Implementation plan: [0136](docs/plans/0136-alpha-console-task-parity.md).
 
 Status: audit and implementation complete and independently reviewed on
 `dev/alpha-console-live-workflow`. Static rendering, API integration, the full
-test suite, and the Docker-local alpha smoke are green. A real interactive
-browser pass remains pending because no browser backend was available in the
-implementation session.
+test suite, the Docker-local alpha smoke, and a real Chrome walkthrough are
+green. The browser gate covered login, agent/environment/session creation,
+authenticated SSE, an `always_ask` bash confirmation, tool output, the final
+agent message, and the idle transition.
 
 OMA already has a bundled console. The alpha question is therefore narrower
 than "build a UI": identify the minimum guided workflow the existing console

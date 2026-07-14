@@ -415,6 +415,7 @@ function toUiAgent(agent) {
     tools: Array.isArray(agent.tools) ? agent.tools.length : 0,
     system: agent.system || "No system prompt set.",
     toolset: summarizeToolset(agent.tools),
+    toolPermission: summarizeToolPermission(agent.tools),
     sessions: [],
   };
 }
@@ -552,6 +553,26 @@ function summarizeToolset(tools) {
   const first = tools[0];
   if (first?.type === "agent_toolset_20260401") return "agent_toolset_20260401";
   return `${tools.length} tool${tools.length === 1 ? "" : "s"}`;
+}
+
+function summarizeToolPermission(tools) {
+  const policies = new Set();
+  for (const toolset of Array.isArray(tools) ? tools : []) {
+    if (toolset?.type !== "agent_toolset_20260401") continue;
+    const defaultEnabled = toolset.default_config?.enabled !== false;
+    const defaultPolicy = toolset.default_config?.permission_policy?.type ?? "always_allow";
+    const configs = Array.isArray(toolset.configs) ? toolset.configs : [];
+    for (const config of configs) {
+      if ((config.enabled ?? defaultEnabled) === false) continue;
+      policies.add(config.permission_policy?.type ?? defaultPolicy);
+    }
+  }
+  if (policies.size === 0) return "No enabled tools";
+  if (policies.size > 1) return "Mixed permissions";
+  const [policy] = policies;
+  if (policy === "always_ask") return "Ask before use";
+  if (policy === "deny") return "Denied";
+  return "Always allow";
 }
 
 function eventRole(type) {

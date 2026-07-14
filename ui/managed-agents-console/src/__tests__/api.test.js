@@ -176,7 +176,14 @@ describe("workspace write capability", () => {
         name:"Console agent",
         model:{ id:"claude-sonnet-4-6", speed:"standard" },
         system:"Be concise.",
-        tools:[{ type:"agent_toolset_20260401" }],
+        tools:[{
+          type:"agent_toolset_20260401",
+          default_config:{ enabled:true, permission_policy:{ type:"always_allow" } },
+          configs:[
+            { name:"bash", enabled:true, permission_policy:{ type:"always_ask" } },
+            { name:"read", enabled:false },
+          ],
+        }],
         version:1,
         created_at:"2026-07-14T10:00:00Z",
         updated_at:"2026-07-14T10:00:00Z",
@@ -185,12 +192,14 @@ describe("workspace write capability", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await createAgent({
+    const created = await createAgent({
       name:"Console agent",
       model:"claude-sonnet-4-6",
       system:"Be concise.",
       tools:[{ type:"agent_toolset_20260401" }],
     });
+
+    expect(created.toolPermission).toBe("Ask before use");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/agents",

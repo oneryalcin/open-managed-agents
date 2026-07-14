@@ -666,7 +666,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
       {view !== 'files' && (
         <div className={'composer' + (readOnly ? ' ro' : '')}>
           <Icon name="terminal" size={16} style={{ color:'var(--faint)' }} />
-          <input placeholder={readOnly ? 'Connect a live workspace to send session events.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'}
+          <input id="session-message-composer" name="message" aria-label="Session message"
+            placeholder={readOnly ? 'Connect a live workspace to send session events.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'}
             value={message} onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }}
             disabled={running || readOnly || actionBusy} />

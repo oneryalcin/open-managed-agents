@@ -21,10 +21,10 @@ function Modal({ icon, title, sub, onClose, children, footer }) {
   );
 }
 
-function Labeled({ label, opt, hint, children }) {
+function Labeled({ label, opt, hint, htmlFor, children }) {
   return (
     <div className="form-row">
-      <label className="form-label">{label}{opt && <span className="opt">optional</span>}</label>
+      <label className="form-label" htmlFor={htmlFor}>{label}{opt && <span className="opt">optional</span>}</label>
       {children}
       {hint && <div className="field-hint">{hint}</div>}
     </div>
@@ -137,8 +137,8 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
         {!partial && <button className="btn btn-primary" disabled={!valid} onClick={submit} style={{ opacity: valid ? 1 : .5 }}>
           <Icon name="plus" size={15} />{busy ? 'Creating…' : 'Create session'}</button>}
       </>}>
-      <Labeled label="Agent">
-        <select className="selectbox" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+      <Labeled label="Agent" htmlFor="create-session-agent">
+        <select id="create-session-agent" name="agent" className="selectbox" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
           {choices.map((a) => (
             <option key={a.id} value={a.id}>{a.name} · {a.model}</option>
           ))}
@@ -146,8 +146,8 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
         {agent && <div className="field-hint">{agent.short} · system prompt {agent.system.length} chars · {agent.tools} tools</div>}
       </Labeled>
 
-      <Labeled label="Environment" hint="Pick an existing environment or enter an ID manually.">
-        <select className="selectbox" value={env} onChange={(e) => setEnv(e.target.value)}>
+      <Labeled label="Environment" htmlFor="create-session-environment" hint="Pick an existing environment or enter an ID manually.">
+        <select id="create-session-environment" name="environment" className="selectbox" value={env} onChange={(e) => setEnv(e.target.value)}>
           {live && environments.length === 0 && <option value="" disabled>Create an environment first…</option>}
           {environments.map((en) => <option key={en.id} value={en.id}>{en.label} — {en.image}</option>)}
           <option value="__custom">Enter an environment ID manually…</option>
@@ -157,17 +157,17 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
         <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>No live environments exist yet. Close this dialog and create one, or select “Enter an environment ID manually”.</span></div>
       )}
       {usingCustom && (
-        <Labeled label="Environment ID">
-          <input className="input mono" placeholder="env_…" value={customEnv} onChange={(e) => setCustomEnv(e.target.value)} />
+        <Labeled label="Environment ID" htmlFor="create-session-environment-id">
+          <input id="create-session-environment-id" name="environment_id" className="input mono" placeholder="env_…" value={customEnv} onChange={(e) => setCustomEnv(e.target.value)} />
         </Labeled>
       )}
 
-      <Labeled label="Title" opt hint="Defaults to the first message if left blank.">
-        <input className="input" placeholder="e.g. Ship your first Managed Agent" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <Labeled label="Title" htmlFor="create-session-title" opt hint="Defaults to the first message if left blank.">
+        <input id="create-session-title" name="title" className="input" placeholder="e.g. Ship your first Managed Agent" value={title} onChange={(e) => setTitle(e.target.value)} />
       </Labeled>
 
-      <Labeled label="First message" opt hint="Send an initial user.message — the session starts running immediately.">
-        <textarea className="textarea" placeholder="Send a message to start the session…" value={msg} onChange={(e) => setMsg(e.target.value)} />
+      <Labeled label="First message" htmlFor="create-session-message" opt hint="Send an initial user.message — the session starts running immediately.">
+        <textarea id="create-session-message" name="message" className="textarea" placeholder="Send a message to start the session…" value={msg} onChange={(e) => setMsg(e.target.value)} />
       </Labeled>
       {error && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{error}</span></div>}
     </Modal>
@@ -237,17 +237,17 @@ function CreateAgent({ onClose, onCreate, onAuthExpired, apiMode = 'demo', api =
           <Icon name="plus" size={15} />{busy ? 'Creating…' : 'Create agent'}</button>
       </>}>
       <div className="form-row two">
-        <Labeled label="Name">
-          <input className="input" placeholder="e.g. cwc-agent" value={name} onChange={(e) => setName(e.target.value)} />
+        <Labeled label="Name" htmlFor="create-agent-name">
+          <input id="create-agent-name" name="name" className="input" placeholder="e.g. cwc-agent" value={name} onChange={(e) => setName(e.target.value)} />
         </Labeled>
-        <Labeled label="Model">
-          <input className="input mono" list="oma-model-suggestions" value={model} onChange={(e) => setModel(e.target.value)} />
+        <Labeled label="Model" htmlFor="create-agent-model">
+          <input id="create-agent-model" name="model" className="input mono" list="oma-model-suggestions" value={model} onChange={(e) => setModel(e.target.value)} />
           <datalist id="oma-model-suggestions">{MODELS.map((m) => <option key={m} value={m} />)}</datalist>
         </Labeled>
       </div>
 
-      <Labeled label="System prompt" opt hint="Plain text. Markdown is preserved.">
-        <textarea className="textarea" placeholder="You help me navigate…" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+      <Labeled label="System prompt" htmlFor="create-agent-system" opt hint="Plain text. Markdown is preserved.">
+        <textarea id="create-agent-system" name="system" className="textarea" placeholder="You help me navigate…" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
       </Labeled>
 
       <Labeled label="Built-in tools" hint="Permissions default to “ask” and can be tuned after creation.">

@@ -121,7 +121,7 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, createSessionReadO
                   <span className="pill" style={{ height:20 }}>{a.tools}</span>
                 </div>
                 <span style={{ display:'flex', alignItems:'center', gap:6, color:'var(--soft)', fontSize:12.5 }}>
-                  <Icon name="checkCircle" size={14} style={{ color:'var(--green)' }} />Always allow</span>
+                  <Icon name="checkCircle" size={14} style={{ color:'var(--green)' }} />{a.toolPermission || 'Always allow'}</span>
               </div>
             </div>
           </div>

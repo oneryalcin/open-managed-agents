@@ -53,8 +53,8 @@ function CreateEnvironmentModal({ mode, onClose, onCreated, onAuthExpired, api =
         </div>
       )}
       <EnvironmentError error={error} />
-      <Labeled label="Name" hint="Stored as the environment name. The API generates the environment ID.">
-        <input className="input" autoFocus placeholder="e.g. default-docker-local" value={name}
+      <Labeled label="Name" htmlFor="create-environment-name" hint="Stored as the environment name. The API generates the environment ID.">
+        <input id="create-environment-name" name="name" className="input" autoFocus placeholder="e.g. default-docker-local" value={name}
           disabled={busy} onChange={(e) => { setName(e.target.value); setError(null); }} />
       </Labeled>
       <Labeled label="Preset" hint="Default-deny networking is the only field sent; model and sandbox-provider readiness are reported by action-time server errors.">
