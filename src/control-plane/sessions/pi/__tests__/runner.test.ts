@@ -535,7 +535,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
     expect(sandbox.materialized).toEqual([mounts]);
     expect(factory.sessions).toHaveLength(1);
-    expect(seenContexts).toContainEqual({ agentId: "agent_1" });
+    expect(seenContexts).toContainEqual({ agentId: "agent_1", agentVersion: 1 });
   });
 
   it("re-materializes file mounts from the resolver when a prepared handle was evicted", async () => {

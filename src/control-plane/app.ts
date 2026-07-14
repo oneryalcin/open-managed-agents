@@ -93,6 +93,7 @@ import {
   createFileMountResolver,
   createSkillSnapshotsProvider,
   createSessionEgressBundleResolver,
+  createStoreBackedAgentRevisionProvider,
   createStoreBackedCustomToolsProvider,
 } from "./wiring.ts";
 import { createStoreBackedBuiltinToolAccessResolver } from "./sessions/pi/tool-permissions.ts";
@@ -102,6 +103,7 @@ import {
   createStoreBackedMcpToolAccessResolver,
 } from "./sessions/pi/mcp/bridge.ts";
 import { createDefaultMcpRuntime } from "./sessions/pi/mcp/runtime.ts";
+import { createPiModelCatalog } from "./sessions/pi/runner.ts";
 import { DEFAULT_MCP_OPERATION_TIMEOUT_MS } from "./sessions/pi/mcp/client.ts";
 import { createOauthRefreshTicker } from "./vaults/oauth-refresh-ticker.ts";
 import type { WakeLoop } from "./wake-loop.ts";
@@ -575,8 +577,26 @@ export function createDeploymentControlPlane(
           onScheduled: () => wakeOauthTicker(),
         })
       : undefined;
+  const modelCatalog =
+    opts.runner?.modelCatalog ?? createPiModelCatalog(opts.runner?.provider);
+  const modelAvailability = {
+    assertAvailable(modelId: string): void {
+      if (!modelCatalog.modelRegistry.find(modelCatalog.provider, modelId)) {
+        throw new ApiError(
+          400,
+          "invalid_request_error",
+          `Model ${modelId} is not available on this deployment`,
+        );
+      }
+    },
+  };
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
+    modelCatalog,
+    agentRevision: createStoreBackedAgentRevisionProvider({
+      sessions: stores.sessions,
+      agents: stores.agents,
+    }),
     ...(metrics === undefined
       ? {}
       : {
@@ -689,7 +709,11 @@ export function createDeploymentControlPlane(
     ...(authMode === "api-key"
       ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
       : {}),
-    agents: new DefaultAgentService(stores.agents, stores.skills),
+    agents: new DefaultAgentService(
+      stores.agents,
+      stores.skills,
+      modelAvailability,
+    ),
     environments: new DefaultEnvironmentService(stores.environments),
     files: new DefaultFileService(stores.files),
     skills: new DefaultSkillsService(stores.skills),
@@ -714,6 +738,7 @@ export function createDeploymentControlPlane(
       {
         assertDeletable: sessionEvents.assertSessionDeletable.bind(sessionEvents),
         runtime: runner,
+        modelAvailability,
         skills: stores.skills,
         egressCapability: {
           canHonorNetworking: runtimeConfig.egress !== undefined,

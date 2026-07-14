@@ -18,10 +18,12 @@ The smallest end-to-end flow that proves the architecture **and preserves the "b
 **Agents:**
 - `POST /v1/agents` — persist an agent config (`name`, `model`, `system`, `tools`). Response: full agent object with field `id` (not `agent_id`).
 - `GET /v1/agents` — list agents (paginated).
-- `GET /v1/agents/{id}` — read one agent.
+- `GET /v1/agents/{id}` — read the latest agent revision, or an immutable historical revision with `?version=N`.
+- `POST /v1/agents/{id}` — optimistically update from required expected `version`; configuration changes allocate an immutable revision.
+- `GET /v1/agents/{id}/versions` — list immutable revisions newest-first.
 
 **Sessions:**
-- `POST /v1/sessions` — request body `{ agent, environment_id }`, where **`agent` is the wire field** (NOT `agent_id`). `agent` accepts either a bare string `"agent_abc"` (latest version semantics — for MVP we just resolve the agent ID) or an object `{type: "agent", id, version?}`. We ignore `version` in MVP. Response: full session object with field `id`.
+- `POST /v1/sessions` — request body `{ agent, environment_id }`, where **`agent` is the wire field** (NOT `agent_id`). A bare string `"agent_abc"` selects the latest revision; `{type:"agent",id,version}` pins that exact immutable revision for storage and runtime execution. Response: full session object with field `id`.
 - `GET /v1/sessions` — list sessions (paginated), with `agent_id`, `limit`, `page`, and `order` query parameters.
 - `GET /v1/sessions/{id}` — read one session (status, agent, environment, usage).
 

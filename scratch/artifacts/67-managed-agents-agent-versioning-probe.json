@@ -1,0 +1,461 @@
+{
+  "after_archive": {
+    "retrieve_latest": {
+      "response": {
+        "archived_at": "timestamp",
+        "created_at": "timestamp",
+        "description": null,
+        "id": "id_001",
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "metadata": {
+          "stable": "two"
+        },
+        "model": {
+          "id": "claude-sonnet-5",
+          "speed": "standard"
+        },
+        "name": "probe67-v2-756bedec",
+        "system": null,
+        "type": "agent",
+        "updated_at": "timestamp",
+        "version": 3
+      }
+    },
+    "retrieve_v1": {
+      "response": {
+        "archived_at": "timestamp",
+        "created_at": "timestamp",
+        "description": "version one",
+        "id": "id_001",
+        "keys": [
+          "archived_at",
+          "created_at",
+          "description",
+          "id",
+          "mcp_servers",
+          "metadata",
+          "model",
+          "multiagent",
+          "name",
+          "skills",
+          "system",
+          "tools",
+          "type",
+          "updated_at",
+          "version"
+        ],
+        "metadata": {
+          "remove_me": "yes",
+          "stable": "one"
+        },
+        "model": {
+          "id": "claude-sonnet-5",
+          "speed": "standard"
+        },
+        "name": "probe67-v1-756bedec",
+        "system": "system-v1",
+        "type": "agent",
+        "updated_at": "timestamp",
+        "version": 1
+      }
+    },
+    "update": {
+      "error": {
+        "error_type": "invalid_request_error",
+        "message": "Cannot modify archived agent",
+        "status_code": 400
+      }
+    },
+    "versions": {
+      "response": {
+        "keys": [
+          "data",
+          "next_page"
+        ],
+        "next_page": null,
+        "versions": [
+          3,
+          2,
+          1
+        ]
+      }
+    }
+  },
+  "archive": {
+    "archived_at": "timestamp",
+    "created_at": "timestamp",
+    "description": null,
+    "id": "id_001",
+    "keys": [
+      "archived_at",
+      "created_at",
+      "description",
+      "id",
+      "mcp_servers",
+      "metadata",
+      "model",
+      "multiagent",
+      "name",
+      "skills",
+      "system",
+      "tools",
+      "type",
+      "updated_at",
+      "version"
+    ],
+    "metadata": {
+      "stable": "two"
+    },
+    "model": {
+      "id": "claude-sonnet-5",
+      "speed": "standard"
+    },
+    "name": "probe67-v2-756bedec",
+    "system": null,
+    "type": "agent",
+    "updated_at": "timestamp",
+    "version": 3
+  },
+  "create": {
+    "archived_at": null,
+    "created_at": "timestamp",
+    "description": "version one",
+    "id": "id_001",
+    "keys": [
+      "archived_at",
+      "created_at",
+      "description",
+      "id",
+      "mcp_servers",
+      "metadata",
+      "model",
+      "multiagent",
+      "name",
+      "skills",
+      "system",
+      "tools",
+      "type",
+      "updated_at",
+      "version"
+    ],
+    "metadata": {
+      "remove_me": "yes",
+      "stable": "one"
+    },
+    "model": {
+      "id": "claude-sonnet-5",
+      "speed": "standard"
+    },
+    "name": "probe67-v1-756bedec",
+    "system": "system-v1",
+    "type": "agent",
+    "updated_at": "timestamp",
+    "version": 1
+  },
+  "model": "claude-sonnet-5",
+  "retrieve": {
+    "latest": {
+      "archived_at": null,
+      "created_at": "timestamp",
+      "description": null,
+      "id": "id_001",
+      "keys": [
+        "archived_at",
+        "created_at",
+        "description",
+        "id",
+        "mcp_servers",
+        "metadata",
+        "model",
+        "multiagent",
+        "name",
+        "skills",
+        "system",
+        "tools",
+        "type",
+        "updated_at",
+        "version"
+      ],
+      "metadata": {
+        "stable": "two"
+      },
+      "model": {
+        "id": "claude-sonnet-5",
+        "speed": "standard"
+      },
+      "name": "probe67-v2-756bedec",
+      "system": null,
+      "type": "agent",
+      "updated_at": "timestamp",
+      "version": 3
+    },
+    "missing_version": {
+      "error": {
+        "error_type": "not_found_error",
+        "message": "Agent version not found.",
+        "status_code": 404
+      }
+    },
+    "version_1": {
+      "archived_at": null,
+      "created_at": "timestamp",
+      "description": "version one",
+      "id": "id_001",
+      "keys": [
+        "archived_at",
+        "created_at",
+        "description",
+        "id",
+        "mcp_servers",
+        "metadata",
+        "model",
+        "multiagent",
+        "name",
+        "skills",
+        "system",
+        "tools",
+        "type",
+        "updated_at",
+        "version"
+      ],
+      "metadata": {
+        "remove_me": "yes",
+        "stable": "one"
+      },
+      "model": {
+        "id": "claude-sonnet-5",
+        "speed": "standard"
+      },
+      "name": "probe67-v1-756bedec",
+      "system": "system-v1",
+      "type": "agent",
+      "updated_at": "timestamp",
+      "version": 1
+    },
+    "version_2": {
+      "archived_at": null,
+      "created_at": "timestamp",
+      "description": "version two",
+      "id": "id_001",
+      "keys": [
+        "archived_at",
+        "created_at",
+        "description",
+        "id",
+        "mcp_servers",
+        "metadata",
+        "model",
+        "multiagent",
+        "name",
+        "skills",
+        "system",
+        "tools",
+        "type",
+        "updated_at",
+        "version"
+      ],
+      "metadata": {
+        "added": "new",
+        "stable": "two"
+      },
+      "model": {
+        "id": "claude-sonnet-5",
+        "speed": "standard"
+      },
+      "name": "probe67-v2-756bedec",
+      "system": "system-v2",
+      "type": "agent",
+      "updated_at": "timestamp",
+      "version": 2
+    }
+  },
+  "run_id": "756bedec",
+  "session_selection": {
+    "bare_agent_id": {
+      "agent": {
+        "description": null,
+        "id": "id_001",
+        "mcp_servers": [],
+        "model": {
+          "id": "claude-sonnet-5",
+          "speed": "standard"
+        },
+        "multiagent": null,
+        "name": "probe67-v2-756bedec",
+        "skills": [],
+        "system": null,
+        "tools": [
+          {
+            "configs": [],
+            "default_config": {
+              "enabled": false,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ],
+        "type": "agent",
+        "version": 3
+      },
+      "id": "id_002",
+      "status": "idle"
+    },
+    "explicit_version_1": {
+      "agent": {
+        "description": "version one",
+        "id": "id_001",
+        "mcp_servers": [],
+        "model": {
+          "id": "claude-sonnet-5",
+          "speed": "standard"
+        },
+        "multiagent": null,
+        "name": "probe67-v1-756bedec",
+        "skills": [],
+        "system": "system-v1",
+        "tools": [
+          {
+            "configs": [],
+            "default_config": {
+              "enabled": false,
+              "permission_policy": {
+                "type": "always_allow"
+              }
+            },
+            "type": "agent_toolset_20260401"
+          }
+        ],
+        "type": "agent",
+        "version": 1
+      },
+      "id": "id_004",
+      "status": "idle"
+    },
+    "missing_version": {
+      "error": {
+        "error_type": "not_found_error",
+        "message": "agent.version: 999 not found",
+        "status_code": 404
+      }
+    }
+  },
+  "stale_update_from_v1": {
+    "error": {
+      "error_type": "invalid_request_error",
+      "message": "Concurrent modification detected. Please fetch the latest version and retry.",
+      "status_code": 409
+    }
+  },
+  "update_v1_to_v2": {
+    "archived_at": null,
+    "created_at": "timestamp",
+    "description": "version two",
+    "id": "id_001",
+    "keys": [
+      "archived_at",
+      "created_at",
+      "description",
+      "id",
+      "mcp_servers",
+      "metadata",
+      "model",
+      "multiagent",
+      "name",
+      "skills",
+      "system",
+      "tools",
+      "type",
+      "updated_at",
+      "version"
+    ],
+    "metadata": {
+      "added": "new",
+      "stable": "two"
+    },
+    "model": {
+      "id": "claude-sonnet-5",
+      "speed": "standard"
+    },
+    "name": "probe67-v2-756bedec",
+    "system": "system-v2",
+    "type": "agent",
+    "updated_at": "timestamp",
+    "version": 2
+  },
+  "update_v2_to_v3_nulls": {
+    "archived_at": null,
+    "created_at": "timestamp",
+    "description": null,
+    "id": "id_001",
+    "keys": [
+      "archived_at",
+      "created_at",
+      "description",
+      "id",
+      "mcp_servers",
+      "metadata",
+      "model",
+      "multiagent",
+      "name",
+      "skills",
+      "system",
+      "tools",
+      "type",
+      "updated_at",
+      "version"
+    ],
+    "metadata": {
+      "stable": "two"
+    },
+    "model": {
+      "id": "claude-sonnet-5",
+      "speed": "standard"
+    },
+    "name": "probe67-v2-756bedec",
+    "system": null,
+    "type": "agent",
+    "updated_at": "timestamp",
+    "version": 3
+  },
+  "versions": {
+    "page_1": {
+      "keys": [
+        "data",
+        "next_page"
+      ],
+      "next_page": "cursor_002",
+      "versions": [
+        3,
+        2
+      ]
+    },
+    "page_2": {
+      "keys": [
+        "data",
+        "next_page"
+      ],
+      "next_page": null,
+      "versions": [
+        1
+      ]
+    }
+  }
+}

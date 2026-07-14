@@ -27,11 +27,30 @@ export function agentsRoutes(service: AgentService): Hono<ControlPlaneRouteEnv> 
     );
   });
 
+  app.get("/:id/versions", (c) => {
+    const limit = parseLimit(c.req.query("limit"));
+    const page = c.req.query("page") || undefined;
+    return c.json(service.listVersions(
+      workspaceIdFrom(c),
+      c.req.param("id"),
+      {
+        ...(limit === undefined ? {} : { limit }),
+        ...(page === undefined ? {} : { page }),
+      },
+    ), 200);
+  });
+
   app.get("/:id", (c) => {
+    const version = parsePositiveInteger(c.req.query("version"), "version");
     return c.json(
-      service.retrieve(workspaceIdFrom(c), c.req.param("id")),
+      service.retrieve(workspaceIdFrom(c), c.req.param("id"), version),
       200,
     );
+  });
+
+  app.post("/:id", async (c) => {
+    const body = await parseJsonBody(c.req);
+    return c.json(service.update(workspaceIdFrom(c), c.req.param("id"), body), 200);
   });
 
   app.post("/:id/archive", (c) => {
@@ -42,6 +61,21 @@ export function agentsRoutes(service: AgentService): Hono<ControlPlaneRouteEnv> 
   });
 
   return app;
+}
+
+function parsePositiveInteger(
+  value: string | undefined,
+  field: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw invalidRequest(`\`${field}\` must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw invalidRequest(`\`${field}\` must be a positive integer`);
+  }
+  return parsed;
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {

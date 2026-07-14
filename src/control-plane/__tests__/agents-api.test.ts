@@ -56,6 +56,85 @@ describe("agents API", () => {
     });
   });
 
+  it("updates agents with immutable versions and optimistic concurrency", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const created = await createAgent(app, {}, {
+      ...VALID_AGENT,
+      metadata: { stable: "one", remove_me: "yes" },
+    });
+
+    const updateRes = await app.request(`/v1/agents/${created.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        version: 1,
+        name: "Updated Agent",
+        system: null,
+        metadata: { stable: "two", remove_me: null },
+      }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = (await updateRes.json()) as ManagedAgentsAgent;
+    expect(updated).toMatchObject({
+      id: created.id,
+      version: 2,
+      name: "Updated Agent",
+      system: null,
+      metadata: { stable: "two" },
+    });
+
+    const stale = await app.request(`/v1/agents/${created.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, description: "stale" }),
+    });
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        message: "Concurrent modification detected. Please fetch the latest version and retry.",
+      },
+    });
+
+    const noOp = await app.request(`/v1/agents/${created.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 2 }),
+    });
+    expect(noOp.status).toBe(200);
+    await expect(noOp.json()).resolves.toEqual(updated);
+
+    const validAfterStale = await app.request(`/v1/agents/${created.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 2, description: "version three" }),
+    });
+    expect(validAfterStale.status).toBe(200);
+    await expect(validAfterStale.json()).resolves.toMatchObject({ version: 3 });
+
+    const historical = await app.request(`/v1/agents/${created.id}?version=1`);
+    expect(historical.status).toBe(200);
+    await expect(historical.json()).resolves.toEqual(created);
+
+    const firstVersions = await app.request(`/v1/agents/${created.id}/versions?limit=1`);
+    expect(firstVersions.status).toBe(200);
+    const firstPage = (await firstVersions.json()) as {
+      data: ManagedAgentsAgent[];
+      next_page: string | null;
+    };
+    expect(firstPage.data.map((agent) => agent.version)).toEqual([3]);
+    expect(firstPage.next_page).toEqual(expect.any(String));
+    const secondVersions = await app.request(
+      `/v1/agents/${created.id}/versions?limit=1&page=${firstPage.next_page}`,
+    );
+    const secondPage = (await secondVersions.json()) as {
+      data: ManagedAgentsAgent[];
+      next_page: string | null;
+    };
+    expect(secondPage.data.map((agent) => agent.version)).toEqual([2]);
+    expect(secondPage.next_page).toEqual(expect.any(String));
+  });
+
   it("archives agents idempotently and keeps direct retrieve available", async () => {
     const app = createInMemoryControlPlaneApp();
     const created = await createAgent(app);
@@ -82,6 +161,21 @@ describe("agents API", () => {
     const retrieveRes = await app.request(`/v1/agents/${created.id}`);
     expect(retrieveRes.status).toBe(200);
     await expect(retrieveRes.json()).resolves.toEqual(archived);
+    const historicalRes = await app.request(`/v1/agents/${created.id}?version=1`);
+    await expect(historicalRes.json()).resolves.toMatchObject({
+      id: created.id,
+      version: 1,
+      archived_at: archived.archived_at,
+    });
+    const updateArchived = await app.request(`/v1/agents/${created.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, description: "blocked" }),
+    });
+    expect(updateArchived.status).toBe(400);
+    await expect(updateArchived.json()).resolves.toMatchObject({
+      error: { message: "Cannot modify archived agent" },
+    });
 
     const defaultListRes = await app.request("/v1/agents?limit=10");
     expect(defaultListRes.status).toBe(200);
@@ -521,6 +615,7 @@ describe("agents API", () => {
 async function createAgent(
   app: ReturnType<typeof createInMemoryControlPlaneApp>,
   headers: Record<string, string> = {},
+  input: Record<string, unknown> = VALID_AGENT,
 ): Promise<ManagedAgentsAgent> {
   const res = await app.request("/v1/agents", {
     method: "POST",
@@ -528,7 +623,7 @@ async function createAgent(
       "content-type": "application/json",
       ...headers,
     },
-    body: JSON.stringify(VALID_AGENT),
+    body: JSON.stringify(input),
   });
   expect(res.status).toBe(200);
   return (await res.json()) as ManagedAgentsAgent;

@@ -17,7 +17,7 @@ const DEFAULT_CUSTOM_TOOL_TIMEOUT_MS = 5 * 60 * 1000;
 export type PiCustomToolsProvider = (
   workspaceId: WorkspaceId,
   sessionId: string,
-  context?: { agentId?: string },
+  context?: { agentId?: string; agentVersion?: number },
 ) => readonly ManagedAgentsCustomTool[];
 
 interface PendingCustomToolCall {
@@ -44,7 +44,7 @@ export class PiCustomToolBridge {
   customToolNames(
     workspaceId: WorkspaceId,
     sessionId: string,
-    context?: { agentId?: string },
+    context?: { agentId?: string; agentVersion?: number },
   ): Set<string> {
     return new Set(
       (this.opts.customTools?.(workspaceId, sessionId, context) ?? []).map(
@@ -57,7 +57,7 @@ export class PiCustomToolBridge {
     workspaceId: WorkspaceId,
     sessionId: string,
     getEmitter: () => ((event: RuntimeCustomToolUseEvent) => void) | undefined,
-    context?: { agentId?: string },
+    context?: { agentId?: string; agentVersion?: number },
   ): ReturnType<typeof defineTool>[] {
     return (this.opts.customTools?.(workspaceId, sessionId, context) ?? []).map(
       (tool) =>

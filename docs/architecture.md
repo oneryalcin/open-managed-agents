@@ -112,7 +112,7 @@ and does not set Pi's emitted tool-result error flag.
 
 | Managed Agents endpoint / event | Pi primitive |
 |---|---|
-| `POST /v1/agents` | (none — store in SQLite, no Pi call) |
+| `POST /v1/agents`, `POST /v1/agents/{id}`, version history | SQLite materialized head + immutable revisions; no Pi call |
 | `POST /v1/sessions` | `createAgentSession()` |
 | `POST /v1/sessions/{id}` (update) | mutate session config in our DB; future Pi updates use public tool/session APIs, not internal active-tool mutation |
 | `events.send` `user.message` | `session.prompt()` / `steer()` / `followUp()` |

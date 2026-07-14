@@ -12,50 +12,53 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-13 (`arc-h-pagination-probe`; PR #184 merged; plan 0132
-session bidirectional pagination complete and awaiting review)._
+_Last updated 2026-07-14 (`arc-i-agent-versioning-probe`; plan 0133
+implemented and awaiting review)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
-  land in the same reviewable branch when they are part of an active slice.
-- The current product-status source is [PARITY.md](PARITY.md): it records the
-  CMA comparison, deliberate non-goals, evidence-backed gaps, and the ordered
-  pre-v1 worklist.
+  land with the implementation slice when they are part of its evidence.
+- [PARITY.md](PARITY.md) is the product-status source of truth. Do not duplicate
+  its full backlog here.
 - The synchronous single-agent core is substantially shipped: agents, sessions,
-  Docker/microsandbox providers, tools, skills, MCP, vault credentials, and SSE.
-  Sandbox security and egress controls intentionally exceed the hosted
-  self-hosted baseline in several areas.
-- MCP OAuth and runtime token refresh are shipped (M2/M3, commits `0d96505` and
-  `c980b4b`), including validate, wake-loop refresh, live smoke, and secret
-  scrubbing. The console vault/MCP surface is also landed.
-- Custom skills are shipped (PR #174, `26f754d`): per-file storage and
-  validation, version admission, copy-at-create session snapshots, sandbox
-  materialization, and Pi 0.80.6 progressive-disclosure delivery.
-- Running-session deletion parity is shipped (PR #179, merge `ff2ae54`): the
-  hosted 400 contract is probed, and `DefaultSessionService` requires the
-  liveness guard at construction before deletion can mutate state.
-- The networking parity slice is merged to `main` via PR #180: CMA `limited`
-  host lists translate to normalized HTTPS/443 exact or `*.` wildcard allow
-  entries; hosted empty lists remain dark; unsupported unrestricted,
-  package-manager, and MCP flags are explicit 400s. Environment creation and
-  session admission validate before side effects, while legacy malformed rows
-  fail closed in the resolver. Native OMA networking remains unchanged.
-- Tool-config validation is merged to `main` via PR #181. Probe 63 established
-  the hosted builtin vocabulary, accepted policies, duplicate rejection,
-  implicit defaults, and validation precedence; OMA now enforces those closed
-  sets while keeping MCP names server-defined.
-- Multiagent honesty is merged to `main` via PR #182. Non-null
-  `multiagent` configurations now reject before persistence with a stable 400;
-  the full coordinator runtime remains deferred.
-- Glob/grep honesty merged via PR #183. The active `arc-g-cma-glob-probe`
-  branch adds probes 65/65b and plan 0131: CMA `glob` requires a separately
-  accounted, bounded, cancellable provider operation; provider-owned `grep`
-  remains separate.
-- Issues `#16`, `#107`, `#113`, and `#121` are closed. `#103`, `#118`, and `#119`
-  remain open follow-up work; PR #169 / issue #164 is the events-service split.
+  Docker/microsandbox providers, tools, skills, MCP, vault credentials, SSE,
+  CMA `glob`, and bidirectional session pagination. Sandbox and egress controls
+  intentionally exceed the hosted self-hosted baseline in several areas.
+- PR #184 shipped provider-owned, bounded, cancellable CMA `glob`; `grep`
+  remains disabled until providers own content search.
+- PR #185 shipped session-specific `{data,next_page,prev_page}` pagination with
+  signed, workspace-bound cursors and preserved ascending/descending order.
+- Probe 67 established hosted agent update/version behavior. Plan 0133 now
+  implements immutable revisions, optimistic updates, authenticated version
+  history, exact-version runtime pinning, and shared model-catalog admission in
+  PR #186; final review is pending.
+- Standing follow-ups remain `#103`, `#118`, and `#119`; consult GitHub rather
+  than this file for their current status.
 
 Treat lifecycle, restart recovery, storage ordering, idempotency, sandbox
 provider boundaries, and hosted parity as sharp edges, not routine CRUD.
+
+## Pre-v1 Compatibility Posture
+
+The repository is not public yet and currently has zero users. Until this
+changes, backward compatibility with earlier OMA builds is **not** a product
+requirement.
+
+- Prefer the cleanest correct schema, API boundary, and runtime invariant over
+  compatibility shims for unreleased behavior.
+- It is acceptable to reset development databases or make a deliberately
+  breaking internal migration when that materially simplifies the design.
+- Do not preserve obsolete constructors, optional capabilities, response
+  fields, or storage layouts solely because they existed on an earlier branch.
+- Add migration/backfill code only when it protects valuable test/development
+  data at low complexity or exercises a future production invariant; label it
+  as convenience rather than user compatibility.
+- This does **not** relax CMA wire-parity, security, durability, or atomicity
+  requirements. It only means old unreleased OMA behavior need not be carried
+  forward.
+
+Revisit this section before the first public release or external deployment;
+at that point compatibility and migration policy must become explicit.
 
 ## How We Work
 
@@ -329,64 +332,38 @@ A slice is done when:
 - issue/PR tracker state matches the code
 - deferred work is either fixed now or clearly ticketed
 
-## What Landed Recently (arcs since the last handoff)
+## What Landed Recently
 
-Full detail lives in-repo; this is the index + the one invariant to carry from each.
+Full history belongs in git, plans, and [PARITY.md](PARITY.md). The current
+load-bearing additions are:
 
-- **Coordinator seams** (ADR 0014; PRs #112/#114). Durable mode remains atomic
-  through the shared `DatabaseSync` transaction boundary; in-memory mode is
-  explicitly best-effort. *No await in the commit path* remains load-bearing.
-- **Request idempotency** (ADR 0015; PRs #116/#120). Completion stays inside the
-  domain transaction, with a status-guarded heartbeat for slow async creates.
-  Upload and streaming idempotency remain the deliberate `#118/#119` follow-up.
-- **Pi runtime and sandbox providers** (PRs #122/#123/#125; plans 0106/0107).
-  Interrupt coalescing, microsandbox-local, Docker isolation, explicit durable
-  workspace mounts, provider gates, and create-time capability rejection are
-  shipped. The runtime rollout policy itself is closed under issue #16.
-- **MCP connector and vault credentials** (PRs #167/#171/#172). Static bearer
-  and OAuth credentials, refresh coordination, runtime token injection,
-  validate, ticker wake-up, live smoke, and secret scrubbing are shipped.
-- **Console vault/MCP operations** (PR #173) provide credential browse, health,
-  and validation views without exposing secret material.
-- **Custom skills execution** (PR #174, `26f754d`). Upload validation, per-file
-  storage, attachment/read coupling, immutable session snapshots, sandbox
-  delivery, and Pi 0.80.6 resource-loader advertisement are all smoke-tested.
-- **Product parity tracker** (`PARITY.md`, `296582b`) is now the standing
-  source of truth for CMA gaps and deliberate post-v1 deferrals.
-- **Running-session delete parity** (PR #179, `ff2ae54`) is probe-backed and
-  constructor-guarded. A direct service caller cannot omit the liveness
-  preflight without failing construction/typecheck.
-- **CMA networking parity** (plan `0127`, probe 62) is merged via PR #180:
-  bounded hosted translation, fail-closed parsing, HTTPS transport enforcement,
-  API-400 mapping, and Docker/in-process policy coverage are in place.
-- **Tool-config validation** (plan `0128`, probe 63) is merged via PR #181:
-  hosted builtin names and permission policies are closed sets, duplicate
-  builtin configs are rejected, implicit defaults are materialized, and MCP
-  names remain server-defined.
-- **Multiagent honesty** (plan `0129`) is merged via PR #182: every non-null
-  configuration is rejected before persistence; null/absent values remain
-  compatible and legacy rows remain readable.
-- **Unsupported builtin honesty boundary** (plan `0130`, probe 64) merged via
-  PR #183: omitted `glob`, `grep`, `web_fetch`, and `web_search` materialize as
-  disabled deployment defaults; explicit configs reject only when effectively
-  enabled. PR #184 implements CMA `glob` with bounded NUL-streaming operations,
-  active cancellation, guest PID cleanup, defensive grammar, and verified
-  Docker/microsandbox coverage. Pi `find` is no longer model-facing. Agents
-  created during the PR #183 honesty window retain their persisted
-  `glob:false` override and must be recreated until agent update exists.
+- **Tool-surface honesty** (PRs #181–#183): closed builtin/policy validation,
+  explicit rejection of inert multiagent configuration, and disabled defaults
+  for unsupported provider-owned tools.
+- **CMA `glob`** (PR #184; plan 0131; probes 65/65b): NUL-safe enumeration,
+  bounded matching/output, cancellation, lifecycle cleanup, and poisoned
+  sandbox eviction across Docker and microsandbox.
+- **Session bidirectional pagination** (PR #185; plan 0132; probe 66): exact
+  session envelope, signed workspace-bound cursors, and order-preserving
+  backward traversal.
+- **Agent versioning evidence** (probe 67): hosted update, concurrency,
+  immutable history, session selection, and archive semantics are captured but
+  not yet implemented.
+
+Older shipped arcs remain documented in their ADRs, plans, and merge history;
+they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. **Probe bidirectional pagination** across sessions and each list resource,
-   then implement real backward-cursor semantics. Keep `grep` rejected until
-   providers own content search and a deterministic search-binary strategy.
-2. **Pagination and agent update/versioning** — probe pagination semantics,
-   then add the highest-value missing core workflow: agent update plus
-   versioning.
-3. **Standing queue (evidence-gated):** `#103` deployment hardening and
-   `#118/#119` upload + streaming idempotency. Postgres/async-store work remains
-   gated on a concrete multi-process need per ADR 0014; do not merge it
-   speculatively. PR #169 / issue #164 (events-service split) is parallelizable.
+1. Review plan 0133's implementation, especially migration atomicity,
+   exact-version runtime resolution, model-catalog ownership, and no-fallback
+   behavior. Merge only after the focused/full gates remain green.
+2. After merge, return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
+   environment images, followed by web tools.
+3. Keep provider-owned `grep` separate and disabled until its execution and
+   deterministic search-binary strategy are designed.
+4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+   gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent
 

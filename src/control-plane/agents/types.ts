@@ -1,6 +1,7 @@
 import type {
   CreateManagedAgentRequest,
   ManagedAgentsAgent,
+  ManagedAgentsAgentVersionsPage,
   ManagedAgentsListPage,
   ManagedAgentsMcpServer,
   ManagedAgentsModelConfig,
@@ -35,14 +36,30 @@ export interface CreateAgentRecord {
   row: AgentRow;
 }
 
+export interface UpdateAgentRecord {
+  expectedVersion: number;
+  row: AgentRow;
+}
+
 export interface ListAgentsOptions {
   page?: string;
   limit?: number;
   includeArchived?: boolean;
 }
 
+export interface ListAgentVersionsOptions {
+  page?: string;
+  limit?: number;
+}
+
+export interface AgentVersionsPage<T> {
+  data: T[];
+  next_page: string | null;
+}
+
 export interface AgentStore {
   create(record: CreateAgentRecord): AgentRow;
+  update(record: UpdateAgentRecord): AgentRow;
   retrieve(
     workspaceId: WorkspaceId,
     agentId: string,
@@ -51,6 +68,16 @@ export interface AgentStore {
     workspaceId: WorkspaceId,
     agentId: string,
   ): AgentRow | undefined;
+  retrieveVersion(
+    workspaceId: WorkspaceId,
+    agentId: string,
+    version: number,
+  ): AgentRow | undefined;
+  listVersions(
+    workspaceId: WorkspaceId,
+    agentId: string,
+    opts?: ListAgentVersionsOptions,
+  ): AgentVersionsPage<AgentRow>;
   archive(
     workspaceId: WorkspaceId,
     agentId: string,
@@ -68,10 +95,21 @@ export interface AgentService {
     workspaceId: WorkspaceId,
     input: unknown,
   ): ManagedAgentsAgent;
+  update(
+    workspaceId: WorkspaceId,
+    agentId: string,
+    input: unknown,
+  ): ManagedAgentsAgent;
   retrieve(
     workspaceId: WorkspaceId,
     agentId: string,
+    version?: number,
   ): ManagedAgentsAgent;
+  listVersions(
+    workspaceId: WorkspaceId,
+    agentId: string,
+    opts?: ListAgentVersionsOptions,
+  ): ManagedAgentsAgentVersionsPage;
   archive(
     workspaceId: WorkspaceId,
     agentId: string,

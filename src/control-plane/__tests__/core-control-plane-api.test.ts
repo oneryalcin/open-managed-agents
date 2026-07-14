@@ -95,6 +95,29 @@ describe("Core control-plane API", () => {
     await expect(retrieveRes.json()).resolves.toEqual(fromString);
   });
 
+  it("pins explicit historical agent versions while bare IDs select latest", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+    const update = await app.request(`/v1/agents/${agent.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, system: "version two" }),
+    });
+    expect(update.status).toBe(200);
+
+    const latest = await createSession(app, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+    const historical = await createSession(app, {
+      agent: { type: "agent", id: agent.id, version: 1 },
+      environment_id: environment.id,
+    });
+    expect(latest.agent).toEqual({ type: "agent", id: agent.id, version: 2 });
+    expect(historical.agent).toEqual({ type: "agent", id: agent.id, version: 1 });
+  });
+
   it("rejects requested agent versions that do not exist", async () => {
     const app = createInMemoryControlPlaneApp();
     const agent = await createAgent(app);
@@ -109,9 +132,9 @@ describe("Core control-plane API", () => {
           environment_id: environment.id,
         }),
       }),
-      400,
-      "invalid_request_error",
-      `Agent ${agent.id} has version 1; requested version 999 not found`,
+      404,
+      "not_found_error",
+      "agent.version: 999 not found",
     );
   });
 

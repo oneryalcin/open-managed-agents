@@ -90,6 +90,7 @@ export type PiSessionSkillsProvider = (workspaceId: WorkspaceId, sessionId: stri
 // used as-is by createAgentSession, and skillsOverride only runs inside reload().
 export function buildSessionSkillsResourceLoader(
   skills: readonly PiSessionSkillSnapshot[],
+  systemPrompt?: string,
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd: "/",
@@ -99,6 +100,7 @@ export function buildSessionSkillsResourceLoader(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
+    ...(systemPrompt === undefined ? {} : { systemPrompt }),
     skillsOverride: () => ({
       diagnostics: [],
       skills: skills.map((skill) => {
@@ -154,9 +156,24 @@ interface McpFailureBudgetEntry {
   fingerprint: string;
 }
 
+export interface PiModelCatalog {
+  provider: string;
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+}
+
+export function createPiModelCatalog(provider = "anthropic"): PiModelCatalog {
+  const authStorage = AuthStorage.create();
+  return {
+    provider,
+    authStorage,
+    modelRegistry: ModelRegistry.create(authStorage),
+  };
+}
+
 export class PiSessionRunner implements RuntimeEventRunner {
-  private readonly authStorage = AuthStorage.create();
-  private readonly modelRegistry = ModelRegistry.create(this.authStorage);
+  private readonly authStorage: AuthStorage;
+  private readonly modelRegistry: ModelRegistry;
   private readonly sessions = new Map<string, RuntimeHandle>();
   private readonly pendingSessions = new Map<string, Promise<RuntimeHandle>>();
   private readonly pendingInterrupts = new Map<string, Promise<void>>();
@@ -165,7 +182,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly toolPermissionBridge: PiToolPermissionBridge;
   private readonly preparingSessionAgents = new Map<
     string,
-    { workspaceId: WorkspaceId; agentId: string }
+    { workspaceId: WorkspaceId; agentId: string; agentVersion: number }
   >();
   private readonly preparingSessionSkills = new Map<string, readonly PiSessionSkillSnapshot[]>();
   private readonly idleTtlMs: number;
@@ -187,6 +204,12 @@ export class PiSessionRunner implements RuntimeEventRunner {
     private readonly opts: {
       provider?: string;
       model?: string;
+      modelCatalog?: PiModelCatalog;
+      agentRevision?: (
+        workspaceId: WorkspaceId,
+        sessionId: string,
+        context?: { agentId?: string; agentVersion?: number },
+      ) => { model: { id: string }; system: string | null } | undefined;
       thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
       idleTtlMs?: number;
       now?: () => number;
@@ -206,6 +229,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
       mcp?: PiMcpOptions;
     } = {},
   ) {
+    const catalog = opts.modelCatalog ?? createPiModelCatalog(opts.provider);
+    this.authStorage = catalog.authStorage;
+    this.modelRegistry = catalog.modelRegistry;
     this.resolveSandboxProviderFactory();
     this.idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
     this.now = opts.now ?? Date.now;
@@ -221,6 +247,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
           agentId:
             this.preparingSessionAgents.get(sessionId)?.workspaceId === workspaceId
               ? this.preparingSessionAgents.get(sessionId)?.agentId
+              : undefined,
+          agentVersion:
+            this.preparingSessionAgents.get(sessionId)?.workspaceId === workspaceId
+              ? this.preparingSessionAgents.get(sessionId)?.agentVersion
               : undefined,
         }) ?? { enabled: true, permission: "allow" },
       timeoutMs: opts.toolConfirmationTimeoutMs,
@@ -245,6 +275,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       this.preparingSessionAgents.set(sessionId, {
         workspaceId,
         agentId: opts.agent.id,
+        agentVersion: opts.agent.version,
       });
     }
     if (opts.skills) this.preparingSessionSkills.set(sessionId, opts.skills);
@@ -669,6 +700,21 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     const created = (async () => {
         const customToolContext = this.preparingSessionAgentContext(workspaceId, sessionId);
+        const agentRevision = this.opts.agentRevision?.(
+          workspaceId,
+          sessionId,
+          customToolContext,
+        );
+        const provider =
+          this.opts.modelCatalog?.provider ?? this.opts.provider ?? "anthropic";
+        const revisionModel = agentRevision === undefined
+          ? undefined
+          : this.modelRegistry.find(provider, agentRevision.model.id);
+        if (agentRevision !== undefined && revisionModel === undefined) {
+          throw new Error(
+            `Pi model not available: ${provider}/${agentRevision.model.id}`,
+          );
+        }
         const customToolNames = new Set(
           (this.opts.customTools?.(workspaceId, sessionId, customToolContext) ?? []).map(
             (tool) => tool.name,
@@ -725,6 +771,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
                   sessionId,
                   sandbox,
                   customToolContext,
+                  agentRevision,
+                  revisionModel,
                   mcp.toolDefinitions,
                 )
               : await this.sessionFactory(workspaceId, sessionId);
@@ -793,7 +841,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private async prepareMcp(
     workspaceId: WorkspaceId,
     sessionId: string,
-    context: { agentId?: string; vaultIds?: readonly string[] } | undefined,
+    context:
+      | { agentId?: string; agentVersion?: number; vaultIds?: readonly string[] }
+      | undefined,
   ): Promise<PreparedMcp> {
     const mcpOpts = this.opts.mcp;
     if (!mcpOpts) return EMPTY_MCP;
@@ -980,12 +1030,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
     sandbox: SandboxProvider | undefined,
-    context: { agentId?: string } | undefined,
+    context: { agentId?: string; agentVersion?: number } | undefined,
+    revision: { model: { id: string }; system: string | null } | undefined,
+    revisionModel: Exclude<ReturnType<ModelRegistry["find"]>, undefined> | undefined,
     mcpTools: readonly ToolDefinition<any, any, any>[] = [],
   ): Promise<PiRuntimeSession> {
-    const provider = this.opts.provider ?? "anthropic";
-    const modelId = this.opts.model ?? "claude-haiku-4-5";
-    const model = this.modelRegistry.find(provider, modelId);
+    const provider = this.opts.modelCatalog?.provider ?? this.opts.provider ?? "anthropic";
+    const modelId = revision?.model.id ?? this.opts.model ?? "claude-haiku-4-5";
+    const model = revisionModel ?? this.modelRegistry.find(provider, modelId);
     if (!model) {
       throw new Error(`Pi model not available: ${provider}/${modelId}`);
     }
@@ -1019,14 +1071,22 @@ export class PiSessionRunner implements RuntimeEventRunner {
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
       sessionManager: SessionManager.inMemory(),
-      resourceLoader: await this.createResourceLoader(workspaceId, sessionId),
+      resourceLoader: await this.createResourceLoader(
+        workspaceId,
+        sessionId,
+        revision?.system ?? undefined,
+      ),
     });
     return session;
   }
 
-  private async createResourceLoader(workspaceId: WorkspaceId, sessionId: string): Promise<DefaultResourceLoader> {
+  private async createResourceLoader(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    systemPrompt?: string,
+  ): Promise<DefaultResourceLoader> {
     const skills = this.preparingSessionSkills.get(sessionId) ?? this.opts.skills?.(workspaceId, sessionId) ?? [];
-    const loader = buildSessionSkillsResourceLoader(skills);
+    const loader = buildSessionSkillsResourceLoader(skills, systemPrompt);
     // createAgentSession only reload()s a loader it constructs itself; a
     // caller-provided one is used as-is. skillsOverride runs inside reload(),
     // so without this the model never sees <available_skills> even though the
@@ -1038,10 +1098,13 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private preparingSessionAgentContext(
     workspaceId: WorkspaceId,
     sessionId: string,
-  ): { agentId?: string } | undefined {
+  ): { agentId?: string; agentVersion?: number } | undefined {
     const preparing = this.preparingSessionAgents.get(sessionId);
     if (preparing?.workspaceId !== workspaceId) return undefined;
-    return { agentId: preparing.agentId };
+    return {
+      agentId: preparing.agentId,
+      agentVersion: preparing.agentVersion,
+    };
   }
 
   private resolveSandboxProviderFactory(): SandboxProviderFactory | undefined {

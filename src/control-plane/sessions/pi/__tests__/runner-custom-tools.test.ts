@@ -13,9 +13,10 @@ const sdk = vi.hoisted(() => {
     }
   }
 
+  const modelFind = vi.fn((_provider: string, id: string) => ({ id }));
   class MockModelRegistry {
-    static create(): { find: () => { id: string } } {
-      return { find: () => ({ id: "mock-model" }) };
+    static create(): { find: typeof modelFind } {
+      return { find: modelFind };
     }
   }
 
@@ -105,10 +106,14 @@ const sdk = vi.hoisted(() => {
   let lastCreateOptions: MockCreateOptions | undefined;
 
   type MockCreateOptions = {
+    model?: { id: string };
     noTools?: "all" | "builtin";
     tools?: string[];
     customTools?: MockToolDefinition[];
-    resourceLoader?: { getSkills(): { skills: Array<{ name: string; filePath: string; baseDir: string }>; diagnostics: unknown[] } };
+    resourceLoader?: {
+      systemPrompt?: string;
+      getSkills(): { skills: Array<{ name: string; filePath: string; baseDir: string }>; diagnostics: unknown[] };
+    };
   };
 
   // Faithful to real Pi 0.80.6: getSkills() stays empty until reload() runs
@@ -116,7 +121,10 @@ const sdk = vi.hoisted(() => {
   // assertions below go empty and fail — which is the bug the mock previously hid.
   class MockResourceLoader {
     private loaded: { skills: unknown[]; diagnostics: unknown[] } = { skills: [], diagnostics: [] };
-    constructor(private readonly opts: { skillsOverride?: (base: { skills: never[]; diagnostics: never[] }) => any }) {}
+    readonly systemPrompt: string | undefined;
+    constructor(private readonly opts: { systemPrompt?: string; skillsOverride?: (base: { skills: never[]; diagnostics: never[] }) => any }) {
+      this.systemPrompt = opts.systemPrompt;
+    }
     async reload() { this.loaded = this.opts.skillsOverride?.({ skills: [], diagnostics: [] }) ?? { skills: [], diagnostics: [] }; }
     getSkills() { return this.loaded; }
   }
@@ -139,6 +147,7 @@ const sdk = vi.hoisted(() => {
     ),
     lastSession: () => lastSession,
     lastCreateOptions: () => lastCreateOptions,
+    modelFind,
     setEmitBuiltinToolCallMessage: (value: boolean) => {
       emitBuiltinToolCallMessage = value;
     },
@@ -332,7 +341,7 @@ describe("PiSessionRunner custom-tool bridge", () => {
     expect(customTools).toHaveBeenCalledWith(
       "wrk_default",
       "sesn_prepared",
-      { agentId: "agent_1" },
+      { agentId: "agent_1", agentVersion: 1 },
     );
     expect(sdk.lastCreateOptions()).toMatchObject({
       noTools: "builtin",
@@ -341,6 +350,65 @@ describe("PiSessionRunner custom-tool bridge", () => {
     expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
       "ask_user",
     ]);
+  });
+
+  it("fails before tool setup when the pinned revision cannot resolve", async () => {
+    const customTools = vi.fn(() => [ASK_USER]);
+    const runner = new PiSessionRunner({
+      customTools,
+      idleTtlMs: 0,
+      agentRevision: () => {
+        throw new Error("missing pinned revision");
+      },
+    });
+
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_missing_revision", "ask")
+      [Symbol.asyncIterator]();
+    await expect(iterator.next()).rejects.toThrow("missing pinned revision");
+    expect(customTools).not.toHaveBeenCalled();
+    await runner.close();
+  });
+
+  it("does not fall back when the pinned model is unregistered", async () => {
+    sdk.modelFind.mockImplementationOnce(() => undefined as never);
+    const customTools = vi.fn(() => [ASK_USER]);
+    const runner = new PiSessionRunner({
+      customTools,
+      idleTtlMs: 0,
+      agentRevision: () => ({ model: { id: "missing-model" }, system: null }),
+    });
+
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_missing_model", "ask")
+      [Symbol.asyncIterator]();
+    await expect(iterator.next()).rejects.toThrow(
+      "Pi model not available: anthropic/missing-model",
+    );
+    expect(customTools).not.toHaveBeenCalled();
+    await runner.close();
+  });
+
+  it("selects the pinned revision model and system prompt", async () => {
+    const runner = new PiSessionRunner({
+      customTools: () => [ASK_USER],
+      customToolTimeoutMs: 0,
+      idleTtlMs: 0,
+      agentRevision: () => ({
+        model: { id: "claude-pinned-v1" },
+        system: "pinned system v1",
+      }),
+    });
+
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_pinned", "ask")
+      [Symbol.asyncIterator]();
+    await iterator.next();
+    expect(sdk.modelFind).toHaveBeenCalledWith("anthropic", "claude-pinned-v1");
+    expect(sdk.lastCreateOptions()?.model).toEqual({ id: "claude-pinned-v1" });
+    expect(sdk.lastCreateOptions()?.resourceLoader?.systemPrompt)
+      .toBe("pinned system v1");
+    await runner.close();
   });
 
   it("advertises snapshotted skills at container paths", async () => {
@@ -669,6 +737,60 @@ describe("PiSessionRunner custom-tool bridge", () => {
     expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
       "bash",
     ]);
+  });
+
+  it("uses the prepared agent version for builtin tools before the session row exists", async () => {
+    const bashTool = {
+      name: "bash",
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    };
+    const runner = new PiSessionRunner({
+      sandboxProviderFactory: async () =>
+        ({
+          cwd: "/workspace",
+          operations: {},
+          tools: [bashTool] as unknown as SandboxProvider["tools"],
+          toolNames: new Set(["bash"]),
+          invocations: {
+            total: 0,
+            byTool: {
+              bash: 0,
+              read: 0,
+              write: 0,
+              edit: 0,
+              find: 0,
+              glob: 0,
+              ls: 0,
+            },
+            toolCallIds: {
+              bash: new Set(),
+              read: new Set(),
+              write: new Set(),
+              edit: new Set(),
+              find: new Set(),
+              glob: new Set(),
+              ls: new Set(),
+            },
+          },
+          dispose: vi.fn(),
+        }) as unknown as SandboxProvider,
+      builtinToolAccess: (_workspaceId, _sessionId, toolName, context) => ({
+        enabled: toolName === "bash" && context?.agentVersion === 1,
+        permission: "allow",
+      }),
+      customToolTimeoutMs: 0,
+      idleTtlMs: 0,
+    });
+
+    await runner.prepareSession("wrk_default", "sesn_precommit_builtin", {
+      agent: { type: "agent", id: "agent_1", version: 1 },
+    });
+
+    expect(sdk.lastCreateOptions()?.tools).toEqual(["bash"]);
+    expect(sdk.lastCreateOptions()?.customTools?.map((tool) => tool.name)).toEqual([
+      "bash",
+    ]);
+    await runner.closeSession("wrk_default", "sesn_precommit_builtin");
   });
 });
 
