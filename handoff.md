@@ -357,8 +357,10 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Follow [ALPHA.md](ALPHA.md): clean-checkout onboarding and a local smoke
-   path are now the top priority before inviting external tinkering.
+1. Merge PR #189 and close plan 0135's OpenAPI/docs slice. Independent contract
+   and adversarial reviews are complete, and live screenshots verified the
+   vendored Swagger UI renders the full grouped route catalog, authentication
+   controls, and schemas from a local appliance.
 2. Run the screenshot-derived task-parity audit against the bundled console
    (`ui/managed-agents-console`) and define the minimum alpha happy path.
 3. Implement the minimum safe console mutations and session transcript/debug

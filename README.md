@@ -83,8 +83,10 @@ Detached lifecycle commands (`oma up --detach`, `oma
 logs`, and `oma down`) are planned but not implemented; keep the foreground
 terminal open for now.
 
-Interactive OpenAPI documentation at `/docs/` and a machine-readable
-`/openapi.json` are an alpha work item; they are not available yet.
+Interactive, air-gap-safe OpenAPI documentation is served at `/docs/`, with
+the same schema available to tools at `/openapi.json`. The documentation lists
+only routes OMA currently ships; workspace and admin credentials entered in
+the UI stay in page memory and are not persisted.
 
 Alternatively, run the appliance with Docker Compose:
 

@@ -102,6 +102,9 @@ sandbox provider and skips local Docker/microsandbox prerequisite checks.
 
 Implementation plan: [0135](docs/plans/0135-alpha-openapi-docs.md).
 
+Status: implemented and independently reviewed on `dev/alpha-openapi-docs`;
+live browser rendering verified; PR #189 is ready for merge.
+
 Goal: provide FastAPI-like discovery without publishing a hand-maintained spec
 that can drift from runtime behavior.
 
@@ -116,6 +119,15 @@ Deliverables:
 - generate the document from shared route schemas, or enforce equivalent
   route/spec coverage in tests;
 - omit unsupported CMA operations rather than advertising future behavior.
+
+Implementation notes:
+
+- a route-contract registry generates deterministic OpenAPI 3.1 JSON;
+- CI compares every shipped `/v1`, `/admin`, `/health`, and `/metrics` route
+  against that registry;
+- `swagger-ui-dist@5.32.8` is vendored as static assets with recorded license,
+  integrity, and file hashes—there is no runtime package or CDN dependency;
+- Swagger UI's remote validator and authorization persistence are disabled.
 
 ### 3. Console task-parity audit
 
