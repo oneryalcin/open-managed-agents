@@ -1,6 +1,7 @@
 # Plan 0135 -- Alpha OpenAPI and interactive API documentation
 
-Status: implemented; independent review and browser rendering check pending
+Status: implemented; independent reviews and live browser rendering complete;
+PR #189 ready for merge
 
 Date: 2026-07-14
 
@@ -73,3 +74,14 @@ server logs.
 - Representative examples execute successfully against a test appliance.
 - No unsupported endpoint or event capability is advertised.
 - Documentation assets make zero external network requests.
+
+## Verification
+
+- Independent contract and adversarial reviews found no remaining merge
+  blocker after the schema-accuracy fixes in `7825181`.
+- The full test suite passed with 1,128 tests and one intentional skip;
+  typecheck and `git diff --check` passed.
+- Redocly CLI validated the generated OpenAPI 3.1 document with zero warnings.
+- A live local appliance returned `/docs/` and `/openapi.json`; browser
+  screenshots verified that the vendored Swagger UI renders the title,
+  authorization control, grouped operations, route locks, and schema catalog.

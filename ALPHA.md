@@ -102,7 +102,8 @@ sandbox provider and skips local Docker/microsandbox prerequisite checks.
 
 Implementation plan: [0135](docs/plans/0135-alpha-openapi-docs.md).
 
-Status: implemented on `dev/alpha-openapi-docs`; independent review pending.
+Status: implemented and independently reviewed on `dev/alpha-openapi-docs`;
+live browser rendering verified; PR #189 is ready for merge.
 
 Goal: provide FastAPI-like discovery without publishing a hand-maintained spec
 that can drift from runtime behavior.

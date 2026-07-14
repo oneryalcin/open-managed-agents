@@ -357,11 +357,10 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Review and close plan 0135's OpenAPI/docs slice. The implementation on
-   `dev/alpha-openapi-docs` provides `/openapi.json`, vendored `/docs/`, and a
-   complete runtime-route/spec gate; browser rendering still needs a live
-   browser check because no browser backend was available in the implementation
-   session.
+1. Merge PR #189 and close plan 0135's OpenAPI/docs slice. Independent contract
+   and adversarial reviews are complete, and live screenshots verified the
+   vendored Swagger UI renders the full grouped route catalog, authentication
+   controls, and schemas from a local appliance.
 2. Run the screenshot-derived task-parity audit against the bundled console
    (`ui/managed-agents-console`) and define the minimum alpha happy path.
 3. Implement the minimum safe console mutations and session transcript/debug
