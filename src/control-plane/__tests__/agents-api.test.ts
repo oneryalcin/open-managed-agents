@@ -3,7 +3,7 @@ import { createInMemoryControlPlaneApp } from "./helpers.ts";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ApiErrorBody } from "../errors.ts";
 
-const DISABLED_UNSUPPORTED_BUILTINS = ["grep", "web_fetch", "web_search"]
+const DISABLED_UNSUPPORTED_BUILTINS = ["web_fetch", "web_search"]
   .map((name) => ({ name, enabled: false }));
 
 const VALID_AGENT = {
@@ -452,7 +452,7 @@ describe("agents API", () => {
 
   it("accepts executable builtin names and both hosted policies", async () => {
     const app = createInMemoryControlPlaneApp();
-    const names = ["bash", "edit", "glob", "read", "write"];
+    const names = ["bash", "edit", "glob", "grep", "read", "write"];
     const res = await app.request("/v1/agents", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -482,7 +482,7 @@ describe("agents API", () => {
 
   it("validates effective enablement for unsupported builtins", async () => {
     const app = createInMemoryControlPlaneApp();
-    for (const name of ["grep", "web_fetch", "web_search"]) {
+    for (const name of ["web_fetch", "web_search"]) {
       const res = await app.request("/v1/agents", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -511,7 +511,7 @@ describe("agents API", () => {
         tools: [{
           type: "agent_toolset_20260401",
           default_config: { enabled: true },
-          configs: [{ name: "grep" }],
+          configs: [{ name: "web_fetch" }],
         }],
       }),
     });
@@ -529,7 +529,7 @@ describe("agents API", () => {
         tools: [{
           type: "agent_toolset_20260401",
           default_config: { enabled: false },
-          configs: [{ name: "grep" }],
+          configs: [{ name: "web_fetch" }],
         }],
       }),
     });

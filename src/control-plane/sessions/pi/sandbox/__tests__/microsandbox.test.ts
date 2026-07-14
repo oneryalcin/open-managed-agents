@@ -12,6 +12,9 @@ import {
   assertInsideMicrosandboxWorkspace,
   buildMicrosandboxBashCommand,
   buildMicrosandboxFileAccessCommand,
+  buildMicrosandboxCmaGrepPreflightCommand,
+  buildMicrosandboxCmaGrepPatternCheckCommand,
+  buildMicrosandboxCmaGrepSearchCommand,
   buildMicrosandboxGlobEnumerationCommand,
   buildMicrosandboxKillProcessGroupCommand,
   buildMicrosandboxMkdirCommand,
@@ -201,6 +204,21 @@ describe("microsandbox command builders", () => {
         "oma.owner=open-managed-agents",
       ],
     );
+  });
+
+  it("builds CMA grep commands with LC_ALL=C and token ownership", () => {
+    const preflight = buildMicrosandboxCmaGrepPreflightCommand();
+    expect(preflight.script).toContain("LC_ALL=C grep -E -q");
+    expect(preflight.script).toContain("grep -Iq");
+    expect(preflight.script).toContain("read -r -d");
+    expect(buildMicrosandboxCmaGrepPatternCheckCommand("[abc]").script).toContain("LC_ALL=C grep -E -q");
+    const command = buildMicrosandboxCmaGrepSearchCommand("/workspace", "oma-grep-token", "needle");
+    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle"]);
+    expect(command.script).toContain("OMA_GREP_OWNER=$2");
+    expect(command.script).toContain("__OMA_GREP_READY__");
+    expect(command.script).toContain("find . -type f -print0");
+    expect(command.script).toContain("grep -Iq");
+    expect(command.script).toContain("grep -E -q");
   });
 
   it("generates stable provider-owned resource names with a uniqueness suffix", () => {
@@ -570,6 +588,10 @@ describe("microsandbox sandbox provider", () => {
     cli.queueExec(ok("README.md\nsrc\n"));
     cli.queueExec(ok("src/index.ts\n"));
     cli.queueExec(ok("__OMA_GLOB_READY__\0src/index.ts\0"));
+    cli.queueExec(ok(""));
+    cli.queueExec(ok(""));
+    cli.queueExec(ok("__OMA_GREP_READY__\0src/index.ts\0"));
+    cli.queueExec(ok(""));
     cli.queueExecSync(ok(""));
     cli.queueExecSync(ok(""));
     const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
@@ -606,6 +628,17 @@ describe("microsandbox sandbox provider", () => {
       maxOutputBytes: 64 * 1024,
       timeoutMs: 10_000,
     })).resolves.toEqual(["/workspace/src/index.ts"]);
+    await expect(provider.operations.grep.grep({
+      pattern: "value",
+      cwd: "/workspace",
+      glob: "*.ts",
+      context: 1,
+      headLimit: 100,
+      signal: new AbortController().signal,
+      maxRawBytes: 1024 * 1024,
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: 10_000,
+    })).resolves.toEqual(["/workspace/src/index.ts"]);
     provider.dispose();
 
     expect(cli.calls.slice(2, 8).map((call) => call.args[0])).toEqual([
@@ -624,6 +657,7 @@ describe("microsandbox sandbox provider", () => {
     expect(provider.invocations.byTool.ls).toBe(2);
     expect(provider.invocations.byTool.find).toBe(1);
     expect(provider.invocations.byTool.glob).toBe(1);
+    expect(provider.invocations.byTool.grep).toBe(1);
     const globCall = cli.calls.find((call) =>
       call.args.some((arg) => arg.includes("find . -type f -print0"))
     );
@@ -1350,6 +1384,9 @@ class RecordingMicrosandboxCli implements MicrosandboxCli {
     args: readonly string[],
     opts?: MicrosandboxCliExecOptions,
   ): Promise<MicrosandboxCliResult> {
+    if (args.some((arg) => arg.includes(".oma-grep-preflight-"))) {
+      return okResult("");
+    }
     this.calls.push({ mode: "async", args: [...args], opts });
     const action = this.execQueue.shift() ?? ok("");
     return action(opts);

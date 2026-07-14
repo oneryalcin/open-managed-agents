@@ -1,5 +1,10 @@
 # Plan 0134 -- Provider-owned CMA `grep`
 
+Status: implemented 2026-07-14 on `arc-j-cma-grep-probe`. The implementation
+uses provider-owned Docker/microsandbox execution with semantic preflight,
+bounded public inputs, NUL-safe path streaming, and POSIX `grep -E` under
+`LC_ALL=C`. Hosted ripgrep regex parity remains a documented future divergence.
+
 Date: 2026-07-14
 Status: ready for implementation
 Branch: `arc-j-cma-grep-probe`
@@ -43,13 +48,13 @@ Probe 68 adds the implementation-relevant edge behavior:
 
 ## Current OMA anchors
 
-- `grep` is a valid CMA builtin name but remains deployment-disabled in
-  `src/control-plane/agents/service.ts`.
-- `SandboxOperations` has provider-owned `glob` but no provider-owned `grep`
-  in `src/control-plane/sessions/pi/sandbox/provider.ts`.
-- `PiSessionRunner` exposes only provider tool definitions in
-  `enabledSandboxTools`; once providers include `grep`, permission and
-  confirmation wrapping follow the existing builtin path.
+- `grep` is a valid CMA builtin name and is no longer deployment-disabled in
+  `src/control-plane/agents/service.ts`; `web_fetch` and `web_search` remain
+  disabled.
+- `SandboxOperations` has provider-owned `glob` and `grep` in
+  `src/control-plane/sessions/pi/sandbox/provider.ts`.
+- `PiSessionRunner` exposes provider tool definitions in `enabledSandboxTools`;
+  permission and confirmation wrapping follow the existing builtin path.
 - Docker and microsandbox already have token-scoped command cleanup patterns
   for CMA `glob` in `src/control-plane/sessions/pi/sandbox/docker.ts` and
   `src/control-plane/sessions/pi/sandbox/microsandbox.ts`.
@@ -182,14 +187,14 @@ this validation.
 
 ### D6 -- Public exposure
 
-Keep `grep` in `OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES` until:
+`grep` was kept in `OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES` until:
 
 - Docker provider owns `grep`;
 - microsandbox provider owns `grep`;
 - runner/accounting tests show public event and accounting name `grep`;
 - permission and confirmation tests cover allow, ask, disabled, and denied.
 
-After those pass, remove only `grep` from deployment-disabled defaults.
+After those passed, remove only `grep` from deployment-disabled defaults.
 `web_fetch` and `web_search` remain disabled.
 
 ## Tests

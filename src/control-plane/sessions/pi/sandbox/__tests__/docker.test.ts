@@ -10,6 +10,9 @@ import {
   buildDockerExtractIntoContainerArgs,
   buildDockerExecShellArgs,
   buildDockerFileAccessCommand,
+  buildDockerCmaGrepPreflightCommand,
+  buildDockerCmaGrepPatternCheckCommand,
+  buildDockerCmaGrepSearchCommand,
   buildDockerGlobEnumerationCommand,
   buildDockerMkdirCommand,
   buildDockerNormalizeUploadsArgs,
@@ -214,6 +217,21 @@ describe("Docker sandbox provider command construction", () => {
       "cat \"$1\"",
       "/workspace/a.txt",
     ]);
+  });
+
+  it("builds CMA grep commands with LC_ALL=C and token ownership", () => {
+    const preflight = buildDockerCmaGrepPreflightCommand();
+    expect(preflight.script).toContain("LC_ALL=C grep -E -q");
+    expect(preflight.script).toContain("grep -Iq");
+    expect(preflight.script).toContain("read -r -d");
+    expect(buildDockerCmaGrepPatternCheckCommand("[abc]").script).toContain("LC_ALL=C grep -E -q");
+    const command = buildDockerCmaGrepSearchCommand("/workspace", "oma-grep-token", "needle");
+    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle"]);
+    expect(command.script).toContain("OMA_GREP_OWNER=$2");
+    expect(command.script).toContain("__OMA_GREP_READY__");
+    expect(command.script).toContain("find . -type f -print0");
+    expect(command.script).toContain("grep -Iq");
+    expect(command.script).toContain("grep -E -q");
   });
 
   it("builds root-owned upload materialization commands explicitly", () => {
@@ -577,6 +595,8 @@ case "$1" in
     ;;
   run)
     ;;
+  exec)
+    ;;
   *)
     printf 'unexpected docker command: %s\\n' "$1" >&2
     exit 1
@@ -641,6 +661,8 @@ case "$1" in
   run)
     ;;
   rm)
+    ;;
+  exec)
     ;;
   *)
     printf 'unexpected docker command: %s\\n' "$1" >&2
@@ -1168,7 +1190,19 @@ describe("Docker sandbox provider integration", () => {
         maxOutputBytes: 64 * 1024,
         timeoutMs: 10_000,
       })).resolves.toEqual(["/workspace/src/index.ts"]);
+      await expect(provider.operations.grep.grep({
+        pattern: "value = 2",
+        cwd: "/workspace",
+        glob: "*.ts",
+        context: 1,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/workspace/src/index.ts"]);
       expect(provider.invocations.byTool.glob).toBe(1);
+      expect(provider.invocations.byTool.grep).toBe(1);
       expect(provider.invocations.byTool.find).toBe(2);
 
       const chunks: Buffer[] = [];

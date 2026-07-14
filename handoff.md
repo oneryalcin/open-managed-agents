@@ -354,20 +354,17 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Build provider-owned CMA `grep` from plan 0134. Probe 64 established the
-   happy-path wire shape; probe 68 established edge behavior for path-list
-   output, no-match, `head_limit`, glob filtering, invalid regex, missing path,
-   binary-ish files, and the unclaimed omitted-path case. Plan 0134 chooses
-   in-guest BusyBox/POSIX `grep -E` for v1; ripgrep-compatible regex parity is
-   deferred. Public inputs are rejected before dispatch under plan 0134's
-   explicit byte/integer/glob bounds, and provider preflight runs under
-   `LC_ALL=C` against required ERE, quiet-output, and binary-detection behavior.
-2. Keep `grep` disabled until Docker and microsandbox own execution, limits,
-   cancellation, cleanup, accounting, permissions, and tests. Never expose Pi's
-   host-process `rg` path.
-3. After `grep`, return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
+1. Provider-owned CMA `grep` is now implemented from plan 0134. Probe 64
+   established the happy-path wire shape; probe 68 established edge behavior
+   for path-list output, no-match, `head_limit`, glob filtering, invalid regex,
+   missing path, binary-ish files, and the unclaimed omitted-path case. OMA v1
+   uses in-guest BusyBox/POSIX `grep -E` under `LC_ALL=C`; ripgrep-compatible
+   regex parity is deferred. Public inputs are rejected before dispatch under
+   plan 0134's explicit byte/integer/glob bounds, and provider preflight proves
+   required ERE, quiet-output, `read -d`, and binary-detection behavior.
+2. Next, return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
    environment images, followed by web tools.
-4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+3. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent
