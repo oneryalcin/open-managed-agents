@@ -92,6 +92,9 @@ still tracked separately in the roadmap.
   Arc A slice 1: the appliance launcher (now exposed as `oma up`) plus
   `startAppliance` defaults, first-boot key minting, Dockerfile/compose, and
   the no-build-step decision.
+- [Alpha OpenAPI documentation](plans/0135-alpha-openapi-docs.md) —
+  schema-backed `/openapi.json`, vendored `/docs/`, route/spec completeness,
+  and credential-safe interactive documentation.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
 - [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —

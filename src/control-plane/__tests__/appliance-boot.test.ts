@@ -50,10 +50,16 @@ describe("appliance boot (plan 0115)", () => {
     });
   }
 
-  it("first boot prints the minted key exactly once", async () => {
-    const { logs } = await boot({ OMA_HOME: makeHome() });
+  it("prints browser/API discovery and the first key exactly once", async () => {
+    const { appliance, logs } = await boot({ OMA_HOME: makeHome() });
     const keyLines = logs.filter((line) => KEY_LINE.test(line));
     expect(keyLines).toHaveLength(1);
+    expect(logs).toContain(`  console: http://127.0.0.1:${appliance.port}/console/`);
+    expect(logs).toContain(`  api: http://127.0.0.1:${appliance.port}`);
+
+    const root = await fetch(`http://127.0.0.1:${appliance.port}/`, { redirect: "manual" });
+    expect(root.status).toBe(302);
+    expect(root.headers.get("location")).toBe("/console/");
   });
 
   it("rejects unauthenticated requests after first boot", async () => {

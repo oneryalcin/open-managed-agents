@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +24,10 @@ if (command === "up") {
   await runUp(args.slice(1));
 } else if (command === "smoke") {
   await runSmoke(args.slice(1));
+} else if (command === "keys") {
+  await runKeys(args.slice(1));
+} else if (command === "workspaces") {
+  await runWorkspaces(args.slice(1));
 } else if (command === "down" || command === "logs" || command === "status") {
   fail(`${command} is not implemented yet. Run \`oma up\` in the foreground and use Ctrl-C to stop it.`);
 } else {
@@ -64,6 +69,60 @@ async function runUp(commandArgs) {
   );
 }
 
+async function runKeys(commandArgs) {
+  const [action, ...rest] = commandArgs;
+  if (action !== "mint" && action !== "list") {
+    fail("Usage: oma keys <mint|list> [--workspace id] [--label label] [--db path]");
+  }
+  let workspace = "wrk_default";
+  let label = "oma-cli";
+  let db = defaultDatabasePath();
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
+    if (arg === "--workspace") {
+      workspace = requiredOption(rest, ++index, arg);
+    } else if (arg === "--label" && action === "mint") {
+      label = requiredOption(rest, ++index, arg);
+    } else if (arg === "--db") {
+      db = requiredOption(rest, ++index, arg);
+    } else {
+      fail(`Unknown option for oma keys ${action}: ${arg}`);
+    }
+  }
+  const provisioningArgs = action === "mint"
+    ? ["mint-key", workspace, label, "--db", db]
+    : ["list-keys", workspace, "--db", db];
+  await runProvisioning(provisioningArgs);
+}
+
+async function runWorkspaces(commandArgs) {
+  const [action, ...rest] = commandArgs;
+  if (action !== "list") fail("Usage: oma workspaces list [--db path]");
+  let db = defaultDatabasePath();
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
+    if (arg === "--db") {
+      db = requiredOption(rest, ++index, arg);
+    } else {
+      fail(`Unknown option for oma workspaces list: ${arg}`);
+    }
+  }
+  await runProvisioning(["list-workspaces", "--db", db]);
+}
+
+async function runProvisioning(provisioningArgs) {
+  await runChild(
+    process.execPath,
+    [
+      "--experimental-transform-types",
+      "--disable-warning=ExperimentalWarning",
+      join(root, "scripts", "oma-workspaces.ts"),
+      ...provisioningArgs,
+    ],
+    process.env,
+  );
+}
+
 async function runSmoke(commandArgs) {
   let sandbox;
   for (let index = 0; index < commandArgs.length; index += 1) {
@@ -85,6 +144,16 @@ async function runSmoke(commandArgs) {
       ...(sandbox === undefined ? {} : { OMA_ALPHA_SANDBOX_PROVIDER: sandbox }),
     },
   );
+}
+
+function requiredOption(args, index, option) {
+  const value = args[index];
+  if (value === undefined || value.startsWith("--")) fail(`${option} requires a value`);
+  return value;
+}
+
+function defaultDatabasePath() {
+  return process.env.OMA_SQLITE_PATH ?? join(process.env.OMA_HOME ?? join(homedir(), ".oma"), "oma.sqlite");
 }
 
 function normalizeSandbox(value) {
@@ -142,13 +211,18 @@ function printHelp() {
 Usage:
   oma up [--sandbox docker|microsandbox]
   oma smoke [--sandbox docker|microsandbox]
+  oma keys mint [--workspace id] [--label label]
+  oma keys list [--workspace id]
+  oma workspaces list
   oma version
   oma help
 
 Commands:
   up       Start the durable local appliance in the foreground. Docker is the default.
-  smoke    Run the disposable end-to-end alpha smoke test.
-  version  Print the installed OMA version.
+  smoke      Run the disposable end-to-end alpha smoke test.
+  keys       Mint or list workspace API keys in the local appliance database.
+  workspaces List local appliance workspaces.
+  version    Print the installed OMA version.
 
 Environment:
   ANTHROPIC_API_KEY       Model credential used by the control plane.

@@ -358,6 +358,7 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     app.route("/admin", adminRoutes(services.admin.service));
   }
   if (services.console) {
+    app.get("/", (c) => c.redirect("/console/", 302));
     registerConsoleRoutes(app, services.console);
   }
   if (services.observability) {

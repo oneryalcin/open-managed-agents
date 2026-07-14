@@ -46,9 +46,11 @@ docker compose logs oma | grep x-api-key
 
 The first boot initializes storage under `OMA_HOME` (default `~/.oma`, `/data`
 in the container) and prints the initial workspace API key **once** — it is
-stored only as a hash. Auth defaults to `api-key`; port defaults to `4180`.
-Point any Anthropic SDK client at `http://127.0.0.1:4180` with that
-`x-api-key`.
+stored only as a hash. If it was not saved, `oma keys mint` creates a new key
+for the default local workspace while the server is running. Auth defaults to
+`api-key`; port defaults to `4180`. The startup output labels the console and
+API URLs, and `/` redirects browsers to `/console/`. Point any Anthropic SDK
+client at `http://127.0.0.1:4180` with that `x-api-key`.
 
 The same process serves the **operator console** at
 `http://127.0.0.1:4180/console` (plan 0120). Log in there with a workspace

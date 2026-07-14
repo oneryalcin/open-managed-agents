@@ -28,8 +28,9 @@ oma up
 ```
 
 `oma up` starts the durable appliance in the foreground with Docker-local
-sandboxing, stores data under `~/.oma`, and prints the first workspace API key
-once. Press Ctrl-C to stop it. In another terminal, run the disposable
+sandboxing, stores data under `~/.oma`, and prints the console URL and first
+workspace API key once. Visiting the bare server URL redirects to the console.
+Press Ctrl-C to stop it. In another terminal, run the disposable
 end-to-end check with:
 
 ```bash
@@ -56,8 +57,22 @@ To choose microsandbox for the durable server:
 oma up --sandbox microsandbox
 ```
 
-Detached lifecycle commands (`oma up --detach`, `oma logs`, and `oma down`)
-are planned but not implemented; keep the foreground terminal open for now.
+If the one-time first-boot key was not saved, mint another against the local
+appliance database while the server is running:
+
+```bash
+oma keys mint
+oma keys list
+oma workspaces list
+```
+
+Use `--workspace`, `--label`, or `--db` when operating on a non-default local
+workspace/database. Detached lifecycle commands (`oma up --detach`, `oma
+logs`, and `oma down`) are planned but not implemented; keep the foreground
+terminal open for now.
+
+Interactive OpenAPI documentation at `/docs/` and a machine-readable
+`/openapi.json` are an alpha work item; they are not available yet.
 
 Alternatively, run the appliance with Docker Compose:
 

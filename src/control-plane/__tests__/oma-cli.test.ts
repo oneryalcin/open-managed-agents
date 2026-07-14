@@ -18,6 +18,8 @@ describe("oma CLI", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("oma up [--sandbox docker|microsandbox]");
     expect(result.stdout).toContain("oma smoke");
+    expect(result.stdout).toContain("oma keys mint");
+    expect(result.stdout).toContain("oma workspaces list");
     expect(result.stdout).toContain("Planned, not implemented yet:");
     expect(result.stdout).toContain("oma up --detach");
     expect(result.stdout).toContain("oma logs");
@@ -39,6 +41,13 @@ describe("oma CLI", () => {
     const down = run(["down"]);
     expect(down.status).toBe(2);
     expect(down.stderr).toContain("down is not implemented yet");
+  });
+
+  it("validates local key-management arguments before provisioning", () => {
+    const result = run(["keys", "mint", "--workspace"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--workspace requires a value");
   });
 
   it("rejects unknown sandbox selections before startup", () => {

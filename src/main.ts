@@ -109,6 +109,8 @@ export async function startAppliance(
 
     const baseUrl = `http://${host}:${boundPort}`;
     log(`open-managed-agents listening on ${baseUrl}`);
+    log(`  console: ${baseUrl}/console/`);
+    log(`  api: ${baseUrl}`);
     log(`  data: ${resolved.OMA_SQLITE_PATH} | files: ${resolved.OMA_FILE_STORAGE_ROOT}`);
     log(`  auth: ${authMode}`);
     if (minted !== undefined) {

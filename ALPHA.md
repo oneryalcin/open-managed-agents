@@ -46,6 +46,8 @@ Deliverables:
   - `oma up` starts the durable foreground appliance with Docker-local by default;
   - `oma up --sandbox microsandbox` selects the opt-in provider;
   - `oma smoke` runs the disposable verification path;
+  - `oma keys mint|list` and `oma workspaces list` cover local operator recovery;
+  - the server prints the console URL and redirects `/` to `/console/`;
   - detached lifecycle (`oma up --detach`, `oma logs`, `oma down`) is documented
     but explicitly not implemented yet.
 - Add a local smoke command, `oma smoke` (also available as
@@ -95,7 +97,26 @@ OMA_ALPHA_KEEP_HOME=1 oma smoke
 server. Existing-server mode assumes the operator has already configured a
 sandbox provider and skips local Docker/microsandbox prerequisite checks.
 
-### 2. Console task-parity audit
+### 2. Schema-backed API documentation
+
+Implementation plan: [0135](docs/plans/0135-alpha-openapi-docs.md).
+
+Goal: provide FastAPI-like discovery without publishing a hand-maintained spec
+that can drift from runtime behavior.
+
+Deliverables:
+
+- expose machine-readable OpenAPI at `/openapi.json`;
+- serve a vendored, air-gap-safe interactive UI at `/docs/`;
+- document `x-api-key` and the required `anthropic-beta` header;
+- separate CMA-compatible `/v1` operations from OMA operator/admin operations;
+- include request/response/error schemas, examples, pagination, and SSE event
+  documentation;
+- generate the document from shared route schemas, or enforce equivalent
+  route/spec coverage in tests;
+- omit unsupported CMA operations rather than advertising future behavior.
+
+### 3. Console task-parity audit
 
 OMA already has a bundled console. The alpha question is therefore narrower
 than "build a UI": identify the minimum guided workflow the existing console
@@ -123,7 +144,7 @@ Output:
 - should-have after alpha;
 - defer / not pursuing pixel parity.
 
-### 3. Minimum safe console mutations
+### 4. Minimum safe console mutations
 
 The console currently supports browsing/admin surfaces better than end-to-end
 mutation flows. For alpha, enable only the safe minimum needed for the happy
@@ -138,7 +159,7 @@ path:
 
 Do not attempt full hosted-console parity in this slice.
 
-### 4. Session transcript and debug timeline
+### 5. Session transcript and debug timeline
 
 The console must make a session understandable without tailing logs or querying
 SQLite.
@@ -157,7 +178,7 @@ Minimum timeline requirements:
 This should use the real SSE event stream rather than a separate polling-only
 debug path.
 
-### 5. Event honesty
+### 6. Event honesty
 
 Make unsupported event behavior explicit before alpha users build against it.
 
@@ -172,7 +193,7 @@ Required:
 Full token-by-token preview streaming can be deferred if buffered
 `agent.message` remains correct and the console timeline is usable.
 
-### 6. Default environment image story
+### 7. Default environment image story
 
 The current default images are intentionally thin. For alpha users, the sandbox
 should be useful without immediately requiring a custom image.
@@ -186,7 +207,7 @@ Near-term target:
 - keep Python/Node/package-rich images as a later environment arc unless the
   smoke path requires them.
 
-### 7. Alpha release checklist
+### 8. Alpha release checklist
 
 Before inviting external tinkering:
 
