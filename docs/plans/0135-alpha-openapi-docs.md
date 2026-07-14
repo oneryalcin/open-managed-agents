@@ -1,7 +1,7 @@
 # Plan 0135 -- Alpha OpenAPI and interactive API documentation
 
-Status: implemented; independent reviews and live browser rendering complete;
-PR #189 ready for merge
+Status: complete; shipped in PR #189 (`e2bc6a3`); independent reviews and live
+browser rendering verification complete
 
 Date: 2026-07-14
 
