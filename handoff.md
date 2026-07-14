@@ -359,7 +359,9 @@ they are intentionally no longer repeated here.
    output, no-match, `head_limit`, glob filtering, invalid regex, missing path,
    binary-ish files, and the unclaimed omitted-path case. Plan 0134 chooses
    in-guest BusyBox/POSIX `grep -E` for v1; ripgrep-compatible regex parity is
-   deferred.
+   deferred. Public inputs are rejected before dispatch under plan 0134's
+   explicit byte/integer/glob bounds, and provider preflight runs under
+   `LC_ALL=C` against required ERE, quiet-output, and binary-detection behavior.
 2. Keep `grep` disabled until Docker and microsandbox own execution, limits,
    cancellation, cleanup, accounting, permissions, and tests. Never expose Pi's
    host-process `rg` path.

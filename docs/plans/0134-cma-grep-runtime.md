@@ -66,9 +66,9 @@ interface CmaGrepOperations {
     pattern: string;
     cwd: string;
     signal: AbortSignal;
-    path?: string;
+    path: string;
     glob?: string;
-    context?: number;
+    context: number;
     headLimit: number;
     maxRawBytes: number;
     maxOutputBytes: number;
@@ -103,14 +103,20 @@ shows `rg`, while OMA v1 uses POSIX extended regular expressions through
 provider-owned, bounded search inside the guest. Ripgrep-compatible Rust regex
 parity is deferred.
 
-Provider creation must preflight that the guest supports the required behavior
-before exposing `grep`:
+Provider creation must run a semantic preflight under `LC_ALL=C` before
+exposing `grep`; checking command presence or flags alone is insufficient. The
+preflight must prove:
 
-- `grep` exists and is executable;
-- `grep -E` accepts a valid extended regex;
-- `grep -q` is supported;
-- invalid regex produces a non-success status before traversal starts.
+1. a valid ERE match exits `0`;
+2. a valid ERE no-match exits `1`;
+3. an invalid ERE exits with neither `0` nor `1`;
+4. `-q` suppresses output;
+5. the exact NUL/binary-detection helper used by enumeration identifies a
+   NUL-containing sample and leaves a text sample classified as text.
 
+This is a POSIX-ERE behavioral capability check, not an assertion that every
+custom image contains a specific BusyBox build. Run all search and preflight
+commands with `LC_ALL=C` so locale-sensitive classes and matching do not drift.
 An incompatible custom image fails closed before model-facing `grep` is
 available. Do not silently fall back to host `rg`, host `grep`, or Pi's
 host-process grep path.
@@ -132,12 +138,32 @@ Reuse the `glob` lifecycle shape:
 Suggested initial constants mirror `glob` unless tests show tighter values are
 needed:
 
-- max matched files: `head_limit` clamped to 100;
+- max matched files: validated `head_limit`, never above 100;
 - raw stream: 1 MiB;
 - formatted output: 64 KiB;
 - timeout: 10 seconds.
 
-### D4 -- Path, glob, and regex semantics
+### D4 -- Public input bounds and defaults
+
+Validate before guest dispatch and reject invalid/excessive values as tool
+errors rather than silently clamping them:
+
+- `pattern`: required non-empty string, at most 4096 UTF-8 bytes;
+- `path`: required for OMA v1, non-empty absolute path, at most 4096 UTF-8
+  bytes;
+- `glob`: optional non-empty string; use the existing CMA glob pattern-length,
+  expansion, and matcher-state limits rather than introducing a second glob
+  grammar;
+- `context`: optional safe integer from 0 through 100, default `0`; accepted for
+  CMA wire compatibility but output-neutral because hosted returned only paths;
+- `head_limit`: optional safe integer from 1 through 100, default `100`;
+- reject unknown fields at the public tool-schema boundary.
+
+These are explicit OMA safety bounds where probe 68 did not establish hosted
+maximums. Provider APIs receive only normalized `context` and `headLimit` after
+this validation.
+
+### D5 -- Path, glob, and regex semantics
 
 - Resolve explicit absolute paths inside the sandbox boundary.
 - Treat explicit relative paths conservatively. For v1, reject them with a tool
@@ -154,7 +180,7 @@ needed:
 - Traverse filenames NUL-safely and emit paths exactly as public output. Do not
   normalize result ordering; hosted ordering was not stable.
 
-### D5 -- Public exposure
+### D6 -- Public exposure
 
 Keep `grep` in `OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES` until:
 
@@ -168,12 +194,14 @@ After those pass, remove only `grep` from deployment-disabled defaults.
 
 ## Tests
 
-- Tool schema: required `pattern`; optional `path`, `glob`, `context`,
-  `head_limit`; unknown fields rejected.
+- Tool schema: required bounded non-empty `pattern` and v1 `path`; optional
+  bounded `glob`, `context`, and `head_limit`; defaults/ranges above; unknown
+  fields rejected before dispatch.
 - Formatting: match paths, no-match text, `head_limit`, glob filtering,
   invalid regex error, missing path error.
-- Engine preflight: provider exposes `grep` only when guest `grep`, `grep -E`,
-  and `grep -q` behavior is available; incompatible custom images fail closed.
+- Engine preflight under `LC_ALL=C`: match=`0`, no-match=`1`, invalid ERE is
+  neither, `-q` emits no output, and the production NUL classifier distinguishes
+  binary-ish and text samples; incompatible custom images fail closed.
 - Provider boundaries: search cannot read host files; absolute paths must stay
   inside the sandbox; relative/omitted path rejection pinned.
 - Binary handling: files containing NUL bytes are skipped.
@@ -192,6 +220,8 @@ After those pass, remove only `grep` from deployment-disabled defaults.
 ## Acceptance criteria
 
 - No accepted `grep` configuration is inert.
+- Public inputs are rejected before dispatch unless they satisfy the explicit
+  byte, integer, glob-complexity, absolute-path, and unknown-field rules.
 - No model-facing `grep` reads from the control-plane host filesystem.
 - Docker and microsandbox own search execution, limits, cancellation, cleanup,
   accounting, and events.
