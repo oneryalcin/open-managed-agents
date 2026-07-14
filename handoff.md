@@ -38,6 +38,28 @@ implemented and awaiting review)._
 Treat lifecycle, restart recovery, storage ordering, idempotency, sandbox
 provider boundaries, and hosted parity as sharp edges, not routine CRUD.
 
+## Pre-v1 Compatibility Posture
+
+The repository is not public yet and currently has zero users. Until this
+changes, backward compatibility with earlier OMA builds is **not** a product
+requirement.
+
+- Prefer the cleanest correct schema, API boundary, and runtime invariant over
+  compatibility shims for unreleased behavior.
+- It is acceptable to reset development databases or make a deliberately
+  breaking internal migration when that materially simplifies the design.
+- Do not preserve obsolete constructors, optional capabilities, response
+  fields, or storage layouts solely because they existed on an earlier branch.
+- Add migration/backfill code only when it protects valuable test/development
+  data at low complexity or exercises a future production invariant; label it
+  as convenience rather than user compatibility.
+- This does **not** relax CMA wire-parity, security, durability, or atomicity
+  requirements. It only means old unreleased OMA behavior need not be carried
+  forward.
+
+Revisit this section before the first public release or external deployment;
+at that point compatibility and migration policy must become explicit.
+
 ## How We Work
 
 ### 1. Read before proposing
