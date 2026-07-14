@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,8 @@ if (command === "up") {
   await runKeys(args.slice(1));
 } else if (command === "workspaces") {
   await runWorkspaces(args.slice(1));
+} else if (command === "admin") {
+  runAdmin(args.slice(1));
 } else if (command === "down" || command === "logs" || command === "status") {
   fail(`${command} is not implemented yet. Run \`oma up\` in the foreground and use Ctrl-C to stop it.`);
 } else {
@@ -56,7 +59,13 @@ async function runUp(commandArgs) {
     ? { OMA_SANDBOX_PROVIDER: sandbox, OMA_ALLOW_DOCKER_LOCAL: "true" }
     : { OMA_SANDBOX_PROVIDER: sandbox, OMA_ALLOW_MICROSANDBOX_LOCAL: "true" };
 
+  const adminEnv = resolveAdminEnvironment();
   console.log(`Starting OMA with ${sandbox}`);
+  if (adminEnv.OMA_ADMIN_KEY_FILE !== undefined) {
+    console.log(`Admin mode: ${adminEnv.OMA_ADMIN_KEY_FILE}`);
+  } else if (process.env.OMA_ADMIN_KEY !== undefined) {
+    console.log("Admin mode: OMA_ADMIN_KEY environment variable");
+  }
   console.log("Press Ctrl-C to stop. Durable data defaults to ~/.oma.\n");
   await runChild(
     process.execPath,
@@ -65,8 +74,60 @@ async function runUp(commandArgs) {
       "--disable-warning=ExperimentalWarning",
       join(root, "src", "main.ts"),
     ],
-    { ...process.env, ...sandboxEnv },
+    { ...process.env, ...sandboxEnv, ...adminEnv },
   );
+}
+
+function runAdmin(commandArgs) {
+  const [action, ...rest] = commandArgs;
+  if (action === "init") {
+    let path = defaultAdminKeyPath();
+    for (let index = 0; index < rest.length; index += 1) {
+      const arg = rest[index];
+      if (arg === "--file") {
+        path = requiredOption(rest, ++index, arg);
+      } else {
+        fail(`Unknown option for oma admin init: ${arg}`);
+      }
+    }
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const key = randomBytes(32).toString("base64");
+    try {
+      writeFileSync(path, `${key}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      chmodSync(path, 0o600);
+    } catch (error) {
+      if (error?.code === "EEXIST") {
+        fail(`Admin key file already exists at ${path}. Refusing to overwrite it.`);
+      }
+      throw error;
+    }
+    console.log(`Admin key initialized at ${path}`);
+    console.log(`Admin key: ${key}`);
+    console.log("This key grants appliance-wide administration. Store it securely.");
+    console.log("Restart `oma up` to enable console admin mode.");
+    return;
+  }
+  if (action === "status") {
+    if (rest.length !== 0) fail("Usage: oma admin status");
+    if (process.env.OMA_ADMIN_KEY !== undefined && process.env.OMA_ADMIN_KEY !== "") {
+      console.log("Admin mode is configured through OMA_ADMIN_KEY.");
+      return;
+    }
+    const path = defaultAdminKeyPath();
+    if (!existsSync(path)) {
+      console.log(`Admin mode is not configured. Run \`oma admin init\` to create ${path}.`);
+      return;
+    }
+    const mode = statSync(path).mode & 0o777;
+    console.log(`Admin key file: ${path}`);
+    console.log(`Permissions: ${mode.toString(8).padStart(3, "0")}`);
+    console.log("Admin mode will be enabled the next time `oma up` starts.");
+    return;
+  }
+  if (action === "rotate") {
+    fail("Admin key rotation is not implemented yet. Preserve the existing key file.");
+  }
+  fail("Usage: oma admin <init|status>");
 }
 
 async function runKeys(commandArgs) {
@@ -153,7 +214,21 @@ function requiredOption(args, index, option) {
 }
 
 function defaultDatabasePath() {
-  return process.env.OMA_SQLITE_PATH ?? join(process.env.OMA_HOME ?? join(homedir(), ".oma"), "oma.sqlite");
+  return process.env.OMA_SQLITE_PATH ?? join(defaultOmaHome(), "oma.sqlite");
+}
+
+function defaultOmaHome() {
+  return process.env.OMA_HOME ?? join(homedir(), ".oma");
+}
+
+function defaultAdminKeyPath() {
+  return process.env.OMA_ADMIN_KEY_FILE ?? join(defaultOmaHome(), "admin.key");
+}
+
+function resolveAdminEnvironment() {
+  if (process.env.OMA_ADMIN_KEY !== undefined || process.env.OMA_ADMIN_KEY_FILE !== undefined) return {};
+  const path = defaultAdminKeyPath();
+  return existsSync(path) ? { OMA_ADMIN_KEY_FILE: path } : {};
 }
 
 function normalizeSandbox(value) {
@@ -214,6 +289,8 @@ Usage:
   oma keys mint [--workspace id] [--label label]
   oma keys list [--workspace id]
   oma workspaces list
+  oma admin init
+  oma admin status
   oma version
   oma help
 
@@ -221,8 +298,9 @@ Commands:
   up       Start the durable local appliance in the foreground. Docker is the default.
   smoke      Run the disposable end-to-end alpha smoke test.
   keys       Mint or list workspace API keys in the local appliance database.
-  workspaces List local appliance workspaces.
-  version    Print the installed OMA version.
+  workspaces  List local appliance workspaces.
+  admin       Initialize or inspect local appliance admin mode.
+  version     Print the installed OMA version.
 
 Environment:
   ANTHROPIC_API_KEY       Model credential used by the control plane.
@@ -234,7 +312,8 @@ Planned, not implemented yet:
   oma up --detach
   oma status
   oma logs
-  oma down`);
+  oma down
+  oma admin rotate`);
 }
 
 function fail(message) {

@@ -67,7 +67,19 @@ oma workspaces list
 ```
 
 Use `--workspace`, `--label`, or `--db` when operating on a non-default local
-workspace/database. Detached lifecycle commands (`oma up --detach`, `oma
+workspace/database. Appliance-wide admin mode remains opt-in:
+
+```bash
+oma admin init     # writes ~/.oma/admin.key with mode 0600 and prints it once
+oma admin status
+# restart oma up after initialization
+```
+
+`oma up` automatically uses that local admin-key file when present. It is not
+created on ordinary first boot because most single-workspace users do not need
+cross-workspace admin HTTP routes. Rotation is deliberately deferred.
+
+Detached lifecycle commands (`oma up --detach`, `oma
 logs`, and `oma down`) are planned but not implemented; keep the foreground
 terminal open for now.
 

@@ -47,6 +47,7 @@ Deliverables:
   - `oma up --sandbox microsandbox` selects the opt-in provider;
   - `oma smoke` runs the disposable verification path;
   - `oma keys mint|list` and `oma workspaces list` cover local operator recovery;
+  - `oma admin init|status` provides explicit, owner-only local admin setup;
   - the server prints the console URL and redirects `/` to `/console/`;
   - detached lifecycle (`oma up --detach`, `oma logs`, `oma down`) is documented
     but explicitly not implemented yet.

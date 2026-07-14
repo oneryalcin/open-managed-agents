@@ -170,10 +170,24 @@ in-memory stores could never hold a provisioned key.
 Design: [0119 — Admin API](plans/0119-admin-api.md) and
 [0120 — Dashboard](plans/0120-dashboard.md).
 
-Setting `OMA_ADMIN_KEY` (or `OMA_ADMIN_KEY_FILE`) enables authenticated
-`/admin` HTTP routes — create/list workspaces, mint/list/revoke keys — and
-with them the console's admin mode. The key must be 32 random bytes,
-base64-encoded (same format as `OMA_MASTER_KEY`):
+Admin mode is intentionally opt-in. For the local appliance, initialize it
+with:
+
+```bash
+oma admin init
+oma admin status
+# restart oma up
+```
+
+This writes `~/.oma/admin.key` atomically with mode `0600`; `oma up`
+automatically supplies it as `OMA_ADMIN_KEY_FILE`. The command refuses to
+overwrite an existing key and prints the generated value once for console
+login. Setting `OMA_ADMIN_KEY` or `OMA_ADMIN_KEY_FILE` directly remains
+supported and takes precedence.
+
+An admin key enables authenticated `/admin` HTTP routes — create/list
+workspaces, mint/list/revoke keys — and with them the console's admin mode. The
+key must be 32 random bytes, base64-encoded (same format as `OMA_MASTER_KEY`):
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
