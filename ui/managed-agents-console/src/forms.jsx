@@ -32,7 +32,7 @@ function Labeled({ label, opt, hint, children }) {
 }
 
 // ─────────── Create session ───────────
-function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAgent, onClose, onCreate }) {
+function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAgent, onClose, onCreate, apiMode = 'demo', api = window.OmaConsoleApi }) {
   // active agents, plus the preset agent even if archived/just-created
   const choices = agents.filter((a) => a.status === 'active' || (presetAgent && a.id === presetAgent.id));
   const [agentId, setAgentId] = useStateF((presetAgent && presetAgent.id) || (choices[0] && choices[0].id));
@@ -40,31 +40,97 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
   const [customEnv, setCustomEnv] = useStateF('');
   const [title, setTitle] = useStateF('');
   const [msg, setMsg] = useStateF('');
+  const [busy, setBusy] = useStateF(false);
+  const [error, setError] = useStateF('');
+  const [partial, setPartial] = useStateF(null);
+  const [sessionIntent] = useStateF(() => api?.createIdempotencyIntent?.());
+  const [eventIntent] = useStateF(() => api?.createIdempotencyIntent?.());
 
   const agent = agents.find((a) => a.id === agentId);
   const usingCustom = env === '__custom';
   const finalEnv = usingCustom ? customEnv.trim() : env;
-  const valid = !!agentId && !!finalEnv;
+  const valid = !!agentId && !!finalEnv && !busy;
+  const live = apiMode === 'api';
+  const initialMessageEvent = () => ({
+    type: 'user.message',
+    content: [{ type: 'text', text: msg.trim() }],
+  });
 
-  const submit = () => {
+  const demoSession = () => ({
+    id:'sesn_01' + Math.random().toString(36).slice(2, 8) + '…new',
+    short:'sesn_…' + Math.random().toString(36).slice(2, 8),
+    title: title.trim() || (msg.trim() ? msg.trim().slice(0, 42) : 'Untitled session'),
+    status: msg.trim() ? 'running' : 'idle',
+    agent: agent.name, env: finalEnv,
+    created:'Just now', updated:'Just now', dur:'—', tokens:'0 / 0', resources:0,
+  });
+
+  const submit = async () => {
     if (!valid) return;
-    onCreate({
-      id:'sesn_01' + Math.random().toString(36).slice(2, 8) + '…new',
-      short:'sesn_…' + Math.random().toString(36).slice(2, 8),
-      title: title.trim() || (msg.trim() ? msg.trim().slice(0, 42) : 'Untitled session'),
-      status: msg.trim() ? 'running' : 'idle',
-      agent: agent.name, env: finalEnv,
-      created:'Just now', updated:'Just now', dur:'—', tokens:'0 / 0', resources:0,
-    });
+    setBusy(true);
+    setError('');
+    setPartial(null);
+    if (!live) {
+      onCreate(demoSession());
+      setBusy(false);
+      return;
+    }
+    const body = {
+      agent: agentId,
+      environment_id: finalEnv,
+      ...(title.trim() ? { title: title.trim() } : {}),
+    };
+    try {
+      const session = await api.createSession(body, {
+        intent: sessionIntent,
+        agentNames: new Map(agents.map((item) => [item.id, item.name])),
+      });
+      if (!msg.trim()) {
+        onCreate({ ...session, firstMessage: { status: 'not_sent' } });
+        return;
+      }
+      try {
+        const firstMessage = await api.sendSessionEvents(session.id, [initialMessageEvent()], {
+          intent: eventIntent,
+        });
+        onCreate({ ...session, status:'running', firstMessage: { status:'sent', response:firstMessage } });
+      } catch (messageError) {
+        setPartial({ session, error: messageError.message || 'First message failed.' });
+        setError(`Session ${session.short || session.id} was created, but the first message was not accepted: ${messageError.message || 'Request failed'}`);
+      }
+    } catch (createError) {
+      setError(createError.message || 'Session creation failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const retryFirstMessage = async () => {
+    if (!partial || !msg.trim() || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const firstMessage = await api.sendSessionEvents(partial.session.id, [initialMessageEvent()], {
+        intent: eventIntent,
+      });
+      onCreate({ ...partial.session, status:'running', firstMessage: { status:'sent_after_retry', response:firstMessage } });
+    } catch (messageError) {
+      setError(`Session ${partial.session.short || partial.session.id} exists, but the first message retry failed: ${messageError.message || 'Request failed'}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <Modal icon="activity" title="Create session" sub="Start a new Managed Agents session against a local environment." onClose={onClose}
       footer={<>
-        <span className="left">Sends to <span className="mono">POST /v1/sessions</span></span>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={!valid} onClick={submit} style={{ opacity: valid ? 1 : .5 }}>
-          <Icon name="plus" size={15} />Create session</button>
+        <span className="left">Sends to <span className="mono">POST /v1/sessions</span>{msg.trim() && <> then <span className="mono">POST /v1/sessions/:id/events</span></>}</span>
+        <button className="btn" onClick={onClose}>{partial ? 'Close' : 'Cancel'}</button>
+        {partial && <button className="btn" disabled={busy} onClick={() => onCreate(partial.session)}>Open session</button>}
+        {partial && msg.trim() && <button className="btn btn-primary" disabled={busy} onClick={retryFirstMessage} style={{ opacity: busy ? .5 : 1 }}>
+          <Icon name="send" size={15} />Retry message</button>}
+        {!partial && <button className="btn btn-primary" disabled={!valid} onClick={submit} style={{ opacity: valid ? 1 : .5 }}>
+          <Icon name="plus" size={15} />{busy ? 'Creating…' : 'Create session'}</button>}
       </>}>
       <Labeled label="Agent">
         <select className="selectbox" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
@@ -94,29 +160,58 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
       <Labeled label="First message" opt hint="Send an initial user.message — the session starts running immediately.">
         <textarea className="textarea" placeholder="Send a message to start the session…" value={msg} onChange={(e) => setMsg(e.target.value)} />
       </Labeled>
+      {error && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{error}</span></div>}
     </Modal>
   );
 }
 
 // ─────────── Create agent ───────────
-function CreateAgent({ onClose, onCreate }) {
+function CreateAgent({ onClose, onCreate, apiMode = 'demo', api = window.OmaConsoleApi }) {
   const [name, setName] = useStateF('');
-  const [model, setModel] = useStateF(MODELS[1]);
+  const [model, setModel] = useStateF(MODELS[0]);
   const [prompt, setPrompt] = useStateF('');
   const [tools, setTools] = useStateF(['bash']);
+  const [busy, setBusy] = useStateF(false);
+  const [error, setError] = useStateF('');
 
-  const valid = name.trim().length > 0;
+  const valid = name.trim().length > 0 && model.trim().length > 0 && !busy;
+  const live = apiMode === 'api';
   const toggle = (t) => setTools(tools.includes(t) ? tools.filter((x) => x !== t) : [...tools, t]);
 
-  const submit = () => {
+  const demoAgent = () => ({
+    id:'agent_01' + Math.random().toString(36).slice(2, 8) + '…new',
+    short:'agent_…' + Math.random().toString(36).slice(2, 8),
+    name: name.trim(), model, status:'active', created:'Just now', updated:'Just now', version:'v1',
+    tools: tools.length, system: prompt.trim() || 'No system prompt set.',
+    toolset:'agent_toolset_20260401', sessions:[],
+  });
+
+  const submit = async () => {
     if (!valid) return;
-    onCreate({
-      id:'agent_01' + Math.random().toString(36).slice(2, 8) + '…new',
-      short:'agent_…' + Math.random().toString(36).slice(2, 8),
-      name: name.trim(), model, status:'active', created:'Just now', updated:'Just now', version:'v1',
-      tools: tools.length, system: prompt.trim() || 'No system prompt set.',
-      toolset:'agent_toolset_20260401', sessions:[],
-    });
+    setBusy(true);
+    setError('');
+    if (!live) {
+      onCreate(demoAgent());
+      setBusy(false);
+      return;
+    }
+    const body = {
+      name: name.trim(),
+      model: model.trim(),
+      ...(prompt.trim() ? { system: prompt.trim() } : {}),
+      tools: [{
+        type: 'agent_toolset_20260401',
+        configs: TOOL_OPTIONS.map((tool) => ({ name:tool, enabled:tools.includes(tool) })),
+      }],
+    };
+    try {
+      const agent = await api.createAgent(body);
+      onCreate(agent);
+    } catch (createError) {
+      setError(createError.message || 'Agent creation failed. Refresh the agent list before retrying if the request may have reached the server.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -125,16 +220,15 @@ function CreateAgent({ onClose, onCreate }) {
         <span className="left">Sends to <span className="mono">POST /v1/agents</span></span>
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn btn-primary" disabled={!valid} onClick={submit} style={{ opacity: valid ? 1 : .5 }}>
-          <Icon name="plus" size={15} />Create agent</button>
+          <Icon name="plus" size={15} />{busy ? 'Creating…' : 'Create agent'}</button>
       </>}>
       <div className="form-row two">
         <Labeled label="Name">
           <input className="input" placeholder="e.g. cwc-agent" value={name} onChange={(e) => setName(e.target.value)} />
         </Labeled>
         <Labeled label="Model">
-          <select className="selectbox mono" value={model} onChange={(e) => setModel(e.target.value)}>
-            {MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
+          <input className="input mono" list="oma-model-suggestions" value={model} onChange={(e) => setModel(e.target.value)} />
+          <datalist id="oma-model-suggestions">{MODELS.map((m) => <option key={m} value={m} />)}</datalist>
         </Labeled>
       </div>
 
@@ -147,14 +241,17 @@ function CreateAgent({ onClose, onCreate }) {
           {TOOL_OPTIONS.map((t) => {
             const on = tools.includes(t);
             return (
-              <span key={t} className={'tool-toggle' + (on ? ' on' : '')} onClick={() => toggle(t)}>
+              <button type="button" key={t} className={'tool-toggle' + (on ? ' on' : '')}
+                aria-pressed={on} onClick={() => toggle(t)}>
                 <span className="chk">{on && <Icon name="checkCircle" size={9} />}</span>
                 <span className="mono">{t}</span>
-              </span>
+              </button>
             );
           })}
         </div>
       </Labeled>
+      {live && <div className="field-hint">Only the currently supported sandbox-backed tools are offered. Disabled tools are persisted explicitly.</div>}
+      {error && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{error}</span></div>}
     </Modal>
   );
 }

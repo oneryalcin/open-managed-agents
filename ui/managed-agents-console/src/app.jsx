@@ -77,7 +77,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 function routeHash(route) {
   if (route.name === 'session') return `#session=${encodeURIComponent(route.session.id)}`;
   if (route.name === 'agent') return `#agent=${encodeURIComponent(route.agent.id)}`;
+  if (route.name === 'start') return '#start';
   if (route.name === 'agents') return '#agents';
+  if (route.name === 'environments') return '#environments';
   if (route.name === 'files') return '#files';
   if (route.name === 'vaults') return route.vaultId ? `#vault=${encodeURIComponent(route.vaultId)}` : '#vaults';
   if (route.name === 'credentialHealth') return `#credential-health=${encodeURIComponent(route.workspaceId)}`;
@@ -109,7 +111,9 @@ function readRouteTarget(sessions, agents) {
     const agent = agents.find((item) => item.id === agentId || item.short === agentId);
     if (agent) return { name:'agent', agent };
   }
+  if (rawHash === 'start') return { name:'start' };
   if (rawHash === 'agents') return { name:'agents' };
+  if (rawHash === 'environments') return { name:'environments' };
   if (rawHash === 'files') return { name:'files' };
   if (rawHash === 'vaults') return { name:'vaults' };
   if (hashParams.get('vault')) return { name:'vaults', vaultId:hashParams.get('vault') };
@@ -120,14 +124,15 @@ function readRouteTarget(sessions, agents) {
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const demoMode = new URLSearchParams(window.location.search).get('mode') === 'demo';
-  const [route, setRoute] = useState({ name:'sessions' });
+  const [route, setRoute] = useState({ name:'start' });
   const [sessions, setSessions] = useState(SESSIONS);
   const [agents, setAgents] = useState(AGENTS);
   const [environments, setEnvironments] = useState(ENVIRONMENTS);
   const [files, setFiles] = useState(FILES);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [apiState, setApiState] = useState({ state:'loading', mode: demoMode ? 'demo' : 'api', error:null, warnings:[] });
-  const [modal, setModal] = useState(null);   // { kind:'session', presetAgent } | { kind:'agent' }
+  const [modal, setModal] = useState(null);   // { kind:'session', presetAgent } | { kind:'agent' } | { kind:'environment' }
+  const [createdEnvironmentId, setCreatedEnvironmentId] = useState(null);
   // Auth phase (plan 0120 §3.4): 'boot' tries /v1 once without a key (an
   // auth-disabled server just works); a 401 lands on 'login' instead of the
   // old silent demo-data fallback. Keys themselves live in api.js memory.
@@ -201,7 +206,9 @@ function App() {
     setAuth((a) => ({ ...a, busy:true, error:null }));
     OmaConsoleApi.setWorkspaceKey(key);
     loadLiveData()
-      .then(() => setAuth((a) => ({ ...a, phase:'ready', busy:false, error:null })))
+      .then(() => {
+        setAuth((a) => ({ ...a, phase:'ready', busy:false, error:null }));
+      })
       .catch((error) => {
         setAuth((a) => ({ ...a, busy:false, error: error.status === 401
           ? 'The server rejected that workspace key.'
@@ -211,7 +218,10 @@ function App() {
   const browseAsWorkspace = (plaintextKey) => {
     OmaConsoleApi.setWorkspaceKey(plaintextKey);
     loadLiveData()
-      .then(() => { setRoute({ name:'sessions' }); writeRouteHash({ name:'sessions' }); })
+      .then(() => {
+        setRoute({ name:'sessions' });
+        writeRouteHash({ name:'sessions' });
+      })
       .catch((error) => {
         // A just-minted key failing to browse is worth a loud re-login, not
         // a silently ignored click.
@@ -220,6 +230,9 @@ function App() {
       });
   };
   const reauth = () => setAuth((a) => ({ ...a, phase:'login', admin:false, error:'Session expired — the admin key was rejected. Enter it again.' }));
+  const workspaceReauth = () => {
+    setAuth((a) => ({ ...a, phase:'login', admin:false, error:'Session expired — the workspace key was rejected. Enter it again.' }));
+  };
 
   const go = (name) => {
     const next = { name };
@@ -250,41 +263,54 @@ function App() {
     setRoute(next);
     writeRouteHash(next);
   };
-  const readOnly = apiState.mode !== 'demo';
+  const mutationReadOnly = apiState.mode === 'mock';
+  const lifecycleReadOnly = apiState.mode !== 'demo';
 
   const createSession = (preset) => {
-    if (readOnly) return;
+    if (mutationReadOnly) return;
     setModal({ kind:'session', presetAgent: preset });
   };
   const createAgent = () => {
-    if (readOnly) return;
+    if (mutationReadOnly) return;
     setModal({ kind:'agent' });
+  };
+  const createEnvironment = () => {
+    if (apiState.mode !== 'api') return;
+    setModal({ kind:'environment' });
   };
 
   const onSessionCreated = (s) => {
-    if (readOnly) return;
+    if (mutationReadOnly) return;
     setSessions((prev) => [s, ...prev]);
     setModal(null);
     openSession(s);
   };
   const onAgentCreated = (a) => {
-    if (readOnly) return;
+    if (mutationReadOnly) return;
     setAgents((prev) => [a, ...prev]);
     setModal(null);
     openAgent(a);
   };
+  const onEnvironmentCreated = (environment) => {
+    setEnvironments((prev) => [environment, ...prev]);
+    setCreatedEnvironmentId(environment.id);
+    setModal(null);
+    const next = { name:'environments' };
+    setRoute(next);
+    writeRouteHash(next);
+  };
 
   const archiveSession = (s) => {
-    if (readOnly) return;
+    if (lifecycleReadOnly) return;
     setSessions((prev) => prev.map((x) => x.id === s.id ? { ...x, status:'archived' } : x));
   };
   const deleteSession = (s) => {
-    if (readOnly) return;
+    if (lifecycleReadOnly) return;
     setSessions((prev) => prev.filter((x) => x.id !== s.id));
     go('sessions');
   };
   const archiveAgent = (a) => {
-    if (readOnly) return;
+    if (lifecycleReadOnly) return;
     const upd = { ...a, status:'archived' };
     setAgents((prev) => prev.map((x) => x.id === a.id ? upd : x));
     setRoute({ name:'agent', agent: upd });
@@ -318,11 +344,13 @@ function App() {
   );
   else if (route.name === 'admin') view = <AdminPanel onBrowseWorkspace={browseAsWorkspace} onReauth={reauth} onCredentialHealth={(workspaceId) => { const next = { name:'credentialHealth', workspaceId }; setRoute(next); writeRouteHash(next); }} />;
   else if (route.name === 'credentialHealth') view = <CredentialHealthView workspaceId={route.workspaceId} onBack={() => go('admin')} onReauth={reauth} />;
-  else if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={readOnly} />;
-  else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={dataState} apiMode={apiState.mode} readOnly={readOnly} />;
-  else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={dataState} readOnly={readOnly} />;
-  else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} readOnly={readOnly} />;
-  else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} readOnly={readOnly} />;
+  else if (route.name === 'start') view = <ReadinessView agents={agents} environments={environments} mode={apiState.mode} workspaceLoaded={workspaceLoaded || demoMode} go={go} onCreateAgent={() => go('agents')} onCreateEnvironment={createEnvironment} />;
+  else if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={mutationReadOnly} />;
+  else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} dataState={dataState} apiMode={apiState.mode} readOnly={mutationReadOnly} lifecycleReadOnly={lifecycleReadOnly} onAuthExpired={workspaceReauth} />;
+  else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={dataState} readOnly={mutationReadOnly} />;
+  else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} createSessionReadOnly={mutationReadOnly} archiveReadOnly={lifecycleReadOnly} />;
+  else if (route.name === 'environments') view = <EnvironmentsView environments={environments} mode={apiState.mode} dataState={dataState} onCreate={createEnvironment} createdEnvironmentId={createdEnvironmentId} />;
+  else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} readOnly={true} />;
   else if (route.name === 'vaults') view = <VaultsView mode={apiState.mode} initialVaultId={route.vaultId} onOpenVault={(vaultId) => { const next = { name:'vaults', vaultId }; setRoute(next); writeRouteHash(next); }} onBackToVaults={() => go('vaults')} />;
 
   return (
@@ -334,9 +362,13 @@ function App() {
       </main>
 
       {modal && modal.kind === 'session' &&
-        <CreateSession agents={agents} environments={environments} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} />}
+        <CreateSession agents={agents} environments={environments} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} apiMode={apiState.mode} />}
       {modal && modal.kind === 'agent' &&
-        <CreateAgent onClose={() => setModal(null)} onCreate={onAgentCreated} />}
+        <CreateAgent onClose={() => setModal(null)} onCreate={onAgentCreated} apiMode={apiState.mode} />}
+      {modal && modal.kind === 'environment' &&
+        <CreateEnvironmentModal mode={apiState.mode}
+          onClose={() => setModal(null)} onCreated={onEnvironmentCreated}
+          onAuthExpired={workspaceReauth} />}
 
       <TweaksPanel>
         <TweakSection label="Theme" />

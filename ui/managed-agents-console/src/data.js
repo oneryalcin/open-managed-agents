@@ -184,5 +184,5 @@ window.ENVIRONMENTS = [
   { id:'oma-span-probe-env', label:'oma-span-probe-env', image:'docker-local · node-22' },
 ];
 
-window.MODELS = ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'];
-window.TOOL_OPTIONS = ['bash', 'text_editor', 'web_search', 'computer_use'];
+window.MODELS = ['claude-sonnet-5', 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'];
+window.TOOL_OPTIONS = ['bash', 'read', 'write', 'edit', 'glob'];

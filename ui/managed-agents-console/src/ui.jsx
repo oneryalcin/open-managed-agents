@@ -66,8 +66,10 @@ function Crumbs({ items }) {
 }
 
 const NAV = [
+  { key:'start', label:'Start', icon:'checkCircle' },
   { key:'sessions', label:'Sessions', icon:'activity' },
   { key:'agents', label:'Agents', icon:'bot' },
+  { key:'environments', label:'Environments', icon:'database' },
   { key:'files', label:'Files', icon:'folder' },
   { key:'vaults', label:'Vaults', icon:'database' },
 ];
@@ -96,8 +98,6 @@ function Sidebar({ route, go, showAdmin = false }) {
           <Icon name="database" size={16} />Admin
         </div>
       </>}
-      <div className="nav-label">Read-only</div>
-      <div className="nav-item dim"><Icon name="database" size={16} />Environments</div>
       <div className="sidebar-spacer" />
       <div className="sidebar-foot">
         <div className="nav-item dim"><Icon name="fileText" size={16} />Documentation</div>
@@ -132,12 +132,12 @@ function ModeBar({ mode, warnings = [] }) {
     ? 'Demo review mode'
     : mode === 'mock'
       ? 'Offline — bundled demo data'
-      : 'Read-only API mode';
+      : 'Live API mode';
   const copy = mode === 'demo'
     ? 'Local interactions mutate bundled demo data only.'
     : mode === 'mock'
       ? 'The API is unavailable; writes are disabled and demo data is clearly marked.'
-      : 'Live API data is inspectable; create, send, archive, delete, and confirm actions are disabled.';
+      : 'Live API data is inspectable; environment creation is enabled while unsupported writes stay disabled.';
   return (
     <div className={'modebar mode-' + mode}>
       <Icon name={mode === 'api' ? 'database' : 'alert'} size={14} />

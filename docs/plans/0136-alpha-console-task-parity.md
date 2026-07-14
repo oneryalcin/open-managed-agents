@@ -1,6 +1,6 @@
 # Plan 0136 -- Alpha console task parity
 
-Status: audit complete; independently reviewed; implementation-ready
+Status: implemented; verification and independent review pending
 
 Date: 2026-07-14
 
