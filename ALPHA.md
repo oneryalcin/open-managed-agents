@@ -42,7 +42,14 @@ Deliverables:
 
 - Verify the README quickstart from a clean checkout.
 - Add one canonical "hello managed agent" flow.
-- Add a local smoke command, `npm run alpha:smoke`, that:
+- Add the repo-local `oma` CLI (`npm link` after install):
+  - `oma up` starts the durable foreground appliance with Docker-local by default;
+  - `oma up --sandbox microsandbox` selects the opt-in provider;
+  - `oma smoke` runs the disposable verification path;
+  - detached lifecycle (`oma up --detach`, `oma logs`, `oma down`) is documented
+    but explicitly not implemented yet.
+- Add a local smoke command, `oma smoke` (also available as
+  `npm run alpha:smoke`), that:
   - verifies local sandbox/runtime prerequisites when it starts its own server;
   - starts an isolated temporary control plane by default, or targets an
     existing server via `OMA_ALPHA_BASE_URL` + `OMA_ALPHA_API_KEY`;
@@ -66,19 +73,22 @@ Deliverables:
   - port already in use;
   - custom image missing expected tools.
 
-Current command:
+Current commands:
 
 ```bash
-npm run alpha:smoke
+npm install
+npm link
+oma up
+oma smoke
 ```
 
 Useful overrides:
 
 ```bash
-OMA_ALPHA_MODEL=claude-sonnet-5 npm run alpha:smoke
-OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 OMA_ALPHA_API_KEY=oma_... npm run alpha:smoke
-OMA_ALPHA_SANDBOX_PROVIDER=microsandbox-local npm run alpha:smoke
-OMA_ALPHA_KEEP_HOME=1 npm run alpha:smoke
+OMA_ALPHA_MODEL=claude-sonnet-5 oma smoke
+OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 OMA_ALPHA_API_KEY=oma_... oma smoke
+oma smoke --sandbox microsandbox
+OMA_ALPHA_KEEP_HOME=1 oma smoke
 ```
 
 `OMA_ALPHA_SANDBOX_PROVIDER` applies only when the smoke starts a temporary

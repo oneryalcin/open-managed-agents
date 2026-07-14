@@ -27,10 +27,17 @@ One command boots a durable, authenticated server
 ([plan 0115](plans/0115-appliance-entrypoint.md)). From a checkout (Node ≥ 22.19):
 
 ```bash
-node bin/open-managed-agents.mjs
+npm install
+npm link
+export ANTHROPIC_API_KEY="..."
+oma up
 ```
 
-or with Docker:
+`oma up` selects Docker-local explicitly and runs in the foreground. Use
+`oma up --sandbox microsandbox` for the opt-in provider. Detached lifecycle
+commands are planned but not implemented yet.
+
+Alternatively, run the appliance with Docker Compose:
 
 ```bash
 docker compose up -d

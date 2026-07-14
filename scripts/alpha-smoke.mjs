@@ -217,13 +217,9 @@ function checkMicrosandbox() {
 
 async function startTemporaryOma(sandboxProvider) {
   state.home = await mkdtemp(join(tmpdir(), "oma-alpha-smoke-"));
-  const sandboxEnv =
-    sandboxProvider === "docker-local"
-      ? { OMA_SANDBOX_PROVIDER: "docker-local", OMA_ALLOW_DOCKER_LOCAL: "true" }
-      : { OMA_SANDBOX_PROVIDER: "microsandbox-local", OMA_ALLOW_MICROSANDBOX_LOCAL: "true" };
   const child = spawn(
     process.execPath,
-    ["bin/open-managed-agents.mjs"],
+    ["bin/oma.mjs", "up", "--sandbox", sandboxProvider],
     {
       cwd: process.cwd(),
       env: {
@@ -231,7 +227,6 @@ async function startTemporaryOma(sandboxProvider) {
         OMA_HOME: state.home,
         OMA_HOST: "127.0.0.1",
         OMA_PORT: "0",
-        ...sandboxEnv,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

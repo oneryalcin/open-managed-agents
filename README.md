@@ -18,50 +18,48 @@ files, and sandboxes live on your machines, under your policies.
 
 ## Quickstart
 
-From a checkout (Node ≥ 22.19):
+From a checkout (Node ≥ 22.19, Docker running):
 
 ```bash
 npm install
-npm run alpha:smoke
+npm link
+export ANTHROPIC_API_KEY="..."
+oma up
 ```
 
-The alpha smoke starts an isolated temporary OMA server, mints a workspace API
-key, creates an agent/environment/session, sends a prompt that must run the
-`bash` sandbox tool, waits for the public tool/result/message events, and
-cleans up. Temporary-server mode explicitly enables Docker-local
-(`OMA_SANDBOX_PROVIDER=docker-local`, `OMA_ALLOW_DOCKER_LOCAL=true`), so it
-requires a working Docker daemon and a model available to the local Pi/model
-registry. Override the model with:
+`oma up` starts the durable appliance in the foreground with Docker-local
+sandboxing, stores data under `~/.oma`, and prints the first workspace API key
+once. Press Ctrl-C to stop it. In another terminal, run the disposable
+end-to-end check with:
 
 ```bash
-OMA_ALPHA_MODEL=claude-sonnet-5 npm run alpha:smoke
+oma smoke
 ```
 
-To use microsandbox for the temporary smoke instead:
+The smoke starts an isolated temporary OMA server, creates an
+agent/environment/session, requires a real `bash` sandbox call, verifies the
+public tool/result/message events, and cleans up. Useful overrides:
 
 ```bash
-OMA_ALPHA_SANDBOX_PROVIDER=microsandbox-local npm run alpha:smoke
+OMA_ALPHA_MODEL=claude-sonnet-5 oma smoke
+oma smoke --sandbox microsandbox
+OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 OMA_ALPHA_API_KEY=oma_... oma smoke
 ```
 
-To smoke an already-running OMA instance instead of a temporary one:
+The repo-local `npm run alpha:smoke` alias remains available. Existing-server
+smoke mode assumes that server already has an explicit sandbox provider and
+therefore skips local sandbox prerequisite checks.
+
+To choose microsandbox for the durable server:
 
 ```bash
-OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 \
-OMA_ALPHA_API_KEY=oma_... \
-npm run alpha:smoke
+oma up --sandbox microsandbox
 ```
 
-Existing-server mode assumes that server has already been started with an
-explicit sandbox provider; the local Docker/microsandbox prerequisite check is
-skipped.
+Detached lifecycle commands (`oma up --detach`, `oma logs`, and `oma down`)
+are planned but not implemented; keep the foreground terminal open for now.
 
-To run the server manually:
-
-```bash
-node bin/open-managed-agents.mjs
-```
-
-or with Docker:
+Alternatively, run the appliance with Docker Compose:
 
 ```bash
 docker compose up -d

@@ -22,7 +22,8 @@ Probed before building (2026-07-02, Node 24.18): plain type stripping fails on
 this codebase (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` — constructor parameter
 properties are non-erasable), but `node --experimental-transform-types` boots
 the full deployment app and serves the hosted-identical 401 envelope. The bin
-shim (`bin/open-managed-agents.mjs`) re-execs node with that flag (plus
+shim (originally `bin/open-managed-agents.mjs`, now the `oma` CLI in
+`bin/oma.mjs`) re-execs node with that flag (plus
 `--disable-warning=ExperimentalWarning`) after a `>= 22.19` version check, so
 `tsx` stays a devDependency and the runtime dependency footprint is unchanged.
 

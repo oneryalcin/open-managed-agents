@@ -132,8 +132,8 @@ The former open bullets split across two channels with different answers:
     messages.
   - `admin_audit` events are emitted at a dedicated `audit` level that
     bypasses `OMA_LOG_LEVEL`: diagnostic verbosity settings cannot silence
-    the admin audit trail. (The `bin/open-managed-agents.mjs` Node-version
-    guard is a separate pre-boot process and prints one plain error line by
+    the admin audit trail. (The `oma` CLI's Node-version guard is a separate
+    pre-boot process and prints one plain error line by
     necessity; it carries no tenant data or secrets.)
 - **Persist/stream channel — deliberately verbatim (R3).** Session
   transcripts and tool outputs are the product; scrubbing them would break

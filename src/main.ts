@@ -13,7 +13,7 @@
  *   OMA_HOST               bind address, default 127.0.0.1
  *
  * Run directly (`node --experimental-transform-types src/main.ts`) or via
- * bin/open-managed-agents.mjs, which adds the Node flags.
+ * `oma up`, whose CLI launcher adds the Node flags and selects a sandbox.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
