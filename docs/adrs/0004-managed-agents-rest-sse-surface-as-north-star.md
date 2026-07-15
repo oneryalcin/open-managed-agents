@@ -11,7 +11,7 @@ We could invent our own API for self-hosted agents. Or we could clone Anthropic'
 **Match Anthropic's Managed Agents REST + SSE API as the north star.**
 
 - **Endpoints:** `/v1/agents`, `/v1/sessions`, `/v1/sessions/{id}/events`, `/v1/sessions/{id}/events/stream`, `/v1/environments`. Beta-namespaced where Anthropic uses `/v1/beta/...`.
-- **Event types:** `agent.message`, `agent.tool_use`, `agent.custom_tool_use`, `session.status_idle`, `session.status_terminated`, `agent.thinking`, etc.
+- **Event types:** `agent.message`, `agent.tool_use`, `agent.custom_tool_use`, `session.status_idle`, `session.status_terminated`, `agent.thinking`, etc. This is the compatibility north star, not a claim that every named event ships today; `src/types/events.ts` and OpenAPI are the authoritative implemented subset, and `agent.thinking` is currently deferred.
 - **Request shapes mirror Anthropic's:** an agent has `model`/`system`/`tools`; a session has `agent`/`environment_id`/`resources`.
 - **Beta-header convention:** we advertise an equivalent of `managed-agents-2026-04-01` for compatibility signaling. Clients passing Anthropic's beta header should not error.
 

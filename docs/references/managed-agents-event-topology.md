@@ -55,8 +55,6 @@ wire-compatible spec events to add by default.
 
 - **Implemented**: OMA emits or accepts the event through the public event API,
   and the type is present in `EVENT_TYPES`.
-- **Partial**: OMA has the event type in `EVENT_TYPES`, but the upstream feature
-  surface is not fully implemented yet.
 - **Deferred**: event is known from the Claude reference but belongs to a
   deferred feature.
 - **Not implemented**: event is known, but there is no current OMA behavior for
@@ -77,8 +75,8 @@ wire-compatible spec events to add by default.
 
 | Event type | OMA status | Current behavior / owner |
 |---|---|---|
-| `agent.message` | Implemented | Emitted from Pi assistant `message_end` text content. |
-| `agent.thinking` | Partial | Present in `EVENT_TYPES`, reserved for compatible thinking content. Current Pi translation does not yet emit this on the common paths. |
+| `agent.message` | Implemented | Emitted from Pi assistant `message_end` text content as one buffered event; token-preview deltas are not supported. |
+| `agent.thinking` | Deferred | Known CMA event for extended-thinking content. OMA does not emit or advertise it until the runtime has a verified public translation. |
 | `agent.tool_use` | Implemented | Emitted for builtin/sandbox tool calls that are not custom tools and are not suppressed by the permission bridge. |
 | `agent.tool_result` | Implemented | Emitted for builtin/sandbox tool results and terminalized permission waits. |
 | `agent.custom_tool_use` | Implemented | Emitted for OMA custom tools; top-level `sevt_*` ID is the public correlation ID for `user.custom_tool_result`. |
@@ -87,6 +85,12 @@ wire-compatible spec events to add by default.
 | `agent.thread_context_compacted` | Deferred | Depends on exposing Pi compaction/thread-context events with a confirmed public shape. |
 | `agent.thread_message_sent` | Deferred | Multiagent sessions are post-MVP. |
 | `agent.thread_message_received` | Deferred | Multiagent sessions are post-MVP. |
+
+## System Events
+
+| Event type | OMA status | Current behavior / owner |
+|---|---|---|
+| `system.message` | Deferred | CMA uses this for a restricted mid-session system-message surface. OMA has no compatible session-update contract and does not advertise or emit this event. |
 
 ## Session Events
 

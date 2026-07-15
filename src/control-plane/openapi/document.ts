@@ -5,9 +5,7 @@ import {
 } from "../api-constants.ts";
 import { EVENT_TYPES } from "../../types/events.ts";
 
-// `agent.thinking` remains declared in the wire union for compatibility but
-// is not emitted by the runtime. Plan 0135 documents shipped behavior only.
-const DOCUMENTED_EVENT_TYPES = EVENT_TYPES.filter((type) => type !== "agent.thinking");
+const DOCUMENTED_EVENT_TYPES = EVENT_TYPES;
 
 const TAG_DESCRIPTIONS: Record<OpenApiTag, string> = {
   Agents: "Versioned Managed Agents definitions.",
@@ -215,7 +213,7 @@ export const OPENAPI_ROUTE_CONTRACTS: readonly OpenApiRouteContract[] = [
 
   route({ method: "post", path: "/v1/sessions/{sessionId}/events", operationId: "sendSessionEvents", tag: "Session events", summary: "Send user events to a session", auth: "workspace", beta: "managed", parameters: [sessionId, idempotencyKey], requestBody: jsonBody(ref("SendEventsRequest"), true, { events: [{ type: "user.message", content: [{ type: "text", text: "Hello" }] }] }), success: { schema: ref("EventPage") } }),
   route({ method: "get", path: "/v1/sessions/{sessionId}/events", operationId: "listSessionEvents", tag: "Session events", summary: "List session events", auth: "workspace", beta: "managed", parameters: [sessionId, limit, page, queryParam("order", { type: "string", enum: ["asc", "desc"] }), queryParam("types[]", { type: "array", items: { type: "string", enum: DOCUMENTED_EVENT_TYPES } }, "Repeat to filter by an event type currently emitted by OMA.")], success: { schema: ref("EventPage") } }),
-  route({ method: "get", path: "/v1/sessions/{sessionId}/events/stream", operationId: "streamSessionEvents", tag: "Session events", summary: "Stream session events over SSE", auth: "workspace", beta: "managed", parameters: [sessionId, headerParam("last-event-id", { type: "string" }, false, "Resume after this event ID.")], success: { schema: { type: "string", description: "SSE frames with id, event, and JSON data fields." }, mediaType: "text/event-stream", description: "SSE stream" } }),
+  route({ method: "get", path: "/v1/sessions/{sessionId}/events/stream", operationId: "streamSessionEvents", tag: "Session events", summary: "Stream persisted session events over SSE", description: "OMA streams complete persisted events. Assistant text is emitted as a buffered `agent.message` after generation, not as token-preview deltas. The unsupported `event_deltas[]` query parameter is rejected with HTTP 400.", auth: "workspace", beta: "managed", parameters: [sessionId, headerParam("last-event-id", { type: "string" }, false, "Resume after this event ID.")], success: { schema: { type: "string", description: "SSE frames with id, event, and JSON data fields." }, mediaType: "text/event-stream", description: "SSE stream" } }),
 
   route({ method: "post", path: "/admin/workspaces", operationId: "adminCreateWorkspace", tag: "Administration (OMA)", summary: "Create a workspace", auth: "admin", requestBody: jsonBody(ref("AdminCreateWorkspaceRequest")), success: { status: 201, schema: ref("AdminWorkspace") } }),
   route({ method: "get", path: "/admin/workspaces", operationId: "adminListWorkspaces", tag: "Administration (OMA)", summary: "List workspaces", auth: "admin", success: { schema: { type: "array", items: ref("AdminWorkspace") } } }),

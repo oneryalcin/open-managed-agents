@@ -39,8 +39,15 @@ describe("OpenAPI and interactive documentation", () => {
       WorkspaceApiKey: { type: "apiKey", in: "header", name: "x-api-key" },
       AdminApiKey: { type: "apiKey", in: "header", name: "x-admin-key" },
     });
-    expect(document.paths["/v1/sessions/{sessionId}/events/stream"].get.responses["200"])
-      .toBeDefined();
+    const streamOperation = document.paths["/v1/sessions/{sessionId}/events/stream"].get;
+    expect(streamOperation.responses["200"]).toBeDefined();
+    expect(streamOperation.description).toContain("buffered `agent.message`");
+    expect(streamOperation.description).toContain("`event_deltas[]`");
+    const eventSchema = document.components.schemas.Event as {
+      properties: { type: { enum: string[] } };
+    };
+    expect(eventSchema.properties.type.enum)
+      .not.toContain("agent.thinking");
     expect(document.paths["/v1/sessions"].get.responses["200"]).toBeDefined();
     expect(document.paths).not.toHaveProperty("/v1/deployments");
     expect(document.paths).not.toHaveProperty("/v1/memory");
@@ -166,6 +173,7 @@ interface OpenApiDocument {
   info: { title: string };
   paths: Record<string, Record<string, {
     operationId: string;
+    description?: string;
     parameters?: Array<Record<string, unknown>>;
     security: Array<Record<string, unknown>>;
     responses: Record<string, unknown>;

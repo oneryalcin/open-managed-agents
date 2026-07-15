@@ -120,15 +120,20 @@ and does not set Pi's emitted tool-result error flag.
 | `events.send` `user.custom_tool_result` | resolves a pending tool promise (see ADR 0005) |
 | `events.stream` | wraps `session.subscribe()` |
 | `events.list` | reads from per-session event buffer in SQLite |
-| `agent.message` text deltas | Pi `message_update.text_delta` |
-| `agent.thinking` deltas | Pi `message_update.thinking_delta` |
+| `agent.message` | Buffered Pi assistant text emitted after message completion |
+| token-preview deltas / `agent.thinking` | Deferred; not advertised by the shipped event union |
 | `agent.tool_use` (built-in) | Pi `tool_execution_start` for sandbox tools |
 | `agent.tool_result` | Pi `tool_execution_end` |
 | `agent.custom_tool_use` | emitted by our async tool body (Pi `tool_execution_start` is incidental) |
 | `session.status_running` | Pi `agent_start` |
 | `session.status_idle` | Pi `agent_end` + idle gate logic |
 
-The mapping is not 1:1 in cardinality — Pi emits more granular per-token events; Managed Agents has session-lifecycle events Pi doesn't model. The control plane is responsible for the bidirectional translation.
+The mapping is not 1:1 in cardinality. Pi exposes more granular per-token
+updates, but OMA currently persists and streams complete public events;
+assistant text arrives as a buffered `agent.message`. Managed Agents also has
+session-lifecycle events Pi does not model. The control plane owns this
+bidirectional translation and rejects unsupported delta opt-ins rather than
+silently ignoring them.
 
 Cycle C mapping is implemented and tested in code, not duplicated as prose:
 - Translator: `src/control-plane/sessions/pi/translator.ts`

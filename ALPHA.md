@@ -215,11 +215,11 @@ Make unsupported event behavior explicit before alpha users build against it.
 
 Required:
 
-- reject or clearly validate unsupported `event_deltas[]` values;
-- either emit `agent.thinking` correctly or stop presenting it as supported;
-- either emit `system.message` correctly or mark it unsupported/deferred;
-- document that streaming text-preview parity is not complete unless/until it is
-  implemented.
+- [x] reject unsupported `event_deltas[]` values before stream admission;
+- [x] stop presenting `agent.thinking` as supported;
+- [x] mark `system.message` unsupported/deferred;
+- [x] document that assistant text is buffered and streaming preview parity is
+  deferred.
 
 Full token-by-token preview streaming can be deferred if buffered
 `agent.message` remains correct and the console timeline is usable.
