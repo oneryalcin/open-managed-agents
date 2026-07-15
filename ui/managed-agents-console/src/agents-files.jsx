@@ -51,7 +51,7 @@ function AgentsList({ agents, openAgent, onCreate, dataState = 'loaded', readOnl
   );
 }
 
-function AgentDetail({ agent, go, onCreateSession, onArchive, readOnly = false }) {
+function AgentDetail({ agent, go, onCreateSession, onArchive, createSessionReadOnly = false, archiveReadOnly = false }) {
   const a = agent;
   const [tab, setTab] = useStateA('agent');
   const [dialog, setDialog] = useStateA(false);
@@ -65,12 +65,12 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, readOnly = false }
           <div className="meta-row mono" style={{ fontSize:12.5, color:'var(--faint)' }}>{a.id} · Last updated {a.updated}</div>
         </div>
         <div style={{ display:'flex', gap:9 }}>
-          <button className="btn" disabled={archived || readOnly} title={readOnly ? 'Read-only API mode · POST /v1/agents/:id/archive' : undefined}
-            style={{ opacity: archived || readOnly ? .5 : 1 }} onClick={() => !readOnly && setDialog(true)}>
+          <button className="btn" disabled={archived || archiveReadOnly} title={archiveReadOnly ? 'Agent archive is not enabled in the alpha console.' : undefined}
+            style={{ opacity: archived || archiveReadOnly ? .5 : 1 }} onClick={() => !archiveReadOnly && setDialog(true)}>
             <Icon name="archive" size={14} />{archived ? 'Archived' : 'Archive'}
           </button>
-          <button className="btn btn-primary" disabled={readOnly} title={readOnly ? 'Read-only API mode · POST /v1/sessions' : undefined}
-            onClick={() => !readOnly && onCreateSession()}>
+          <button className="btn btn-primary" disabled={createSessionReadOnly} title={createSessionReadOnly ? 'Connect a live workspace to create a session.' : undefined}
+            onClick={() => !createSessionReadOnly && onCreateSession()}>
             <Icon name="plus" size={15} />Create session
           </button>
         </div>
@@ -121,7 +121,7 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, readOnly = false }
                   <span className="pill" style={{ height:20 }}>{a.tools}</span>
                 </div>
                 <span style={{ display:'flex', alignItems:'center', gap:6, color:'var(--soft)', fontSize:12.5 }}>
-                  <Icon name="checkCircle" size={14} style={{ color:'var(--green)' }} />Always allow</span>
+                  <Icon name="checkCircle" size={14} style={{ color:'var(--green)' }} />{a.toolPermission || 'Always allow'}</span>
               </div>
             </div>
           </div>

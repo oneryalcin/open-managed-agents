@@ -127,11 +127,11 @@ function FilesPanel({ files = FILES }) {
   );
 }
 
-function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = 'loaded', apiMode = 'mock', readOnly = false }) {
+function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStateChange, onRefreshSession, dataState = 'loaded', apiMode = 'mock', readOnly = false, lifecycleReadOnly = readOnly, onAuthExpired }) {
   const s = session;
   const displayStatus = s.status === 'action' ? 'idle' : s.status;
   const isLive = displayStatus === 'running';
-  const isConfirm = !!s.confirm;
+  const isConfirm = !!s.confirm || !!s.requiresAction;
   const [view, setView] = useStateD('transcript');           // transcript | debug | spans | files
   const [selId, setSel] = useStateD(isLive || isConfirm ? null : 'sevt_…a05');
   const [filters, setFilters] = useStateD([]);
@@ -144,22 +144,37 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const baseSpans = s.spans ?? (apiMode === 'api' ? [] : SPANS);
   const [shown, setShown] = useStateD(() => isLive && apiMode !== 'api' ? RUN_EVENTS.slice(0, 1) : isConfirm && apiMode !== 'api' ? CONFIRM_EVENTS : baseEvents);
   const [status, setStatus] = useStateD(displayStatus);
-  const [working, setWorking] = useStateD(isLive && apiMode !== 'api');
+  const [working, setWorking] = useStateD(isLive);
   const [confirmState, setConfirmState] = useStateD(isConfirm ? 'pending' : null);
   const [menuOpen, setMenuOpen] = useStateD(false);
   const [dialog, setDialog] = useStateD(null);               // 'archive' | 'delete'
+  const [message, setMessage] = useStateD('');
+  const [actionBusy, setActionBusy] = useStateD(false);
+  const [actionError, setActionError] = useStateD(null);
+  const [streamState, setStreamState] = useStateD(apiMode === 'api' ? 'connecting' : 'closed');
   const aliveRef = useRefD(true);
   const idxRef = useRefD(1);
   const timerRef = useRefD(null);
   const streamRef = useRefD(null);
+  const messageIntentRef = useRefD(null);
+  const interruptIntentRef = useRefD(null);
+  const confirmationIntentRef = useRefD(null);
+  const running = status === 'running';
 
   useEffectD(() => {
     setStatus(displayStatus);
+    setWorking(isLive);
     setConfirmState(isConfirm ? 'pending' : null);
     setSel(isLive || isConfirm ? null : 'sevt_…a05');
     setView('transcript');
     setFilters([]);
     setQuery('');
+    setMessage('');
+    setActionError(null);
+    setStreamState(apiMode === 'api' ? 'connecting' : 'closed');
+    messageIntentRef.current = OmaConsoleApi.createIdempotencyIntent();
+    interruptIntentRef.current = OmaConsoleApi.createIdempotencyIntent();
+    confirmationIntentRef.current = OmaConsoleApi.createIdempotencyIntent();
   }, [s.id]);
 
   useEffectD(() => {
@@ -189,14 +204,80 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
     setShown(baseEvents);
   }, [s.id, s.events, apiMode]);
 
+  useEffectD(() => {
+    if (apiMode !== 'api' || s.loadingEvents || s.eventError) return;
+    const controller = new AbortController();
+    const lastPersistedId = baseEvents.length > 0 ? baseEvents[baseEvents.length - 1].id : undefined;
+    setStreamState('connecting');
+    OmaConsoleApi.followSessionEvents(s.id, {
+      signal: controller.signal,
+      lastEventId: lastPersistedId,
+      onState: ({ status: next, error }) => {
+        setStreamState(next);
+        if (next === 'failed') {
+          setActionError(error?.message || 'The live event stream failed. Persisted history remains available.');
+          if (error?.status === 401 && onAuthExpired) onAuthExpired();
+        }
+      },
+      onEvent: (event) => {
+        const mapped = OmaConsoleApi.toUiSessionEvent(event);
+        setShown((current) => current.some((item) => item.id === mapped.id)
+          ? current
+          : [...current, mapped]);
+        if (event.type === 'session.status_running') {
+          setStatus('running');
+          setWorking(true);
+          setConfirmState(null);
+          if (onSessionStateChange) onSessionStateChange(s.id, { status:'running', requiresAction:false });
+        } else if (event.type === 'session.status_idle') {
+          const requiresAction = event.stop_reason?.type === 'requires_action';
+          setStatus('idle');
+          setWorking(false);
+          setConfirmState(requiresAction ? 'pending' : null);
+          if (onSessionStateChange) onSessionStateChange(s.id, { status:'idle', requiresAction });
+          if (onRefreshSession) onRefreshSession({ ...s, status:'idle' });
+        } else if (event.type === 'session.status_terminated') {
+          setStatus('terminated');
+          setWorking(false);
+          setConfirmState(null);
+          if (onSessionStateChange) onSessionStateChange(s.id, { status:'terminated', requiresAction:false });
+        } else if (event.type === 'session.error') {
+          setWorking(false);
+        } else if (event.type === 'user.tool_confirmation') {
+          setConfirmState(event.result === 'allow' ? 'allowed' : 'denied');
+        }
+      },
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      setActionError(error?.message || 'The live event stream failed. Persisted history remains available.');
+    });
+    return () => controller.abort();
+  }, [apiMode, s.id, s.loadingEvents, s.eventError]);
+
   // auto-scroll the live stream as events arrive (no scrollIntoView)
   useEffectD(() => {
-    if (!isLive) return;
+    if (!running) return;
     const el = streamRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [shown, view, isLive]);
+  }, [shown, view, running]);
 
-  const interrupt = () => {
+  const interrupt = async () => {
+    if (apiMode === 'api') {
+      if (actionBusy) return;
+      setActionBusy(true);
+      setActionError(null);
+      try {
+        interruptIntentRef.current ||= OmaConsoleApi.createIdempotencyIntent();
+        await OmaConsoleApi.sendSessionEvents(s.id, [{ type:'user.interrupt' }], { intent:interruptIntentRef.current });
+        interruptIntentRef.current = null;
+      } catch (error) {
+        setActionError(error.message || 'Interrupt request failed.');
+        if (error.status === 401 && onAuthExpired) onAuthExpired();
+      } finally {
+        setActionBusy(false);
+      }
+      return;
+    }
     aliveRef.current = false;
     clearTimeout(timerRef.current);
     const t = '0:00:06';
@@ -215,8 +296,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
     setWorking(false);
   };
 
-  const running = status === 'running';
-  const pool = (isLive || isConfirm || s.events) ? shown : EVENTS;
+  const pool = apiMode === 'api' || isLive || isConfirm || s.events ? shown : EVENTS;
   const usesSessionEvents = Array.isArray(s.events);
   const sel = pool.find((e) => e.id === selId) ||
     (!usesSessionEvents ? EVENTS.find((e) => e.id === selId) : null);
@@ -235,12 +315,36 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
   const dbgEvents = filteredPool;
   const tabFor = (view === 'spans' || view === 'debug') ? 'debug' : view;
   const fileCount = Array.isArray(baseFiles) ? baseFiles.length : 0;
-  const needsAction = Boolean(s.requiresAction || (isConfirm && confirmState === 'pending'));
+  const needsAction = Boolean(confirmState === 'pending' || confirmState === 'submitting');
   const resultCount = view === 'debug' ? dbgEvents.length : txEvents.length;
   const eventSearchVisible = view !== 'files' && view !== 'spans';
 
   // resolve a pending tool confirmation → emit user.tool_confirmation + follow-up
-  const resolveConfirm = (decision) => {
+  const resolveConfirm = async (decision) => {
+    if (apiMode === 'api') {
+      if (!pendingTool || actionBusy) return;
+      setActionBusy(true);
+      setActionError(null);
+      setConfirmState('submitting');
+      const event = {
+        type:'user.tool_confirmation',
+        tool_use_id:pendingTool.id,
+        result:decision,
+        ...(decision === 'deny' ? { deny_message:'Denied in the OMA console.' } : {}),
+      };
+      try {
+        confirmationIntentRef.current ||= OmaConsoleApi.createIdempotencyIntent();
+        await OmaConsoleApi.sendSessionEvents(s.id, [event], { intent:confirmationIntentRef.current });
+        confirmationIntentRef.current = null;
+      } catch (error) {
+        setConfirmState('pending');
+        setActionError(error.message || 'Tool confirmation failed.');
+        if (error.status === 401 && onAuthExpired) onAuthExpired();
+      } finally {
+        setActionBusy(false);
+      }
+      return;
+    }
     const allow = decision === 'allow';
     const t = '0:00:02';
     const extra = allow
@@ -273,9 +377,22 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
     setStatus('idle');
   };
 
-  const pendingTool = isConfirm ? CONFIRM_EVENTS.find((e) => e.confirm) : null;
+  const confirmedToolIds = new Set(pool
+    .filter((event) => event.type === 'user.tool_confirmation')
+    .map((event) => event.source?.tool_use_id)
+    .filter(Boolean));
+  const latestRequiredIds = [...pool].reverse()
+    .find((event) => event.type === 'session.status_idle' && event.source?.stop_reason?.type === 'requires_action')
+    ?.source?.stop_reason?.event_ids;
+  const pendingTool = apiMode === 'api'
+    ? [...pool].reverse().find((event) =>
+        (event.type === 'agent.tool_use' || event.type === 'agent.mcp_tool_use') &&
+        (event.confirm || event.source?.evaluated_permission === 'ask') &&
+        !confirmedToolIds.has(event.id) &&
+        (!Array.isArray(latestRequiredIds) || latestRequiredIds.includes(event.id)))
+    : (isConfirm ? CONFIRM_EVENTS.find((e) => e.confirm) : null);
   const renderConfirmCard = () => {
-    if (confirmState !== 'pending') return null;
+    if ((confirmState !== 'pending' && confirmState !== 'submitting') || !pendingTool) return null;
     const endpoint = 'POST /v1/sessions/:id/events';
     return (
       <div className="confirm-card">
@@ -287,15 +404,15 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
           </div>
         </div>
         <div className="cc-body">
-          <div className="cc-tool"><span className="tn">{pendingTool.tool}</span><span style={{ color:'var(--faint)' }}>$</span>{pendingTool.cmd}</div>
+          <div className="cc-tool"><span className="tn">{pendingTool.tool || 'tool'}</span><span style={{ color:'var(--faint)' }}>$</span>{pendingTool.cmd || JSON.stringify(pendingTool.source?.input || {})}</div>
         </div>
         <div className="cc-actions">
-          <button className="btn btn-accent" disabled={readOnly}
+          <button className="btn btn-accent" disabled={readOnly || actionBusy}
             title={readOnly ? `Read-only API mode · ${endpoint}` : undefined}
             onClick={() => !readOnly && resolveConfirm('allow')}>
-            <Icon name="checkCircle" size={14} />Allow
+            <Icon name="checkCircle" size={14} />{actionBusy ? 'Submitting…' : 'Allow'}
           </button>
-          <button className="btn btn-danger" disabled={readOnly}
+          <button className="btn btn-danger" disabled={readOnly || actionBusy}
             title={readOnly ? `Read-only API mode · ${endpoint}` : undefined}
             onClick={() => !readOnly && resolveConfirm('deny')}>
             <Icon name="x" size={14} />Deny
@@ -307,6 +424,28 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
         </div>
       </div>
     );
+  };
+
+  const sendMessage = async () => {
+    const text = message.trim();
+    if (!text || running || readOnly || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    const event = { type:'user.message', content:[{ type:'text', text }] };
+    try {
+      messageIntentRef.current ||= OmaConsoleApi.createIdempotencyIntent();
+      await OmaConsoleApi.sendSessionEvents(s.id, [event], { intent:messageIntentRef.current });
+      messageIntentRef.current = null;
+      setMessage('');
+      setStatus('running');
+      setWorking(true);
+      if (onSessionStateChange) onSessionStateChange(s.id, { status:'running', requiresAction:false });
+    } catch (error) {
+      setActionError(error.message || 'Message submission failed.');
+      if (error.status === 401 && onAuthExpired) onAuthExpired();
+    } finally {
+      setActionBusy(false);
+    }
   };
 
   const inspectorVisible = view !== 'files';
@@ -448,7 +587,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
                 <div className="menu">
                   <div className="menu-item" onClick={() => { setMenuOpen(false); }}><Icon name="copy" />Copy session ID</div>
                   <div className="menu-item" onClick={() => { setMenuOpen(false); }}><Icon name="download" />Export events (JSON)</div>
-                  {!readOnly && <>
+                  {!lifecycleReadOnly && <>
                     <div className="menu-sep" />
                     <div className="menu-item" onClick={() => { setMenuOpen(false); setDialog('archive'); }}><Icon name="archive" />Archive session</div>
                     <div className="menu-item danger" onClick={() => { setMenuOpen(false); setDialog('delete'); }}><Icon name="x" />Delete session</div>
@@ -458,9 +597,10 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
             )}
           </div>
           {running
-            ? <button className="btn btn-danger" disabled={readOnly} title={readOnly ? 'Read-only API mode · POST /v1/sessions/:id/events' : undefined}
+            ? <button className="btn btn-danger" disabled={readOnly || actionBusy} title={readOnly ? 'Connect a live workspace to send session events.' : undefined}
                 onClick={() => !readOnly && interrupt()}><Icon name="stop" size={14} />Interrupt</button>
-            : <button className="btn btn-accent" disabled={readOnly} title={readOnly ? 'Read-only API mode · POST /v1/sessions/:id/events' : undefined}>
+            : <button className="btn btn-accent" disabled={readOnly} title={readOnly ? 'Connect a live workspace to send session events.' : undefined}
+                onClick={() => !readOnly && setView('transcript')}>
                 <Icon name="sparkles" size={15} />Ask Claude</button>}
         </div>
       </div>
@@ -482,6 +622,26 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
         </div>
       )}
 
+      {apiMode === 'api' && streamState !== 'connected' && streamState !== 'closed' && (
+        <div className={streamState === 'failed' ? 'inline-warn' : 'inline-ok'} role="status">
+          <Icon name={streamState === 'failed' ? 'alert' : 'refresh'} size={14} />
+          <span>{streamState === 'reconnecting' ? 'Live events disconnected; reconnecting with replay…'
+            : streamState === 'failed' ? 'Live events are unavailable. Persisted history is still shown.'
+            : 'Connecting to live session events…'}</span>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="inline-warn" role="alert">
+          <Icon name="alert" size={14} /><span>{actionError}</span>
+        </div>
+      )}
+      {s.refreshError && (
+        <div className="inline-warn" role="alert">
+          <Icon name="alert" size={14} /><span>Session finished, but files/history refresh failed: {s.refreshError.message}</span>
+        </div>
+      )}
+
       {dialog === 'archive' &&
         <ConfirmDialog icon="archive" title="Archive this session?"
           message={<>Archiving <b>{s.title}</b> hides it from the default list. Its events stay intact and it can be restored. </>}
@@ -499,17 +659,21 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, dataState = '
 
       <div className={'detail-grid' + (threecol ? ' threecol' : '')}>
         {threecol && renderRail()}
-        <div className={'stream' + (isLive ? ' live scroll' : '')} ref={streamRef}>{renderStream()}</div>
+        <div className={'stream' + (running ? ' live scroll' : '')} ref={streamRef}>{renderStream()}</div>
         {inspectorVisible && <Inspector e={sel} onClose={() => setSel(null)} />}
       </div>
 
       {view !== 'files' && (
         <div className={'composer' + (readOnly ? ' ro' : '')}>
           <Icon name="terminal" size={16} style={{ color:'var(--faint)' }} />
-          <input placeholder={readOnly ? 'Read-only API mode — POST /v1/sessions/:id/events is disabled.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'} disabled={running || readOnly} />
+          <input id="session-message-composer" name="message" aria-label="Session message"
+            placeholder={readOnly ? 'Connect a live workspace to send session events.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'}
+            value={message} onChange={(event) => setMessage(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }}
+            disabled={running || readOnly || actionBusy} />
           {running
-            ? <button className="btn btn-sm btn-danger" disabled={readOnly} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={() => !readOnly && interrupt()}><Icon name="stop" size={13} />Interrupt</button>
-            : <button className="btn btn-sm btn-primary" disabled={readOnly} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined}><Icon name="send" size={13} />Send</button>}
+            ? <button className="btn btn-sm btn-danger" disabled={readOnly || actionBusy} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={() => !readOnly && interrupt()}><Icon name="stop" size={13} />{actionBusy ? 'Stopping…' : 'Interrupt'}</button>
+            : <button className="btn btn-sm btn-primary" disabled={readOnly || actionBusy || !message.trim()} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={sendMessage}><Icon name="send" size={13} />{actionBusy ? 'Sending…' : 'Send'}</button>}
         </div>
       )}
     </div>

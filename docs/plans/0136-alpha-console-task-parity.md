@@ -1,6 +1,6 @@
 # Plan 0136 -- Alpha console task parity
 
-Status: audit complete; independently reviewed; implementation-ready
+Status: complete; implemented, independently reviewed, and verified in Chrome
 
 Date: 2026-07-14
 

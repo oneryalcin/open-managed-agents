@@ -357,10 +357,10 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Implement plan 0136's independently reviewed, narrowly capability-gated
-   console mutations and live
-   timeline: create agent → create environment → create session → prompt →
-   inspect events/tools/files, including interrupt and tool confirmation.
+1. Merge plan 0136's independently reviewed and Chrome-verified console
+   workflow. The browser gate covered create agent → create environment →
+   create session → prompt → authenticated live events → `always_ask` tool
+   confirmation → sandbox result → final agent message → idle.
 2. Add event honesty around unsupported `event_deltas[]`, `agent.thinking`, and
    `system.message`.
 3. Then return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable

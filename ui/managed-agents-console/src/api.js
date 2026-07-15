@@ -1,6 +1,7 @@
 // api.js — OMA REST adapter for the static Managed Agents Console.
 // ES module (plan 0120 §3.3): loaded with type="module" in index.html so the
 // pure header logic below is importable by Node tests without a browser.
+import { followEventStream } from "./sse.js";
 
 const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 const FILES_API_BETA = "files-api-2025-04-14";
@@ -9,6 +10,10 @@ const PAGE_LIMIT = 100;
 const EVENT_PAGE_LIMIT = 1000;
 const MAX_AUTO_PAGES = 100;
 const VALIDATE_CAPABILITY = Symbol("validate-mcp-oauth-credential");
+const CREATE_AGENT_CAPABILITY = Symbol("create-agent");
+const CREATE_ENVIRONMENT_CAPABILITY = Symbol("create-environment");
+const CREATE_SESSION_CAPABILITY = Symbol("create-session");
+const SEND_SESSION_EVENTS_CAPABILITY = Symbol("send-session-events");
 
 // Session-scoped credentials, in module memory only (plan 0120 §3.2):
 // never localStorage, sessionStorage, or a cookie — a reload means
@@ -65,7 +70,7 @@ function isExactValidatePath(path) {
   return /^\/v1\/vaults\/[^/]+\/credentials\/[^/]+\/mcp_oauth_validate$/.test(pathname);
 }
 
-async function request(path, { method = "GET", body, capability } = {}) {
+async function request(path, { method = "GET", body, capability, headers: extraHeaders } = {}) {
   // Normalize the verb once so the guard and fetch see the same value. The
   // guard is already fail-closed for any casing (a lowercase "post" is
   // non-GET, so it is denied unless it exactly matches the capability clause);
@@ -76,10 +81,11 @@ async function request(path, { method = "GET", body, capability } = {}) {
   // named capability rather than silently gaining access through this generic
   // transport helper.
   if (normalizedMethod !== "GET" && path.startsWith("/v1/") &&
-      !(capability === VALIDATE_CAPABILITY && normalizedMethod === "POST" && isExactValidatePath(path))) {
+      !isAllowedWorkspaceWrite(path, normalizedMethod, capability)) {
     throw new Error("Console /v1 writes are not permitted");
   }
   const headers = buildRequestHeaders(path, credentials);
+  if (extraHeaders) Object.assign(headers, extraHeaders);
   const init = { method: normalizedMethod, headers };
   if (body !== undefined) {
     headers["content-type"] = "application/json";
@@ -106,6 +112,20 @@ async function request(path, { method = "GET", body, capability } = {}) {
     throw error;
   }
   return parsed;
+}
+
+function isAllowedWorkspaceWrite(path, method, capability) {
+  return (
+    (capability === VALIDATE_CAPABILITY && method === "POST" && isExactValidatePath(path)) ||
+    (capability === CREATE_AGENT_CAPABILITY && method === "POST" && path === "/v1/agents") ||
+    (capability === CREATE_ENVIRONMENT_CAPABILITY && method === "POST" && path === "/v1/environments") ||
+    (capability === CREATE_SESSION_CAPABILITY && method === "POST" && path === "/v1/sessions") ||
+    (
+      capability === SEND_SESSION_EVENTS_CAPABILITY &&
+      method === "POST" &&
+      /^\/v1\/sessions\/[^/]+\/events$/.test(new URL(path, "http://oma.local").pathname)
+    )
+  );
 }
 
 // Deliberately not added to window.OmaConsoleApi: this exists solely for the
@@ -176,6 +196,100 @@ export function validateMcpOauthCredential(vaultId, credentialId, mode) {
   if (mode !== "api") return Promise.reject(new Error("Validate is only available in live API mode"));
   const path = `/v1/vaults/${encodeURIComponent(vaultId)}/credentials/${encodeURIComponent(credentialId)}/mcp_oauth_validate`;
   return request(path, { method: "POST", capability: VALIDATE_CAPABILITY });
+}
+
+export function createIdempotencyIntent() {
+  return { key: null, fingerprint: null };
+}
+
+export function createAgent(body) {
+  return request("/v1/agents", {
+    method: "POST",
+    body,
+    capability: CREATE_AGENT_CAPABILITY,
+  }).then(toUiAgent);
+}
+
+export function createEnvironment(body) {
+  return request("/v1/environments", {
+    method: "POST",
+    body,
+    capability: CREATE_ENVIRONMENT_CAPABILITY,
+  }).then(toUiEnvironment);
+}
+
+export function createSession(body, { intent, agentNames } = {}) {
+  return request("/v1/sessions", {
+    method: "POST",
+    body,
+    capability: CREATE_SESSION_CAPABILITY,
+    headers: { "idempotency-key": keyForIntent(intent, body) },
+  }).then((session) => toUiSession(session, agentNames ?? new Map()));
+}
+
+export function sendSessionEvents(sessionId, events, { intent } = {}) {
+  const body = { events };
+  return request(`/v1/sessions/${encodeURIComponent(sessionId)}/events`, {
+    method: "POST",
+    body,
+    capability: SEND_SESSION_EVENTS_CAPABILITY,
+    headers: { "idempotency-key": keyForIntent(intent, body) },
+  });
+}
+
+export function followSessionEvents(sessionId, {
+  signal,
+  onEvent,
+  onState,
+  lastEventId,
+  fetchImpl,
+  maxReconnects,
+  reconnectDelayMs,
+  maxFrameBytes,
+} = {}) {
+  const path = `/v1/sessions/${encodeURIComponent(sessionId)}/events/stream`;
+  return followEventStream({
+    url: path,
+    headers: { ...buildRequestHeaders(path, credentials), accept:"text/event-stream" },
+    signal,
+    onEvent,
+    onState,
+    lastEventId,
+    fetchImpl,
+    maxReconnects,
+    reconnectDelayMs,
+    maxFrameBytes,
+  }).catch((error) => {
+    if (error?.status === 401) clearKeyForPath(path, credentials);
+    throw error;
+  });
+}
+
+function keyForIntent(intent, payload) {
+  const target = intent ?? createIdempotencyIntent();
+  const fingerprint = JSON.stringify(payload);
+  if (target.key === null || target.fingerprint !== fingerprint) {
+    target.key = newIdempotencyKey();
+    target.fingerprint = fingerprint;
+  }
+  return target.key;
+}
+
+function newIdempotencyKey() {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (cryptoApi?.getRandomValues) {
+    cryptoApi.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
 }
 
 // Browser navigation on an <a href> cannot attach x-api-key, so authenticated
@@ -301,6 +415,7 @@ function toUiAgent(agent) {
     tools: Array.isArray(agent.tools) ? agent.tools.length : 0,
     system: agent.system || "No system prompt set.",
     toolset: summarizeToolset(agent.tools),
+    toolPermission: summarizeToolPermission(agent.tools),
     sessions: [],
   };
 }
@@ -325,10 +440,20 @@ function toUiSession(session, agentNames) {
 }
 
 function toUiEnvironment(environment) {
+  const networking = environment.config?.networking;
+  const allowedHosts = Array.isArray(networking?.allowed_hosts)
+    ? networking.allowed_hosts.length
+    : 0;
+  const provider = environment.config?.sandbox_provider ?? "deployment provider";
   return {
     id: environment.id,
     label: environment.name || environment.id,
-    image: environment.config?.sandbox_provider ?? "local",
+    image: networking?.type === "limited"
+      ? `${provider} · default-deny${allowedHosts ? ` · ${allowedHosts} hosts` : ""}`
+      : provider,
+    created: shortDate(environment.created_at),
+    config: environment.config ?? {},
+    archived: Boolean(environment.archived_at),
   };
 }
 
@@ -354,6 +479,10 @@ function toUiEvents(events) {
   return events.map((event) => toUiEvent(event, firstTime));
 }
 
+export function toUiSessionEvent(event, firstTime = null) {
+  return toUiEvent(event, firstTime);
+}
+
 function toUiEvent(event, firstTime) {
   const role = eventRole(event.type);
   const content = contentText(event);
@@ -376,6 +505,10 @@ function toUiEvent(event, firstTime) {
     dur: undefined,
     pairedStart: event.model_request_start_id,
     usage,
+    source: event,
+    confirm: (event.type === "agent.tool_use" || event.type === "agent.mcp_tool_use") && event.evaluated_permission === "ask",
+    tool: event.name,
+    cmd: event.input?.command ?? event.input?.cmd ?? JSON.stringify(event.input ?? {}),
   };
 }
 
@@ -422,6 +555,26 @@ function summarizeToolset(tools) {
   return `${tools.length} tool${tools.length === 1 ? "" : "s"}`;
 }
 
+function summarizeToolPermission(tools) {
+  const policies = new Set();
+  for (const toolset of Array.isArray(tools) ? tools : []) {
+    if (toolset?.type !== "agent_toolset_20260401") continue;
+    const defaultEnabled = toolset.default_config?.enabled !== false;
+    const defaultPolicy = toolset.default_config?.permission_policy?.type ?? "always_allow";
+    const configs = Array.isArray(toolset.configs) ? toolset.configs : [];
+    for (const config of configs) {
+      if ((config.enabled ?? defaultEnabled) === false) continue;
+      policies.add(config.permission_policy?.type ?? defaultPolicy);
+    }
+  }
+  if (policies.size === 0) return "No enabled tools";
+  if (policies.size > 1) return "Mixed permissions";
+  const [policy] = policies;
+  if (policy === "always_ask") return "Ask before use";
+  if (policy === "deny") return "Denied";
+  return "Always allow";
+}
+
 function eventRole(type) {
   if (type.startsWith("user.")) return "user";
   if (type.startsWith("agent.tool") || type.includes("tool_")) return "tool";
@@ -433,6 +586,8 @@ function eventRole(type) {
 function eventTag(event) {
   if (event.type === "agent.tool_use") return event.name ?? "tool";
   if (event.type === "agent.tool_result") return event.is_error ? "error" : "exit 0";
+  if (event.type === "agent.mcp_tool_use") return event.name ?? "mcp tool";
+  if (event.type === "agent.mcp_tool_result") return event.is_error ? "error" : "mcp result";
   if (event.type === "span.model_request_end") return event.is_error ? "error" : "model";
   if (event.type === "session.error") return "error";
   if (event.type.startsWith("session.status_")) return event.type.slice("session.status_".length);
@@ -444,6 +599,8 @@ function eventSummary(event, content) {
   if (event.type === "session.error") return event.error?.message ?? event.message ?? "session.error";
   if (event.type === "agent.tool_use") return `agent.tool_use · ${event.name ?? "tool"}`;
   if (event.type === "agent.tool_result") return `agent.tool_result · ${event.is_error ? "error" : "ok"}`;
+  if (event.type === "agent.mcp_tool_use") return `agent.mcp_tool_use · ${event.name ?? "tool"}`;
+  if (event.type === "agent.mcp_tool_result") return `agent.mcp_tool_result · ${event.is_error ? "error" : "ok"}`;
   if (event.type === "span.model_request_start") return "model_request_start";
   if (event.type === "span.model_request_end") return "model_request_end";
   return event.type;
@@ -458,6 +615,8 @@ function isTranscriptEvent(event) {
     "agent.message",
     "agent.tool_use",
     "agent.tool_result",
+    "agent.mcp_tool_use",
+    "agent.mcp_tool_result",
     "agent.custom_tool_use",
   ].includes(event.type);
 }
@@ -563,6 +722,13 @@ if (typeof window !== "undefined") {
     listVaultCredentials,
     listWorkspaceCredentialHealth,
     validateMcpOauthCredential,
+    createIdempotencyIntent,
+    createAgent,
+    createEnvironment,
+    createSession,
+    sendSessionEvents,
+    followSessionEvents,
+    toUiSessionEvent,
     downloadFile,
   };
 }

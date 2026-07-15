@@ -134,8 +134,12 @@ Implementation notes:
 
 Implementation plan: [0136](docs/plans/0136-alpha-console-task-parity.md).
 
-Status: audit complete and independently reviewed on
-`dev/alpha-console-task-audit`; plan 0136 is implementation-ready.
+Status: audit and implementation complete and independently reviewed on
+`dev/alpha-console-live-workflow`. Static rendering, API integration, the full
+test suite, the Docker-local alpha smoke, and a real Chrome walkthrough are
+green. The browser gate covered login, agent/environment/session creation,
+authenticated SSE, an `always_ask` bash confirmation, tool output, the final
+agent message, and the idle transition.
 
 OMA already has a bundled console. The alpha question is therefore narrower
 than "build a UI": identify the minimum guided workflow the existing console
@@ -163,9 +167,10 @@ Output:
 - should-have after alpha;
 - defer / not pursuing pixel parity.
 
-Audit conclusion: the existing console is already a strong read-only inspector.
-Alpha requires API-backed agent/environment/session creation, prompt and
-interrupt actions, authenticated live SSE, and real tool-confirmation handling.
+Audit conclusion: the existing console was already a strong read-only inspector.
+The implementation now adds API-backed agent/environment/session creation,
+prompt and interrupt actions, authenticated live SSE, and real
+tool-confirmation handling.
 CMA's conversational Quickstart, deployments, analytics, and pixel parity are
 deferred.
 

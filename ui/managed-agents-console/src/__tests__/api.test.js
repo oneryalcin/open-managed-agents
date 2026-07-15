@@ -1,5 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testRequest, buildRequestHeaders, clearKeyForPath, listVaultCredentials, listVaults, mintKey, validateMcpOauthCredential } from "../api.js";
+import {
+  __testRequest,
+  buildRequestHeaders,
+  clearCredentials,
+  clearKeyForPath,
+  createAgent,
+  createEnvironment,
+  createIdempotencyIntent,
+  createSession,
+  followSessionEvents,
+  hasWorkspaceKey,
+  listVaultCredentials,
+  listVaults,
+  mintKey,
+  sendSessionEvents,
+  setWorkspaceKey,
+  toUiSessionEvent,
+  validateMcpOauthCredential,
+} from "../api.js";
 
 // The console's credential-routing contract (plan 0120 §3.3): the admin key
 // rides /admin requests only, the workspace key /v1 only. A bug that crossed
@@ -104,7 +122,10 @@ describe("clearKeyForPath", () => {
 });
 
 describe("workspace write capability", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    clearCredentials();
+    vi.unstubAllGlobals();
+  });
 
   it("rejects generic /v1 writes before a network call", async () => {
     const fetchMock = vi.fn();
@@ -144,6 +165,180 @@ describe("workspace write capability", () => {
     await expect(validateMcpOauthCredential("a", "b", "mock")).rejects.toThrow("live API mode");
   });
 
+  it("creates agents through the narrow wrapper with workspace auth, beta, and JSON headers", async () => {
+    setWorkspaceKey("oma_workspace");
+    const fetchMock = vi.fn(() => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify({
+        id:"agent_1234567890",
+        type:"agent",
+        name:"Console agent",
+        model:{ id:"claude-sonnet-4-6", speed:"standard" },
+        system:"Be concise.",
+        tools:[{
+          type:"agent_toolset_20260401",
+          default_config:{ enabled:true, permission_policy:{ type:"always_allow" } },
+          configs:[
+            { name:"bash", enabled:true, permission_policy:{ type:"always_ask" } },
+            { name:"read", enabled:false },
+          ],
+        }],
+        version:1,
+        created_at:"2026-07-14T10:00:00Z",
+        updated_at:"2026-07-14T10:00:00Z",
+        archived_at:null,
+      })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const created = await createAgent({
+      name:"Console agent",
+      model:"claude-sonnet-4-6",
+      system:"Be concise.",
+      tools:[{ type:"agent_toolset_20260401" }],
+    });
+
+    expect(created.toolPermission).toBe("Ask before use");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/agents",
+      expect.objectContaining({
+        method:"POST",
+        headers:expect.objectContaining({
+          accept:"application/json",
+          "x-api-key":"oma_workspace",
+          "anthropic-beta":expect.stringContaining("managed-agents-2026-04-01"),
+          "content-type":"application/json",
+        }),
+        body:JSON.stringify({
+          name:"Console agent",
+          model:"claude-sonnet-4-6",
+          system:"Be concise.",
+          tools:[{ type:"agent_toolset_20260401" }],
+        }),
+      }),
+    );
+  });
+
+  it("creates environments through the narrow wrapper without an idempotency key", async () => {
+    setWorkspaceKey("oma_workspace");
+    const fetchMock = vi.fn(() => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify({
+        id:"env_1234567890",
+        type:"environment",
+        name:"Console env",
+        config:{ type:"cloud" },
+        created_at:"2026-07-14T10:00:00Z",
+        updated_at:"2026-07-14T10:00:00Z",
+        archived_at:null,
+      })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createEnvironment({ name:"Console env", config:{ type:"cloud" } });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/v1/environments");
+    expect(fetchMock.mock.calls[0][1].method).toBe("POST");
+    expect(fetchMock.mock.calls[0][1].headers["idempotency-key"]).toBeUndefined();
+    expect(fetchMock.mock.calls[0][1].body).toBe(JSON.stringify({
+      name:"Console env",
+      config:{ type:"cloud" },
+    }));
+  });
+
+  it("creates sessions with a reused idempotency key for the same intent and rotates when the payload changes", async () => {
+    setWorkspaceKey("oma_workspace");
+    const fetchMock = vi.fn(() => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify({
+        id:"sesn_1234567890",
+        type:"session",
+        agent:{ type:"agent", id:"agent_1", version:1 },
+        environment_id:"env_1",
+        vault_ids:[],
+        status:"idle",
+        title:null,
+        metadata:{},
+        created_at:"2026-07-14T10:00:00Z",
+        updated_at:"2026-07-14T10:00:00Z",
+        archived_at:null,
+        usage:null,
+        resources:[],
+      })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const intent = createIdempotencyIntent();
+
+    await createSession({ agent:"agent_1", environment_id:"env_1" }, { intent });
+    await createSession({ agent:"agent_1", environment_id:"env_1" }, { intent });
+    await createSession({ agent:"agent_1", environment_id:"env_2" }, { intent });
+
+    const keys = fetchMock.mock.calls.map((call) => call[1].headers["idempotency-key"]);
+    expect(keys[0]).toMatch(/[0-9a-f-]{36}/);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(fetchMock.mock.calls[0][1].body).toBe(JSON.stringify({
+      agent:"agent_1",
+      environment_id:"env_1",
+    }));
+  });
+
+  it("sends session events with the supported envelope and idempotency rotation", async () => {
+    setWorkspaceKey("oma_workspace");
+    const fetchMock = vi.fn(() => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify({ data:[], has_more:false })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const intent = createIdempotencyIntent();
+    const message = { type:"user.message", content:[{ type:"text", text:"Hello" }] };
+
+    await sendSessionEvents("sesn/a", [message], { intent });
+    await sendSessionEvents("sesn/a", [message], { intent });
+    await sendSessionEvents("sesn/a", [{ type:"user.interrupt" }], { intent });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/v1/sessions/sesn%2Fa/events");
+    expect(fetchMock.mock.calls[0][1].body).toBe(JSON.stringify({ events:[message] }));
+    const keys = fetchMock.mock.calls.map((call) => call[1].headers["idempotency-key"]);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("follows session event streams with authenticated headers and no URL credentials", async () => {
+    setWorkspaceKey("oma_workspace");
+    const fetchMock = vi.fn(() => Promise.resolve({
+      ok:false,
+      status:401,
+      body:null,
+    }));
+    await expect(followSessionEvents("sesn/a", {
+      fetchImpl: fetchMock,
+      onEvent: vi.fn(),
+      lastEventId: "sevt_1",
+      maxReconnects: 0,
+    })).rejects.toThrow("Session event stream failed (401)");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/sessions/sesn%2Fa/events/stream",
+      expect.objectContaining({
+        method:"GET",
+        headers:expect.objectContaining({
+          accept:"text/event-stream",
+          "x-api-key":"oma_workspace",
+          "anthropic-beta":expect.stringContaining("managed-agents-2026-04-01"),
+          "last-event-id":"sevt_1",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][0]).not.toContain("oma_workspace");
+    expect(hasWorkspaceKey()).toBe(false);
+  });
+
   it("reads vault lists with archived rows included", async () => {
     const fetchMock = vi.fn(() => Promise.resolve({ ok:true, status:200, text:() => Promise.resolve(JSON.stringify({ data:[], has_more:false, next_page:null })) }));
     vi.stubGlobal("fetch", fetchMock);
@@ -155,5 +350,27 @@ describe("workspace write capability", () => {
     expect(urls[0]).toContain("include_archived=true");
     expect(urls[1]).toContain("/v1/vaults/vlt%2F1/credentials?");
     expect(urls[1]).toContain("include_archived=true");
+  });
+});
+
+describe("session event UI mapping", () => {
+  it("keeps MCP confirmation metadata actionable", () => {
+    const event = toUiSessionEvent({
+      id:"sevt_mcp",
+      type:"agent.mcp_tool_use",
+      processed_at:"2026-07-14T10:00:00Z",
+      mcp_server_name:"github",
+      name:"create_issue",
+      input:{ title:"Alpha" },
+      evaluated_permission:"ask",
+    });
+    expect(event).toMatchObject({
+      id:"sevt_mcp",
+      role:"tool",
+      transcript:true,
+      confirm:true,
+      tool:"create_issue",
+    });
+    expect(event.cmd).toContain("Alpha");
   });
 });
