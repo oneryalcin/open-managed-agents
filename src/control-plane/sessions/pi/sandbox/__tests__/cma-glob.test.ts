@@ -4,6 +4,7 @@ import {
   CmaGlobPatternError,
   CmaGlobReadinessFilter,
   CmaGlobStreamCollector,
+  cmaGlobToRipgrepGlob,
   compileCmaGlob,
 } from "../cma-glob.ts";
 
@@ -49,6 +50,14 @@ describe("CMA glob pattern compiler", () => {
     expect(compileCmaGlob("sub/*.md").matches("root/sub/a.md")).toBe(true);
     expect(compileCmaGlob("sub/*.md").matches("root/sub/deep/a.md")).toBe(false);
     expect(compileCmaGlob("sub/**").matches("root/sub/deep/a.md")).toBe(true);
+  });
+
+  it("translates CMA suffix matching into ripgrep root-relative globs", () => {
+    expect(cmaGlobToRipgrepGlob("*.md")).toBe("**/*.md");
+    expect(cmaGlobToRipgrepGlob("sub/*.md")).toBe("**/sub/*.md");
+    expect(cmaGlobToRipgrepGlob("**/*.md")).toBe("**/*.md");
+    expect(cmaGlobToRipgrepGlob("q\\?.md")).toBe("**/q\\?.md");
+    expect(() => cmaGlobToRipgrepGlob("[")).toThrow(CmaGlobPatternError);
   });
 
   it("rejects malformed and over-complex patterns", () => {

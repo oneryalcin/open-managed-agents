@@ -16,13 +16,12 @@ import {
   CMA_GLOB_READY_MARKER,
   CmaGlobReadinessFilter,
   CmaGlobStreamCollector,
+  cmaGlobToRipgrepGlob,
   compileCmaGlob,
 } from "./cma-glob.ts";
 import {
   CMA_GREP_READY_MARKER,
-  CmaGrepCandidateCollector,
   CmaGrepStreamCollector,
-  createCmaGrepDeadline,
 } from "./cma-grep.ts";
 import { matchGlob } from "./glob.ts";
 import {
@@ -50,8 +49,9 @@ import {
   MAX_SESSION_OUTPUT_FILE_BYTES,
   MAX_SESSION_OUTPUT_FILES,
 } from "../../../files/types.ts";
+import { DEFAULT_OMA_SANDBOX_IMAGE } from "./image.ts";
 
-const DEFAULT_IMAGE = "bash:5.2";
+export const DEFAULT_DOCKER_SANDBOX_IMAGE = DEFAULT_OMA_SANDBOX_IMAGE;
 const DEFAULT_WORKSPACE = "/workspace";
 const DEFAULT_UPLOADS_PATH = "/mnt/session/uploads";
 const DEFAULT_OUTPUTS_PATH = "/mnt/session/outputs";
@@ -658,81 +658,25 @@ export async function createDockerSandboxProvider(
       const protocolBytes = Buffer.byteLength(CMA_GREP_READY_MARKER, "utf8") + 1;
       const abortFromCaller = () => controller.abort();
       signal.addEventListener("abort", abortFromCaller, { once: true });
-      const remainingTimeoutMs = createCmaGrepDeadline(timeoutMs);
       let streamError: Error | undefined;
-      const matcher = glob === undefined ? undefined : compileCmaGlob(glob);
-      const candidates = new CmaGrepCandidateCollector({ root, maxRawBytes, matcher });
-      const enumerationToken = `oma-grep-${randomUUID()}`;
-      const enumerationReady = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
+      const ownershipToken = `oma-grep-${randomUUID()}`;
+      const readiness = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
+      const collector = new CmaGrepStreamCollector({
+        root,
+        maxMatches: headLimit,
+        maxRawBytes,
+        maxOutputBytes,
+        join: posix.join,
+        formatForOutput: outputBase === undefined
+          ? undefined
+          : (absolutePath) => posix.relative(outputBase, absolutePath),
+        onLimit: () => controller.abort(),
+      });
       try {
-        await dockerShell(buildDockerCmaGrepPatternCheckCommand(pattern), {
-          signal: controller.signal,
-          timeoutMs: remainingTimeoutMs(),
-          guestTimeout: false,
-        });
-
         try {
-          await dockerShell(buildDockerCmaGrepCandidateEnumerationCommand(root, enumerationToken), {
+          await dockerShell(buildDockerCmaGrepSearchCommand(root, ownershipToken, pattern, glob), {
             signal: controller.signal,
-            timeoutMs: remainingTimeoutMs(),
-            guestTimeout: false,
-            maxStdoutBytes: maxRawBytes + protocolBytes + 64 * 1024,
-            maxCombinedBytes: maxRawBytes + protocolBytes + 128 * 1024,
-            onStdout: (chunk) => {
-              try {
-                const filenames = enumerationReady.push(chunk);
-                if (filenames) candidates.push(filenames);
-              } catch (error) {
-                streamError = error as Error;
-                controller.abort();
-              }
-            },
-          });
-          if (streamError) throw streamError;
-          if (signal.aborted) throw new Error("Operation aborted");
-          enumerationReady.assertReady();
-          candidates.finish();
-        } catch (error) {
-          if (streamError) throw streamError;
-          if (signal.aborted) throw new Error("Operation aborted");
-          throw error;
-        } finally {
-          if (!enumerationReady.ready) {
-            await poisonInfrastructure();
-          } else {
-            try {
-              await dockerShell(buildDockerCmaGrepCleanupCommand(enumerationToken), {
-                timeoutMs: 3_000,
-                guestTimeout: false,
-              });
-            } catch (cleanupError) {
-              await poisonInfrastructure();
-              throw cleanupError;
-            }
-          }
-        }
-        if (signal.aborted) throw new Error("Operation aborted");
-        if (candidates.candidates.length === 0) return [];
-
-        const searchToken = `oma-grep-${randomUUID()}`;
-        const readiness = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
-        const collector = new CmaGrepStreamCollector({
-          root,
-          maxMatches: headLimit,
-          maxRawBytes,
-          maxOutputBytes,
-          join: posix.join,
-          formatForOutput: outputBase === undefined
-            ? undefined
-            : (absolutePath) => posix.relative(outputBase, absolutePath),
-          onLimit: () => controller.abort(),
-        });
-        streamError = undefined;
-        try {
-          await dockerShell(buildDockerCmaGrepSearchCommand(root, searchToken, pattern), {
-            input: Buffer.from(`${candidates.candidates.join("\0")}\0`, "utf8"),
-            signal: controller.signal,
-            timeoutMs: remainingTimeoutMs(),
+            timeoutMs,
             guestTimeout: false,
             maxStdoutBytes: maxRawBytes + protocolBytes + 64 * 1024,
             maxCombinedBytes: maxRawBytes + protocolBytes + 128 * 1024,
@@ -759,7 +703,7 @@ export async function createDockerSandboxProvider(
             await poisonInfrastructure();
           } else {
             try {
-              await dockerShell(buildDockerCmaGrepCleanupCommand(searchToken), {
+              await dockerShell(buildDockerCmaGrepCleanupCommand(ownershipToken), {
                 timeoutMs: 3_000,
                 guestTimeout: false,
               });
@@ -1274,20 +1218,6 @@ export function buildDockerCmaGrepCleanupCommand(
   };
 }
 
-export function buildDockerCmaGrepPatternCheckCommand(
-  pattern: string,
-): DockerShellCommand {
-  return {
-    script: [
-      "set +e",
-      "LC_ALL=C grep -E -q -- \"$1\" /dev/null >/dev/null 2>&1",
-      "code=$?",
-      "[ \"$code\" -eq 1 ]",
-    ].join("\n"),
-    args: [pattern],
-  };
-}
-
 export function buildDockerCmaGrepPreflightCommand(): DockerShellCommand {
   return {
     script: [
@@ -1297,23 +1227,26 @@ export function buildDockerCmaGrepPreflightCommand(): DockerShellCommand {
       "trap 'rm -rf \"$dir\"' EXIT",
       "printf 'needle\\n' > \"$dir/text.txt\"",
       "printf 'other\\n' > \"$dir/no-match.txt\"",
-      "printf 'a\\0b' > \"$dir/binary.bin\"",
-      "LC_ALL=C grep -E -q -- 'needle' \"$dir/text.txt\"",
+      "printf '\\0needle\\0tail' > \"$dir/binary.bin\"",
+      "LC_ALL=C rg --no-config --files-with-matches --null -- 'needle' \"$dir/text.txt\" | grep -Fq \"$dir/text.txt\"",
       "set +e",
-      "LC_ALL=C grep -E -q -- 'needle' \"$dir/no-match.txt\" >/dev/null 2>&1",
+      "LC_ALL=C rg --no-config --files-with-matches --null -- 'needle' \"$dir/no-match.txt\" >/dev/null 2>&1",
       "code=$?",
       "set -e",
       "[ \"$code\" -eq 1 ]",
       "set +e",
-      "LC_ALL=C grep -E -q -- '[' \"$dir/text.txt\" >/dev/null 2>&1",
+      "LC_ALL=C rg --no-config --files-with-matches --null -- '[' \"$dir/text.txt\" >/dev/null 2>&1",
       "code=$?",
       "set -e",
       "[ \"$code\" -ne 0 ] && [ \"$code\" -ne 1 ]",
-      "out=$(LC_ALL=C grep -E -q -- 'needle' \"$dir/text.txt\" 2>/dev/null || true)",
-      "[ -z \"$out\" ]",
-      "LC_ALL=C grep -Iq . \"$dir/text.txt\"",
-      "! LC_ALL=C grep -Iq . \"$dir/binary.bin\"",
-      "printf 'x\\0' | while IFS= read -r -d '' item; do [ \"$item\" = x ]; done",
+      "last=$(LC_ALL=C rg --no-config --files-with-matches --null -- 'needle' \"$dir/text.txt\" | tail -c 1 | od -An -tu1)",
+      "[ \"$(printf '%s' \"$last\" | tr -d ' ')\" = 0 ]",
+      "LC_ALL=C rg --no-config -qaU -- '\\x00' \"$dir/binary.bin\"",
+      "set +e",
+      "LC_ALL=C rg --no-config -qaU -- '\\x00' \"$dir/text.txt\"",
+      "code=$?",
+      "set -e",
+      "[ \"$code\" -eq 1 ]",
     ].join("\n"),
     args: [],
   };
@@ -1323,38 +1256,35 @@ export function buildDockerCmaGrepSearchCommand(
   root: string,
   ownershipToken: string,
   pattern: string,
+  glob?: string,
 ): DockerShellCommand {
+  const ripgrepGlob = glob === undefined ? "" : cmaGlobToRipgrepGlob(glob);
   return {
     script: [
       "set -eu",
-      "exec setsid env \"OMA_GREP_OWNER=$2\" sh -c '",
-      "set -eu",
+      "exec setsid env \"OMA_GREP_OWNER=$2\" bash -c '",
+      "set -euo pipefail",
       "printf \"%s\\0\" __OMA_GREP_READY__",
-      "while IFS= read -r -d \"\" file; do",
-      "  if LC_ALL=C grep -Iq . \"$file\" 2>/dev/null && LC_ALL=C grep -E -q -- \"$2\" \"$file\" 2>/dev/null; then",
-      "    printf \"%s\\0\" \"$file\"",
-      "  fi",
-      "done",
-      "' \"$2\" \"$1\" \"$3\"",
+      "emit_text_matches() {",
+      "  while IFS= read -r -d \"\" path; do",
+      "    set +e",
+      "    LC_ALL=C rg --no-config -qaU -- \"\\x00\" \"$path\"",
+      "    binary_code=$?",
+      "    set -e",
+      "    if [ \"$binary_code\" -eq 1 ]; then printf \"%s\\0\" \"$path\"; elif [ \"$binary_code\" -ne 0 ]; then exit \"$binary_code\"; fi",
+      "  done",
+      "}",
+      "set +e",
+      "if [ -n \"$3\" ]; then",
+      "  LC_ALL=C rg --no-config --hidden --no-ignore --color never --files-with-matches --null --glob \"$3\" -- \"$2\" \"$1\" | emit_text_matches",
+      "else",
+      "  LC_ALL=C rg --no-config --hidden --no-ignore --color never --files-with-matches --null -- \"$2\" \"$1\" | emit_text_matches",
+      "fi",
+      "code=$?",
+      "[ \"$code\" -eq 0 ] || [ \"$code\" -eq 1 ]",
+      "' oma-rg \"$1\" \"$3\" \"$4\"",
     ].join("\n"),
-    args: [root, ownershipToken, pattern],
-    input: "",
-    interactive: true,
-  };
-}
-
-export function buildDockerCmaGrepCandidateEnumerationCommand(
-  root: string,
-  ownershipToken: string,
-): DockerShellCommand {
-  return {
-    script: [
-      "set -eu",
-      "setsid env \"OMA_GREP_OWNER=$2\" sh -c 'set -eu; printf \"%s\\0\" __OMA_GREP_READY__; if [ -f \"$1\" ]; then printf \"%s\\0\" \"$1\"; elif [ -d \"$1\" ]; then exec find \"$1\" -type f -print0; else cd \"$1\"; fi' \"$2\" \"$1\" &",
-      "child=$!",
-      "wait \"$child\"",
-    ].join("\n"),
-    args: [root, ownershipToken],
+    args: [root, ownershipToken, pattern, ripgrepGlob],
   };
 }
 
@@ -1701,7 +1631,7 @@ function resolveDockerOptions(
   opts: DockerSandboxOptions,
 ): DockerSandboxResolvedOptions {
   return {
-    image: opts.image ?? DEFAULT_IMAGE,
+    image: opts.image ?? DEFAULT_DOCKER_SANDBOX_IMAGE,
     dockerCommand: opts.dockerCommand ?? "docker",
     workspacePath: opts.workspacePath ?? DEFAULT_WORKSPACE,
     uploadsPath: DEFAULT_UPLOADS_PATH,

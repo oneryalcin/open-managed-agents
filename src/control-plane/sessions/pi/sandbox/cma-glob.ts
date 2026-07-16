@@ -141,6 +141,14 @@ export function compileCmaGlob(pattern: string): CompiledCmaGlob {
   };
 }
 
+/** Translate CMA's implicit descendant-suffix matching to ripgrep's
+ * root-relative glob syntax. Both grammars share the validated wildcard,
+ * class, brace, and escape forms used by CMA; the anchoring rule differs. */
+export function cmaGlobToRipgrepGlob(pattern: string): string {
+  compileCmaGlob(pattern);
+  return pattern.startsWith("**/") ? pattern : `**/${pattern}`;
+}
+
 function expandBraces(pattern: string): string[] {
   let escaped = false;
   let open = -1;

@@ -162,10 +162,11 @@ the risk of silent contradiction, not by how easy they first appear.
     file paths, `head_limit` caps paths, invalid regex/missing path are tool
     errors, and omitted-path semantics remain unclaimed. Implementation plan:
     [`docs/plans/0134-cma-grep-runtime.md`](docs/plans/0134-cma-grep-runtime.md).
-  - OMA chooses in-guest BusyBox/POSIX `grep -E` under `LC_ALL=C` for v1,
-    with bounded inputs and semantic provider preflight. Ripgrep-compatible Rust
-    regex parity is deferred to avoid coupling this slice to image and
-    supply-chain work.
+  - OMA initially shipped in-guest BusyBox/POSIX `grep -E` under `LC_ALL=C`
+    with bounded inputs and semantic provider preflight in PR #188. Plan 0138
+    and PR #193 replace that interim engine with a pinned in-guest ripgrep
+    runtime shared by Docker and microsandbox. Anonymous pull and both live
+    provider paths are verified.
 
 - [x] **Bidirectional session pagination / `prev_page`** *(DONE 2026-07-13; PR #185; plan 0132; probe 66)*
   - CMA `[Obs]`: session pages are `{data,next_page,prev_page}` without
@@ -248,11 +249,12 @@ early adopter can build and iterate a credible single-agent product.
    with 409, retain historical retrieval after archive, and select latest or an
    explicitly pinned version at session creation. OMA now implements immutable
    revisions and exact-version runtime pinning. Implementation plan: [`docs/plans/0133-cma-agent-update-versioning.md`](docs/plans/0133-cma-agent-update-versioning.md).
-2. **Usable environment image story** — provide a batteries-included default
-   runtime and a reviewed per-environment image override. Today the minimal
-   `bash:5.2` / Alpine defaults require operators to build an image before a
-   typical Python or Node workflow works. Image selection is a security
-   boundary and needs allowlisting/pinning, not a raw untrusted Docker string.
+2. **Usable environment image story** — the first narrow foundation is in
+   review: a digest-pinned, multi-architecture OMA image with Bash and ripgrep
+   (plan 0138 / issue #187). A batteries-included Python/Node runtime and a
+   reviewed per-environment image override remain. Image selection is a
+   security boundary and needs allowlisting/pinning, not a raw untrusted Docker
+   string.
 3. **Web tools** — re-probe CMA `web_fetch` / `web_search` shapes, decide which
    leg owns execution, and integrate them with the shipped egress policy rather
    than exposing Pi's host-network defaults. This is now unblocked but is still

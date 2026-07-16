@@ -15,13 +15,12 @@ import {
   CMA_GLOB_READY_MARKER,
   CmaGlobReadinessFilter,
   CmaGlobStreamCollector,
+  cmaGlobToRipgrepGlob,
   compileCmaGlob,
 } from "./cma-glob.ts";
 import {
   CMA_GREP_READY_MARKER,
-  CmaGrepCandidateCollector,
   CmaGrepStreamCollector,
-  createCmaGrepDeadline,
 } from "./cma-grep.ts";
 import { matchGlob } from "./glob.ts";
 import {
@@ -42,9 +41,10 @@ import {
   MAX_SESSION_OUTPUT_FILE_BYTES,
   MAX_SESSION_OUTPUT_FILES,
 } from "../../../files/types.ts";
+import { DEFAULT_OMA_SANDBOX_IMAGE } from "./image.ts";
 
 export const DEFAULT_MICROSANDBOX_COMMAND = "msb";
-export const DEFAULT_MICROSANDBOX_IMAGE = "docker.io/library/alpine:latest";
+export const DEFAULT_MICROSANDBOX_IMAGE = DEFAULT_OMA_SANDBOX_IMAGE;
 export const DEFAULT_MICROSANDBOX_WORKSPACE = "/workspace";
 export const DEFAULT_MICROSANDBOX_UPLOADS_PATH = "/mnt/session/uploads";
 export const DEFAULT_MICROSANDBOX_OUTPUTS_PATH = "/mnt/session/outputs";
@@ -308,6 +308,20 @@ export async function createMicrosandboxSandboxProvider(
       { timeoutMs: resolved.operationTimeoutMs },
     );
     sandboxCreated = true;
+    await microsandboxChecked(
+      resolved.cli,
+      buildMicrosandboxShellExecArgs({
+        sandboxName,
+        ...buildMicrosandboxPrepareMountsCommand(
+          resolved.uploadsPath,
+          resolved.outputsPath,
+        ),
+        workdir: resolved.workspacePath,
+        timeout: timeoutSecondsText(resolved.operationTimeoutMs),
+        user: "0",
+      }),
+      { timeoutMs: resolved.operationTimeoutMs + 2_000 },
+    );
   } catch (error) {
     if (volumeCreated || sandboxCreated) {
       forceRemoveMicrosandboxSandbox(resolved.cli, sandboxName, resolved);
@@ -349,6 +363,7 @@ export async function createMicrosandboxSandboxProvider(
   const shell = (
     command: MicrosandboxShellCommand,
     execOpts: MicrosandboxCliExecOptions = {},
+    guestUser?: string,
   ) =>
     microsandboxChecked(
       resolved.cli,
@@ -366,6 +381,7 @@ export async function createMicrosandboxSandboxProvider(
           execOpts.onData !== undefined ||
           execOpts.onStdout !== undefined ||
           execOpts.onStderr !== undefined,
+        user: guestUser,
       }),
       {
         ...execOpts,
@@ -407,24 +423,34 @@ export async function createMicrosandboxSandboxProvider(
       const destination = kind === "upload" ? resolved.uploadsPath : "/workspace/skills";
       const tempRoot = await mkdtemp(joinHostPath(tmpdir(), "oma-msb-mounts-"));
       try {
-      for (const mount of selected) {
-        const relativePath = assertInsideMicrosandboxUploadsPath(
-          mount.mountPath,
-          destination,
+        for (const mount of selected) {
+          const relativePath = assertInsideMicrosandboxUploadsPath(
+            mount.mountPath,
+            destination,
+          );
+          const hostPath = await writeMountFile(tempRoot, relativePath, mount);
+          const guestPath = posix.join(destination, relativePath);
+          await shell(
+            buildMicrosandboxMkdirCommand(posix.dirname(guestPath)),
+            {},
+            "0",
+          );
+          await microsandboxChecked(
+            resolved.cli,
+            buildMicrosandboxCopyArgs(
+              hostPath,
+              microsandboxPathRef(sandboxName, guestPath),
+            ),
+            { timeoutMs: resolved.operationTimeoutMs },
+          );
+        }
+        await shell(
+          kind === "upload"
+            ? buildMicrosandboxNormalizeUploadsCommand(destination)
+            : buildMicrosandboxNormalizeSkillsCommand(destination),
+          {},
+          "0",
         );
-        const hostPath = await writeMountFile(tempRoot, relativePath, mount);
-        const guestPath = posix.join(destination, relativePath);
-        await shell(buildMicrosandboxMkdirCommand(posix.dirname(guestPath)));
-        await microsandboxChecked(
-          resolved.cli,
-          buildMicrosandboxCopyArgs(
-            hostPath,
-            microsandboxPathRef(sandboxName, guestPath),
-          ),
-          { timeoutMs: resolved.operationTimeoutMs },
-        );
-      }
-      await shell(kind === "upload" ? buildMicrosandboxNormalizeUploadsCommand(destination) : buildMicrosandboxNormalizeSkillsCommand(destination));
       } finally {
         await rm(tempRoot, { force: true, recursive: true });
       }
@@ -671,95 +697,28 @@ export async function createMicrosandboxSandboxProvider(
       const protocolBytes = Buffer.byteLength(CMA_GREP_READY_MARKER, "utf8") + 1;
       const abortFromCaller = () => controller.abort();
       signal.addEventListener("abort", abortFromCaller, { once: true });
-      const remainingTimeoutMs = createCmaGrepDeadline(timeoutMs);
       let streamError: Error | undefined;
       let sawStdout = false;
-      const matcher = glob === undefined ? undefined : compileCmaGlob(glob);
-      const candidates = new CmaGrepCandidateCollector({ root, maxRawBytes, matcher });
-      const enumerationToken = `oma-grep-${randomUUID()}`;
-      const enumerationReady = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
+      const ownershipToken = `oma-grep-${randomUUID()}`;
+      const readiness = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
+      const collector = new CmaGrepStreamCollector({
+        root,
+        maxMatches: headLimit,
+        maxRawBytes,
+        maxOutputBytes,
+        join: posix.join,
+        formatForOutput: outputBase === undefined
+          ? undefined
+          : (absolutePath) => posix.relative(outputBase, absolutePath),
+        onLimit: () => controller.abort(),
+      });
       try {
-        await shell(buildMicrosandboxCmaGrepPatternCheckCommand(pattern), {
-          signal: controller.signal,
-          timeoutMs: remainingTimeoutMs(),
-          guestTimeout: false,
-        });
-
         try {
           const result = await shell(
-            buildMicrosandboxCmaGrepCandidateEnumerationCommand(root, enumerationToken),
+            buildMicrosandboxCmaGrepSearchCommand(root, ownershipToken, pattern, glob),
             {
               signal: controller.signal,
-              timeoutMs: remainingTimeoutMs(),
-              guestTimeout: false,
-              maxBuffer: maxRawBytes + protocolBytes + 64 * 1024,
-              onStdout: (chunk) => {
-                sawStdout = true;
-                try {
-                  const filenames = enumerationReady.push(chunk);
-                  if (filenames) candidates.push(filenames);
-                } catch (error) {
-                  streamError = error as Error;
-                  controller.abort();
-                }
-              },
-            },
-          );
-          if (!sawStdout && result.stdout.length > 0) {
-            const filenames = enumerationReady.push(result.stdout);
-            if (filenames) candidates.push(filenames);
-          }
-          if (streamError) throw streamError;
-          if (signal.aborted) throw new Error("Operation aborted");
-          enumerationReady.assertReady();
-          candidates.finish();
-        } catch (error) {
-          if (streamError) throw streamError;
-          if (signal.aborted) throw new Error("Operation aborted");
-          throw error;
-        } finally {
-          if (!enumerationReady.ready) {
-            await poisonInfrastructure();
-          } else {
-            try {
-              await shell(
-                buildMicrosandboxCmaGrepCleanupCommand(enumerationToken),
-                {
-                  timeoutMs: 3_000,
-                  guestTimeout: false,
-                },
-              );
-            } catch (cleanupError) {
-              await poisonInfrastructure();
-              throw cleanupError;
-            }
-          }
-        }
-        if (signal.aborted) throw new Error("Operation aborted");
-        if (candidates.candidates.length === 0) return [];
-
-        const searchToken = `oma-grep-${randomUUID()}`;
-        const readiness = new CmaGlobReadinessFilter(CMA_GREP_READY_MARKER);
-        const collector = new CmaGrepStreamCollector({
-          root,
-          maxMatches: headLimit,
-          maxRawBytes,
-          maxOutputBytes,
-          join: posix.join,
-          formatForOutput: outputBase === undefined
-            ? undefined
-            : (absolutePath) => posix.relative(outputBase, absolutePath),
-          onLimit: () => controller.abort(),
-        });
-        streamError = undefined;
-        sawStdout = false;
-        try {
-          const result = await shell(
-            buildMicrosandboxCmaGrepSearchCommand(root, searchToken, pattern),
-            {
-              input: Buffer.from(`${candidates.candidates.join("\0")}\0`, "utf8"),
-              signal: controller.signal,
-              timeoutMs: remainingTimeoutMs(),
+              timeoutMs,
               guestTimeout: false,
               maxBuffer: maxRawBytes + protocolBytes + 64 * 1024,
               onStdout: (chunk) => {
@@ -792,7 +751,7 @@ export async function createMicrosandboxSandboxProvider(
           } else {
             try {
               await shell(
-                buildMicrosandboxCmaGrepCleanupCommand(searchToken),
+                buildMicrosandboxCmaGrepCleanupCommand(ownershipToken),
                 {
                   timeoutMs: 3_000,
                   guestTimeout: false,
@@ -1056,10 +1015,15 @@ export function buildMicrosandboxExecArgs(opts: {
   workdir?: string;
   timeout?: string;
   stream?: boolean;
+  user?: string;
 }): string[] {
   assertMicrosandboxArg(opts.sandboxName, "sandboxName");
   const out = ["exec"];
   if (opts.stream) out.push("--stream");
+  if (opts.user !== undefined) {
+    assertMicrosandboxArg(opts.user, "user");
+    out.push("--user", opts.user);
+  }
   if (opts.timeout !== undefined) out.push("--timeout", opts.timeout);
   if (opts.workdir !== undefined) out.push("--workdir", opts.workdir);
   out.push(opts.sandboxName, "--", ...opts.command);
@@ -1073,12 +1037,14 @@ export function buildMicrosandboxShellExecArgs(opts: {
   workdir?: string;
   timeout?: string;
   stream?: boolean;
+  user?: string;
 }): string[] {
   return buildMicrosandboxExecArgs({
     sandboxName: opts.sandboxName,
     workdir: opts.workdir,
     timeout: opts.timeout,
     stream: opts.stream,
+    user: opts.user,
     command: ["/bin/sh", "-lc", opts.script, "sh", ...(opts.args ?? [])],
   });
 }
@@ -1163,6 +1129,17 @@ export function buildMicrosandboxMkdirCommand(
   absolutePath: string,
 ): MicrosandboxShellCommand {
   return { script: "mkdir -p \"$1\"", args: [absolutePath] };
+}
+
+export function buildMicrosandboxPrepareMountsCommand(
+  uploadsPath: string,
+  outputsPath: string,
+): MicrosandboxShellCommand {
+  return {
+    script:
+      "chown 0:0 \"$1\" && chmod 755 \"$1\" && chown 65534:65534 \"$2\" && chmod 700 \"$2\"",
+    args: [uploadsPath, outputsPath],
+  };
 }
 
 export function buildMicrosandboxNormalizeUploadsCommand(
@@ -1271,20 +1248,6 @@ export function buildMicrosandboxCmaGrepCleanupCommand(
   };
 }
 
-export function buildMicrosandboxCmaGrepPatternCheckCommand(
-  pattern: string,
-): MicrosandboxShellCommand {
-  return {
-    script: [
-      "set +e",
-      "LC_ALL=C grep -E -q -- \"$1\" /dev/null >/dev/null 2>&1",
-      "code=$?",
-      "[ \"$code\" -eq 1 ]",
-    ].join("\n"),
-    args: [pattern],
-  };
-}
-
 export function buildMicrosandboxCmaGrepPreflightCommand(): MicrosandboxShellCommand {
   return {
     script: [
@@ -1294,23 +1257,26 @@ export function buildMicrosandboxCmaGrepPreflightCommand(): MicrosandboxShellCom
       "trap 'rm -rf \"$dir\"' EXIT",
       "printf 'needle\\n' > \"$dir/text.txt\"",
       "printf 'other\\n' > \"$dir/no-match.txt\"",
-      "printf 'a\\0b' > \"$dir/binary.bin\"",
-      "LC_ALL=C grep -E -q -- 'needle' \"$dir/text.txt\"",
+      "printf '\\0needle\\0tail' > \"$dir/binary.bin\"",
+      "LC_ALL=C rg --no-config --files-with-matches --null -- 'needle' \"$dir/text.txt\" | grep -Fq \"$dir/text.txt\"",
       "set +e",
-      "LC_ALL=C grep -E -q -- 'needle' \"$dir/no-match.txt\" >/dev/null 2>&1",
+      "LC_ALL=C rg --no-config --files-with-matches --null -- 'needle' \"$dir/no-match.txt\" >/dev/null 2>&1",
       "code=$?",
       "set -e",
       "[ \"$code\" -eq 1 ]",
       "set +e",
-      "LC_ALL=C grep -E -q -- '[' \"$dir/text.txt\" >/dev/null 2>&1",
+      "LC_ALL=C rg --no-config --files-with-matches --null -- '[' \"$dir/text.txt\" >/dev/null 2>&1",
       "code=$?",
       "set -e",
       "[ \"$code\" -ne 0 ] && [ \"$code\" -ne 1 ]",
-      "out=$(LC_ALL=C grep -E -q -- 'needle' \"$dir/text.txt\" 2>/dev/null || true)",
-      "[ -z \"$out\" ]",
-      "LC_ALL=C grep -Iq . \"$dir/text.txt\"",
-      "! LC_ALL=C grep -Iq . \"$dir/binary.bin\"",
-      "printf 'x\\0' | while IFS= read -r -d '' item; do [ \"$item\" = x ]; done",
+      "last=$(LC_ALL=C rg --no-config --files-with-matches --null -- 'needle' \"$dir/text.txt\" | tail -c 1 | od -An -tu1)",
+      "[ \"$(printf '%s' \"$last\" | tr -d ' ')\" = 0 ]",
+      "LC_ALL=C rg --no-config -qaU -- '\\x00' \"$dir/binary.bin\"",
+      "set +e",
+      "LC_ALL=C rg --no-config -qaU -- '\\x00' \"$dir/text.txt\"",
+      "code=$?",
+      "set -e",
+      "[ \"$code\" -eq 1 ]",
     ].join("\n"),
     args: [],
   };
@@ -1320,37 +1286,35 @@ export function buildMicrosandboxCmaGrepSearchCommand(
   root: string,
   ownershipToken: string,
   pattern: string,
+  glob?: string,
 ): MicrosandboxShellCommand {
+  const ripgrepGlob = glob === undefined ? "" : cmaGlobToRipgrepGlob(glob);
   return {
     script: [
       "set -eu",
-      "exec setsid env \"OMA_GREP_OWNER=$2\" sh -c '",
-      "set -eu",
+      "exec setsid env \"OMA_GREP_OWNER=$2\" bash -c '",
+      "set -euo pipefail",
       "printf \"%s\\0\" __OMA_GREP_READY__",
-      "while IFS= read -r -d \"\" file; do",
-      "  if LC_ALL=C grep -Iq . \"$file\" 2>/dev/null && LC_ALL=C grep -E -q -- \"$2\" \"$file\" 2>/dev/null; then",
-      "    printf \"%s\\0\" \"$file\"",
-      "  fi",
-      "done",
-      "' \"$2\" \"$1\" \"$3\"",
+      "emit_text_matches() {",
+      "  while IFS= read -r -d \"\" path; do",
+      "    set +e",
+      "    LC_ALL=C rg --no-config -qaU -- \"\\x00\" \"$path\"",
+      "    binary_code=$?",
+      "    set -e",
+      "    if [ \"$binary_code\" -eq 1 ]; then printf \"%s\\0\" \"$path\"; elif [ \"$binary_code\" -ne 0 ]; then exit \"$binary_code\"; fi",
+      "  done",
+      "}",
+      "set +e",
+      "if [ -n \"$3\" ]; then",
+      "  LC_ALL=C rg --no-config --hidden --no-ignore --color never --files-with-matches --null --glob \"$3\" -- \"$2\" \"$1\" | emit_text_matches",
+      "else",
+      "  LC_ALL=C rg --no-config --hidden --no-ignore --color never --files-with-matches --null -- \"$2\" \"$1\" | emit_text_matches",
+      "fi",
+      "code=$?",
+      "[ \"$code\" -eq 0 ] || [ \"$code\" -eq 1 ]",
+      "' oma-rg \"$1\" \"$3\" \"$4\"",
     ].join("\n"),
-    args: [root, ownershipToken, pattern],
-    input: "",
-  };
-}
-
-export function buildMicrosandboxCmaGrepCandidateEnumerationCommand(
-  root: string,
-  ownershipToken: string,
-): MicrosandboxShellCommand {
-  return {
-    script: [
-      "set -eu",
-      "setsid env \"OMA_GREP_OWNER=$2\" sh -c 'set -eu; printf \"%s\\0\" __OMA_GREP_READY__; if [ -f \"$1\" ]; then printf \"%s\\0\" \"$1\"; elif [ -d \"$1\" ]; then exec find \"$1\" -type f -print0; else cd \"$1\"; fi' \"$2\" \"$1\" &",
-      "child=$!",
-      "wait \"$child\"",
-    ].join("\n"),
-    args: [root, ownershipToken],
+    args: [root, ownershipToken, pattern, ripgrepGlob],
   };
 }
 

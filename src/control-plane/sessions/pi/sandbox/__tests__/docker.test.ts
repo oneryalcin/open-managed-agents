@@ -11,8 +11,6 @@ import {
   buildDockerExecShellArgs,
   buildDockerFileAccessCommand,
   buildDockerCmaGrepPreflightCommand,
-  buildDockerCmaGrepPatternCheckCommand,
-  buildDockerCmaGrepCandidateEnumerationCommand,
   buildDockerCmaGrepSearchCommand,
   buildDockerGlobEnumerationCommand,
   buildDockerMkdirCommand,
@@ -222,21 +220,20 @@ describe("Docker sandbox provider command construction", () => {
 
   it("builds CMA grep commands with LC_ALL=C and token ownership", () => {
     const preflight = buildDockerCmaGrepPreflightCommand();
-    expect(preflight.script).toContain("LC_ALL=C grep -E -q");
-    expect(preflight.script).toContain("grep -Iq");
-    expect(preflight.script).toContain("read -r -d");
-    expect(buildDockerCmaGrepPatternCheckCommand("[abc]").script).toContain("LC_ALL=C grep -E -q");
-    expect(buildDockerCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
-      .toContain("find \"$1\" -type f -print0");
-    expect(buildDockerCmaGrepCandidateEnumerationCommand("/workspace", "oma-grep-token").script)
-      .toContain("[ -f \"$1\" ]");
-    const command = buildDockerCmaGrepSearchCommand("/workspace", "oma-grep-token", "needle");
-    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle"]);
+    expect(preflight.script).toContain("LC_ALL=C rg --no-config --files-with-matches --null");
+    expect(preflight.script).toContain("binary.bin");
+    const command = buildDockerCmaGrepSearchCommand(
+      "/workspace",
+      "oma-grep-token",
+      "needle",
+      "*.md",
+    );
+    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle", "**/*.md"]);
     expect(command.script).toContain("OMA_GREP_OWNER=$2");
     expect(command.script).toContain("__OMA_GREP_READY__");
-    expect(command.script).toContain("while IFS= read -r -d");
-    expect(command.script).toContain("grep -Iq");
-    expect(command.script).toContain("grep -E -q");
+    expect(command.script).toContain("rg --no-config --hidden --no-ignore");
+    expect(command.script).toContain("--files-with-matches --null --glob");
+    expect(command.script).not.toContain("find \"$1\"");
   });
 
   it("builds root-owned upload materialization commands explicitly", () => {
@@ -1264,6 +1261,7 @@ describe("Docker sandbox provider integration", () => {
       .toString(36)
       .slice(2, 8)}`;
     const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      image: process.env.OMA_TEST_SANDBOX_IMAGE ?? "oma-sandbox:dev",
       extraLabels: { "open-managed-agents.test-id": label },
       operationTimeoutMs: 15_000,
     });
@@ -1336,13 +1334,49 @@ describe("Docker sandbox provider integration", () => {
       .toString(36)
       .slice(2, 8)}`;
     const provider = await createDockerSandboxProvider("wrk_test", "sesn_test", {
+      image: process.env.OMA_TEST_SANDBOX_IMAGE ?? "oma-sandbox:dev",
       extraLabels: { "open-managed-agents.test-id": label },
       operationTimeoutMs: 15_000,
     });
     try {
       await provider.operations.write.mkdir("/workspace/src");
+      await provider.operations.write.mkdir("/workspace/root/sub");
       await provider.operations.write.writeFile("/workspace/src/a.md", "needle\n");
       await provider.operations.write.writeFile("/workspace/src/b.md", "needle\n");
+      await provider.operations.write.writeFile("/workspace/root/sub/nested.md", "needle\n");
+      await provider.operations.bash.exec(
+        "printf '\\0needle\\0tail' > /workspace/src/binary.md",
+        "/workspace",
+        { env: {}, onData: () => {}, timeout: 1 },
+      );
+
+      const textMatches = await provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace/src",
+        glob: "*.md",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      });
+      expect(new Set(textMatches)).toEqual(new Set([
+        "/workspace/src/a.md",
+        "/workspace/src/b.md",
+      ]));
+
+      await expect(provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace",
+        glob: "sub/*.md",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/workspace/root/sub/nested.md"]);
 
       await expect(provider.operations.grep.grep({
         pattern: "needle",

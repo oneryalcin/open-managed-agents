@@ -6,6 +6,11 @@ NUL-safe path streaming, and POSIX `grep -E` under `LC_ALL=C`. Hosted ripgrep
 regex parity remains a documented pre-v1 issue (#187) rather than a final
 parity claim.
 
+Successor note (2026-07-16): plan 0138 replaces the BusyBox engine and thin
+guest defaults with a digest-pinned OMA image containing ripgrep. The lifecycle
+and public bounds defined here remain authoritative; the engine choice in D2 is
+historical after plan 0138 lands.
+
 Date: 2026-07-14
 Branch: `arc-j-cma-grep-probe` (merged)
 Evidence: [probe 64](../../scratch/64-managed-agents-tool-glob-grep-probe.md),
