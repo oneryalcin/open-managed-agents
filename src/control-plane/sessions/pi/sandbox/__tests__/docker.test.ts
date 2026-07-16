@@ -228,7 +228,7 @@ describe("Docker sandbox provider command construction", () => {
       "needle",
       "*.md",
     );
-    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle", "*.md"]);
+    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle", "**/*.md"]);
     expect(command.script).toContain("OMA_GREP_OWNER=$2");
     expect(command.script).toContain("__OMA_GREP_READY__");
     expect(command.script).toContain("rg --no-config --hidden --no-ignore");
@@ -1340,8 +1340,10 @@ describe("Docker sandbox provider integration", () => {
     });
     try {
       await provider.operations.write.mkdir("/workspace/src");
+      await provider.operations.write.mkdir("/workspace/root/sub");
       await provider.operations.write.writeFile("/workspace/src/a.md", "needle\n");
       await provider.operations.write.writeFile("/workspace/src/b.md", "needle\n");
+      await provider.operations.write.writeFile("/workspace/root/sub/nested.md", "needle\n");
       await provider.operations.bash.exec(
         "printf '\\0needle\\0tail' > /workspace/src/binary.md",
         "/workspace",
@@ -1363,6 +1365,18 @@ describe("Docker sandbox provider integration", () => {
         "/workspace/src/a.md",
         "/workspace/src/b.md",
       ]));
+
+      await expect(provider.operations.grep.grep({
+        pattern: "needle",
+        cwd: "/workspace",
+        glob: "sub/*.md",
+        context: 0,
+        headLimit: 100,
+        signal: new AbortController().signal,
+        maxRawBytes: 1024 * 1024,
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: 10_000,
+      })).resolves.toEqual(["/workspace/root/sub/nested.md"]);
 
       await expect(provider.operations.grep.grep({
         pattern: "needle",

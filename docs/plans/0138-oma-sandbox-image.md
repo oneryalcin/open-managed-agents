@@ -39,6 +39,9 @@ This is not the broader Python/Node development-environment arc.
   path is emitted, use pinned `rg -qaU '\x00'` to exclude NUL-containing files.
 - Preserve hidden/ignored-file traversal with `--hidden --no-ignore`, matching
   the previously shipped `find`-based behavior.
+- Translate validated CMA globs to ripgrep's root-relative glob syntax by
+  adding CMA's implicit recursive suffix prefix; raw ripgrep anchoring is not
+  the public contract.
 - Preflight the same NUL classifier used by the search pipeline. This is an
   explicit OMA binary-file policy rather than an assumption about ripgrep's
   `--files-with-matches` behavior.

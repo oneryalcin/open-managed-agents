@@ -16,6 +16,7 @@ import {
   CMA_GLOB_READY_MARKER,
   CmaGlobReadinessFilter,
   CmaGlobStreamCollector,
+  cmaGlobToRipgrepGlob,
   compileCmaGlob,
 } from "./cma-glob.ts";
 import {
@@ -1257,6 +1258,7 @@ export function buildDockerCmaGrepSearchCommand(
   pattern: string,
   glob?: string,
 ): DockerShellCommand {
+  const ripgrepGlob = glob === undefined ? "" : cmaGlobToRipgrepGlob(glob);
   return {
     script: [
       "set -eu",
@@ -1282,7 +1284,7 @@ export function buildDockerCmaGrepSearchCommand(
       "[ \"$code\" -eq 0 ] || [ \"$code\" -eq 1 ]",
       "' oma-rg \"$1\" \"$3\" \"$4\"",
     ].join("\n"),
-    args: [root, ownershipToken, pattern, glob ?? ""],
+    args: [root, ownershipToken, pattern, ripgrepGlob],
   };
 }
 

@@ -215,7 +215,7 @@ describe("microsandbox command builders", () => {
       "needle",
       "*.md",
     );
-    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle", "*.md"]);
+    expect(command.args).toEqual(["/workspace", "oma-grep-token", "needle", "**/*.md"]);
     expect(command.script).toContain("OMA_GREP_OWNER=$2");
     expect(command.script).toContain("__OMA_GREP_READY__");
     expect(command.script).toContain("rg --no-config --hidden --no-ignore");

@@ -15,6 +15,7 @@ import {
   CMA_GLOB_READY_MARKER,
   CmaGlobReadinessFilter,
   CmaGlobStreamCollector,
+  cmaGlobToRipgrepGlob,
   compileCmaGlob,
 } from "./cma-glob.ts";
 import {
@@ -1243,6 +1244,7 @@ export function buildMicrosandboxCmaGrepSearchCommand(
   pattern: string,
   glob?: string,
 ): MicrosandboxShellCommand {
+  const ripgrepGlob = glob === undefined ? "" : cmaGlobToRipgrepGlob(glob);
   return {
     script: [
       "set -eu",
@@ -1268,7 +1270,7 @@ export function buildMicrosandboxCmaGrepSearchCommand(
       "[ \"$code\" -eq 0 ] || [ \"$code\" -eq 1 ]",
       "' oma-rg \"$1\" \"$3\" \"$4\"",
     ].join("\n"),
-    args: [root, ownershipToken, pattern, glob ?? ""],
+    args: [root, ownershipToken, pattern, ripgrepGlob],
   };
 }
 
