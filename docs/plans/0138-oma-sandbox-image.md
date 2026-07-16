@@ -21,6 +21,8 @@ This is not the broader Python/Node development-environment arc.
 - Default user `65534:65534` and workdir `/workspace`.
 - `linux/amd64` and `linux/arm64` publication to GHCR.
 - No mutable `latest` tag.
+- Publication refuses to overwrite an existing release tag; runtime selection
+  still uses the immutable digest rather than trusting tag immutability.
 - Maximum 25 MiB compressed per runtime platform.
 - BuildKit SBOM/provenance and a CRITICAL vulnerability scan in the publishing
   workflow. GitHub artifact attestation runs where the repository/account
