@@ -252,6 +252,11 @@ and intentional deviations:
 | Persistence | SQLite (single-node appliance); Postgres is the scale-out target behind existing store interfaces |
 | Sandbox providers | Docker-local and microsandbox-local, fail-closed selection |
 
+The default sandbox guest is an OMA-owned, multi-architecture image pinned by
+immutable digest. It is intentionally small (about 6.5 MiB compressed per
+platform) and currently contains Bash plus ripgrep; Python/Node-rich images are
+a later alpha usability slice.
+
 ## Development
 
 ```bash

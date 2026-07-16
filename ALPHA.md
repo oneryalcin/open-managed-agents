@@ -226,15 +226,17 @@ Full token-by-token preview streaming can be deferred if buffered
 
 ### 7. Default environment image story
 
-The current default images are intentionally thin. For alpha users, the sandbox
-should be useful without immediately requiring a custom image.
+The original `bash:5.2` / `alpine:latest` defaults were intentionally thin. A
+minimal OMA-owned replacement is implemented in plan 0138 and is awaiting final
+review plus anonymous GHCR pull verification before it becomes the alpha
+default.
 
 Near-term target:
 
-- define a minimal OMA-owned default image;
-- include the tools needed by the documented smoke path;
-- strongly consider pinned `ripgrep` in this image for future grep parity
-  (#187);
+- [x] define a minimal OMA-owned, multi-architecture default image;
+- [x] include pinned Bash and ripgrep for the documented smoke and grep paths;
+- [ ] verify anonymous pull of the digest-pinned GHCR image, then land it as the
+  Docker-local and microsandbox-local default (#187 / plan 0138);
 - keep Python/Node/package-rich images as a later environment arc unless the
   smoke path requires them.
 
@@ -262,4 +264,4 @@ Before inviting external tinkering:
 - Webhooks.
 - Outcomes/evaluation.
 - Full hosted environment provisioning parity.
-- Full ripgrep regex parity before the OMA-owned image work.
+- Python/Node/package-rich environment images.

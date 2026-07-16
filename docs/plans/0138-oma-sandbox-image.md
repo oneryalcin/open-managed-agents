@@ -1,6 +1,6 @@
 # Plan 0138 -- Minimal OMA sandbox image and pinned ripgrep
 
-Status: implementation in progress
+Status: implemented; review and public-pull verification pending
 
 Date: 2026-07-16
 Branch: `dev/alpha-sandbox-image`
@@ -22,18 +22,24 @@ This is not the broader Python/Node development-environment arc.
 - `linux/amd64` and `linux/arm64` publication to GHCR.
 - No mutable `latest` tag.
 - Maximum 25 MiB compressed per runtime platform.
-- BuildKit SBOM/provenance, CRITICAL vulnerability scan, and GitHub artifact
-  attestation in the publishing workflow.
+- BuildKit SBOM/provenance and a CRITICAL vulnerability scan in the publishing
+  workflow. GitHub artifact attestation runs where the repository/account
+  supports it; user-owned private repositories retain the attached BuildKit
+  provenance and SBOM instead.
 - Runtime defaults use a published digest, not a mutable tag.
 
 ## Runtime contract
 
 - Keep OMA's public input bounds, permissions, accounting, cancellation,
   timeout, raw/output ceilings, token-owned cleanup, and sandbox poisoning.
-- Use one in-guest `rg --files-with-matches --null` process for traversal,
-  glob filtering, regex matching, binary detection, and path output.
+- Use one primary in-guest `rg --files-with-matches --null` process for
+  traversal, glob filtering, regex matching, and path output. Before a matched
+  path is emitted, use pinned `rg -qaU '\x00'` to exclude NUL-containing files.
 - Preserve hidden/ignored-file traversal with `--hidden --no-ignore`, matching
   the previously shipped `find`-based behavior.
+- Preflight the same NUL classifier used by the search pipeline. This is an
+  explicit OMA binary-file policy rather than an assumption about ripgrep's
+  `--files-with-matches` behavior.
 - Custom images fail closed during semantic preflight when `rg` is missing or
   incompatible.
 - No host `rg`, host `grep`, Pi grep, or JavaScript-regex fallback becomes
@@ -57,3 +63,15 @@ This is not the broader Python/Node development-environment arc.
 - Hosted-probe-derived path-list, `head_limit`, glob, invalid-regex,
   missing-path, and binary-ish behavior remains covered.
 - Full typecheck/tests and real Docker grep smoke pass.
+
+## First publication evidence
+
+- Published digest:
+  `sha256:cf5f8ce4a747987267364a7f1c6217a47fd9bbd80eefd0ba7fa0024d084a7c4a`
+- Compressed platform sizes: 6.17 MiB (`linux/amd64`) and 6.46 MiB
+  (`linux/arm64`).
+- CRITICAL vulnerability scan: zero findings.
+- The first workflow run published the image successfully but the run was red
+  only because GitHub artifact attestations are unavailable for a user-owned
+  private repository. The workflow now skips that unsupported step while
+  retaining BuildKit provenance/SBOM.

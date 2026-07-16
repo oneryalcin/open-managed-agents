@@ -8,8 +8,6 @@ on:
         required: true
         default: 0.1.0
   push:
-    branches:
-      - dev/alpha-sandbox-image
     tags:
       - sandbox-v*
 
@@ -85,11 +83,16 @@ jobs:
           severity: CRITICAL
 
       - name: Attest image provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+      - name: Note private-repository attestation limitation
+        if: ${{ github.event.repository.private }}
+        run: echo "GitHub artifact attestations are unavailable for user-owned private repositories; BuildKit provenance and SBOM remain attached to the image." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record immutable reference
         run: |

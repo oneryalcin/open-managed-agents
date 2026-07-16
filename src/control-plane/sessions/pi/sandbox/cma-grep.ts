@@ -11,22 +11,6 @@ export const CMA_GREP_MAX_RAW_BYTES = 1024 * 1024;
 export const CMA_GREP_MAX_OUTPUT_BYTES = 64 * 1024;
 export const CMA_GREP_TIMEOUT_MS = 10_000;
 
-export class CmaGrepTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`Grep operation timed out after ${timeoutMs}ms`);
-    this.name = "CmaGrepTimeoutError";
-  }
-}
-
-export function createCmaGrepDeadline(timeoutMs: number): () => number {
-  const expiresAt = Date.now() + timeoutMs;
-  return () => {
-    const remainingMs = expiresAt - Date.now();
-    if (remainingMs <= 0) throw new CmaGrepTimeoutError(timeoutMs);
-    return remainingMs;
-  };
-}
-
 export class CmaGrepInputError extends Error {
   constructor(message: string) {
     super(message);
@@ -99,53 +83,6 @@ export class CmaGrepStreamCollector {
       this.limitReached = true;
       this.opts.onLimit();
     }
-  }
-}
-
-export class CmaGrepCandidateCollector {
-  readonly candidates: string[] = [];
-  private pending = Buffer.alloc(0);
-  private rawBytes = 0;
-
-  constructor(
-    private readonly opts: {
-      root?: string;
-      maxRawBytes: number;
-      matcher?: CompiledCmaGlob;
-    },
-  ) {}
-
-  push(chunk: Buffer): void {
-    this.rawBytes += chunk.byteLength;
-    if (this.rawBytes > this.opts.maxRawBytes) {
-      throw new Error(`Grep enumeration exceeds ${this.opts.maxRawBytes} raw bytes`);
-    }
-    this.pending = Buffer.concat([this.pending, chunk]);
-    for (;;) {
-      const delimiter = this.pending.indexOf(0);
-      if (delimiter < 0) return;
-      const record = this.pending.subarray(0, delimiter);
-      this.pending = this.pending.subarray(delimiter + 1);
-      this.accept(record);
-    }
-  }
-
-  finish(): void {
-    if (this.pending.length !== 0) {
-      throw new Error("Grep enumeration returned an unterminated filename");
-    }
-  }
-
-  private accept(record: Buffer): void {
-    if (record.includes(0)) throw new Error("Grep filename contains NUL");
-    let path = record.toString("utf8");
-    if (path.startsWith("./")) path = path.slice(2);
-    if (path.length === 0) return;
-    const relativePath = posix.isAbsolute(path) && this.opts.root !== undefined
-      ? relativeToSearchRoot(this.opts.root, path)
-      : path;
-    if (this.opts.matcher !== undefined && !this.opts.matcher.matches(relativePath)) return;
-    this.candidates.push(path);
   }
 }
 

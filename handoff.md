@@ -351,18 +351,21 @@ load-bearing additions are:
 - **Provider-owned CMA `grep`** (PR #188; plan 0134; probes 68/68b/68c):
   Docker and microsandbox own content search, limits, cancellation, cleanup,
   accounting, and events. Pi's host-process `rg` path is not exposed.
+- **Minimal OMA sandbox image** (plan 0138; issue #187; review pending):
+  multi-architecture Alpine image with pinned Bash and ripgrep has been
+  published under an immutable digest and is wired as the proposed Docker and
+  microsandbox default. Real Docker grep passes; anonymous GHCR pull and final
+  independent review remain release gates.
 
 Older shipped arcs remain documented in their ADRs, plans, and merge history;
 they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Begin the usable environment image story in [PARITY.md](PARITY.md), now
-   that plan 0137's event-honesty slice is complete and independently reviewed.
-   Unsupported `event_deltas[]` fails closed, `agent.thinking` is no longer
-   advertised, `system.message` is explicitly deferred, and buffered
-   assistant-message behavior is documented.
-2. Then continue the pre-v1 sequence with web tools.
+1. Finish plan 0138: independent review, anonymous pull verification, and a
+   green publication workflow for the minimal OMA sandbox image.
+2. Then return to the broader Python/Node environment-image usability story or
+   continue the pre-v1 sequence with web tools.
 3. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
