@@ -18,6 +18,7 @@ import {
   buildMicrosandboxKillProcessGroupCommand,
   buildMicrosandboxMkdirCommand,
   buildMicrosandboxOutputListingCommand,
+  buildMicrosandboxPrepareMountsCommand,
   buildMicrosandboxReadFileCommand,
   buildMicrosandboxReaddirCommand,
   buildMicrosandboxStatCommand,
@@ -135,10 +136,13 @@ describe("microsandbox command builders", () => {
         workdir: DEFAULT_MICROSANDBOX_WORKSPACE,
         timeout: "1s",
         stream: true,
+        user: "0",
       }),
     ).toEqual([
       "exec",
       "--stream",
+      "--user",
+      "0",
       "--timeout",
       "1s",
       "--workdir",
@@ -257,6 +261,19 @@ describe("microsandbox command builders", () => {
       script: "mkdir -p \"$1\"",
       args: ["/workspace/src"],
     });
+    expect(
+      buildMicrosandboxPrepareMountsCommand(
+        DEFAULT_MICROSANDBOX_UPLOADS_PATH,
+        DEFAULT_MICROSANDBOX_OUTPUTS_PATH,
+      ),
+    ).toEqual({
+      script:
+        "chown 0:0 \"$1\" && chmod 755 \"$1\" && chown 65534:65534 \"$2\" && chmod 700 \"$2\"",
+      args: [
+        DEFAULT_MICROSANDBOX_UPLOADS_PATH,
+        DEFAULT_MICROSANDBOX_OUTPUTS_PATH,
+      ],
+    });
     expect(buildMicrosandboxStatCommand("/workspace/src")).toEqual({
       script:
         "if [ -d \"$1\" ]; then printf directory; elif [ -e \"$1\" ]; then printf file; else exit 1; fi",
@@ -374,6 +391,13 @@ describe("microsandbox command builders", () => {
     expect(() => buildMicrosandboxVolumeRemoveArgs("-oops")).toThrow(
       "cannot be empty or start",
     );
+    expect(() =>
+      buildMicrosandboxExecArgs({
+        sandboxName: "oma-sbx",
+        command: ["true"],
+        user: "--privileged",
+      }),
+    ).toThrow("user cannot be empty or start");
     expect(() =>
       buildMicrosandboxCreateArgs({
         sandboxName: "oma-sbx",
@@ -1544,6 +1568,13 @@ class RecordingMicrosandboxCli implements MicrosandboxCli {
     opts?: MicrosandboxCliExecOptions,
   ): Promise<MicrosandboxCliResult> {
     if (args.some((arg) => arg.includes(".oma-grep-preflight-"))) {
+      return okResult("");
+    }
+    if (
+      args.includes(
+        "chown 0:0 \"$1\" && chmod 755 \"$1\" && chown 65534:65534 \"$2\" && chmod 700 \"$2\"",
+      )
+    ) {
       return okResult("");
     }
     this.calls.push({ mode: "async", args: [...args], opts });

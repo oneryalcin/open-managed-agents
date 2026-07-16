@@ -308,6 +308,20 @@ export async function createMicrosandboxSandboxProvider(
       { timeoutMs: resolved.operationTimeoutMs },
     );
     sandboxCreated = true;
+    await microsandboxChecked(
+      resolved.cli,
+      buildMicrosandboxShellExecArgs({
+        sandboxName,
+        ...buildMicrosandboxPrepareMountsCommand(
+          resolved.uploadsPath,
+          resolved.outputsPath,
+        ),
+        workdir: resolved.workspacePath,
+        timeout: timeoutSecondsText(resolved.operationTimeoutMs),
+        user: "0",
+      }),
+      { timeoutMs: resolved.operationTimeoutMs + 2_000 },
+    );
   } catch (error) {
     if (volumeCreated || sandboxCreated) {
       forceRemoveMicrosandboxSandbox(resolved.cli, sandboxName, resolved);
@@ -349,6 +363,7 @@ export async function createMicrosandboxSandboxProvider(
   const shell = (
     command: MicrosandboxShellCommand,
     execOpts: MicrosandboxCliExecOptions = {},
+    guestUser?: string,
   ) =>
     microsandboxChecked(
       resolved.cli,
@@ -366,6 +381,7 @@ export async function createMicrosandboxSandboxProvider(
           execOpts.onData !== undefined ||
           execOpts.onStdout !== undefined ||
           execOpts.onStderr !== undefined,
+        user: guestUser,
       }),
       {
         ...execOpts,
@@ -407,24 +423,34 @@ export async function createMicrosandboxSandboxProvider(
       const destination = kind === "upload" ? resolved.uploadsPath : "/workspace/skills";
       const tempRoot = await mkdtemp(joinHostPath(tmpdir(), "oma-msb-mounts-"));
       try {
-      for (const mount of selected) {
-        const relativePath = assertInsideMicrosandboxUploadsPath(
-          mount.mountPath,
-          destination,
+        for (const mount of selected) {
+          const relativePath = assertInsideMicrosandboxUploadsPath(
+            mount.mountPath,
+            destination,
+          );
+          const hostPath = await writeMountFile(tempRoot, relativePath, mount);
+          const guestPath = posix.join(destination, relativePath);
+          await shell(
+            buildMicrosandboxMkdirCommand(posix.dirname(guestPath)),
+            {},
+            "0",
+          );
+          await microsandboxChecked(
+            resolved.cli,
+            buildMicrosandboxCopyArgs(
+              hostPath,
+              microsandboxPathRef(sandboxName, guestPath),
+            ),
+            { timeoutMs: resolved.operationTimeoutMs },
+          );
+        }
+        await shell(
+          kind === "upload"
+            ? buildMicrosandboxNormalizeUploadsCommand(destination)
+            : buildMicrosandboxNormalizeSkillsCommand(destination),
+          {},
+          "0",
         );
-        const hostPath = await writeMountFile(tempRoot, relativePath, mount);
-        const guestPath = posix.join(destination, relativePath);
-        await shell(buildMicrosandboxMkdirCommand(posix.dirname(guestPath)));
-        await microsandboxChecked(
-          resolved.cli,
-          buildMicrosandboxCopyArgs(
-            hostPath,
-            microsandboxPathRef(sandboxName, guestPath),
-          ),
-          { timeoutMs: resolved.operationTimeoutMs },
-        );
-      }
-      await shell(kind === "upload" ? buildMicrosandboxNormalizeUploadsCommand(destination) : buildMicrosandboxNormalizeSkillsCommand(destination));
       } finally {
         await rm(tempRoot, { force: true, recursive: true });
       }
@@ -989,10 +1015,15 @@ export function buildMicrosandboxExecArgs(opts: {
   workdir?: string;
   timeout?: string;
   stream?: boolean;
+  user?: string;
 }): string[] {
   assertMicrosandboxArg(opts.sandboxName, "sandboxName");
   const out = ["exec"];
   if (opts.stream) out.push("--stream");
+  if (opts.user !== undefined) {
+    assertMicrosandboxArg(opts.user, "user");
+    out.push("--user", opts.user);
+  }
   if (opts.timeout !== undefined) out.push("--timeout", opts.timeout);
   if (opts.workdir !== undefined) out.push("--workdir", opts.workdir);
   out.push(opts.sandboxName, "--", ...opts.command);
@@ -1006,12 +1037,14 @@ export function buildMicrosandboxShellExecArgs(opts: {
   workdir?: string;
   timeout?: string;
   stream?: boolean;
+  user?: string;
 }): string[] {
   return buildMicrosandboxExecArgs({
     sandboxName: opts.sandboxName,
     workdir: opts.workdir,
     timeout: opts.timeout,
     stream: opts.stream,
+    user: opts.user,
     command: ["/bin/sh", "-lc", opts.script, "sh", ...(opts.args ?? [])],
   });
 }
@@ -1096,6 +1129,17 @@ export function buildMicrosandboxMkdirCommand(
   absolutePath: string,
 ): MicrosandboxShellCommand {
   return { script: "mkdir -p \"$1\"", args: [absolutePath] };
+}
+
+export function buildMicrosandboxPrepareMountsCommand(
+  uploadsPath: string,
+  outputsPath: string,
+): MicrosandboxShellCommand {
+  return {
+    script:
+      "chown 0:0 \"$1\" && chmod 755 \"$1\" && chown 65534:65534 \"$2\" && chmod 700 \"$2\"",
+    args: [uploadsPath, outputsPath],
+  };
 }
 
 export function buildMicrosandboxNormalizeUploadsCommand(

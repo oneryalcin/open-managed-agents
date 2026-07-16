@@ -1,6 +1,6 @@
 # Plan 0138 -- Minimal OMA sandbox image and pinned ripgrep
 
-Status: implemented; review and public-pull verification pending
+Status: complete; verified for merge in PR #193
 
 Date: 2026-07-16
 Branch: `dev/alpha-sandbox-image`
@@ -80,3 +80,11 @@ This is not the broader Python/Node development-environment arc.
   only because GitHub artifact attestations are unavailable for a user-owned
   private repository. The workflow now skips that unsupported step while
   retaining BuildKit provenance/SBOM.
+- The package is public. An empty Docker credential store successfully
+  inspected and pulled the exact digest, including its `linux/amd64` and
+  `linux/arm64` manifests.
+- The pulled image runs as `65534:65534` and reports Bash 5.2.37 plus ripgrep
+  14.1.1.
+- The gated live microsandbox smoke passes against the exact public digest,
+  including root-owned upload materialization, non-root writable outputs,
+  provider grep, no-network behavior, timeout/process cleanup, and disposal.

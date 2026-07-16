@@ -227,16 +227,15 @@ Full token-by-token preview streaming can be deferred if buffered
 ### 7. Default environment image story
 
 The original `bash:5.2` / `alpine:latest` defaults were intentionally thin. A
-minimal OMA-owned replacement is implemented in plan 0138 and is awaiting final
-review plus anonymous GHCR pull verification before it becomes the alpha
-default.
+minimal OMA-owned replacement is shipped by plan 0138 as the digest-pinned
+Docker-local and microsandbox-local alpha default.
 
 Near-term target:
 
 - [x] define a minimal OMA-owned, multi-architecture default image;
 - [x] include pinned Bash and ripgrep for the documented smoke and grep paths;
-- [ ] verify anonymous pull of the digest-pinned GHCR image, then land it as the
-  Docker-local and microsandbox-local default (#187 / plan 0138);
+- [x] verify anonymous pull of the digest-pinned GHCR image and use it as the
+  Docker-local and microsandbox-local default (#187 / plan 0138 / PR #193);
 - keep Python/Node/package-rich images as a later environment arc unless the
   smoke path requires them.
 

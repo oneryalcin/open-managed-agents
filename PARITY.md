@@ -162,10 +162,11 @@ the risk of silent contradiction, not by how easy they first appear.
     file paths, `head_limit` caps paths, invalid regex/missing path are tool
     errors, and omitted-path semantics remain unclaimed. Implementation plan:
     [`docs/plans/0134-cma-grep-runtime.md`](docs/plans/0134-cma-grep-runtime.md).
-  - OMA chooses in-guest BusyBox/POSIX `grep -E` under `LC_ALL=C` for v1,
+  - OMA initially shipped in-guest BusyBox/POSIX `grep -E` under `LC_ALL=C`
     with bounded inputs and semantic provider preflight in PR #188. Plan 0138
-    now replaces that interim engine with a pinned in-guest ripgrep runtime;
-    review and anonymous image-pull verification are still pending.
+    and PR #193 replace that interim engine with a pinned in-guest ripgrep
+    runtime shared by Docker and microsandbox. Anonymous pull and both live
+    provider paths are verified.
 
 - [x] **Bidirectional session pagination / `prev_page`** *(DONE 2026-07-13; PR #185; plan 0132; probe 66)*
   - CMA `[Obs]`: session pages are `{data,next_page,prev_page}` without
