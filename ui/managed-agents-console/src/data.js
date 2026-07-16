@@ -175,7 +175,7 @@ window.FILES = [
   { name:'input-corpus.zip', ext:'zip', type:'application/zip', size:'1.2 MB', created:'May 29', dl:false },
 ];
 
-window.EVENT_TYPES = ['message','thinking','tool_use','tool_result','custom_tool','model_request','status','error'];
+window.EVENT_TYPES = ['message','tool_use','tool_result','custom_tool','model_request','status','error'];
 
 window.ENVIRONMENTS = [
   { id:'cwc-env', label:'cwc-env', image:'docker-local · python-3.12' },

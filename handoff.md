@@ -357,15 +357,13 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Merge plan 0136's independently reviewed and Chrome-verified console
-   workflow. The browser gate covered create agent → create environment →
-   create session → prompt → authenticated live events → `always_ask` tool
-   confirmation → sandbox result → final agent message → idle.
-2. Add event honesty around unsupported `event_deltas[]`, `agent.thinking`, and
-   `system.message`.
-3. Then return to the pre-v1 sequence in [PARITY.md](PARITY.md): usable
-   environment image story, followed by web tools.
-4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+1. Begin the usable environment image story in [PARITY.md](PARITY.md), now
+   that plan 0137's event-honesty slice is complete and independently reviewed.
+   Unsupported `event_deltas[]` fails closed, `agent.thinking` is no longer
+   advertised, `system.message` is explicitly deferred, and buffered
+   assistant-message behavior is documented.
+2. Then continue the pre-v1 sequence with web tools.
+3. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

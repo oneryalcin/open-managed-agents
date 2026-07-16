@@ -22,7 +22,7 @@ post-v1 deferrals, and deliberate architecture-specific divergences.
 | API reference & onboarding | ~65% | Auth / betas / error-envelope and bidirectional session pagination ✅; no update/lifecycle endpoints |
 | Tools & permissions | ~75% | Permission state-machine faithful ✅; CMA `glob` and provider-owned `grep` wired; web tools remain disabled |
 | Agent config & outcomes | ~55% | Create/get/list/archive and update/versioning ✅; outcomes deferred |
-| Events, streaming & webhooks | ~55% | SSE / resume / idempotency ✅; webhooks 0%, deltas 0%, `agent.thinking` dead |
+| Events, streaming & webhooks | ~55% | SSE / resume / idempotency ✅; unsupported deltas fail closed; previews/webhooks deferred |
 | Environments & sandboxes | ~35%\* | Thin *resource* (no packages/image/runtimes); strong self-hosted isolation defaults |
 | Multi-agent / GitHub / scheduled | ~5 / 0 / 0% | `multiagent` is an inert façade; GitHub & cron absent |
 | Memory & dreams | ~0% | Absent (hard 400 at the session-resource boundary); deliberately deferred |
@@ -187,15 +187,13 @@ the risk of silent contradiction, not by how easy they first appear.
   - OMA: `MAX_SESSION_FILE_RESOURCES = 10` (`sessions/service.ts:58`, enforced ~:826). >10 → a 400 a hosted client wouldn't hit.
   - Fix: raise to 100 (revisit the 50 MiB shared mounted-byte budget accordingly), or document the divergence deliberately.
 
-- [ ] **`agent.thinking` is a declared-but-dead event type**
+- [x] **`agent.thinking` is no longer falsely advertised** *(DONE 2026-07-15; plan 0137)*
   - CMA: `agent.thinking` is emitted for extended-thinking content (`reference.md:33`).
-  - OMA: the type is in the union (`src/types/events.ts:23`) but never emitted (runtime emits nothing; topology doc self-admits). Extended-thinking clients are silently downgraded.
-  - Fix: emit `agent.thinking` from the runtime when the model produces thinking content, or explicitly document it as unsupported.
+  - OMA: removed it from the shipped event union, OpenAPI, console filters, and implementation claims. It remains explicitly deferred until a verified runtime translation exists.
 
-- [ ] **`system.message` missing and untracked**
+- [x] **`system.message` explicitly deferred** *(DONE 2026-07-15; plan 0137)*
   - CMA: mid-session system-prompt update event, Opus-4.8 only (`events-and-streaming.md:2276`).
-  - OMA: 0 hits in `src/`; not in the deferred table either — a silent, unrecorded gap.
-  - Fix: decide support vs. explicit deferral; at minimum add to the deferred list so it's tracked.
+  - OMA: not accepted, emitted, or advertised. The event topology now records it as deferred pending a compatible session-update contract.
 
 - [ ] **5-minute tool-confirmation timeout, undocumented**
   - CMA: session "waits indefinitely" for a tool confirmation (`permission-policies.md:628`).
@@ -231,10 +229,9 @@ the risk of silent contradiction, not by how easy they first appear.
   - OMA: `environments/routes.ts` has only create/list/get; `archived_at` column exists but nothing sets it. Environments accumulate with no lifecycle path.
   - Fix: add archive + delete routes (delete only if unreferenced), mirroring the agents/sessions archive pattern.
 
-- [ ] **`event_deltas[]` stream param silently ignored**
+- [x] **Unsupported `event_deltas[]` fails closed** *(DONE 2026-07-15; plan 0137)*
   - CMA: streaming text previews via opt-in `event_deltas[]`; unknown values 400 (`events-and-streaming.md:1074`).
-  - OMA: the stream handler never reads the param (`events/routes.ts:80`); passing it yields a stream that silently never previews. (Full preview support is a larger feature — see Pile A "streaming deltas"; this item is just the defensive 400.)
-  - Fix: at minimum validate/400 the param until preview deltas exist.
+  - OMA: any supplied `event_deltas[]` parameter returns `400 invalid_request_error` before stream admission. Full preview support remains a larger deferred feature.
 
 > **Related (skills-internal follow-ups, already filed):** GitHub issues #175 (`/skill:` host-read), #176 (`*/scripts/*` glob over-match), #177 (microsandbox tamper limitation), #178 (budget error text + `assertInsideMountRoot` dedup). Not CMA-parity gaps; tracked separately.
 
@@ -291,7 +288,7 @@ Known, roadmap-tracked. Leave until each is scheduled as its own arc. Grouped by
 ### Tools & credentials
 - ❌ **`environment_variable` vault credential type** — env-var secret substitution at egress (`vaults.md:486`). Absent. Deferred pending egress-proxy slice (`0122:638`, `0124:1579`).
 - 🟡 **MCP long-output spill-to-file, tunnels, rich content blocks, `listChanged` subscriptions** — OMA byte-caps in place instead of token-spill-to-file; no tunnels; text/JSON only; tools-only. Named non-goals `docs/plans/0124-…:1566-1577`.
-- 🔵 **Streaming text previews (`event_start`/`event_delta`)** — no live token-by-token; buffered `agent.message` only. (The defensive param-validation slice is in Pile B Tier 3.)
+- 🔵 **Streaming text previews (`event_start`/`event_delta`)** — explicitly deferred. OMA streams complete persisted events and emits buffered `agent.message` text; unsupported `event_deltas[]` requests fail closed.
 
 ### Environments
 - ❌ **Environment provisioning richness beyond the pre-v1 image story** —

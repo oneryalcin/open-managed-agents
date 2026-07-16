@@ -79,6 +79,7 @@ export function sessionEventsRoutes(
 
   app.get("/stream", (c) => {
     const sessionId = requiredSessionId(c.req.param("sessionId"));
+    rejectUnsupportedEventDeltas(c.req.url);
     // 0113 D9: the stream's cost is its lifetime (a bounded live queue per
     // subscription), so the slot is held until the stream closes.
     const releaseStream = admission?.sseStreams.acquire(workspaceIdFrom(c));
@@ -154,6 +155,14 @@ function parseTypesQuery(url: string): string[] {
   const params = new URL(url).searchParams;
   const values = params.getAll("types[]");
   return values.filter((value) => value.length > 0);
+}
+
+function rejectUnsupportedEventDeltas(url: string): void {
+  if (new URL(url).searchParams.has("event_deltas[]")) {
+    throw invalidRequest(
+      "`event_deltas[]` is not supported; OMA streams complete persisted events and emits buffered `agent.message` text",
+    );
+  }
 }
 
 function toSseBody(

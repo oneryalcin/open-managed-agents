@@ -41,7 +41,6 @@ import { EVENT_TYPES, type EventType } from "../events.ts";
 const WIRE_COMPATIBLE_EVENT_TYPES = [
   // Agent-originated
   "agent.message",
-  "agent.thinking",
   "agent.tool_use",
   "agent.tool_result",
   "agent.custom_tool_use",

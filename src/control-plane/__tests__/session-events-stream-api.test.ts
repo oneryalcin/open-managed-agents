@@ -32,6 +32,29 @@ const VALID_ENVIRONMENT = {
 };
 
 describe("Session events stream API", () => {
+  it("rejects unsupported event_deltas[] before opening a stream", async () => {
+    const fixture = makeFixture();
+    const session = await setupSession(fixture.app);
+
+    for (const query of [
+      "event_deltas%5B%5D=agent.message",
+      "event_deltas%5B%5D=",
+    ]) {
+      const res = await fixture.app.request(
+        `/v1/sessions/${session.id}/events/stream?${query}`,
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message: "`event_deltas[]` is not supported; OMA streams complete persisted events and emits buffered `agent.message` text",
+        },
+      });
+      expect(fixture.broadcaster.subscriberCount(session.id)).toBe(0);
+    }
+  });
+
   it("streams SSE frames with id/event/data and receives live events after replay barrier", async () => {
     const fixture = makeFixture();
     const session = await setupSession(fixture.app);

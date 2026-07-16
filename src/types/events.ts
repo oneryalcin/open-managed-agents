@@ -19,7 +19,6 @@ import type { JsonObject } from "./json.ts";
 export const EVENT_TYPES = [
   // Agent-originated
   "agent.message",
-  "agent.thinking",
   "agent.tool_use",
   "agent.tool_result",
   "agent.custom_tool_use",
