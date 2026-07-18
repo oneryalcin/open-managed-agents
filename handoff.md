@@ -364,20 +364,16 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Finish plan 0139's final independent review and clean-checkout alpha audit.
-   The deterministic `oma smoke --local-compatible` lane has already proven an
-   operator-defined non-Anthropic model across both Pi requests and a real
-   Docker tool round trip; `npm run alpha:smoke:providers` supplies strict,
-   credential-gated Anthropic/OpenAI/Google/OpenRouter lanes. Keep reusing Pi's
-   catalog/adapters rather than creating a parallel OMA provider layer.
-2. Confirm the final branch from a fresh checkout with `npm ci`, typecheck, and
-   the local-compatible smoke; then mark plan 0139 complete only after the
-   independent code/security review is clear.
-3. Then return to the broader Python/Node environment-image usability story or
+1. Plan 0139 is complete on `dev/pi-multi-provider-models-plan`. Its final
+   independent review returned `APPROVE` with architecture `CLEAR`; a fresh
+   checkout passed `npm ci`, typecheck, the full suite, and the Docker-backed
+   `oma smoke --local-compatible` lane. The optional live provider matrix stays
+   credential-gated and manual-only.
+2. Return to the broader Python/Node environment-image usability story or
    continue the pre-v1 sequence with web tools.
-4. Track publication-pipeline promotion hardening separately in issue #194; it
+3. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
-5. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

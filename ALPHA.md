@@ -243,11 +243,12 @@ Near-term target:
 
 Implementation plan: [0139](docs/plans/0139-pi-multi-provider-models.md).
 
-Status: implementation complete; final independent review and clean-checkout
-release verification are pending. Durable `{provider,id}` identity, the shared
-Pi catalog/runtime boundary, authenticated discovery API, secret-safe operator
-CLI, live console selection, a no-paid-API custom compatible-provider smoke,
-and credential-gated live provider lanes are implemented.
+Status: complete and independently reviewed on `dev/pi-multi-provider-models-plan`.
+Durable `{provider,id}` identity, the shared Pi catalog/runtime boundary,
+authenticated discovery API, secret-safe operator CLI, live console selection,
+a no-paid-API custom compatible-provider smoke, and credential-gated live
+provider lanes are implemented. A fresh checkout passed install, typecheck, the
+full suite, and the Docker-backed local-compatible provider smoke.
 
 Goal: make model choice an OMA product capability rather than an Anthropic-only
 deployment assumption, while reusing Pi's provider catalog, protocol adapters,

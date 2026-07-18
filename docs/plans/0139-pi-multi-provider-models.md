@@ -1,8 +1,10 @@
 # 0139 — Pi-backed multi-provider models
 
-Status: implementation complete on this branch; final independent review and
-clean-checkout release verification are pending. Slice 1 shipped in `ba05f0c`,
-Slice 2 in `91860fe`, Slice 3 in `322dd5f`, and Slice 4 in `6e55760`.
+Status: complete on this branch. Slice 1 shipped in `ba05f0c`, Slice 2 in
+`91860fe`, Slice 3 in `322dd5f`, Slice 4 in `6e55760`, and Slice 5 in
+`34154cb`. The final independent review returned `APPROVE` with architecture
+`CLEAR`; a fresh checkout passed install, typecheck, the full suite, and the
+Docker-backed local-compatible provider smoke.
 
 Branch: `dev/pi-multi-provider-models-plan`
 
@@ -23,7 +25,7 @@ construct one allowlisted OMA-owned Pi catalog, and use that same catalog for
 agent admission, session readiness, and warm/restart runtime resolution.
 Authenticated discovery, the secret-safe operator CLI, live console
 selection/readiness, and the deterministic/gated provider smoke matrix are
-implemented. The remaining work is the final review and clean-checkout gate.
+implemented and final-gate verified.
 
 The implementation must preserve CMA-compatible Anthropic requests while
 adding an explicit OMA provider extension, persist the exact provider/model on
