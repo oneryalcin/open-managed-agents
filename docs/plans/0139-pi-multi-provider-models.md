@@ -50,6 +50,9 @@ This arc does **not**:
   are appliance/operator configuration;
 - change the CMA session-agent response expansion tracked separately in
   `PARITY.md`.
+- redefine CMA's existing `speed` field or promise provider-specific fast-mode
+  behavior; this arc preserves and persists it as today, while Pi model
+  selection remains the exact `{provider,id}` pair.
 
 ## 3. Principles and invariants
 
@@ -152,6 +155,11 @@ Why not `openai/gpt-5.4` in `id`: provider and model IDs can themselves contain
 slashes, colons, ARNs, and routed names. A second parsing convention would be
 ambiguous and duplicate a field Pi already models explicitly.
 
+`speed` keeps its existing `standard|fast` validation and persistence semantics
+but is not part of Pi model lookup. In particular, `fast` does not select a
+different non-Anthropic model or transport in this arc; documentation and the
+console must not imply otherwise.
+
 ### D2 — Migrate historical rows to explicit Anthropic identity
 
 The `agents.model` and `agent_versions.model` columns already store JSON text
@@ -160,10 +168,14 @@ Add an idempotent transaction in `SqliteAgentStore` startup migration:
 
 1. read every head/version model JSON;
 2. validate it is the legacy `{id,speed}` shape or the new shape;
-3. rewrite only legacy rows as `{provider:"anthropic",id,speed}`;
-4. roll back all rewrites if any row is malformed;
-5. run the existing head-to-version backfill and model migration in one
-   explicitly ordered startup transaction.
+3. rewrite legacy rows already present in both `agents` and `agent_versions` as
+   `{provider:"anthropic",id,speed}`;
+4. run the existing `INSERT OR IGNORE ... SELECT ... FROM agents`
+   head-to-version backfill only after head rows have been normalized, so newly
+   inserted version rows copy the explicit provider;
+5. assert no legacy-shaped head/version row remains and commit;
+6. roll back the migration and backfill together if any row is malformed or any
+   step fails.
 
 Never use the current deployment default for legacy migration. Every historical
 OMA model was previously resolved against Anthropic, so `anthropic` is the only
@@ -212,9 +224,11 @@ ${OMA_HOME:-~/.oma}/pi/auth.json
 ${OMA_HOME:-~/.oma}/pi/models.json
 ```
 
-Construct the mandatory OMA atomic backend for `authPath`, pass it to
-`AuthStorage.fromStorage(backend)`, then call
-`ModelRegistry.create(authStorage, modelsPath)`. Do not call
+After the narrow security/path scan, construct the mandatory OMA atomic backend
+for `authPath`, pass it to `AuthStorage.fromStorage(backend)`, fail startup if
+`authStorage.drainErrors()` returns any parse/load error, then call
+`ModelRegistry.create(authStorage, modelsPath)` and require
+`modelRegistry.getError() === undefined`. Do not call
 `AuthStorage.create()` or use Pi's implicit `~/.pi/agent` paths in production;
 unrelated interactive Pi credentials or custom models must not leak into an OMA
 appliance.
@@ -243,6 +257,8 @@ Rules:
 - `OMA_DEFAULT_MODEL_PROVIDER` and `OMA_DEFAULT_MODEL` form one required pair;
 - the default pair must resolve exactly in the loaded Pi registry at startup;
 - custom provider names are allowed only when Pi successfully loads them;
+- provider identifiers are trimmed but otherwise exact and case-sensitive; do
+  not lowercase or alias them, and reject case-mismatched names as unknown;
 - unknown allowed providers fail appliance startup with a precise error;
 - paths resolve explicitly and are logged without file contents;
 - changing policy/config requires appliance restart in this arc;
@@ -317,6 +333,15 @@ is no auth-file bypass.
 Pi provider extensions execute host code and are not loaded by this arc. The
 compatible API adapters in `models.json` cover the intended alpha surface.
 
+Pi 0.80.6 deliberately does not treat arbitrary provider/model headers as
+credential readiness. Header values are supplemental request configuration;
+`hasConfiguredAuth(model)` requires `auth.json`, a supported environment/cloud
+source, or provider-level `apiKey`. A custom endpoint that authenticates with a
+Bearer header should configure `apiKey` plus `authHeader:true`; header-only
+authentication remains unsupported for alpha and must not bypass the session
+gate. Supplemental Authorization-like headers may still be used when Pi also
+reports model-scoped configured auth (for example a gateway plus upstream BYOK).
+
 ### D6 — Credential lifecycle is operator-side
 
 Credential resolution remains delegated to Pi. Supported sources include the
@@ -384,7 +409,7 @@ refresh coordination, is a separate post-alpha design.
 Add OMA extension route:
 
 ```text
-GET /v1/models
+GET /v1/model-catalog
 ```
 
 It requires workspace authentication and the managed-agents beta header. It is
@@ -431,10 +456,25 @@ for agent-version/session pagination. Stable ordering is `(provider,id)`.
 The endpoint reports catalog/readiness state; it does not mutate credentials or
 providers.
 
+Do not use `/v1/models`: Anthropic already owns that path for its public Models
+API, whose wire shape and pagination differ from this OMA readiness catalog.
+Keeping `/v1/model-catalog` distinct preserves room for future wire-compatible
+implementation of Anthropic's endpoint instead of creating header-dependent
+semantics on one path.
+
+Route registration must add `/v1/model-catalog` to
+`isManagedAgentsRoute()` (`app.ts:932-947`) before mounting the router. This is
+a security invariant, not routing housekeeping: omission would skip workspace
+authentication and fall back to `wrk_default`. API tests must pin missing-key
+`401`, authenticated-but-missing-beta `404`, successful authenticated/beta
+access, workspace isolation, and `routeClassForPath(...) === "v1"`.
+
 `credentials_configured` is computed per returned resolved model with
 `modelRegistry.hasConfiguredAuth(model)`. `default` is true only for the exact
 configured `{OMA_DEFAULT_MODEL_PROVIDER,OMA_DEFAULT_MODEL}` pair. Provider
-status metadata is never used as either boolean.
+status metadata is never used as either boolean. `available=true` filters using
+that same model-scoped predicate; header-only custom authentication therefore
+does not appear available in alpha.
 
 ### D8 — Admission behavior
 
@@ -493,7 +533,7 @@ transport definitions. If a model is removed, existing sessions fail closed.
 ### D10 — Console model selection
 
 Replace the hardcoded `MODELS` datalist (`console/forms.jsx:177-246`) with live
-`GET /v1/models` data:
+`GET /v1/model-catalog` data:
 
 - provider selector first;
 - searchable model selector second;
@@ -545,6 +585,8 @@ Files:
 - `src/control-plane/agents/store.ts`
 - agent store/service/API tests
 - OpenAPI agent schemas
+- dev-only official `@anthropic-ai/sdk` compatibility fixture/dependency (add
+  it in this slice because the repository does not currently depend on it)
 
 Deliver:
 
@@ -565,8 +607,11 @@ Files:
 - `src/control-plane/sessions/pi/runner.ts`
 - new `src/control-plane/models/catalog.ts`
 - new `src/control-plane/models/deployment-config.ts`
+- new `src/control-plane/models/auth-storage-backend.ts`
 - `src/control-plane/app.ts`
 - `src/control-plane/sessions/service.ts`
+- promote Pi's pinned `proper-lockfile@4.1.2` transitive dependency to an
+  explicit OMA runtime dependency for the shared inter-process lock
 - store-backed agent revision provider and runner tests
 - deployment configuration tests
 
@@ -575,6 +620,8 @@ Deliver:
 - OMA-owned Pi config paths;
 - provider allowlist/default-pair parsing;
 - one shared registry/auth owner;
+- mandatory atomic/inter-process-locking auth backend before constructing that
+  owner;
 - exact-pair admission and runtime resolution;
 - model-scoped configured-auth session gate using
   `ModelRegistry.hasConfiguredAuth(model)`;
@@ -598,8 +645,7 @@ Deliver:
 - paginated workspace-safe model discovery;
 - secret-free provider/model status;
 - `oma providers`, `oma models`, and `oma auth` commands;
-- mandatory atomic `0600` `AuthStorageBackend` covering API-key and OAuth
-  refresh writes;
+- CLI reuse of the Slice-2 atomic `AuthStorageBackend` for API-key mutations;
 - explicit restart-required credential-mutation UX;
 - shared catalog validation path;
 - no HTTP credential mutation.
@@ -654,14 +700,16 @@ Deliver:
 - migration rollback on one malformed row leaves every row untouched;
 - allowlist/default-pair parsing rejects empty, duplicate, unknown, and
   inconsistent configurations;
+- surrounding whitespace is trimmed once, while provider IDs remain
+  case-sensitive; `OpenAI` is rejected rather than aliased to `openai`;
 - catalog resolves only allowed exact pairs;
 - catalog never searches across providers by model ID;
 - model-scoped readiness uses `hasConfiguredAuth`; provider status cannot
   change its result and reveals no secret/source details;
 - custom model validator covers all enumerated base URL/header/API-key
   locations, HTTPS, exact loopback HTTP, URL userinfo, command expressions in
-  both config files, literal-key warnings, unsafe files, and malformed Pi
-  config;
+  both config files, literal-key warnings, unsafe files, malformed Pi model
+  config, and malformed Pi auth storage;
 - CLI auth writes atomically with `0600`, preserves peers, and prints no key;
 - sync/async backend contention across two instances preserves both updates,
   and an injected crash before rename leaves the previous JSON intact.
@@ -680,9 +728,9 @@ Deliver:
   fail-closed behavior;
 - warm handle and restart both use the pinned revision pair;
 - no default fallback mutation survives;
-- `/v1/models` filters, pagination, auth, beta, order, cursor binding, and
-  redaction;
-- `/v1/models.default` identifies exactly one configured default pair and
+- `/v1/model-catalog` filters, pagination, auth, beta, order, cursor binding,
+  workspace isolation, route classification, and redaction;
+- `/v1/model-catalog.default` identifies exactly one configured default pair and
   `credentials_configured` agrees with model-scoped Pi readiness;
 - OpenAPI route/spec completeness remains green;
 - official SDK create/get/list path tolerates the model provider extension.
@@ -696,11 +744,14 @@ Use real Pi 0.80.6 `AuthStorage`/`ModelRegistry` with temporary files to prove:
   `configured:false`;
 - OMA-owned `auth.json` API-key readiness and precedence;
 - `models.json` API-key readiness;
+- header-only custom authentication remains unavailable until the operator
+  supplies provider `apiKey`, `auth.json`, or another Pi-recognized source;
 - Bedrock ambient credentials (`AWS_PROFILE`/IAM-supported sources);
 - Vertex ADC readiness;
 - custom OpenAI-compatible and Anthropic-compatible entries;
 - custom base URL and compat fields reach the resolved Pi model;
 - malformed config fails startup rather than silently dropping custom models;
+- malformed auth storage fails startup rather than silently appearing empty;
 - registry instance identity is shared by admission and runner.
 
 ### Console
@@ -863,3 +914,9 @@ Two native reviewers evaluated revision `a970a5a` against the installed Pi
   field, URL, permission, and upgrade contract;
 - provider enablement is documented as granting every registered model under
   that provider, with catalog review required on Pi upgrades.
+- OMA discovery uses authenticated `/v1/model-catalog`, leaving Anthropic's
+  incompatible public `/v1/models` contract unclaimed;
+- route-classification tests prevent the discovery route from bypassing
+  workspace auth/beta gates;
+- migration order is explicit, and Pi's header-only-auth readiness limitation,
+  exact provider casing, and unchanged `speed` semantics are documented.
