@@ -32,7 +32,11 @@ function revision(version: number): AgentRow {
     workspace_id: "wrk_default",
     type: "agent",
     name: `Agent v${version}`,
-    model: { id: `model-v${version}`, speed: "standard" },
+    model: {
+      provider: version === 1 ? "openai" : "anthropic",
+      id: `model-v${version}`,
+      speed: "standard",
+    },
     system: `system-v${version}`,
     description: null,
     tools: [
@@ -83,7 +87,7 @@ describe("pinned agent revision runtime resolution", () => {
     const mcpAccess = createStoreBackedMcpToolAccessResolver(source);
 
     expect(agentRevision("wrk_default", "sesn_1")).toEqual({
-      model: { id: "model-v1", speed: "standard" },
+      model: { provider: "openai", id: "model-v1", speed: "standard" },
       system: "system-v1",
     });
     expect(customTools("wrk_default", "sesn_1").map((tool) => tool.name))

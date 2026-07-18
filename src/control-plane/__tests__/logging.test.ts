@@ -3,6 +3,9 @@
 // truncated (a cap-only test would bless the leak, plan §9).
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { randomBytes } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createLogger,
   log,
@@ -27,9 +30,19 @@ function captureLogger(config?: {
 
 const WORKSPACE_KEY = `oma_${randomBytes(32).toString("base64url")}`;
 const ADMIN_SHAPED_KEY = randomBytes(32).toString("base64");
+const modelHomes: string[] = [];
+
+function tempModelHome(): string {
+  const root = mkdtempSync(join(tmpdir(), "oma-logging-models-"));
+  modelHomes.push(root);
+  return root;
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
+  for (const root of modelHomes.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 describe("logger output shape", () => {
@@ -390,13 +403,40 @@ describe("default writer", () => {
     log.warn("spy_check", { sessionId: "ses_1" });
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('"event":"spy_check"'));
   });
+
+  it("logs bounded model catalog counts without configuration paths", () => {
+    const home = tempModelHome();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const plane = createDeploymentControlPlane({ OMA_HOME: home });
+    try {
+      const line = infoSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((candidate) => candidate.includes('"event":"model_catalog_loaded"'));
+      expect(line).toBeTruthy();
+      const record = JSON.parse(line!);
+      expect(record).toMatchObject({
+        piVersion: "0.80.6",
+        providers: ["anthropic"],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-5",
+      });
+      expect(record.registeredModelCount).toBeGreaterThan(0);
+      expect(record.readyModelCount + record.missingCredentialModelCount).toBe(record.registeredModelCount);
+      expect(line).not.toContain(home);
+      expect(line).not.toContain("authPath");
+      expect(line).not.toContain("modelsPath");
+    } finally {
+      plane.stores.close();
+    }
+  });
 });
 
 describe("request_failed on 5xx", () => {
   it("logs event with requestId matching the response header, secrets absent", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {}); // auth_mode_disabled boot warning
-    const plane = createDeploymentControlPlane({});
+    const plane = createDeploymentControlPlane({ OMA_HOME: tempModelHome() });
     plane.app.get("/test-boom", () => {
       throw new Error(`downstream refused key ${WORKSPACE_KEY}`);
     });
@@ -422,7 +462,7 @@ describe("request_failed on 5xx", () => {
   it("stays silent on 4xx", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const plane = createDeploymentControlPlane({});
+    const plane = createDeploymentControlPlane({ OMA_HOME: tempModelHome() });
     const res = await plane.app.request("/no-such-route");
     expect(res.status).toBe(404);
     expect(

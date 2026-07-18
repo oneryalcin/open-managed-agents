@@ -239,7 +239,46 @@ Near-term target:
 - keep Python/Node/package-rich images as a later environment arc unless the
   smoke path requires them.
 
-### 8. Alpha release checklist
+### 8. Pi-backed multi-provider models
+
+Implementation plan: [0139](docs/plans/0139-pi-multi-provider-models.md).
+
+Status: complete and independently reviewed on `dev/pi-multi-provider-models-plan`.
+Durable `{provider,id}` identity, the shared Pi catalog/runtime boundary,
+authenticated discovery API, secret-safe operator CLI, live console selection,
+a no-paid-API custom compatible-provider smoke, and credential-gated live
+provider lanes are implemented. A fresh checkout passed install, typecheck, the
+full suite, and the Docker-backed local-compatible provider smoke.
+
+Goal: make model choice an OMA product capability rather than an Anthropic-only
+deployment assumption, while reusing Pi's provider catalog, protocol adapters,
+auth storage, credential resolution, and custom `models.json` format.
+
+Required before the final alpha audit:
+
+- preserve existing CMA-compatible Anthropic model input;
+- add explicit `{provider,id}` model selection for OMA agents;
+- persist the provider on every immutable agent revision and migrate historical
+  rows to explicit Anthropic identity;
+- use one shared Pi `AuthStorage`/`ModelRegistry` for admission and runtime;
+- load Pi configuration from OMA-owned paths rather than ambient
+  `~/.pi/agent` state;
+- support operator-allowed Pi built-ins plus operator-defined compatible APIs;
+- add secret-safe provider/model discovery through CLI, API, and console;
+- fail closed when provider policy, model registration, or configured auth is
+  missing—never fall back to another model;
+- verify at least one non-Anthropic and one local custom compatible provider.
+
+The deterministic proof is `oma smoke --local-compatible`; the opt-in live
+matrix is `npm run alpha:smoke:providers`. Paid provider lanes run only when
+selected/configured, and the ordinary smoke still exercises CMA's Anthropic
+string-model input.
+
+The alpha claim is “Pi-supported when operator-enabled and configured,” not
+“every Pi model is independently certified by OMA.” Documentation must separate
+OMA-verified, Pi-supported, and operator-defined support tiers.
+
+### 9. Alpha release checklist
 
 Before inviting external tinkering:
 

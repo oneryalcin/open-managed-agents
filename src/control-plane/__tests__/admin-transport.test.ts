@@ -25,6 +25,7 @@ function boot(env: Record<string, string>): void {
   const root = mkdtempSync(join(tmpdir(), "oma-admin-transport-"));
   tempRoots.push(root);
   const plane = createDeploymentControlPlane({
+    OMA_HOME: root,
     OMA_SQLITE_PATH: join(root, "oma.sqlite"),
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
     OMA_AUTH_MODE: "api-key",

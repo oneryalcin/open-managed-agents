@@ -13,8 +13,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  createDeploymentControlPlane,
+  createDeploymentControlPlane as createRawDeploymentControlPlane,
   type DeploymentControlPlane,
+  type DeploymentControlPlaneEnv,
 } from "../app.ts";
 import { createSessionEgressBundleResolver } from "../wiring.ts";
 import { buildHooksFromBundle } from "../egress/policy.ts";
@@ -53,6 +54,14 @@ const tempRoots: string[] = [];
 afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+function createDeploymentControlPlane(
+  env: DeploymentControlPlaneEnv,
+): DeploymentControlPlane {
+  const root = mkdtempSync(join(tmpdir(), "oma-egress-models-"));
+  tempRoots.push(root);
+  return createRawDeploymentControlPlane({ OMA_HOME: root, ...env });
+}
 
 // A real deployment control plane in durable + api-key mode with an egress
 // sidecar image and a master key — the ONLY configuration in which a secrets

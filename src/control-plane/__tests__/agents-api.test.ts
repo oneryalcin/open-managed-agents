@@ -30,7 +30,11 @@ describe("agents API", () => {
       id: expect.stringMatching(/^agent_/),
       type: "agent",
       name: "Coding Assistant",
-      model: { id: "claude-opus-4-7", speed: "standard" },
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-7",
+        speed: "standard",
+      },
       version: 1,
       archived_at: null,
       tools: [
@@ -133,6 +137,43 @@ describe("agents API", () => {
     };
     expect(secondPage.data.map((agent) => agent.version)).toEqual([2]);
     expect(secondPage.next_page).toEqual(expect.any(String));
+  });
+
+  it("persists explicit provider identity across updates and history", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const created = await createAgent(app, {}, {
+      ...VALID_AGENT,
+      model: { provider: "openai", id: "gpt-5.4", speed: "fast" },
+    });
+    expect(created.model).toEqual({
+      provider: "openai",
+      id: "gpt-5.4",
+      speed: "fast",
+    });
+
+    const updatedRes = await app.request(`/v1/agents/${created.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        version: 1,
+        model: { provider: "anthropic", id: "claude-opus-4-7" },
+      }),
+    });
+    expect(updatedRes.status).toBe(200);
+    await expect(updatedRes.json()).resolves.toMatchObject({
+      version: 2,
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-7",
+        speed: "standard",
+      },
+    });
+
+    const historical = await app.request(`/v1/agents/${created.id}?version=1`);
+    await expect(historical.json()).resolves.toMatchObject({
+      version: 1,
+      model: { provider: "openai", id: "gpt-5.4", speed: "fast" },
+    });
   });
 
   it("archives agents idempotently and keeps direct retrieve available", async () => {

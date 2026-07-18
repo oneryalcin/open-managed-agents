@@ -364,11 +364,16 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Return to the broader Python/Node environment-image usability story or
+1. Plan 0139 is complete on `dev/pi-multi-provider-models-plan`. Its final
+   independent review returned `APPROVE` with architecture `CLEAR`; a fresh
+   checkout passed `npm ci`, typecheck, the full suite, and the Docker-backed
+   `oma smoke --local-compatible` lane. The optional live provider matrix stays
+   credential-gated and manual-only.
+2. Return to the broader Python/Node environment-image usability story or
    continue the pre-v1 sequence with web tools.
-2. Track publication-pipeline promotion hardening separately in issue #194; it
+3. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
-3. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

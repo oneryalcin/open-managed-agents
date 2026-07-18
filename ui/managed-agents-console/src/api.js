@@ -210,6 +210,19 @@ export function createAgent(body) {
   }).then(toUiAgent);
 }
 
+export function modelInputForSelection(model) {
+  if (!model || typeof model.provider !== "string" || typeof model.id !== "string") {
+    throw new Error("A deployment model must be selected");
+  }
+  return model.default && model.provider === "anthropic"
+    ? model.id
+    : { provider: model.provider, id: model.id };
+}
+
+export function listModelCatalog() {
+  return fetchCursorPages("/v1/model-catalog");
+}
+
 export function createEnvironment(body) {
   return request("/v1/environments", {
     method: "POST",
@@ -350,13 +363,14 @@ async function fetchFilePages(path, { limit = PAGE_LIMIT } = {}) {
   return { data, truncated: true };
 }
 
-async function loadConsoleData() {
-  const [agentsPage, sessionsPage, environmentsPage, filesPage] =
+export async function loadConsoleData() {
+  const [agentsPage, sessionsPage, environmentsPage, filesPage, modelsPage] =
     await Promise.all([
       fetchCursorPages("/v1/agents?include_archived=true"),
       fetchCursorPages("/v1/sessions?include_archived=true&order=desc"),
       fetchCursorPages("/v1/environments"),
       fetchFilePages("/v1/files"),
+      listModelCatalog(),
     ]);
 
   const agents = agentsPage.data.map(toUiAgent);
@@ -370,9 +384,10 @@ async function loadConsoleData() {
     ["sessions", sessionsPage],
     ["environments", environmentsPage],
     ["files", filesPage],
+    ["models", modelsPage],
   ]);
 
-  return { agents, sessions, environments, files, warnings };
+  return { agents, sessions, environments, files, models: modelsPage.data, warnings };
 }
 
 async function hydrateSession(session) {
@@ -403,11 +418,15 @@ function paginationWarnings(pages) {
 }
 
 function toUiAgent(agent) {
+  const modelId = agent.model?.id ?? String(agent.model ?? "unknown");
+  const modelProvider = agent.model?.provider ?? "anthropic";
   return {
     id: agent.id,
     short: shortId(agent.id),
     name: agent.name || agent.id,
-    model: agent.model?.id ?? String(agent.model ?? "unknown"),
+    model: `${modelProvider}/${modelId}`,
+    modelId,
+    modelProvider,
     status: agent.archived_at ? "archived" : "active",
     created: shortDate(agent.created_at),
     updated: shortDate(agent.updated_at),
@@ -724,6 +743,8 @@ if (typeof window !== "undefined") {
     validateMcpOauthCredential,
     createIdempotencyIntent,
     createAgent,
+    modelInputForSelection,
+    listModelCatalog,
     createEnvironment,
     createSession,
     sendSessionEvents,

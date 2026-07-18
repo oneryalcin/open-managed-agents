@@ -49,6 +49,19 @@ describe("OpenAPI and interactive documentation", () => {
     expect(eventSchema.properties.type.enum)
       .not.toContain("agent.thinking");
     expect(document.paths["/v1/sessions"].get.responses["200"]).toBeDefined();
+    expect(document.paths["/v1/model-catalog"].get).toMatchObject({
+      operationId: "listModelCatalog",
+      security: [{ WorkspaceApiKey: [] }],
+    });
+    expect(document.components.schemas.ModelCatalogEntry).toMatchObject({
+      required: expect.arrayContaining([
+        "provider",
+        "id",
+        "credentials_configured",
+        "default",
+      ]),
+      additionalProperties: false,
+    });
     expect(document.paths).not.toHaveProperty("/v1/deployments");
     expect(document.paths).not.toHaveProperty("/v1/memory");
     expect(document.components.schemas.CreateAgentRequest).toMatchObject({
@@ -56,6 +69,23 @@ describe("OpenAPI and interactive documentation", () => {
     });
     expect(document.components.schemas.UpdateAgentRequest).toMatchObject({
       properties: { multiagent: { type: "null" } },
+    });
+    expect(document.components.schemas.ModelInput).toMatchObject({
+      oneOf: expect.arrayContaining([
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            provider: { type: "string", minLength: 1 },
+          }),
+        }),
+      ]),
+    });
+    expect(document.components.schemas.Agent).toMatchObject({
+      properties: {
+        model: {
+          required: ["provider", "id", "speed"],
+          properties: { provider: { type: "string" } },
+        },
+      },
     });
     for (const name of [
       "ForwardAgentPage",
@@ -233,6 +263,7 @@ function makeDeploymentPlane(): DeploymentControlPlane {
   const root = mkdtempSync(join(tmpdir(), "oma-openapi-"));
   roots.push(root);
   return createDeploymentControlPlane({
+    OMA_HOME: root,
     OMA_SQLITE_PATH: join(root, "oma.sqlite"),
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
     OMA_AUTH_MODE: "api-key",

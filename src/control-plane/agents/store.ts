@@ -9,7 +9,10 @@ import type {
   ListAgentsOptions,
   UpdateAgentRecord,
 } from "./types.ts";
-import type { ManagedAgentsListPage } from "../../types/agents.ts";
+import type {
+  ManagedAgentsListPage,
+  ManagedAgentsModelConfig,
+} from "../../types/agents.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS agents (
@@ -109,12 +112,14 @@ export class SqliteAgentStore implements AgentStore {
     this.db = db;
     this.db.exec(SCHEMA);
     withSqliteTransaction(this.db, () => {
+      migratePersistedModels(this.db);
       this.db.exec(`INSERT OR IGNORE INTO agent_versions (
         workspace_id, agent_id, version, name, model, system, description,
         tools, skills, mcp_servers, metadata, multiagent, created_at, updated_at
       ) SELECT workspace_id, id, version, name, model, system, description,
         tools, skills, mcp_servers, metadata, multiagent, created_at, updated_at
         FROM agents`);
+      assertAllPersistedModelsNormalized(this.db);
     });
     this.insertStmt = this.db.prepare(
       `INSERT INTO agents (
@@ -465,6 +470,110 @@ function normalizeLimit(limit: number | undefined): number {
   if (limit === undefined) return 20;
   if (!Number.isSafeInteger(limit) || limit <= 0) return 20;
   return Math.min(limit, 100);
+}
+
+interface PersistedModelRow {
+  workspace_id: string;
+  id: string;
+  version: number;
+  model: string;
+}
+
+function migratePersistedModels(db: DatabaseSync): void {
+  const updateHead = db.prepare(
+    "UPDATE agents SET model = ? WHERE workspace_id = ? AND id = ?",
+  );
+  const updateVersion = db.prepare(
+    `UPDATE agent_versions SET model = ?
+     WHERE workspace_id = ? AND agent_id = ? AND version = ?`,
+  );
+  const heads = db.prepare(
+    "SELECT workspace_id, id, version, model FROM agents",
+  ).all() as unknown as PersistedModelRow[];
+  for (const row of heads) {
+    const parsed = parsePersistedModel(row.model, `agent ${row.id}`);
+    if (parsed.legacy) {
+      updateHead.run(JSON.stringify(parsed.model), row.workspace_id, row.id);
+    }
+  }
+
+  const versions = db.prepare(
+    `SELECT workspace_id, agent_id AS id, version, model
+     FROM agent_versions`,
+  ).all() as unknown as PersistedModelRow[];
+  for (const row of versions) {
+    const parsed = parsePersistedModel(
+      row.model,
+      `agent version ${row.id}@${row.version}`,
+    );
+    if (parsed.legacy) {
+      updateVersion.run(
+        JSON.stringify(parsed.model),
+        row.workspace_id,
+        row.id,
+        row.version,
+      );
+    }
+  }
+}
+
+function assertAllPersistedModelsNormalized(db: DatabaseSync): void {
+  const heads = db.prepare(
+    "SELECT workspace_id, id, version, model FROM agents",
+  ).all() as unknown as PersistedModelRow[];
+  const versions = db.prepare(
+    `SELECT workspace_id, agent_id AS id, version, model FROM agent_versions`,
+  ).all() as unknown as PersistedModelRow[];
+  const rows = [...heads, ...versions];
+  for (const row of rows) {
+    const parsed = parsePersistedModel(
+      row.model,
+      `agent revision ${row.id}@${row.version}`,
+    );
+    if (parsed.legacy) {
+      throw new Error(`Agent model migration left a legacy row: ${row.id}@${row.version}`);
+    }
+  }
+}
+
+function parsePersistedModel(
+  raw: string,
+  location: string,
+): { model: ManagedAgentsModelConfig; legacy: boolean } {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error(`Invalid persisted model JSON for ${location}`);
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid persisted model for ${location}`);
+  }
+  const model = value as Record<string, unknown>;
+  const legacy = model.provider === undefined;
+  const allowedKeys = legacy
+    ? new Set(["id", "speed"])
+    : new Set(["provider", "id", "speed"]);
+  if (Object.keys(model).some((key) => !allowedKeys.has(key))) {
+    throw new Error(`Invalid persisted model fields for ${location}`);
+  }
+  if (typeof model.id !== "string" || model.id.length === 0) {
+    throw new Error(`Invalid persisted model id for ${location}`);
+  }
+  if (model.speed !== "standard" && model.speed !== "fast") {
+    throw new Error(`Invalid persisted model speed for ${location}`);
+  }
+  if (!legacy && (typeof model.provider !== "string" || model.provider.length === 0)) {
+    throw new Error(`Invalid persisted model provider for ${location}`);
+  }
+  return {
+    model: {
+      provider: legacy ? "anthropic" : model.provider as string,
+      id: model.id,
+      speed: model.speed,
+    },
+    legacy,
+  };
 }
 
 function deserialize(row: AgentDbRow): AgentRow {

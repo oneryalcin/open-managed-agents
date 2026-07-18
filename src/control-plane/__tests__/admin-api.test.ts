@@ -461,6 +461,7 @@ function makePlane(opts: {
   const admin = opts.admin ?? true;
   const authMode = Object.hasOwn(opts, "authMode") ? opts.authMode : "api-key";
   return createDeploymentControlPlane({
+    OMA_HOME: root,
     ...(durable
       ? {
           OMA_SQLITE_PATH: join(root, "oma.sqlite"),

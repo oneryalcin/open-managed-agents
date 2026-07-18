@@ -17,9 +17,17 @@ import type { ManagedAgentsSession } from "../../types/sessions.ts";
 
 describe("deployment runtime config", () => {
   it("owns MCP background-worker teardown idempotently", async () => {
-    const plane = createDeploymentControlPlane({ OMA_ENABLE_MCP: "true" });
-    await plane.close();
-    await expect(plane.close()).resolves.toBeUndefined();
+    const root = mkdtempSync(join(tmpdir(), "oma-mcp-teardown-"));
+    try {
+      const plane = createDeploymentControlPlane({
+        OMA_HOME: root,
+        OMA_ENABLE_MCP: "true",
+      });
+      await plane.close();
+      await expect(plane.close()).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("joins a validate refresh into the ticker's in-flight refresh (one coordinator, one POST)", async () => {
@@ -63,6 +71,7 @@ describe("deployment runtime config", () => {
     const root = mkdtempSync(join(tmpdir(), "oma-refresh-race-"));
     const plane = createDeploymentControlPlane(
       {
+        OMA_HOME: root,
         OMA_ENABLE_MCP: "true",
         OMA_MASTER_KEY: generateMasterKey(),
         OMA_AUTH_MODE: "api-key",

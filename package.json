@@ -15,6 +15,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "alpha:smoke": "node scripts/alpha-smoke.mjs",
+    "alpha:smoke:providers": "node scripts/alpha-provider-smoke-matrix.mjs",
     "ui:dev": "node ui/managed-agents-console/serve.mjs"
   },
   "dependencies": {
@@ -23,14 +24,17 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "hono": "4.12.29",
     "node-forge": "1.4.0",
+    "proper-lockfile": "4.1.2",
     "typebox": "1.1.29",
     "undici": "7.28.0",
     "yauzl": "3.4.0"
   },
   "devDependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.63",
+    "@anthropic-ai/sdk": "0.91.1",
     "@types/node": "25.6.0",
     "@types/node-forge": "1.3.14",
+    "@types/proper-lockfile": "4.1.4",
     "@types/yauzl": "2.10.3",
     "tsx": "4.21.0",
     "typescript": "6.0.3",

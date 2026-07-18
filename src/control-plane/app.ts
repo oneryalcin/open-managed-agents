@@ -14,6 +14,7 @@ import {
 } from "./observability/routes.ts";
 import {
   createControlPlaneMetrics,
+  modelProviderMetricLabel,
   registerProcessGauges,
   type ControlPlaneMetrics,
 } from "./observability/instruments.ts";
@@ -107,7 +108,21 @@ import {
   createStoreBackedMcpToolAccessResolver,
 } from "./sessions/pi/mcp/bridge.ts";
 import { createDefaultMcpRuntime } from "./sessions/pi/mcp/runtime.ts";
-import { createPiModelCatalog } from "./sessions/pi/runner.ts";
+import {
+  PINNED_PI_MODEL_RUNTIME_VERSION,
+  createPiModelCatalog,
+  type PiModelCatalog,
+} from "./models/catalog.ts";
+import { modelCatalogRoutes } from "./models/routes.ts";
+import {
+  DefaultModelCatalogService,
+  type ModelCatalogService,
+} from "./models/service.ts";
+import {
+  parseModelDeploymentConfigFromEnv,
+  type ModelDeploymentEnv,
+} from "./models/deployment-config.ts";
+import { createOmaAuthStorageBackend } from "./models/auth-storage-backend.ts";
 import { DEFAULT_MCP_OPERATION_TIMEOUT_MS } from "./sessions/pi/mcp/client.ts";
 import { createOauthRefreshTicker } from "./vaults/oauth-refresh-ticker.ts";
 import type { WakeLoop } from "./wake-loop.ts";
@@ -148,6 +163,7 @@ export interface ControlPlaneServices {
   mcp?: McpOauthValidationDependencies;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
+  models?: ModelCatalogService;
   auth?: ControlPlaneAuth;
   admission?: AdmissionLimits;
   // 0121 C2. Absent = no /health, no /metrics, no HTTP metrics middleware
@@ -206,7 +222,8 @@ export type DeploymentControlPlaneEnv =
   DeploymentStorageEnv &
   DeploymentAuthEnv &
   DeploymentAdmissionEnv &
-  DeploymentObservabilityEnv;
+  DeploymentObservabilityEnv &
+  ModelDeploymentEnv;
 
 // 0113 D5: exactly two values; unset stays disabled for the currently allowed
 // rollout tiers but warns loudly; anything else fails construction.
@@ -339,6 +356,9 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     registerOpenApiRoutes(app, services.openapi);
   }
 
+  if (services.models) {
+    app.route("/v1/model-catalog", modelCatalogRoutes(services.models));
+  }
   app.route("/v1/agents", agentsRoutes(services.agents));
   app.route("/v1/environments", environmentsRoutes(services.environments));
   app.route(
@@ -447,6 +467,7 @@ export function createDeploymentControlPlane(
   internal: { backgroundWorkers?: boolean } = {},
 ): DeploymentControlPlane {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
+  const modelConfig = parseModelDeploymentConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
   const adminKey = loadAdminKey(env);
   // Parsed before any store opens so a malformed flag can't leak a store.
@@ -591,15 +612,75 @@ export function createDeploymentControlPlane(
           onScheduled: () => wakeOauthTicker(),
         })
       : undefined;
-  const modelCatalog =
-    opts.runner?.modelCatalog ?? createPiModelCatalog(opts.runner?.provider);
+  let modelCatalog: PiModelCatalog;
+  try {
+    modelCatalog = opts.runner?.modelCatalog ?? createPiModelCatalog({
+      allowedProviders: modelConfig.allowedProviders,
+      defaultModel: modelConfig.defaultModel,
+      authBackend: createOmaAuthStorageBackend(modelConfig.authPath),
+      authPath: modelConfig.authPath,
+      modelsPath: modelConfig.modelsPath,
+      allowModelAuthCommands: modelConfig.allowModelAuthCommands,
+    });
+  } catch (error) {
+    stores.close();
+    throw error;
+  }
+  const registeredModels = modelCatalog.list();
+  const readyModelCount = registeredModels.filter((model) => modelCatalog.hasConfiguredAuth(model)).length;
+  log.info("model_catalog_loaded", {
+    piVersion: PINNED_PI_MODEL_RUNTIME_VERSION,
+    providers: [...modelCatalog.allowedProviders],
+    defaultProvider: modelCatalog.defaultModel.provider,
+    defaultModel: modelCatalog.defaultModel.id,
+    registeredModelCount: registeredModels.length,
+    readyModelCount,
+    missingCredentialModelCount: registeredModels.length - readyModelCount,
+  });
+  for (const detail of modelCatalog.securityReport.warnings) {
+    log.warn("model_config_warning", { detail });
+  }
   const modelAvailability = {
-    assertAvailable(modelId: string): void {
-      if (!modelCatalog.modelRegistry.find(modelCatalog.provider, modelId)) {
+    resolve(model: { provider: string; id: string }) {
+      if (!modelCatalog.allowedProviders.has(model.provider)) {
+        metrics?.modelAdmissionFailures.inc({
+          reason: "provider_disabled",
+          provider: modelProviderMetricLabel(model.provider),
+        });
         throw new ApiError(
           400,
           "invalid_request_error",
-          `Model ${modelId} is not available on this deployment`,
+          `Model provider ${model.provider} is not enabled on this deployment`,
+        );
+      }
+      const resolved = modelCatalog.resolve(model);
+      if (!resolved) {
+        metrics?.modelAdmissionFailures.inc({
+          reason: "model_unavailable",
+          provider: modelProviderMetricLabel(model.provider),
+        });
+        throw new ApiError(
+          400,
+          "invalid_request_error",
+          `Model ${model.provider}/${model.id} is not available on this deployment`,
+        );
+      }
+      return resolved;
+    },
+    assertAvailable(model: { provider: string; id: string }): void {
+      this.resolve(model);
+    },
+    assertReady(model: { provider: string; id: string }): void {
+      const resolved = this.resolve(model);
+      if (!modelCatalog.hasConfiguredAuth(resolved)) {
+        metrics?.modelAdmissionFailures.inc({
+          reason: "credentials_missing",
+          provider: modelProviderMetricLabel(model.provider),
+        });
+        throw new ApiError(
+          400,
+          "invalid_request_error",
+          `Credentials for model provider ${model.provider} are not configured on this deployment`,
         );
       }
     },
@@ -783,6 +864,7 @@ export function createDeploymentControlPlane(
       },
     ),
     sessionEvents,
+    models: new DefaultModelCatalogService(modelCatalog),
     admission,
     observability: {
       health: {
@@ -943,6 +1025,7 @@ function isManagedAgentsRoute(path: string): boolean {
     // to wrk_default if someone forgets the auth prefix registration.
     "/v1/vaults",
     "/v1/sessions",
+    "/v1/model-catalog",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 

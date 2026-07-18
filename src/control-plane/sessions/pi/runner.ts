@@ -7,6 +7,7 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { PiModelCatalog } from "../../models/catalog.ts";
 import type {
   RuntimeEventRunner,
   RuntimeInternalEvent,
@@ -156,24 +157,46 @@ interface McpFailureBudgetEntry {
   fingerprint: string;
 }
 
-export interface PiModelCatalog {
-  provider: string;
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
-}
-
-export function createPiModelCatalog(provider = "anthropic"): PiModelCatalog {
+function createPrivatePiModelCatalog(
+  provider = "anthropic",
+  modelId = "claude-haiku-4-5",
+): PiModelCatalog {
   const authStorage = AuthStorage.create();
+  const modelRegistry = ModelRegistry.create(authStorage);
+  const allowedProviders = new Set([provider]);
   return {
-    provider,
+    defaultModel: { provider, id: modelId },
+    allowedProviders,
     authStorage,
-    modelRegistry: ModelRegistry.create(authStorage),
+    modelRegistry,
+    securityReport: { warnings: [] },
+    // Standalone runners are an internal/test seam without deployment
+    // admission policy. Production always receives the shared allowlisted
+    // catalog from the composition root.
+    resolve: (ref) => modelRegistry.find(ref.provider, ref.id),
+    list: (options = {}) =>
+      (options.availableOnly ? modelRegistry.getAvailable() : modelRegistry.getAll())
+        .filter((model) =>
+          allowedProviders.has(model.provider) &&
+          (options.provider === undefined || model.provider === options.provider)),
+    // Standalone runners do not participate in production admission. Tests
+    // and internal callers may supply their own session factory without
+    // configuring operator credentials.
+    hasConfiguredAuth: () => true,
+    providerAuthMetadata: (providerName) => {
+      const status = modelRegistry.getProviderAuthStatus(providerName);
+      return {
+        ...(status.source === undefined ? {} : { source: status.source }),
+        ...(status.label === undefined ? {} : { label: status.label }),
+      };
+    },
   };
 }
 
 export class PiSessionRunner implements RuntimeEventRunner {
   private readonly authStorage: AuthStorage;
   private readonly modelRegistry: ModelRegistry;
+  private readonly modelCatalog: PiModelCatalog;
   private readonly sessions = new Map<string, RuntimeHandle>();
   private readonly pendingSessions = new Map<string, Promise<RuntimeHandle>>();
   private readonly pendingInterrupts = new Map<string, Promise<void>>();
@@ -209,7 +232,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
         workspaceId: WorkspaceId,
         sessionId: string,
         context?: { agentId?: string; agentVersion?: number },
-      ) => { model: { id: string }; system: string | null } | undefined;
+      ) => {
+        model: { provider: string; id: string };
+        system: string | null;
+      } | undefined;
       thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
       idleTtlMs?: number;
       now?: () => number;
@@ -229,7 +255,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
       mcp?: PiMcpOptions;
     } = {},
   ) {
-    const catalog = opts.modelCatalog ?? createPiModelCatalog(opts.provider);
+    const catalog = opts.modelCatalog ?? createPrivatePiModelCatalog(
+      opts.provider,
+      opts.model,
+    );
+    this.modelCatalog = catalog;
     this.authStorage = catalog.authStorage;
     this.modelRegistry = catalog.modelRegistry;
     this.resolveSandboxProviderFactory();
@@ -705,14 +735,21 @@ export class PiSessionRunner implements RuntimeEventRunner {
           sessionId,
           customToolContext,
         );
-        const provider =
-          this.opts.modelCatalog?.provider ?? this.opts.provider ?? "anthropic";
         const revisionModel = agentRevision === undefined
           ? undefined
-          : this.modelRegistry.find(provider, agentRevision.model.id);
+          : this.modelCatalog.resolve(agentRevision.model);
         if (agentRevision !== undefined && revisionModel === undefined) {
           throw new Error(
-            `Pi model not available: ${provider}/${agentRevision.model.id}`,
+            `Pi model not available: ${agentRevision.model.provider}/${agentRevision.model.id}`,
+          );
+        }
+        if (
+          agentRevision !== undefined &&
+          revisionModel !== undefined &&
+          !this.modelCatalog.hasConfiguredAuth(revisionModel)
+        ) {
+          throw new Error(
+            `Credentials for model provider ${agentRevision.model.provider} are not configured on this deployment`,
           );
         }
         const customToolNames = new Set(
@@ -1031,13 +1068,16 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
     sandbox: SandboxProvider | undefined,
     context: { agentId?: string; agentVersion?: number } | undefined,
-    revision: { model: { id: string }; system: string | null } | undefined,
+    revision: {
+      model: { provider: string; id: string };
+      system: string | null;
+    } | undefined,
     revisionModel: Exclude<ReturnType<ModelRegistry["find"]>, undefined> | undefined,
     mcpTools: readonly ToolDefinition<any, any, any>[] = [],
   ): Promise<PiRuntimeSession> {
-    const provider = this.opts.modelCatalog?.provider ?? this.opts.provider ?? "anthropic";
-    const modelId = revision?.model.id ?? this.opts.model ?? "claude-haiku-4-5";
-    const model = revisionModel ?? this.modelRegistry.find(provider, modelId);
+    const provider = revision?.model.provider ?? this.modelCatalog.defaultModel.provider;
+    const modelId = revision?.model.id ?? this.modelCatalog.defaultModel.id;
+    const model = revisionModel ?? this.modelCatalog.resolve({ provider, id: modelId });
     if (!model) {
       throw new Error(`Pi model not available: ${provider}/${modelId}`);
     }

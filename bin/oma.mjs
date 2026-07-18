@@ -31,6 +31,12 @@ if (command === "up") {
   await runWorkspaces(args.slice(1));
 } else if (command === "admin") {
   runAdmin(args.slice(1));
+} else if (command === "providers") {
+  await runProviders(args.slice(1));
+} else if (command === "models") {
+  await runModels(args.slice(1));
+} else if (command === "auth") {
+  await runAuth(args.slice(1));
 } else if (command === "down" || command === "logs" || command === "status") {
   fail(`${command} is not implemented yet. Run \`oma up\` in the foreground and use Ctrl-C to stop it.`);
 } else {
@@ -171,6 +177,43 @@ async function runWorkspaces(commandArgs) {
   await runProvisioning(["list-workspaces", "--db", db]);
 }
 
+async function runProviders(commandArgs) {
+  const [action, ...rest] = commandArgs;
+  if (action !== "status") fail("Usage: oma providers status");
+  if (rest.length !== 0) fail("Usage: oma providers status");
+  await runModelProvisioning(["providers-status"]);
+}
+
+async function runModels(commandArgs) {
+  const [action, ...rest] = commandArgs;
+  if (action === "list") {
+    await runModelProvisioning(["models-list", ...rest]);
+    return;
+  }
+  if (action === "validate") {
+    await runModelProvisioning(["models-validate", ...rest]);
+    return;
+  }
+  fail("Usage: oma models <list|validate>");
+}
+
+async function runAuth(commandArgs) {
+  const [action, ...rest] = commandArgs;
+  if (action === "set") {
+    await runModelProvisioning(["auth-set", ...rest]);
+    return;
+  }
+  if (action === "remove") {
+    await runModelProvisioning(["auth-remove", ...rest]);
+    return;
+  }
+  if (action === "status") {
+    await runModelProvisioning(["auth-status", ...rest]);
+    return;
+  }
+  fail("Usage: oma auth <set|remove|status>");
+}
+
 async function runProvisioning(provisioningArgs) {
   await runChild(
     process.execPath,
@@ -184,8 +227,22 @@ async function runProvisioning(provisioningArgs) {
   );
 }
 
+async function runModelProvisioning(provisioningArgs) {
+  await runChild(
+    process.execPath,
+    [
+      "--experimental-transform-types",
+      "--disable-warning=ExperimentalWarning",
+      join(root, "scripts", "oma-models.ts"),
+      ...provisioningArgs,
+    ],
+    process.env,
+  );
+}
+
 async function runSmoke(commandArgs) {
   let sandbox;
+  let localCompatible = false;
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
     if (arg === "--sandbox") {
@@ -193,6 +250,10 @@ async function runSmoke(commandArgs) {
       if (value === undefined) fail("--sandbox requires docker or microsandbox");
       sandbox = normalizeSandbox(value);
       index += 1;
+      continue;
+    }
+    if (arg === "--local-compatible") {
+      localCompatible = true;
       continue;
     }
     fail(`Unknown option for oma smoke: ${arg}`);
@@ -203,6 +264,7 @@ async function runSmoke(commandArgs) {
     {
       ...process.env,
       ...(sandbox === undefined ? {} : { OMA_ALPHA_SANDBOX_PROVIDER: sandbox }),
+      ...(localCompatible ? { OMA_ALPHA_LOCAL_COMPATIBLE: "1" } : {}),
     },
   );
 }
@@ -285,10 +347,16 @@ function printHelp() {
 
 Usage:
   oma up [--sandbox docker|microsandbox]
-  oma smoke [--sandbox docker|microsandbox]
+  oma smoke [--sandbox docker|microsandbox] [--local-compatible]
   oma keys mint [--workspace id] [--label label]
   oma keys list [--workspace id]
   oma workspaces list
+  oma providers status
+  oma models list [--provider name] [--available]
+  oma models validate [--file path]
+  oma auth set <provider> [--stdin]
+  oma auth status [provider]
+  oma auth remove <provider>
   oma admin init
   oma admin status
   oma version
@@ -299,11 +367,21 @@ Commands:
   smoke      Run the disposable end-to-end alpha smoke test.
   keys       Mint or list workspace API keys in the local appliance database.
   workspaces  List local appliance workspaces.
+  providers   Inspect enabled Pi model providers and credential readiness.
+  models      List or validate enabled Pi models.
+  auth        Store, remove, or inspect model provider API-key credentials.
   admin       Initialize or inspect local appliance admin mode.
   version     Print the installed OMA version.
 
 Environment:
-  ANTHROPIC_API_KEY       Model credential used by the control plane.
+  ANTHROPIC_API_KEY       Anthropic model credential used by the control plane.
+  OMA_MODEL_PROVIDERS     Enabled provider allowlist (default: anthropic).
+  OMA_DEFAULT_MODEL_PROVIDER / OMA_DEFAULT_MODEL
+                           Default exact model pair.
+  OMA_ALPHA_MODEL_PROVIDER / OMA_ALPHA_MODEL
+                           Exact provider/model used by oma smoke.
+  OMA_PI_AUTH_FILE        Pi auth storage path (default: $OMA_HOME/pi/auth.json).
+  OMA_PI_MODELS_FILE      Pi models.json path (default: $OMA_HOME/pi/models.json).
   OMA_HOME                Durable data directory (default: ~/.oma).
   OMA_HOST                Bind address (default: 127.0.0.1).
   OMA_PORT                Listen port (default: 4180).

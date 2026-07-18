@@ -43,13 +43,58 @@ public tool/result/message events, and cleans up. Useful overrides:
 
 ```bash
 OMA_ALPHA_MODEL=claude-sonnet-5 oma smoke
+OMA_ALPHA_MODEL_PROVIDER=openai OMA_ALPHA_MODEL=gpt-4.1-mini oma smoke
 oma smoke --sandbox microsandbox
+oma smoke --local-compatible
 OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 OMA_ALPHA_API_KEY=oma_... oma smoke
 ```
 
 The repo-local `npm run alpha:smoke` alias remains available. Existing-server
 smoke mode assumes that server already has an explicit sandbox provider and
 therefore skips local sandbox prerequisite checks.
+
+`oma smoke --local-compatible` is the no-paid-API multi-provider proof: it
+starts a deterministic loopback OpenAI-compatible endpoint, writes a private
+temporary Pi `models.json`, verifies the exact custom provider/model through
+both model requests and a real Docker `bash` round trip, then removes all
+temporary state. To run every credentialed lane available in your environment:
+
+```bash
+npm run alpha:smoke:providers
+# Or select strict lanes; a requested lane fails if its credential is absent:
+OMA_ALPHA_PROVIDER_LANES=local-compatible,openai npm run alpha:smoke:providers
+```
+
+### Choose another Pi model provider
+
+OMA reuses the provider catalog and request adapters from its pinned Pi
+release. Providers are operator-enabled, and agents persist an exact
+`{provider,id}` pair. For a built-in provider such as OpenAI:
+
+```bash
+export OMA_MODEL_PROVIDERS="anthropic,openai"
+oma auth set openai             # hidden prompt; use --stdin for automation
+oma providers status
+oma models list --provider openai --available
+oma up                          # restart after any `oma auth` mutation
+```
+
+The console's Create Agent dialog reads the same authenticated catalog and
+shows whether the selected model has configured credentials. Missing
+credentials do not prevent defining an agent, but session creation fails
+closed until the operator configures them and restarts `oma up`.
+
+Operator-defined OpenAI-, Anthropic-, and Google-compatible endpoints use Pi's
+existing `models.json` format at `~/.oma/pi/models.json` (or
+`OMA_PI_MODELS_FILE`). Validate configuration before starting:
+
+```bash
+oma models validate
+```
+
+See [development/deployment setup](docs/dev-deployment.md#model-providers-and-custom-compatible-endpoints)
+for a complete local-compatible example and the support tiers. OMA does not
+expose provider base URLs or credentials through its workspace API or console.
 
 To choose microsandbox for the durable server:
 

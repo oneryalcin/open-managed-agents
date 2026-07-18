@@ -130,13 +130,13 @@ function PageHead({ title, sub, action, onAction, readOnly = false, endpoint }) 
 function ModeBar({ mode, warnings = [] }) {
   const label = mode === 'demo'
     ? 'Demo review mode'
-    : mode === 'mock'
-      ? 'Offline — bundled demo data'
+    : mode === 'error'
+      ? 'Live API unavailable'
       : 'Live API mode';
   const copy = mode === 'demo'
     ? 'Local interactions mutate bundled demo data only.'
-    : mode === 'mock'
-      ? 'The API is unavailable; writes are disabled and demo data is clearly marked.'
+    : mode === 'error'
+      ? 'The live request failed; no bundled demo records are being shown.'
       : 'Live agent, environment, session, prompt, interrupt, and confirmation actions are enabled; unsupported writes stay disabled.';
   return (
     <div className={'modebar mode-' + mode}>

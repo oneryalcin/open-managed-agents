@@ -1286,6 +1286,43 @@ describe("session service/store", () => {
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
   });
 
+  it("rejects an unavailable pinned model before snapshots, runtime, or session rows", async () => {
+    const runtime = new FakeRuntimePreparer();
+    const fixture = createFixture({
+      fileStorage: true,
+      runtime,
+      modelAvailability: {
+        assertReady: () => {
+          throw new Error(
+            "Credentials for model provider anthropic are not configured on this deployment",
+          );
+        },
+      },
+    });
+    const snapshot = vi.spyOn(fixture.fileStorage!, "createInternalSnapshot");
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Unavailable Model Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow("Credentials for model provider anthropic");
+
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(runtime.prepares).toEqual([]);
+    expect(
+      fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data,
+    ).toEqual([]);
+  });
+
   it("materializes file resources before persisting the session row", async () => {
     const runtime = new FakeRuntimePreparer();
     const vaults = { assertVaultsUsable: vi.fn() };
@@ -1486,6 +1523,9 @@ function createFixture(
     sessionStore?: SqliteSessionStore;
     pendingSnapshotCleanupRetryDelayMs?: number;
     pendingSnapshotCleanupMaxAttempts?: number;
+    modelAvailability?: {
+      assertReady(model: { provider: string; id: string; speed: "standard" | "fast" }): void;
+    };
   } = {},
 ): {
   sessions: DefaultSessionService;
@@ -1528,6 +1568,9 @@ function createFixture(
         : { maxMountedBytes: opts.maxMountedBytes }),
       ...(opts.runtime === undefined ? {} : { runtime: opts.runtime }),
       ...(opts.vaults === undefined ? {} : { vaults: opts.vaults }),
+      ...(opts.modelAvailability === undefined
+        ? {}
+        : { modelAvailability: opts.modelAvailability }),
       ...(opts.pendingSnapshotCleanupRetryDelayMs === undefined
         ? {}
         : {

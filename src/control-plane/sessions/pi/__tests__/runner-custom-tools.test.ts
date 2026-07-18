@@ -376,7 +376,10 @@ describe("PiSessionRunner custom-tool bridge", () => {
     const runner = new PiSessionRunner({
       customTools,
       idleTtlMs: 0,
-      agentRevision: () => ({ model: { id: "missing-model" }, system: null }),
+      agentRevision: () => ({
+        model: { provider: "anthropic", id: "missing-model" },
+        system: null,
+      }),
     });
 
     const iterator = runner
@@ -389,13 +392,44 @@ describe("PiSessionRunner custom-tool bridge", () => {
     await runner.close();
   });
 
+  it("fails closed when pinned-model credentials disappear before handle recreation", async () => {
+    const resolved = { provider: "openai", id: "gpt-pinned-v1" };
+    const runner = new PiSessionRunner({
+      idleTtlMs: 0,
+      modelCatalog: {
+        defaultModel: { provider: "anthropic", id: "default-model" },
+        allowedProviders: new Set(["anthropic", "openai"]),
+        authStorage: {} as never,
+        modelRegistry: { find: () => resolved } as never,
+        securityReport: { warnings: [] },
+        resolve: () => resolved as never,
+        list: () => [],
+        hasConfiguredAuth: () => false,
+        providerAuthMetadata: () => ({}),
+      },
+      agentRevision: () => ({
+        model: resolved,
+        system: null,
+      }),
+    });
+
+    const iterator = runner
+      .runUserMessage("wrk_default", "sesn_missing_credentials", "ask")
+      [Symbol.asyncIterator]();
+    await expect(iterator.next()).rejects.toThrow(
+      "Credentials for model provider openai are not configured on this deployment",
+    );
+    expect(sdk.createAgentSession).not.toHaveBeenCalled();
+    await runner.close();
+  });
+
   it("selects the pinned revision model and system prompt", async () => {
     const runner = new PiSessionRunner({
       customTools: () => [ASK_USER],
       customToolTimeoutMs: 0,
       idleTtlMs: 0,
       agentRevision: () => ({
-        model: { id: "claude-pinned-v1" },
+        model: { provider: "openai", id: "gpt-pinned-v1" },
         system: "pinned system v1",
       }),
     });
@@ -404,8 +438,8 @@ describe("PiSessionRunner custom-tool bridge", () => {
       .runUserMessage("wrk_default", "sesn_pinned", "ask")
       [Symbol.asyncIterator]();
     await iterator.next();
-    expect(sdk.modelFind).toHaveBeenCalledWith("anthropic", "claude-pinned-v1");
-    expect(sdk.lastCreateOptions()?.model).toEqual({ id: "claude-pinned-v1" });
+    expect(sdk.modelFind).toHaveBeenCalledWith("openai", "gpt-pinned-v1");
+    expect(sdk.lastCreateOptions()?.model).toEqual({ id: "gpt-pinned-v1" });
     expect(sdk.lastCreateOptions()?.resourceLoader?.systemPrompt)
       .toBe("pinned system v1");
     await runner.close();

@@ -349,7 +349,7 @@ a.dl { text-decoration:none; }
 .mode-main { color:var(--ink); font-weight:600; white-space:nowrap; }
 .mode-copy { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .mode-warn { margin-left:auto; max-width:45%; color:var(--accent); font-weight:550; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.mode-demo,.mode-mock { background:var(--accent-wash); border-bottom-color:var(--accent-line); }
+.mode-demo,.mode-error { background:var(--accent-wash); border-bottom-color:var(--accent-line); }
 .inline-warn {
   display:flex; align-items:flex-start; gap:8px; margin:-6px 0 18px;
   max-width:820px; padding:9px 12px; border-radius:var(--r-md);

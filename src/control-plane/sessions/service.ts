@@ -5,6 +5,7 @@ import type {
   ManagedAgentsSession,
   ManagedAgentsSessionFileResource,
 } from "../../types/sessions.ts";
+import type { ManagedAgentsModelConfig } from "../../types/agents.ts";
 import { log } from "../logging.ts";
 import type { AgentStore } from "../agents/types.ts";
 import {
@@ -123,7 +124,7 @@ export interface DefaultSessionServiceOptions {
   pendingSnapshotCleanupMaxAttempts?: number;
   /** 0121 C2: telemetry-only, fired when the active-sessions cap rejects. */
   onAdmissionRejected?: () => void;
-  modelAvailability?: { assertAvailable(modelId: string): void };
+  modelAvailability?: { assertReady(model: ManagedAgentsModelConfig): void };
 }
 
 export class DefaultSessionService implements SessionService {
@@ -160,7 +161,7 @@ export class DefaultSessionService implements SessionService {
   private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly onAdmissionRejected: (() => void) | undefined;
   private readonly modelAvailability:
-    | { assertAvailable(modelId: string): void }
+    | { assertReady(model: ManagedAgentsModelConfig): void }
     | undefined;
   private readonly pendingSessionCreates = new Map<WorkspaceId, number>();
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
@@ -377,7 +378,7 @@ export class DefaultSessionService implements SessionService {
     if (!agent) {
       throw notFound(`agent.version: ${agentRef.version} not found`);
     }
-    this.modelAvailability?.assertAvailable(agent.model.id);
+    this.modelAvailability?.assertReady(agent.model);
     if (agent.skills.length > 0) {
       const read = resolveBuiltinToolAccessForAgent(agent, "read");
       if (!read.enabled || read.permission === "deny") {

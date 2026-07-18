@@ -12,6 +12,8 @@ import {
   hasWorkspaceKey,
   listVaultCredentials,
   listVaults,
+  listModelCatalog,
+  modelInputForSelection,
   mintKey,
   sendSessionEvents,
   setWorkspaceKey,
@@ -200,6 +202,7 @@ describe("workspace write capability", () => {
     });
 
     expect(created.toolPermission).toBe("Ask before use");
+    expect(created.model).toBe("anthropic/claude-sonnet-4-6");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/agents",
@@ -219,6 +222,16 @@ describe("workspace write capability", () => {
         }),
       }),
     );
+  });
+
+  it("preserves CMA string input only for the exact deployment default", () => {
+    expect(modelInputForSelection({ provider:"anthropic", id:"claude-sonnet-5", default:true }))
+      .toBe("claude-sonnet-5");
+    expect(modelInputForSelection({ provider:"openai", id:"gpt-5", default:false }))
+      .toEqual({ provider:"openai", id:"gpt-5" });
+    expect(modelInputForSelection({ provider:"openai", id:"gpt-5", default:true }))
+      .toEqual({ provider:"openai", id:"gpt-5" });
+    expect(() => modelInputForSelection(null)).toThrow("must be selected");
   });
 
   it("creates environments through the narrow wrapper without an idempotency key", async () => {
@@ -350,6 +363,32 @@ describe("workspace write capability", () => {
     expect(urls[0]).toContain("include_archived=true");
     expect(urls[1]).toContain("/v1/vaults/vlt%2F1/credentials?");
     expect(urls[1]).toContain("include_archived=true");
+  });
+
+  it("reads every model-catalog page with workspace auth and no has_more assumption", async () => {
+    setWorkspaceKey("oma_workspace");
+    const fetchMock = vi.fn((url) => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify(url.includes("page=next")
+        ? { data:[{ provider:"openai", id:"gpt-5" }], next_page:null }
+        : { data:[{ provider:"anthropic", id:"claude-sonnet-5" }], next_page:"next" })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", { location: { origin: "http://oma.local" } });
+
+    await expect(listModelCatalog()).resolves.toEqual({
+      data:[
+        { provider:"anthropic", id:"claude-sonnet-5" },
+        { provider:"openai", id:"gpt-5" },
+      ],
+      truncated:false,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1].headers).toMatchObject({
+      "x-api-key":"oma_workspace",
+      "anthropic-beta":expect.stringContaining("managed-agents-2026-04-01"),
+    });
   });
 });
 

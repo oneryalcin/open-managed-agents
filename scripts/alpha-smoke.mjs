@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { startAlphaOpenAICompatibleFixture } from "./alpha-openai-compatible-fixture.mjs";
+import {
+  LOCAL_ALPHA_API_KEY,
+  createLocalCompatibleModelsConfig,
+  resolveAlphaModel,
+} from "./alpha-smoke-models.mjs";
 
 const BETA = "managed-agents-2026-04-01";
-const DEFAULT_MODEL = "claude-sonnet-5";
+const SMOKE_TOKEN = "OMA_ALPHA_SMOKE_OK";
 const DEFAULT_SANDBOX_PROVIDER = "docker-local";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const KEY_LINE = /x-api-key: (oma_[A-Za-z0-9_-]+)/;
@@ -14,6 +20,7 @@ const URL_LINE = /open-managed-agents listening on (http:\/\/[^\s]+)/;
 
 const state = {
   child: undefined,
+  fixture: undefined,
   home: undefined,
   keepHome: process.env.OMA_ALPHA_KEEP_HOME === "1",
 };
@@ -42,6 +49,11 @@ async function main() {
 
   const configuredBaseUrl = process.env.OMA_ALPHA_BASE_URL;
   const configuredApiKey = process.env.OMA_ALPHA_API_KEY;
+  const localCompatible = process.env.OMA_ALPHA_LOCAL_COMPATIBLE === "1";
+  if (localCompatible && (configuredBaseUrl || configuredApiKey)) {
+    throw new Error("OMA_ALPHA_LOCAL_COMPATIBLE cannot target an existing OMA server");
+  }
+  const model = resolveAlphaModel(process.env, localCompatible);
   let baseUrl;
   let apiKey;
   let sandboxProvider = "existing-server";
@@ -57,27 +69,35 @@ async function main() {
   } else {
     sandboxProvider = process.env.OMA_ALPHA_SANDBOX_PROVIDER ?? DEFAULT_SANDBOX_PROVIDER;
     checkSandboxPrerequisites(sandboxProvider);
-    const started = await startTemporaryOma(sandboxProvider);
+    if (localCompatible) {
+      state.fixture = await startAlphaOpenAICompatibleFixture({
+        apiKey: LOCAL_ALPHA_API_KEY,
+        modelId: model.id,
+        token: SMOKE_TOKEN,
+      });
+      ok(`Started deterministic OpenAI-compatible fixture at ${state.fixture.baseUrl}`);
+    }
+    const started = await startTemporaryOma(sandboxProvider, model, state.fixture?.baseUrl);
     baseUrl = started.baseUrl;
     apiKey = started.apiKey;
   }
 
   await waitForApi(baseUrl, apiKey);
+  await verifyModelCatalog(baseUrl, apiKey, model);
 
-  const model = process.env.OMA_ALPHA_MODEL ?? DEFAULT_MODEL;
   const prefix = `alpha-smoke-${Date.now().toString(36)}`;
 
-  step(`Creating agent (${model})`);
+  step(`Creating agent (${model.provider}/${model.id})`);
   const agent = await requestJson(baseUrl, apiKey, "/v1/agents", {
     method: "POST",
     body: {
       name: `${prefix}-agent`,
-      model,
+      model: model.input,
       system: [
         "You are running the Open Managed Agents alpha smoke test.",
         "You must use the bash tool exactly once.",
-        "Run this exact command: printf OMA_ALPHA_SMOKE_OK.",
-        "After the tool result, reply with the exact token OMA_ALPHA_SMOKE_OK and no extra prose.",
+        `Run this exact command: printf ${SMOKE_TOKEN}.`,
+        `After the tool result, reply with the exact token ${SMOKE_TOKEN} and no extra prose.`,
       ].join(" "),
       tools: [
         {
@@ -92,6 +112,11 @@ async function main() {
       metadata: { alpha_smoke: "true", prefix },
     },
   });
+  if (agent.model?.provider !== model.provider || agent.model?.id !== model.id) {
+    throw new Error(
+      `Agent persisted unexpected model ${JSON.stringify(agent.model)}; expected ${model.provider}/${model.id}`,
+    );
+  }
   ok(`Agent ${agent.id} v${agent.version}`);
 
   step("Creating default-deny environment");
@@ -126,7 +151,7 @@ async function main() {
           content: [
             {
               type: "text",
-              text: "Use bash exactly once and run: printf OMA_ALPHA_SMOKE_OK",
+              text: `Use bash exactly once and run: printf ${SMOKE_TOKEN}`,
             },
           ],
         },
@@ -144,20 +169,22 @@ async function main() {
   } else {
     throw new Error(`Session completed without an agent.tool_use for bash. Last event types: ${result.eventTypes.join(", ")}`);
   }
-  if (result.toolResultText.includes("OMA_ALPHA_SMOKE_OK")) {
+  if (result.toolResultText.includes(SMOKE_TOKEN)) {
     ok("Observed expected bash tool_result output");
   } else {
     throw new Error(
-      `Session completed, but no bash agent.tool_result included OMA_ALPHA_SMOKE_OK. Last tool result: ${JSON.stringify(result.toolResultText)}`,
+      `Session completed, but no bash agent.tool_result included ${SMOKE_TOKEN}. Last tool result: ${JSON.stringify(result.toolResultText)}`,
     );
   }
-  if (result.agentText.includes("OMA_ALPHA_SMOKE_OK")) {
+  if (result.agentText.includes(SMOKE_TOKEN)) {
     ok("Received expected agent.message token");
   } else {
     throw new Error(
-      `Session completed, but the final agent.message did not include OMA_ALPHA_SMOKE_OK. Last message: ${JSON.stringify(result.agentText)}`,
+      `Session completed, but the final agent.message did not include ${SMOKE_TOKEN}. Last message: ${JSON.stringify(result.agentText)}`,
     );
   }
+  state.fixture?.assertComplete();
+  if (state.fixture !== undefined) ok("Observed exact custom provider/model routing across both model requests");
 
   step("Best-effort cleanup");
   await bestEffort(() => requestJson(baseUrl, apiKey, `/v1/sessions/${session.id}`, { method: "DELETE" }));
@@ -166,6 +193,7 @@ async function main() {
 
   console.log("");
   console.log("Alpha smoke passed.");
+  console.log(`Model: ${model.provider}/${model.id}`);
   console.log(`Sandbox provider: ${sandboxProvider}`);
   console.log(`Console: ${baseUrl}/console`);
 }
@@ -215,8 +243,27 @@ function checkMicrosandbox() {
   ok(`Microsandbox CLI reachable (${command})`);
 }
 
-async function startTemporaryOma(sandboxProvider) {
+async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl) {
   state.home = await mkdtemp(join(tmpdir(), "oma-alpha-smoke-"));
+  const modelEnv = {};
+  if (localFixtureBaseUrl !== undefined) {
+    const piRoot = join(state.home, "pi");
+    await mkdir(piRoot, { recursive: true, mode: 0o700 });
+    await chmod(state.home, 0o700);
+    const modelsPath = join(piRoot, "models.json");
+    await writeFile(
+      modelsPath,
+      `${JSON.stringify(createLocalCompatibleModelsConfig(localFixtureBaseUrl), null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    await chmod(modelsPath, 0o600);
+    Object.assign(modelEnv, {
+      OMA_MODEL_PROVIDERS: model.provider,
+      OMA_DEFAULT_MODEL_PROVIDER: model.provider,
+      OMA_DEFAULT_MODEL: model.id,
+      OMA_PI_MODELS_FILE: modelsPath,
+    });
+  }
   const child = spawn(
     process.execPath,
     ["bin/oma.mjs", "up", "--sandbox", sandboxProvider],
@@ -227,6 +274,7 @@ async function startTemporaryOma(sandboxProvider) {
         OMA_HOME: state.home,
         OMA_HOST: "127.0.0.1",
         OMA_PORT: "0",
+        ...modelEnv,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -283,6 +331,25 @@ async function waitForApi(baseUrl, apiKey) {
     await delay(100);
   }
   throw new Error("Timed out waiting for OMA API readiness.");
+}
+
+async function verifyModelCatalog(baseUrl, apiKey, model) {
+  const page = await requestJson(
+    baseUrl,
+    apiKey,
+    `/v1/model-catalog?provider=${encodeURIComponent(model.provider)}&limit=100`,
+    { method: "GET" },
+  );
+  const entry = page.data?.find((candidate) => candidate.provider === model.provider && candidate.id === model.id);
+  if (!entry) throw new Error(`Model catalog did not contain ${model.provider}/${model.id}`);
+  if (entry.credentials_configured !== true) {
+    throw new Error(`Model catalog reported missing credentials for ${model.provider}/${model.id}`);
+  }
+  const serialized = JSON.stringify(page);
+  for (const forbidden of ["baseUrl", "headers", "authPath", "modelsPath", "apiKey", "Authorization", LOCAL_ALPHA_API_KEY]) {
+    if (serialized.includes(forbidden)) throw new Error(`Model catalog leaked forbidden field/value ${forbidden}`);
+  }
+  ok(`Model catalog reports ${model.provider}/${model.id} ready without configuration internals`);
 }
 
 async function waitForResult(baseUrl, apiKey, sessionId, timeoutMs) {
@@ -380,6 +447,10 @@ async function cleanup() {
       delay(3_000),
     ]);
     if (state.child.exitCode === null) state.child.kill("SIGKILL");
+  }
+  if (state.fixture !== undefined) {
+    await state.fixture.close();
+    state.fixture = undefined;
   }
   if (state.home !== undefined && !state.keepHome) {
     await rm(state.home, { recursive: true, force: true });
