@@ -124,7 +124,7 @@ export interface DefaultSessionServiceOptions {
   pendingSnapshotCleanupMaxAttempts?: number;
   /** 0121 C2: telemetry-only, fired when the active-sessions cap rejects. */
   onAdmissionRejected?: () => void;
-  modelAvailability?: { assertAvailable(model: ManagedAgentsModelConfig): void };
+  modelAvailability?: { assertReady(model: ManagedAgentsModelConfig): void };
 }
 
 export class DefaultSessionService implements SessionService {
@@ -161,7 +161,7 @@ export class DefaultSessionService implements SessionService {
   private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly onAdmissionRejected: (() => void) | undefined;
   private readonly modelAvailability:
-    | { assertAvailable(model: ManagedAgentsModelConfig): void }
+    | { assertReady(model: ManagedAgentsModelConfig): void }
     | undefined;
   private readonly pendingSessionCreates = new Map<WorkspaceId, number>();
   private readonly pendingSnapshotDeleteRetryTimers = new Map<
@@ -378,7 +378,7 @@ export class DefaultSessionService implements SessionService {
     if (!agent) {
       throw notFound(`agent.version: ${agentRef.version} not found`);
     }
-    this.modelAvailability?.assertAvailable(agent.model);
+    this.modelAvailability?.assertReady(agent.model);
     if (agent.skills.length > 0) {
       const read = resolveBuiltinToolAccessForAgent(agent, "read");
       if (!read.enabled || read.permission === "deny") {

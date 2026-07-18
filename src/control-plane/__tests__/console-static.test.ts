@@ -182,6 +182,7 @@ describe("console in the deployment assembly", () => {
     const root = mkdtempSync(join(tmpdir(), "oma-console-deploy-"));
     tempRoots.push(root);
     const plane = createDeploymentControlPlane({
+      OMA_HOME: root,
       OMA_SQLITE_PATH: join(root, "oma.sqlite"),
       OMA_FILE_STORAGE_ROOT: join(root, "objects"),
       OMA_AUTH_MODE: "api-key",

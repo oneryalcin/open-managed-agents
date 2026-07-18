@@ -33,7 +33,9 @@ afterEach(() => {
 });
 
 function makePlane(env: DeploymentControlPlaneEnv = {}): DeploymentControlPlane {
-  return createDeploymentControlPlane(env);
+  const root = mkdtempSync(join(tmpdir(), "oma-observability-memory-"));
+  tempRoots.push(root);
+  return createDeploymentControlPlane({ OMA_HOME: root, ...env });
 }
 
 function makeDurablePlane(
@@ -42,6 +44,7 @@ function makeDurablePlane(
   const root = mkdtempSync(join(tmpdir(), "oma-observability-"));
   tempRoots.push(root);
   const plane = createDeploymentControlPlane({
+    OMA_HOME: root,
     OMA_SQLITE_PATH: join(root, "oma.sqlite"),
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
     ...env,

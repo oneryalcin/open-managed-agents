@@ -110,7 +110,7 @@ export function createStoreBackedAgentRevisionProvider(opts: {
   workspaceId: string,
   sessionId: string,
   context?: { agentId?: string; agentVersion?: number },
-) => { model: { id: string }; system: string | null } | undefined {
+) => { model: { provider: string; id: string }; system: string | null } | undefined {
   return (workspaceId, sessionId, context) => {
     const session = opts.sessions.retrieveAny(workspaceId, sessionId);
     const agentId = session?.agent.id ?? context?.agentId;

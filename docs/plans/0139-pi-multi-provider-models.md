@@ -1,7 +1,7 @@
 # 0139 — Pi-backed multi-provider models
 
-Status: implementation-ready candidate; implementation not started. Independent
-normal and adversarial review blockers folded; focused re-review pending.
+Status: implementation in progress. Slice 1 shipped in `ba05f0c`; Slice 2 is
+implemented and independently reviewed green on this branch. Slices 3-5 remain.
 
 Branch: `dev/pi-multi-provider-models-plan`
 
@@ -15,14 +15,13 @@ OMA:
 > endpoints. Availability depends on operator policy and configured
 > credentials.
 
-Today Pi already knows hundreds of models and many authentication mechanisms,
-but OMA binds one `provider` string to the whole deployment. The default is
-`anthropic` (`sessions/pi/runner.ts:159-171`), agent model records contain only
-`{id,speed}` (`types/agents.ts:3-15`), admission checks only
-`find(catalog.provider, modelId)` (`app.ts:594-604`), and runtime resolution
-repeats the same deployment-wide provider lookup (`runner.ts:708-716`,
-`1038-1043`). Setting `OPENAI_API_KEY` or adding a Pi custom model therefore
-does not currently make that model selectable by an OMA agent.
+Before this arc, Pi already knew hundreds of models and many authentication
+mechanisms, but OMA bound one `provider` string to the whole deployment and
+persisted only `{id,speed}`. Slices 1-2 now persist exact provider/model pairs,
+construct one allowlisted OMA-owned Pi catalog, and use that same catalog for
+agent admission, session readiness, and warm/restart runtime resolution.
+Discovery, operator CLI, console selection, and the final smoke matrix remain
+in Slices 3-5.
 
 The implementation must preserve CMA-compatible Anthropic requests while
 adding an explicit OMA provider extension, persist the exact provider/model on
@@ -360,9 +359,11 @@ command, strict-key, permission, and redaction rules; an `anthropic` or
 built in.
 
 Reject symlinked auth/config files and unsafe parent/file permissions before
-reading them. OMA-owned directories/files use `0700`/`0600`. Operator-supplied
-paths may be read-only, but must not be group/world writable. Log resolved paths
-only at startup and never their contents.
+reading them. The mandatory mutable auth backend requires its parent directory
+to be exactly `0700` and `auth.json` to be exactly writable `0600`, including
+when `OMA_PI_AUTH_FILE` points at an operator-selected path. Operator-supplied
+`models.json` may be read-only, but it must not be group/world writable. Log
+resolved paths only at startup and never their contents.
 
 Environment interpolation (`$OPENAI_API_KEY`) remains supported through Pi.
 Literal credentials in `models.json` should produce a startup warning and

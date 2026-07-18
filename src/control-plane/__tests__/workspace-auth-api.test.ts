@@ -359,6 +359,7 @@ describe("deployment auth mode", () => {
     tempRoots.push(root);
     const sqlitePath = join(root, "oma.db");
     const app = createRawDeploymentControlPlaneApp({
+      OMA_HOME: root,
       OMA_AUTH_MODE: "api-key",
       OMA_SQLITE_PATH: sqlitePath,
       OMA_FILE_STORAGE_ROOT: join(root, "objects"),

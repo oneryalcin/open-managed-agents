@@ -250,6 +250,7 @@ function makeDeploymentPlane(): DeploymentControlPlane {
   const root = mkdtempSync(join(tmpdir(), "oma-openapi-"));
   roots.push(root);
   return createDeploymentControlPlane({
+    OMA_HOME: root,
     OMA_SQLITE_PATH: join(root, "oma.sqlite"),
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
     OMA_AUTH_MODE: "api-key",

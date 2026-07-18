@@ -11,7 +11,10 @@ import {
   type DeploymentControlPlaneAppOptions,
   type InMemoryControlPlaneAppOptions,
 } from "../app.ts";
-import type { DeploymentRuntimeEnv } from "../deployment-runtime-config.ts";
+import type { DeploymentControlPlaneEnv } from "../app.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export {
   createRawControlPlaneApp,
@@ -41,12 +44,21 @@ export function createControlPlaneApp(services: ControlPlaneServices) {
 }
 
 export function createDeploymentControlPlaneApp(
-  env?: DeploymentRuntimeEnv,
+  env?: DeploymentControlPlaneEnv,
   opts?: DeploymentControlPlaneAppOptions,
 ) {
   return withDefaultManagedAgentsBeta(
-    createRawDeploymentControlPlaneApp(env, opts),
+    createRawDeploymentControlPlaneApp(withTestModelHome(env), opts),
   );
+}
+
+export function withTestModelHome(
+  env: DeploymentControlPlaneEnv = {},
+): DeploymentControlPlaneEnv {
+  return {
+    ...env,
+    OMA_HOME: env.OMA_HOME ?? mkdtempSync(join(tmpdir(), "oma-test-home-")),
+  };
 }
 
 export function createInMemoryControlPlaneApp(

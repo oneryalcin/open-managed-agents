@@ -107,7 +107,15 @@ import {
   createStoreBackedMcpToolAccessResolver,
 } from "./sessions/pi/mcp/bridge.ts";
 import { createDefaultMcpRuntime } from "./sessions/pi/mcp/runtime.ts";
-import { createPiModelCatalog } from "./sessions/pi/runner.ts";
+import {
+  createPiModelCatalog,
+  type PiModelCatalog,
+} from "./models/catalog.ts";
+import {
+  parseModelDeploymentConfigFromEnv,
+  type ModelDeploymentEnv,
+} from "./models/deployment-config.ts";
+import { createOmaAuthStorageBackend } from "./models/auth-storage-backend.ts";
 import { DEFAULT_MCP_OPERATION_TIMEOUT_MS } from "./sessions/pi/mcp/client.ts";
 import { createOauthRefreshTicker } from "./vaults/oauth-refresh-ticker.ts";
 import type { WakeLoop } from "./wake-loop.ts";
@@ -206,7 +214,8 @@ export type DeploymentControlPlaneEnv =
   DeploymentStorageEnv &
   DeploymentAuthEnv &
   DeploymentAdmissionEnv &
-  DeploymentObservabilityEnv;
+  DeploymentObservabilityEnv &
+  ModelDeploymentEnv;
 
 // 0113 D5: exactly two values; unset stays disabled for the currently allowed
 // rollout tiers but warns loudly; anything else fails construction.
@@ -447,6 +456,7 @@ export function createDeploymentControlPlane(
   internal: { backgroundWorkers?: boolean } = {},
 ): DeploymentControlPlane {
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
+  const modelConfig = parseModelDeploymentConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
   const adminKey = loadAdminKey(env);
   // Parsed before any store opens so a malformed flag can't leak a store.
@@ -591,18 +601,59 @@ export function createDeploymentControlPlane(
           onScheduled: () => wakeOauthTicker(),
         })
       : undefined;
-  const modelCatalog =
-    opts.runner?.modelCatalog ?? createPiModelCatalog(opts.runner?.provider);
+  let modelCatalog: PiModelCatalog;
+  try {
+    modelCatalog = opts.runner?.modelCatalog ?? createPiModelCatalog({
+      allowedProviders: modelConfig.allowedProviders,
+      defaultModel: modelConfig.defaultModel,
+      authBackend: createOmaAuthStorageBackend(modelConfig.authPath),
+      authPath: modelConfig.authPath,
+      modelsPath: modelConfig.modelsPath,
+      allowModelAuthCommands: modelConfig.allowModelAuthCommands,
+    });
+  } catch (error) {
+    stores.close();
+    throw error;
+  }
+  log.info("model_catalog_loaded", {
+    providers: [...modelCatalog.allowedProviders],
+    defaultProvider: modelCatalog.defaultModel.provider,
+    defaultModel: modelCatalog.defaultModel.id,
+    authPath: modelConfig.authPath,
+    modelsPath: modelConfig.modelsPath,
+  });
+  for (const detail of modelCatalog.securityReport.warnings) {
+    log.warn("model_config_warning", { detail });
+  }
   const modelAvailability = {
-    assertAvailable(model: { provider: string; id: string }): void {
-      if (
-        model.provider !== modelCatalog.provider ||
-        !modelCatalog.modelRegistry.find(model.provider, model.id)
-      ) {
+    resolve(model: { provider: string; id: string }) {
+      if (!modelCatalog.allowedProviders.has(model.provider)) {
         throw new ApiError(
           400,
           "invalid_request_error",
-          `Model ${model.id} is not available on this deployment`,
+          `Model provider ${model.provider} is not enabled on this deployment`,
+        );
+      }
+      const resolved = modelCatalog.resolve(model);
+      if (!resolved) {
+        throw new ApiError(
+          400,
+          "invalid_request_error",
+          `Model ${model.provider}/${model.id} is not available on this deployment`,
+        );
+      }
+      return resolved;
+    },
+    assertAvailable(model: { provider: string; id: string }): void {
+      this.resolve(model);
+    },
+    assertReady(model: { provider: string; id: string }): void {
+      const resolved = this.resolve(model);
+      if (!modelCatalog.hasConfiguredAuth(resolved)) {
+        throw new ApiError(
+          400,
+          "invalid_request_error",
+          `Credentials for model provider ${model.provider} are not configured on this deployment`,
         );
       }
     },

@@ -14,11 +14,22 @@ const sdk = vi.hoisted(() => {
     static create(): Record<string, never> {
       return {};
     }
+    static fromStorage(): { drainErrors: () => never[] } {
+      return { drainErrors: () => [] };
+    }
   }
 
   class MockModelRegistry {
-    static create(): { find: () => { id: string } } {
-      return { find: () => ({ id: "mock-model" }) };
+    static create() {
+      const model = { provider: "anthropic", id: "claude-sonnet-5" };
+      return {
+        find: () => model,
+        getAll: () => [model],
+        getAvailable: () => [model],
+        getError: () => undefined,
+        hasConfiguredAuth: () => true,
+        getProviderAuthStatus: () => ({}),
+      };
     }
   }
 

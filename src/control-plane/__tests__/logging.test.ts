@@ -3,6 +3,9 @@
 // truncated (a cap-only test would bless the leak, plan §9).
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { randomBytes } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createLogger,
   log,
@@ -27,9 +30,19 @@ function captureLogger(config?: {
 
 const WORKSPACE_KEY = `oma_${randomBytes(32).toString("base64url")}`;
 const ADMIN_SHAPED_KEY = randomBytes(32).toString("base64");
+const modelHomes: string[] = [];
+
+function tempModelHome(): string {
+  const root = mkdtempSync(join(tmpdir(), "oma-logging-models-"));
+  modelHomes.push(root);
+  return root;
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
+  for (const root of modelHomes.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 describe("logger output shape", () => {
@@ -396,7 +409,7 @@ describe("request_failed on 5xx", () => {
   it("logs event with requestId matching the response header, secrets absent", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {}); // auth_mode_disabled boot warning
-    const plane = createDeploymentControlPlane({});
+    const plane = createDeploymentControlPlane({ OMA_HOME: tempModelHome() });
     plane.app.get("/test-boom", () => {
       throw new Error(`downstream refused key ${WORKSPACE_KEY}`);
     });
@@ -422,7 +435,7 @@ describe("request_failed on 5xx", () => {
   it("stays silent on 4xx", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const plane = createDeploymentControlPlane({});
+    const plane = createDeploymentControlPlane({ OMA_HOME: tempModelHome() });
     const res = await plane.app.request("/no-such-route");
     expect(res.status).toBe(404);
     expect(
