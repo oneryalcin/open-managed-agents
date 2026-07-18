@@ -1,6 +1,7 @@
 # 0139 — Pi-backed multi-provider models
 
-Status: implementation-ready plan; implementation not started.
+Status: implementation-ready candidate; implementation not started. Independent
+normal and adversarial review blockers folded; focused re-review pending.
 
 Branch: `dev/pi-multi-provider-models-plan`
 
@@ -64,7 +65,8 @@ constants.
 OMA owns:
 
 - the operator allowlist of providers;
-- the deployment default provider;
+- the deployment default provider/model pair used by OMA discovery and console
+  onboarding;
 - the durable `{provider,id,speed}` selected by each immutable agent revision;
 - fail-closed admission and restart behavior;
 - model discovery exposed to workspace users;
@@ -91,11 +93,16 @@ select only entries published by OMA's filtered catalog.
 
 ### P6 — Credential presence is not credential validity
 
-Pi can establish that auth is configured without making a paid network call.
+Pi can establish model-scoped credential readiness without making a paid
+network call. The authoritative predicate is
+`ModelRegistry.hasConfiguredAuth(resolvedModel)`, not provider-level
+`getProviderAuthStatus()`: Pi 0.80.6 can report an environment credential as
+`configured:false` in provider status while the resolved model is usable.
 Agent create/update validates policy and registration only. Session admission
-also requires configured auth, but an expired, revoked, rate-limited, or
-otherwise invalid credential remains a runtime provider error. Do not reject a
-durable agent revision because a credential is temporarily absent or invalid.
+also requires model-scoped configured auth, but an expired, revoked,
+rate-limited, or otherwise invalid credential remains a runtime provider error.
+Do not reject a durable agent revision because a credential is temporarily
+absent or invalid.
 
 ## 4. Decisions
 
@@ -125,9 +132,12 @@ Accept both existing CMA input and the OMA extension:
 {"model":{"provider":"openai","id":"gpt-5.4","speed":"standard"}}
 ```
 
-String and provider-less object input resolve through the configured deployment
-default **at create/update time**, then persist the explicit provider. The
-initial deployment default remains `anthropic`.
+String and provider-less object input are the CMA-compatible forms and always
+resolve to `anthropic` **at create/update time**, then persist that explicit
+provider. They do not change meaning when the operator changes OMA's discovery
+or console default. Selecting a non-Anthropic model requires the explicit
+`{provider,id}` OMA extension. This preserves existing CMA requests without
+creating a deployment-dependent reinterpretation of historical input.
 
 Responses include `model.provider` for all agents. This is a deliberate OMA
 extension to the CMA model object, not a replacement endpoint or a
@@ -170,19 +180,30 @@ owner similar to:
 
 ```ts
 interface PiModelCatalog {
-  defaultProvider: string;
+  defaultModel: { provider: string; id: string };
   allowedProviders: ReadonlySet<string>;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
-  resolve(ref: { provider?: string; id: string }): Model<any> | undefined;
+  resolve(ref: { provider: string; id: string }): Model<any> | undefined;
   list(options?: { provider?: string; availableOnly?: boolean }): Model<any>[];
-  authStatus(provider: string): { configured: boolean };
+  hasConfiguredAuth(model: Model<any>): boolean;
+  providerAuthMetadata(provider: string): {
+    source?: string;
+    label?: string;
+  };
 }
 ```
 
-`resolve()` first normalizes `provider ?? defaultProvider`, then checks the
-allowlist, then calls Pi's `ModelRegistry.find(provider,id)`. It never searches
-all providers by ID and never falls back.
+`resolve()` receives an already normalized durable reference, checks the
+allowlist, then calls Pi's `ModelRegistry.find(provider,id)`. CMA input
+normalization to Anthropic happens at the API/service boundary; the catalog
+never guesses a provider, searches all providers by ID, or falls back.
+
+`hasConfiguredAuth(model)` delegates directly to
+`ModelRegistry.hasConfiguredAuth(model)` and is the only readiness boolean used
+by API discovery and session/runtime admission. `getProviderAuthStatus()` may
+feed redacted diagnostic-source metadata, but its `configured` field must never
+gate admission or populate `credentials_configured`.
 
 Create the production owner with explicit OMA paths:
 
@@ -191,10 +212,12 @@ ${OMA_HOME:-~/.oma}/pi/auth.json
 ${OMA_HOME:-~/.oma}/pi/models.json
 ```
 
-Call `AuthStorage.create(authPath)` and
-`ModelRegistry.create(authStorage, modelsPath)`. Do not use Pi's implicit
-`~/.pi/agent` paths in production; unrelated interactive Pi credentials or
-custom models must not leak into an OMA appliance.
+Construct the mandatory OMA atomic backend for `authPath`, pass it to
+`AuthStorage.fromStorage(backend)`, then call
+`ModelRegistry.create(authStorage, modelsPath)`. Do not call
+`AuthStorage.create()` or use Pi's implicit `~/.pi/agent` paths in production;
+unrelated interactive Pi credentials or custom models must not leak into an OMA
+appliance.
 
 Tests and standalone internal runners may still inject a finite fake catalog.
 
@@ -205,6 +228,7 @@ Add deployment configuration:
 ```text
 OMA_MODEL_PROVIDERS=anthropic,openai,google
 OMA_DEFAULT_MODEL_PROVIDER=anthropic
+OMA_DEFAULT_MODEL=claude-sonnet-5
 OMA_PI_AUTH_FILE=/optional/operator/path/auth.json
 OMA_PI_MODELS_FILE=/optional/operator/path/models.json
 ```
@@ -212,8 +236,12 @@ OMA_PI_MODELS_FILE=/optional/operator/path/models.json
 Rules:
 
 - unset `OMA_MODEL_PROVIDERS` means `anthropic` only;
+- when both default variables are unset, the effective default pair is
+  `anthropic/claude-sonnet-5`; setting either variable requires setting both;
 - trim entries, reject empty names/duplicates, and preserve deterministic order;
 - the default provider must appear in the allowlist;
+- `OMA_DEFAULT_MODEL_PROVIDER` and `OMA_DEFAULT_MODEL` form one required pair;
+- the default pair must resolve exactly in the loaded Pi registry at startup;
 - custom provider names are allowed only when Pi successfully loads them;
 - unknown allowed providers fail appliance startup with a precise error;
 - paths resolve explicitly and are logged without file contents;
@@ -223,6 +251,12 @@ Rules:
 Do not infer authorization from whichever API keys happen to be in the process
 environment. Credentials answer “can Pi authenticate?”; the allowlist answers
 “may workspace agents use this provider and incur its cost/data transfer?”
+
+For alpha, enabling a provider authorizes every model registered under that
+provider. This is intentional so OMA can expose the pinned Pi catalog without a
+second copied model list. Pi upgrades require a catalog-diff/policy review
+because newly registered models under an enabled provider become selectable.
+Per-model cost policy is a separate follow-up, not an implicit filter.
 
 Parse this in a dedicated model-deployment config module rather than extending
 the sandbox-only `deployment-runtime-config.ts` vocabulary.
@@ -239,21 +273,46 @@ provider overrides, and custom models using supported adapters such as:
 - `google-generative-ai`.
 
 OMA loads that format unchanged through `ModelRegistry`. Do not define
-`oma-models.yaml` or translate it into a second schema.
+`oma-models.yaml`, translate it into a second schema, or implement a competing
+semantic parser. Pi remains the schema/semantic authority: construct the real
+registry and require `ModelRegistry.getError() === undefined` before serving.
+OMA adds only a narrow JSONC-aware raw-config security scan before construction.
 
-For alpha, validate the operator file before server construction and reject:
+The security scan must enumerate and classify every Pi 0.80.6 location that can
+redirect traffic, add outbound headers, or resolve credential-like values:
+
+- provider-level `baseUrl`, `apiKey`, and `headers`;
+- model-level `baseUrl` and `headers`;
+- model-override `baseUrl` and `headers`;
+- API-key values in `auth.json`.
+
+If a future pinned Pi release adds a security-sensitive field, the Pi contract
+fixture/catalog-diff test must fail until the field is explicitly classified.
+For alpha, validate operator files before constructing the production catalog
+and reject:
 
 - malformed Pi model config;
 - providers not in the OMA allowlist;
-- non-HTTPS remote base URLs, except loopback HTTP for explicitly local custom
-  providers;
-- command-backed `!command` values in `apiKey` or headers unless the operator
+- non-HTTPS remote base URLs; `http:` is allowed only when WHATWG `URL` parsing
+  yields an exact syntactic loopback host (`localhost`, `127.0.0.0/8`, or
+  `[::1]`) for an explicitly local custom provider;
+- every URL containing username/password userinfo, unsupported schemes,
+  malformed ports, or non-loopback HTTP hosts;
+- command-backed `!command` values in any classified `models.json` credential
+  or header location, or any `auth.json` API-key value, unless the operator
   explicitly enables `OMA_ALLOW_MODEL_AUTH_COMMANDS=true`;
 - unsupported extension-only/custom stream implementations.
 
-Environment interpolation (`$OPENAI_API_KEY`) and OMA-owned `auth.json` remain
-supported through Pi. Literal credentials in `models.json` should produce a
-startup warning and documentation guidance, not be returned by any API or log.
+Reject symlinked auth/config files and unsafe parent/file permissions before
+reading them. OMA-owned directories/files use `0700`/`0600`. Operator-supplied
+paths may be read-only, but must not be group/world writable. Log resolved paths
+only at startup and never their contents.
+
+Environment interpolation (`$OPENAI_API_KEY`) remains supported through Pi.
+Literal credentials in `models.json` should produce a startup warning and
+documentation guidance, not be returned by any API or log. Command opt-in is
+one deployment-wide policy covering both `models.json` and `auth.json`; there
+is no auth-file bypass.
 
 Pi provider extensions execute host code and are not loaded by this arc. The
 compatible API adapters in `models.json` cover the intended alpha surface.
@@ -282,10 +341,18 @@ Requirements:
 - `oma auth set` prompts without echo by default;
 - never accept a plaintext key as a command-line argument;
 - `--stdin` reads exactly one credential value for automation;
-- writes and removals call Pi's `AuthStorage.set/remove` rather than editing its
-  JSON format independently; verify the backing store's lock/atomicity behavior
-  and add an OMA wrapper only if the installed Pi implementation cannot meet
-  the required durability contract;
+- create one mandatory OMA `AuthStorageBackend` and pass it through
+  `AuthStorage.fromStorage()`; Pi 0.80.6's default file backend overwrites the
+  file directly and does not satisfy this arc's crash-atomicity requirement;
+- backend writes use a same-directory temporary file, `fsync` the file, set
+  mode `0600`, atomically rename, and `fsync` the parent directory; this covers
+  both API-key mutations and asynchronous OAuth refresh writes;
+- synchronous and asynchronous backend operations share one inter-process lock
+  across CLI and server processes; the callback always receives the latest
+  durable bytes and concurrent API-key/OAuth writes cannot lose peer entries;
+- preserve Pi's schema and resolution by calling `AuthStorage.set/remove`; the
+  backend owns durable bytes, locking, and atomic replacement rather than a
+  second auth parser;
 - directory mode is `0700`, file mode is `0600`;
 - refuse unsafe existing permissions until corrected;
 - preserve unrelated provider credentials when updating one provider;
@@ -293,10 +360,24 @@ Requirements:
 - removal requires an exact provider name and is idempotent;
 - OAuth subscription login is deferred; `status` may report existing Pi OAuth
   credentials if an operator deliberately supplied an auth file;
-- command-backed credentials are never created by this CLI.
+- `auth status` never invents one provider-level readiness boolean: it may show
+  redacted provider-source metadata plus ready/total model counts computed with
+  `hasConfiguredAuth(model)`;
+- command-backed credentials are never created by this CLI and imported
+  command-backed API-key values are rejected unless deployment opt-in is set;
+- every mutating auth command prints that `oma up` must be restarted before the
+  running appliance observes the change.
 
 `oma up` passes the resolved OMA paths/policy to the control plane. The CLI and
 server must call the same catalog factory so validation cannot drift.
+
+Alpha contract: credential mutation is **restart-required**, not live reload.
+The server owns one in-memory `AuthStorage` for its lifetime; a separate CLI
+process cannot mutate that instance safely. Until restart, existing warm
+handles and new admissions use the server's previously loaded credential
+state. After restart, all session admission and durable-handle recreation use
+the newly loaded state. Live reload/revocation, including concurrent OAuth
+refresh coordination, is a separate post-alpha design.
 
 ### D7 — Workspace-safe discovery API
 
@@ -350,6 +431,11 @@ for agent-version/session pagination. Stable ordering is `(provider,id)`.
 The endpoint reports catalog/readiness state; it does not mutate credentials or
 providers.
 
+`credentials_configured` is computed per returned resolved model with
+`modelRegistry.hasConfiguredAuth(model)`. `default` is true only for the exact
+configured `{OMA_DEFAULT_MODEL_PROVIDER,OMA_DEFAULT_MODEL}` pair. Provider
+status metadata is never used as either boolean.
+
 ### D8 — Admission behavior
 
 Change `AgentModelAvailability.assertAvailable(modelId)`
@@ -357,7 +443,8 @@ Change `AgentModelAvailability.assertAvailable(modelId)`
 
 Agent create/update:
 
-1. normalize provider using the deployment default;
+1. normalize CMA string/provider-less input to Anthropic; retain an explicit
+   OMA `provider` unchanged;
 2. reject a provider outside the allowlist;
 3. reject a pair absent from Pi's registry;
 4. persist the explicit pair before any agent/version writes;
@@ -374,8 +461,8 @@ Session create (`sessions/service.ts:358-380`) and durable handle recreation:
 
 1. resolve the exact persisted pair;
 2. reject if provider policy or registry changed;
-3. reject before session rows, snapshots, mounts, or runtime state when Pi
-   reports no configured auth;
+3. call `modelRegistry.hasConfiguredAuth(resolvedModel)` and reject before
+   session rows, snapshots, mounts, or runtime state when it returns false;
 4. never substitute the default provider/model.
 
 Missing-auth error:
@@ -410,8 +497,8 @@ Replace the hardcoded `MODELS` datalist (`console/forms.jsx:177-246`) with live
 
 - provider selector first;
 - searchable model selector second;
-- default to the deployment default provider/model only when returned by the
-  server;
+- default to the exact deployment default provider/model pair only when the
+  server returns it with `default:true`;
 - visually distinguish configured vs missing credentials;
 - allow creating an agent with missing credentials, but show that session
   creation will be unavailable until the operator configures them;
@@ -462,7 +549,7 @@ Files:
 Deliver:
 
 - provider-aware input/output types;
-- default-provider normalization;
+- CMA input normalization to Anthropic plus explicit provider handling;
 - explicit provider persistence in heads and immutable versions;
 - atomic legacy migration to Anthropic;
 - create/update/history/no-op behavior pinned;
@@ -486,12 +573,14 @@ Files:
 Deliver:
 
 - OMA-owned Pi config paths;
-- provider allowlist/default parsing;
+- provider allowlist/default-pair parsing;
 - one shared registry/auth owner;
 - exact-pair admission and runtime resolution;
-- configured-auth session gate;
+- model-scoped configured-auth session gate using
+  `ModelRegistry.hasConfiguredAuth(model)`;
 - restart/warm-handle no-fallback proof;
-- custom `models.json` validation/security profile.
+- Pi-owned semantic validation plus OMA's exhaustive narrow security scan over
+  `models.json` and `auth.json`.
 
 ### Slice 3 — Discovery API and CLI
 
@@ -509,7 +598,9 @@ Deliver:
 - paginated workspace-safe model discovery;
 - secret-free provider/model status;
 - `oma providers`, `oma models`, and `oma auth` commands;
-- atomic `0600` auth storage;
+- mandatory atomic `0600` `AuthStorageBackend` covering API-key and OAuth
+  refresh writes;
+- explicit restart-required credential-mutation UX;
 - shared catalog validation path;
 - no HTTP credential mutation.
 
@@ -557,17 +648,23 @@ Deliver:
 
 - model parser accepts string, provider-less object, and provider object;
 - parser rejects empty/unknown fields, malformed provider, and invalid speed;
-- default provider is materialized once and persisted;
+- CMA string/provider-less input is always materialized as Anthropic;
+- explicit non-Anthropic input persists its provider unchanged;
 - legacy model JSON migrates to Anthropic, idempotently;
 - migration rollback on one malformed row leaves every row untouched;
-- allowlist/default parsing rejects empty, duplicate, unknown, and inconsistent
-  configurations;
+- allowlist/default-pair parsing rejects empty, duplicate, unknown, and
+  inconsistent configurations;
 - catalog resolves only allowed exact pairs;
 - catalog never searches across providers by model ID;
-- auth-status mapping reveals no secret/source details;
-- custom model validator covers HTTPS, loopback HTTP, command expressions,
-  literal-key warnings, and malformed Pi config;
-- CLI auth writes atomically with `0600`, preserves peers, and prints no key.
+- model-scoped readiness uses `hasConfiguredAuth`; provider status cannot
+  change its result and reveals no secret/source details;
+- custom model validator covers all enumerated base URL/header/API-key
+  locations, HTTPS, exact loopback HTTP, URL userinfo, command expressions in
+  both config files, literal-key warnings, unsafe files, and malformed Pi
+  config;
+- CLI auth writes atomically with `0600`, preserves peers, and prints no key;
+- sync/async backend contention across two instances preserves both updates,
+  and an injected crash before rename leaves the previous JSON intact.
 
 ### Integration/API
 
@@ -585,6 +682,8 @@ Deliver:
 - no default fallback mutation survives;
 - `/v1/models` filters, pagination, auth, beta, order, cursor binding, and
   redaction;
+- `/v1/models.default` identifies exactly one configured default pair and
+  `credentials_configured` agrees with model-scoped Pi readiness;
 - OpenAPI route/spec completeness remains green;
 - official SDK create/get/list path tolerates the model provider extension.
 
@@ -593,8 +692,12 @@ Deliver:
 Use real Pi 0.80.6 `AuthStorage`/`ModelRegistry` with temporary files to prove:
 
 - built-in provider discovery;
-- environment credential readiness;
-- OMA-owned auth file precedence;
+- environment credential readiness even when provider status reports
+  `configured:false`;
+- OMA-owned `auth.json` API-key readiness and precedence;
+- `models.json` API-key readiness;
+- Bedrock ambient credentials (`AWS_PROFILE`/IAM-supported sources);
+- Vertex ADC readiness;
 - custom OpenAI-compatible and Anthropic-compatible entries;
 - custom base URL and compat fields reach the resolved Pi model;
 - malformed config fails startup rather than silently dropping custom models;
@@ -617,17 +720,22 @@ Use real Pi 0.80.6 `AuthStorage`/`ModelRegistry` with temporary files to prove:
 - operator-defined local OpenAI-compatible fixture;
 - exact provider/model appears in internal model-request diagnostics;
 - tools, skills, MCP, sandboxing, and event stream remain provider-independent;
-- removing auth then recreating a handle fails clearly and does not fall back.
+- mutating auth prints restart-required guidance;
+- after auth removal and appliance restart, session admission/handle recreation
+  fails clearly and does not fall back;
+- before restart, the running appliance retains its documented in-memory auth
+  state rather than claiming live revocation.
 
 ### Security and observability
 
 - API/log/OpenAPI/console snapshots contain no credentials, auth-file paths,
   custom headers, or full base URLs;
 - workspace user cannot mutate catalog/auth/provider policy;
-- arbitrary `models.json` command expressions are rejected unless explicit
-  operator opt-in is present;
+- arbitrary command expressions in every classified `models.json` location and
+  `auth.json` API-key values are rejected unless explicit operator opt-in is
+  present; negative tests use a sentinel command and prove it never executes;
 - log catalog startup with Pi version, allowed provider names, registered model
-  counts, and configured/missing status only;
+  counts, and model-scoped ready/missing counts only;
 - count model admission failures by bounded reason/provider label; do not label
   unbounded model IDs in Prometheus metrics.
 
@@ -646,13 +754,15 @@ The arc is complete only when all are true:
    model definitions into OMA source or SQLite.
 7. Provider policy is explicit and independent of credential presence.
 8. Agent persistence validates registration/policy; session admission validates
-   configured auth before side effects.
+   model-scoped configured auth with `ModelRegistry.hasConfiguredAuth` before
+   side effects.
 9. Missing/removed provider/model/auth fails closed and never selects another
    provider/model.
 10. Workspace callers can discover allowed models and credential readiness but
     no secrets/config internals.
 11. CLI users can inspect providers/models and safely persist/remove API-key
-    credentials under OMA-owned paths.
+    credentials under OMA-owned paths, with crash-atomic writes and explicit
+    restart-required semantics.
 12. Console users select live providers/models rather than a hardcoded list.
 13. At least one non-Anthropic and one operator-defined compatible endpoint pass
     end-to-end verification.
@@ -660,6 +770,10 @@ The arc is complete only when all are true:
     accurately.
 15. Targeted tests, full Vitest, typecheck, `git diff --check`, alpha smoke, and
     real Docker provider smoke pass.
+16. CMA string/provider-less model inputs always retain Anthropic meaning,
+    independent of the deployment's OMA default provider/model pair.
+17. Command execution policy covers both `models.json` and `auth.json`; no
+    command-backed credential runs without explicit deployment opt-in.
 
 ## 8. Risks and mitigations
 
@@ -682,7 +796,8 @@ Mitigation: explicit OMA-owned auth/model paths; no production default to
 ### Risk: custom provider config becomes host code execution
 
 Mitigation: operator-only files, no workspace mutation, no Pi extensions,
-command expressions disabled by default, startup validation.
+command expressions disabled across both config files by default, exhaustive
+classified-location scanning, and startup validation before catalog creation.
 
 ### Risk: provider credentials are shared across workspaces
 
@@ -695,15 +810,29 @@ Mitigation: pin Pi version, persist exact provider/id, fail closed when removed,
 and include catalog-diff review in Pi upgrade procedure. Do not freeze secrets or
 transport definitions into revisions.
 
+### Risk: enabling a provider unexpectedly exposes costly new catalog entries
+
+Mitigation: document that provider policy grants every registered model under
+that provider, pin Pi, and require a catalog diff/operator policy review on
+each Pi upgrade. Add per-model policy only as an explicit later capability.
+
 ### Risk: high-cardinality discovery or metrics
 
 Mitigation: paginate `(provider,id)`, cap limits at 100, use bounded provider and
 reason labels in metrics, omit model IDs from Prometheus labels.
 
-### Risk: valid credentials are mistaken for configured credentials
+### Risk: provider status is mistaken for model credential readiness
 
-Mitigation: call the field `credentials_configured`, never `healthy` or
-`validated`; remote failures stay runtime errors.
+Mitigation: compute readiness only with
+`ModelRegistry.hasConfiguredAuth(resolvedModel)`; use provider status as
+diagnostic metadata only. Call the field `credentials_configured`, never
+`healthy` or `validated`; remote failures stay runtime errors.
+
+### Risk: CLI credential changes appear live but the server retains stale auth
+
+Mitigation: alpha commands explicitly require appliance restart and tests pin
+the before/after-restart behavior. Do not claim live revocation until one
+coordinated reload design covers admissions, warm handles, and OAuth refresh.
 
 ## 9. Engineer handoff order
 
@@ -717,3 +846,20 @@ Mitigation: call the field `credentials_configured`, never `healthy` or
 Each slice must be independently testable and must leave unsupported behavior
 fail-closed. Do not enable console selection or document multi-provider support
 before exact runtime resolution and restart tests are green.
+
+## 10. Independent review disposition
+
+Two native reviewers evaluated revision `a970a5a` against the installed Pi
+0.80.6 source and runtime behavior. This revision folds their requested changes:
+
+- provider-level auth status was replaced by model-scoped
+  `ModelRegistry.hasConfiguredAuth(model)` for discovery and admission;
+- auth CLI changes are explicitly restart-required for alpha;
+- command-expression policy now covers both `models.json` and `auth.json`;
+- the OMA atomic, inter-process-locking `AuthStorageBackend` is mandatory;
+- the deployment default is one validated provider/model pair;
+- CMA string/provider-less model inputs retain Anthropic meaning;
+- Pi remains semantic config owner while OMA's security scan has an exhaustive
+  field, URL, permission, and upgrade contract;
+- provider enablement is documented as granting every registered model under
+  that provider, with catalog review required on Pi upgrades.
