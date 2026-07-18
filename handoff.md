@@ -364,21 +364,21 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Fix console issue #156 so a reachable live server returning 5xx never falls
-   back to bundled demo data.
-2. Continue plan 0139 with the live console provider/model workflow, then the
-   multi-provider alpha smoke matrix. Durable `{provider,id}` identity, shared
-   policy-aware Pi catalog/runtime, authenticated discovery API, and secret-safe
-   CLI are implemented. Keep reusing Pi's `AuthStorage`, `ModelRegistry`,
+1. Continue plan 0139 with the multi-provider alpha smoke matrix. Durable
+   `{provider,id}` identity, shared policy-aware Pi catalog/runtime,
+   authenticated discovery API, secret-safe CLI, and live console
+   provider/model selection are implemented. The console now fails visibly on
+   live API errors instead of substituting bundled demo rows (issue #156).
+   Keep reusing Pi's `AuthStorage`, `ModelRegistry`,
    built-in adapters, and `models.json`; do not create a parallel OMA model
    catalog or provider format.
-3. Run the final clean-checkout alpha audit after at least one non-Anthropic and
+2. Run the final clean-checkout alpha audit after at least one non-Anthropic and
    one operator-defined compatible endpoint pass end to end.
-4. Then return to the broader Python/Node environment-image usability story or
+3. Then return to the broader Python/Node environment-image usability story or
    continue the pre-v1 sequence with web tools.
-5. Track publication-pipeline promotion hardening separately in issue #194; it
+4. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
-6. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+5. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

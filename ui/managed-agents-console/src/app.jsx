@@ -129,6 +129,10 @@ function App() {
   const [agents, setAgents] = useState(AGENTS);
   const [environments, setEnvironments] = useState(ENVIRONMENTS);
   const [files, setFiles] = useState(FILES);
+  const [models, setModels] = useState(demoMode ? MODELS.map((id) => ({
+    type:'model', provider:'anthropic', id, name:id,
+    credentials_configured:true, default:id === MODELS[0],
+  })) : []);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [apiState, setApiState] = useState({ state:'loading', mode: demoMode ? 'demo' : 'api', error:null, warnings:[] });
   const [modal, setModal] = useState(null);   // { kind:'session', presetAgent } | { kind:'agent' } | { kind:'environment' }
@@ -154,6 +158,7 @@ function App() {
       setSessions(data.sessions);
       setEnvironments(data.environments);
       setFiles(data.files);
+      setModels(data.models);
       setApiState({ state:'loaded', mode:'api', error:null, warnings:data.warnings || [] });
       setWorkspaceLoaded(true);
       const target = readRouteTarget(data.sessions, linkedAgents);
@@ -179,10 +184,14 @@ function App() {
           setAuth((a) => ({ ...a, phase:'login' }));
           return;
         }
-        setApiState({ state:'loaded', mode:'mock', error, warnings:[] });
+        setAgents([]);
+        setSessions([]);
+        setEnvironments([]);
+        setFiles([]);
+        setModels([]);
+        setWorkspaceLoaded(false);
+        setApiState({ state:'error', mode:'error', error, warnings:[] });
         setAuth((a) => ({ ...a, phase:'ready' }));
-        const target = readRouteTarget(SESSIONS, AGENTS);
-        if (target) setRoute(target);
       });
     return () => { alive = false; };
   }, [demoMode]);
@@ -263,7 +272,8 @@ function App() {
     setRoute(next);
     writeRouteHash(next);
   };
-  const mutationReadOnly = apiState.mode === 'mock';
+  const mutationReadOnly = apiState.state !== 'loaded'
+    || (apiState.mode !== 'api' && apiState.mode !== 'demo');
   const lifecycleReadOnly = apiState.mode !== 'demo';
 
   const createSession = (preset) => {
@@ -351,7 +361,22 @@ function App() {
   // demo rows, which must not render as if they were live tenant data.
   const needsWorkspaceKey = apiState.state !== 'loading' && apiState.mode === 'api'
     && !demoMode && !workspaceLoaded && route.name !== 'admin' && route.name !== 'credentialHealth';
-  if (needsWorkspaceKey) view = (
+  if (apiState.state === 'error') view = (
+    <div className="main-scroll scroll fade-in">
+      <PageHead title="Live API unavailable" sub="The console will not substitute demo data for a failed live server." />
+      <ErrorState resource="workspace data" onRetry={() => {
+        setApiState({ state:'loading', mode:'api', error:null, warnings:[] });
+        loadLiveData().catch((error) => {
+          if (error.status === 401) {
+            setAuth((current) => ({ ...current, phase:'login', error:'Session expired — enter a workspace key to retry.' }));
+          } else {
+            setApiState({ state:'error', mode:'error', error, warnings:[] });
+          }
+        });
+      }} />
+    </div>
+  );
+  else if (needsWorkspaceKey) view = (
     <div className="main-scroll scroll fade-in">
       <PageHead title="No workspace selected" sub="Browsing /v1 needs a workspace key." />
       <EmptyState icon="database" title="Connect a workspace"
@@ -381,7 +406,7 @@ function App() {
       {modal && modal.kind === 'session' &&
         <CreateSession agents={agents} environments={environments} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
       {modal && modal.kind === 'agent' &&
-        <CreateAgent onClose={() => setModal(null)} onCreate={onAgentCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
+        <CreateAgent models={models} onClose={() => setModal(null)} onCreate={onAgentCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
       {modal && modal.kind === 'environment' &&
         <CreateEnvironmentModal mode={apiState.mode}
           onClose={() => setModal(null)} onCreated={onEnvironmentCreated}

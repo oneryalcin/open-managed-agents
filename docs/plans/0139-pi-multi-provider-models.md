@@ -1,8 +1,8 @@
 # 0139 — Pi-backed multi-provider models
 
 Status: implementation in progress. Slice 1 shipped in `ba05f0c`; Slice 2
-shipped in `91860fe`; Slice 3 is implemented and independently reviewed green
-on this branch. Slices 4-5 remain.
+shipped in `91860fe`; Slice 3 shipped in `322dd5f`; Slice 4 is implemented on
+this branch. Slice 5 remains.
 
 Branch: `dev/pi-multi-provider-models-plan`
 
@@ -21,8 +21,9 @@ mechanisms, but OMA bound one `provider` string to the whole deployment and
 persisted only `{id,speed}`. Slices 1-2 now persist exact provider/model pairs,
 construct one allowlisted OMA-owned Pi catalog, and use that same catalog for
 agent admission, session readiness, and warm/restart runtime resolution.
-Authenticated discovery and the secret-safe operator CLI are now implemented.
-Console selection and the final smoke matrix remain in Slices 4-5.
+Authenticated discovery, the secret-safe operator CLI, and live console
+selection/readiness are now implemented. The final smoke matrix remains in
+Slice 5.
 
 The implementation must preserve CMA-compatible Anthropic requests while
 adding an explicit OMA provider extension, persist the exact provider/model on
@@ -594,7 +595,10 @@ Replace the hardcoded `MODELS` datalist (`console/forms.jsx:177-246`) with live
 - visually distinguish configured vs missing credentials;
 - allow creating an agent with missing credentials, but show that session
   creation will be unavailable until the operator configures them;
-- send `{provider,id}` for non-default selections;
+- send a CMA string only for the exact default when its provider is
+  `anthropic`; every non-Anthropic selection, including a non-Anthropic
+  deployment default, must send `{provider,id}` because provider-less strings
+  deliberately normalize to Anthropic;
 - render provider beside model in agent list/detail (`console/api.js:405-420`);
 - if catalog loading fails, show a real error and do not fall back to a
   hardcoded/demo model list in live mode;

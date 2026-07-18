@@ -262,10 +262,11 @@ early adopter can build and iterate a credible single-agent product.
    a bounded security-sensitive arc.
 4. **Pi-backed multi-provider models** — exact `{provider,id}` identity,
    immutable revision persistence, shared Pi catalog/runtime resolution,
-   provider policy, authenticated model discovery, and the secret-safe operator
-   CLI are implemented. Console selection and the final non-Anthropic/custom
-   compatible-provider smoke matrix remain. Existing CMA Anthropic input stays
-   valid; non-Anthropic and custom compatible endpoints are an OMA extension.
+   provider policy, authenticated model discovery, secret-safe operator CLI,
+   and live console selection/readiness are implemented. The final
+   non-Anthropic/custom compatible-provider smoke matrix remains. Existing CMA
+   Anthropic input stays valid; non-Anthropic and custom compatible endpoints
+   are an OMA extension.
    Implementation plan:
    [`docs/plans/0139-pi-multi-provider-models.md`](docs/plans/0139-pi-multi-provider-models.md).
 

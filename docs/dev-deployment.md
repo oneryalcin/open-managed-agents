@@ -65,6 +65,95 @@ or the [provisioning CLI](#provisioning-workspaces-and-keys). Builtin-tool
 execution stays off until a sandbox provider is configured (see
 [Pi runtime rollout policy](#pi-runtime-rollout-policy)).
 
+## Model providers and custom compatible endpoints
+
+OMA uses the `AuthStorage`, `ModelRegistry`, built-in catalog, and request
+adapters from its pinned Pi release. The operator chooses which providers are
+visible; workspace callers cannot register providers, change base URLs, or
+write credentials.
+
+Enable a built-in provider and store its API key without placing the secret in
+shell history:
+
+```bash
+export OMA_MODEL_PROVIDERS="anthropic,openai"
+export OMA_DEFAULT_MODEL_PROVIDER="anthropic"
+export OMA_DEFAULT_MODEL="claude-sonnet-5"
+
+oma auth set openai
+oma auth status openai
+oma providers status
+oma models list --provider openai --available
+oma up
+```
+
+`oma auth set` uses a hidden prompt by default; automation may pipe exactly one
+value to `oma auth set openai --stdin`. Auth mutations are deliberately
+restart-required in alpha: restart `oma up` before new sessions can use the
+changed credential state. `oma auth remove PROVIDER` is exact and idempotent,
+including for a provider that is no longer enabled.
+
+For an operator-defined local OpenAI-compatible endpoint, create
+`~/.oma/pi/models.json` with private permissions:
+
+```bash
+mkdir -p ~/.oma/pi
+chmod 700 ~/.oma ~/.oma/pi
+```
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [
+        {
+          "id": "llama3.1:8b",
+          "name": "Llama 3.1 8B (Local)",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 128000,
+          "maxTokens": 32000,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}
+```
+
+Then:
+
+```bash
+chmod 700 ~/.oma ~/.oma/pi
+chmod 600 ~/.oma/pi/models.json
+export OMA_MODEL_PROVIDERS="anthropic,ollama"
+oma models validate
+oma models list --provider ollama --available
+oma up
+```
+
+The literal `ollama` key is Pi's documented placeholder for a keyless local
+endpoint; OMA may warn because literal credentials in `models.json` are
+discouraged. Remote endpoints must use HTTPS and should use `oma auth set`, an
+environment reference, or another Pi-recognized credential source instead of
+literal secrets.
+
+Support tiers:
+
+- **OMA-verified:** provider/model paths exercised by OMA's live alpha smokes.
+- **Pi-supported:** present in the pinned Pi catalog and usable when enabled
+  and configured, but not independently certified by OMA.
+- **Operator-defined:** compatible entries supplied through Pi `models.json`;
+  advanced until the operator verifies the target endpoint.
+
+The workspace-safe discovery endpoint is `GET /v1/model-catalog`. It requires
+the ordinary workspace key and Managed Agents beta header, and returns only
+model identity/capabilities/readiness—never base URLs, headers, credential
+sources, paths, or secrets.
+
 ## Local development
 
 From the repo root:

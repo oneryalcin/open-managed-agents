@@ -29,7 +29,8 @@ managed remote providers are still tracked separately.
 
 - Node.js 22.19 or newer
 - Docker or OrbStack running
-- `ANTHROPIC_API_KEY` in your shell
+- credentials for the selected model provider (`ANTHROPIC_API_KEY` for the
+  default Anthropic quickstart, or `oma auth set PROVIDER` plus a restart)
 
 Check the basics:
 
@@ -146,6 +147,9 @@ OMA_DOCKER_REAP_STALE_CONTAINERS_OLDER_THAN_MS=86400000
   `OMA_ALLOW_DOCKER_LOCAL=true`.
 - `docker info` must work before the Docker-local provider can start.
 - If the smoke fails before model output, confirm `ANTHROPIC_API_KEY` is set in
-  the shell running the command.
+  the shell running the command. For another enabled provider, run
+  `oma auth status PROVIDER` and
+  `oma models list --provider PROVIDER --available`, then restart `oma up`
+  after credential changes.
 - If a run is interrupted, the probe attempts to remove labelled containers for
   its session before exiting.

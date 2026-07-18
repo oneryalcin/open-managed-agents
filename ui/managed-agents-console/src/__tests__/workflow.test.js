@@ -13,10 +13,25 @@ function source(name) {
 describe("alpha console workflow", () => {
   it("keeps live API mutations enabled while unsupported lifecycle writes stay disabled", () => {
     const app = source("app.jsx");
-    expect(app).toContain("const mutationReadOnly = apiState.mode === 'mock'");
+    expect(app).toContain("const mutationReadOnly = apiState.state !== 'loaded'");
+    expect(app).toContain("|| (apiState.mode !== 'api' && apiState.mode !== 'demo')");
     expect(app).toContain("const lifecycleReadOnly = apiState.mode !== 'demo'");
     expect(app).toContain("apiMode={apiState.mode}");
     expect(app).toContain("archiveReadOnly={lifecycleReadOnly}");
+  });
+
+  it("uses live model discovery and never substitutes demo rows after an API failure", () => {
+    const app = source("app.jsx");
+    const forms = source("forms.jsx");
+    expect(app).toContain("setModels(data.models)");
+    expect(app).toContain("useState(demoMode ? MODELS.map");
+    expect(app).toContain("default:id === MODELS[0],\n  })) : [])");
+    expect(app).toContain("setApiState({ state:'error', mode:'error', error, warnings:[] })");
+    expect(app).not.toContain("setApiState({ state:'loaded', mode:'mock'");
+    expect(app).toContain("<CreateAgent models={models}");
+    expect(forms).toContain("const providers = [...new Set(models.map((item) => item.provider))]");
+    expect(forms).toContain("model: api.modelInputForSelection(selectedModel)");
+    expect(forms).toContain("Credentials are not configured for");
   });
 
   it("uses real API mode even when an auth-disabled appliance has no workspace key", () => {

@@ -51,6 +51,37 @@ The repo-local `npm run alpha:smoke` alias remains available. Existing-server
 smoke mode assumes that server already has an explicit sandbox provider and
 therefore skips local sandbox prerequisite checks.
 
+### Choose another Pi model provider
+
+OMA reuses the provider catalog and request adapters from its pinned Pi
+release. Providers are operator-enabled, and agents persist an exact
+`{provider,id}` pair. For a built-in provider such as OpenAI:
+
+```bash
+export OMA_MODEL_PROVIDERS="anthropic,openai"
+oma auth set openai             # hidden prompt; use --stdin for automation
+oma providers status
+oma models list --provider openai --available
+oma up                          # restart after any `oma auth` mutation
+```
+
+The console's Create Agent dialog reads the same authenticated catalog and
+shows whether the selected model has configured credentials. Missing
+credentials do not prevent defining an agent, but session creation fails
+closed until the operator configures them and restarts `oma up`.
+
+Operator-defined OpenAI-, Anthropic-, and Google-compatible endpoints use Pi's
+existing `models.json` format at `~/.oma/pi/models.json` (or
+`OMA_PI_MODELS_FILE`). Validate configuration before starting:
+
+```bash
+oma models validate
+```
+
+See [development/deployment setup](docs/dev-deployment.md#model-providers-and-custom-compatible-endpoints)
+for a complete local-compatible example and the support tiers. OMA does not
+expose provider base URLs or credentials through its workspace API or console.
+
 To choose microsandbox for the durable server:
 
 ```bash

@@ -175,22 +175,34 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAge
 }
 
 // ─────────── Create agent ───────────
-function CreateAgent({ onClose, onCreate, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
+function CreateAgent({ models = [], onClose, onCreate, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
+  const defaultModel = models.find((item) => item.default) || models[0] || null;
   const [name, setName] = useStateF('');
-  const [model, setModel] = useStateF(MODELS[0]);
+  const [provider, setProvider] = useStateF(defaultModel?.provider || '');
+  const [model, setModel] = useStateF(defaultModel?.id || '');
   const [prompt, setPrompt] = useStateF('');
   const [tools, setTools] = useStateF(['bash']);
   const [busy, setBusy] = useStateF(false);
   const [error, setError] = useStateF('');
 
-  const valid = name.trim().length > 0 && model.trim().length > 0 && !busy;
   const live = apiMode === 'api';
+  const providers = [...new Set(models.map((item) => item.provider))];
+  const providerModels = models.filter((item) => item.provider === provider);
+  const selectedModel = providerModels.find((item) => item.id === model) || null;
+  const valid = name.trim().length > 0 && selectedModel !== null && !busy;
   const toggle = (t) => setTools(tools.includes(t) ? tools.filter((x) => x !== t) : [...tools, t]);
+  const chooseProvider = (nextProvider) => {
+    setProvider(nextProvider);
+    const choices = models.filter((item) => item.provider === nextProvider);
+    const nextModel = choices.find((item) => item.default) || choices[0] || null;
+    setModel(nextModel?.id || '');
+  };
 
   const demoAgent = () => ({
     id:'agent_01' + Math.random().toString(36).slice(2, 8) + '…new',
     short:'agent_…' + Math.random().toString(36).slice(2, 8),
-    name: name.trim(), model, status:'active', created:'Just now', updated:'Just now', version:'v1',
+    name: name.trim(), model:`${provider}/${model}`, modelProvider:provider, modelId:model,
+    status:'active', created:'Just now', updated:'Just now', version:'v1',
     tools: tools.length, system: prompt.trim() || 'No system prompt set.',
     toolset:'agent_toolset_20260401', sessions:[],
   });
@@ -206,7 +218,7 @@ function CreateAgent({ onClose, onCreate, onAuthExpired, apiMode = 'demo', api =
     }
     const body = {
       name: name.trim(),
-      model: model.trim(),
+      model: api.modelInputForSelection(selectedModel),
       ...(prompt.trim() ? { system: prompt.trim() } : {}),
       tools: [{
         type: 'agent_toolset_20260401',
@@ -240,11 +252,24 @@ function CreateAgent({ onClose, onCreate, onAuthExpired, apiMode = 'demo', api =
         <Labeled label="Name" htmlFor="create-agent-name">
           <input id="create-agent-name" name="name" className="input" placeholder="e.g. cwc-agent" value={name} onChange={(e) => setName(e.target.value)} />
         </Labeled>
-        <Labeled label="Model" htmlFor="create-agent-model">
-          <input id="create-agent-model" name="model" className="input mono" list="oma-model-suggestions" value={model} onChange={(e) => setModel(e.target.value)} />
-          <datalist id="oma-model-suggestions">{MODELS.map((m) => <option key={m} value={m} />)}</datalist>
+        <Labeled label="Provider" htmlFor="create-agent-provider">
+          <select id="create-agent-provider" name="provider" className="selectbox mono" value={provider} onChange={(e) => chooseProvider(e.target.value)}>
+            {providers.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
         </Labeled>
       </div>
+
+      <Labeled label="Model" htmlFor="create-agent-model" hint="Search the deployment-enabled Pi catalog for this provider.">
+        <input id="create-agent-model" name="model" className="input mono" list="oma-model-suggestions" value={model} onChange={(e) => setModel(e.target.value)} />
+        <datalist id="oma-model-suggestions">{providerModels.map((item) => <option key={`${item.provider}/${item.id}`} value={item.id}>{item.name}</option>)}</datalist>
+      </Labeled>
+      {selectedModel && <div className={selectedModel.credentials_configured ? 'field-hint' : 'inline-warn'} role={selectedModel.credentials_configured ? undefined : 'status'}>
+        {!selectedModel.credentials_configured && <Icon name="alert" size={14} />}
+        <span>{selectedModel.credentials_configured
+          ? `${selectedModel.provider_name || selectedModel.provider} credentials are configured on this appliance.`
+          : `Credentials are not configured for ${selectedModel.provider}/${selectedModel.id}. You can create the agent, but sessions will be rejected until the operator runs oma auth set ${selectedModel.provider} and restarts oma up.`}</span>
+      </div>}
+      {live && models.length === 0 && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>No deployment-enabled models were returned. Agent creation is unavailable.</span></div>}
 
       <Labeled label="System prompt" htmlFor="create-agent-system" opt hint="Plain text. Markdown is preserved.">
         <textarea id="create-agent-system" name="system" className="textarea" placeholder="You help me navigate…" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
