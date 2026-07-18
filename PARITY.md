@@ -38,7 +38,8 @@ claim of blanket superiority over Anthropic's hosted environment.
 validation → reject the inert multi-agent façade (DONE 2026-07-13) →
 `glob`/`grep` honesty boundary (DONE 2026-07-13) → sandbox-backed CMA
 `glob` (DONE 2026-07-13) → pagination semantics (DONE 2026-07-13) → agent update/versioning (DONE 2026-07-14) → provider-owned CMA `grep` (DONE 2026-07-14; PR #188) → alpha
-readiness ([ALPHA.md](ALPHA.md)) → usable environment image story → web tools.
+readiness ([ALPHA.md](ALPHA.md)) → Pi-backed multi-provider model selection
+(plan 0139) → usable environment image story → web tools.
 
 ## Legend
 
@@ -259,6 +260,14 @@ early adopter can build and iterate a credible single-agent product.
    leg owns execution, and integrate them with the shipped egress policy rather
    than exposing Pi's host-network defaults. This is now unblocked but is still
    a bounded security-sensitive arc.
+4. **Pi-backed multi-provider models** — replace OMA's deployment-wide
+   Anthropic lookup with exact `{provider,id}` identity on immutable agent
+   revisions, while reusing Pi's `AuthStorage`, `ModelRegistry`, built-in
+   catalog, protocol adapters, and custom `models.json` format. Add an explicit
+   operator provider allowlist plus secret-safe CLI/API/console discovery.
+   Existing CMA Anthropic input remains valid; non-Anthropic and custom
+   compatible endpoints are an OMA extension. Implementation plan:
+   [`docs/plans/0139-pi-multi-provider-models.md`](docs/plans/0139-pi-multi-provider-models.md).
 
 Do not start a broad post-v1 block merely because it has a lower nominal parity
 percentage; finish these trust/usability arcs first.

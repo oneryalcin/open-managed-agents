@@ -239,7 +239,36 @@ Near-term target:
 - keep Python/Node/package-rich images as a later environment arc unless the
   smoke path requires them.
 
-### 8. Alpha release checklist
+### 8. Pi-backed multi-provider models
+
+Implementation plan: [0139](docs/plans/0139-pi-multi-provider-models.md).
+
+Status: implementation-ready plan; implementation not started.
+
+Goal: make model choice an OMA product capability rather than an Anthropic-only
+deployment assumption, while reusing Pi's provider catalog, protocol adapters,
+auth storage, credential resolution, and custom `models.json` format.
+
+Required before the final alpha audit:
+
+- preserve existing CMA-compatible Anthropic model input;
+- add explicit `{provider,id}` model selection for OMA agents;
+- persist the provider on every immutable agent revision and migrate historical
+  rows to explicit Anthropic identity;
+- use one shared Pi `AuthStorage`/`ModelRegistry` for admission and runtime;
+- load Pi configuration from OMA-owned paths rather than ambient
+  `~/.pi/agent` state;
+- support operator-allowed Pi built-ins plus operator-defined compatible APIs;
+- add secret-safe provider/model discovery through CLI, API, and console;
+- fail closed when provider policy, model registration, or configured auth is
+  missing—never fall back to another model;
+- verify at least one non-Anthropic and one local custom compatible provider.
+
+The alpha claim is “Pi-supported when operator-enabled and configured,” not
+“every Pi model is independently certified by OMA.” Documentation must separate
+OMA-verified, Pi-supported, and operator-defined support tiers.
+
+### 9. Alpha release checklist
 
 Before inviting external tinkering:
 

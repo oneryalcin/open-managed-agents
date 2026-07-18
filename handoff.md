@@ -364,11 +364,20 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Return to the broader Python/Node environment-image usability story or
+1. Fix console issue #156 so a reachable live server returning 5xx never falls
+   back to bundled demo data.
+2. Implement plan 0139 in reviewable slices: durable `{provider,id}` model
+   identity and migration; shared policy-aware Pi catalog/runtime; discovery
+   API and secret-safe CLI; console workflow; then multi-provider alpha smokes.
+   Reuse Pi's `AuthStorage`, `ModelRegistry`, built-in adapters, and
+   `models.json`; do not create a parallel OMA model catalog or provider format.
+3. Run the final clean-checkout alpha audit after at least one non-Anthropic and
+   one operator-defined compatible endpoint pass end to end.
+4. Then return to the broader Python/Node environment-image usability story or
    continue the pre-v1 sequence with web tools.
-2. Track publication-pipeline promotion hardening separately in issue #194; it
+5. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
-3. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+6. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent
