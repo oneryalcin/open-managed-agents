@@ -286,13 +286,44 @@ provider overrides, and custom models using supported adapters such as:
 - `openai-completions`;
 - `openai-responses`;
 - `azure-openai-responses`;
-- `google-generative-ai`.
+- `openai-codex-responses`;
+- `mistral-conversations`;
+- `google-generative-ai`;
+- `google-vertex`;
+- `bedrock-converse-stream`.
 
 OMA loads that format unchanged through `ModelRegistry`. Do not define
 `oma-models.yaml`, translate it into a second schema, or implement a competing
 semantic parser. Pi remains the schema/semantic authority: construct the real
 registry and require `ModelRegistry.getError() === undefined` before serving.
 OMA adds only a narrow JSONC-aware raw-config security scan before construction.
+
+Pi 0.80.6's TypeBox schema is intentionally non-strict and its `api` field is a
+free string, so the OMA scan must additionally enforce a pinned strict-key and
+adapter policy. Recursively reject unknown schema keys at the root, provider,
+model, model-override, cost/tier, compatibility, and thinking-map scopes using
+the installed Pi 0.80.6 field vocabulary. Header maps intentionally retain
+arbitrary header names, but every value must be a string and pass the command
+and secret-location scan. In particular, reject
+`stream`, `streamSimple`, extension hooks, functions, and other executable or
+silently ignored fields. Accept `api` only when it is one of the nine adapters
+listed above. This is a narrow admission/security allowlist, not a replacement
+type/semantic parser; Pi still owns value validation, merging, and runtime
+behavior.
+
+Pin the principal object keys explicitly:
+
+- root: `providers`;
+- provider: `name`, `baseUrl`, `apiKey`, `api`, `headers`, `compat`,
+  `authHeader`, `models`, `modelOverrides`;
+- model: `id`, `name`, `api`, `baseUrl`, `reasoning`, `thinkingLevelMap`,
+  `input`, `cost`, `contextWindow`, `maxTokens`, `headers`, `compat`;
+- model override: `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost`,
+  `contextWindow`, `maxTokens`, `headers`, `compat`.
+
+Nested `cost`/tier, `compat`, and `thinkingLevelMap` key constants must mirror
+the pinned Pi schemas and be snapshot-tested in the upgrade contract. Header
+names and provider/model IDs remain dynamic map keys, not schema keys.
 
 The security scan must enumerate and classify every Pi 0.80.6 location that can
 redirect traffic, add outbound headers, or resolve credential-like values:
@@ -304,6 +335,8 @@ redirect traffic, add outbound headers, or resolve credential-like values:
 
 If a future pinned Pi release adds a security-sensitive field, the Pi contract
 fixture/catalog-diff test must fail until the field is explicitly classified.
+The same upgrade gate snapshots the strict key vocabulary and nine-adapter
+allowlist so a Pi upgrade cannot silently broaden executable/network behavior.
 For alpha, validate operator files before constructing the production catalog
 and reject:
 
@@ -318,6 +351,13 @@ and reject:
   or header location, or any `auth.json` API-key value, unless the operator
   explicitly enables `OMA_ALLOW_MODEL_AUTH_COMMANDS=true`;
 - unsupported extension-only/custom stream implementations.
+
+Allowlisted built-in providers may be deliberately repointed through
+provider-level `baseUrl`, headers, compat, or model overrides. Treat this as a
+permitted operator-controlled proxy configuration, but apply the same URL,
+command, strict-key, permission, and redaction rules; an `anthropic` or
+`openai` override receives no trust exemption merely because the provider is
+built in.
 
 Reject symlinked auth/config files and unsafe parent/file permissions before
 reading them. OMA-owned directories/files use `0700`/`0600`. Operator-supplied
@@ -341,6 +381,16 @@ Bearer header should configure `apiKey` plus `authHeader:true`; header-only
 authentication remains unsupported for alpha and must not bypass the session
 gate. Supplemental Authorization-like headers may still be used when Pi also
 reports model-scoped configured auth (for example a gateway plus upstream BYOK).
+
+The same Pi rule affects keyless Ollama/vLLM/LM Studio-style endpoints. A
+loopback provider that intentionally ignores authentication must declare the
+exact non-secret placeholder `apiKey:"oma-local-keyless"` to become available.
+OMA exempts that exact value from the literal-credential warning only when the
+validated provider base URL is syntactic loopback HTTP; it remains a warning on
+remote/HTTPS endpoints. Documentation must explain that Pi may send the
+placeholder to the endpoint and it is appropriate only when that endpoint is
+known to ignore it. Missing placeholder/auth keeps the model registered but
+unavailable and session admission fails closed.
 
 ### D6 — Credential lifecycle is operator-side
 
@@ -683,8 +733,9 @@ Files:
 Deliver:
 
 - `OMA_ALPHA_MODEL_PROVIDER` plus existing `OMA_ALPHA_MODEL`;
-- one local custom OpenAI-compatible fixture proving operator-defined model
-  routing without a paid external call;
+- one local custom OpenAI-compatible fixture using
+  `apiKey:"oma-local-keyless"` and proving operator-defined model routing
+  without a paid external call;
 - gated live Anthropic/OpenAI/Google/OpenRouter lanes;
 - final clean-checkout alpha audit with at least one non-Anthropic provider.
 
@@ -710,6 +761,11 @@ Deliver:
   locations, HTTPS, exact loopback HTTP, URL userinfo, command expressions in
   both config files, literal-key warnings, unsafe files, malformed Pi model
   config, and malformed Pi auth storage;
+- strict-key validation rejects unknown/extension fields at every supported
+  object scope, and adapter validation accepts exactly Pi 0.80.6's nine
+  `KnownApi` values;
+- the exact loopback `oma-local-keyless` placeholder is warning-free and ready,
+  while a missing placeholder remains unavailable and remote use is warned;
 - CLI auth writes atomically with `0600`, preserves peers, and prints no key;
 - sync/async backend contention across two instances preserves both updates,
   and an injected crash before rename leaves the previous JSON intact.
@@ -750,6 +806,8 @@ Use real Pi 0.80.6 `AuthStorage`/`ModelRegistry` with temporary files to prove:
 - Vertex ADC readiness;
 - custom OpenAI-compatible and Anthropic-compatible entries;
 - custom base URL and compat fields reach the resolved Pi model;
+- allowlisted built-in-provider base-URL/header overrides remain subject to the
+  same security scan and reach the resolved Pi model;
 - malformed config fails startup rather than silently dropping custom models;
 - malformed auth storage fails startup rather than silently appearing empty;
 - registry instance identity is shared by admission and runner.
@@ -768,7 +826,8 @@ Use real Pi 0.80.6 `AuthStorage`/`ModelRegistry` with temporary files to prove:
 
 - clean OMA home + Anthropic existing quickstart;
 - clean OMA home + OpenAI (or another verified provider);
-- operator-defined local OpenAI-compatible fixture;
+- operator-defined local OpenAI-compatible fixture using the documented
+  keyless placeholder;
 - exact provider/model appears in internal model-request diagnostics;
 - tools, skills, MCP, sandboxing, and event stream remain provider-independent;
 - mutating auth prints restart-required guidance;
@@ -825,6 +884,9 @@ The arc is complete only when all are true:
     independent of the deployment's OMA default provider/model pair.
 17. Command execution policy covers both `models.json` and `auth.json`; no
     command-backed credential runs without explicit deployment opt-in.
+18. Custom config rejects unknown keys and APIs outside Pi 0.80.6's nine
+    supported adapters; the local keyless fixture becomes ready only through
+    the documented loopback placeholder.
 
 ## 8. Risks and mitigations
 
@@ -849,6 +911,13 @@ Mitigation: explicit OMA-owned auth/model paths; no production default to
 Mitigation: operator-only files, no workspace mutation, no Pi extensions,
 command expressions disabled across both config files by default, exhaustive
 classified-location scanning, and startup validation before catalog creation.
+
+### Risk: Pi accepts an unknown config key or adapter that OMA cannot execute
+
+Mitigation: enforce a pinned recursive key vocabulary and the nine Pi 0.80.6
+`KnownApi` adapters before registry construction. Pi upgrades fail the catalog
+contract fixture until new fields/adapters receive explicit security and
+runtime review.
 
 ### Risk: provider credentials are shared across workspaces
 
@@ -920,3 +989,6 @@ Two native reviewers evaluated revision `a970a5a` against the installed Pi
   workspace auth/beta gates;
 - migration order is explicit, and Pi's header-only-auth readiness limitation,
   exact provider casing, and unchanged `speed` semantics are documented.
+- keyless loopback providers use one explicit non-secret placeholder contract;
+- OMA recursively rejects unknown config keys and accepts exactly Pi 0.80.6's
+  nine runtime adapters, including validated built-in-provider overrides.
