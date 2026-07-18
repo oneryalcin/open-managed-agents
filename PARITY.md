@@ -260,13 +260,13 @@ early adopter can build and iterate a credible single-agent product.
    leg owns execution, and integrate them with the shipped egress policy rather
    than exposing Pi's host-network defaults. This is now unblocked but is still
    a bounded security-sensitive arc.
-4. **Pi-backed multi-provider models** — replace OMA's deployment-wide
-   Anthropic lookup with exact `{provider,id}` identity on immutable agent
-   revisions, while reusing Pi's `AuthStorage`, `ModelRegistry`, built-in
-   catalog, protocol adapters, and custom `models.json` format. Add an explicit
-   operator provider allowlist plus secret-safe CLI/API/console discovery.
-   Existing CMA Anthropic input remains valid; non-Anthropic and custom
-   compatible endpoints are an OMA extension. Implementation plan:
+4. **Pi-backed multi-provider models** — exact `{provider,id}` identity,
+   immutable revision persistence, shared Pi catalog/runtime resolution,
+   provider policy, authenticated model discovery, and the secret-safe operator
+   CLI are implemented. Console selection and the final non-Anthropic/custom
+   compatible-provider smoke matrix remain. Existing CMA Anthropic input stays
+   valid; non-Anthropic and custom compatible endpoints are an OMA extension.
+   Implementation plan:
    [`docs/plans/0139-pi-multi-provider-models.md`](docs/plans/0139-pi-multi-provider-models.md).
 
 Do not start a broad post-v1 block merely because it has a lower nominal parity

@@ -49,6 +49,19 @@ describe("OpenAPI and interactive documentation", () => {
     expect(eventSchema.properties.type.enum)
       .not.toContain("agent.thinking");
     expect(document.paths["/v1/sessions"].get.responses["200"]).toBeDefined();
+    expect(document.paths["/v1/model-catalog"].get).toMatchObject({
+      operationId: "listModelCatalog",
+      security: [{ WorkspaceApiKey: [] }],
+    });
+    expect(document.components.schemas.ModelCatalogEntry).toMatchObject({
+      required: expect.arrayContaining([
+        "provider",
+        "id",
+        "credentials_configured",
+        "default",
+      ]),
+      additionalProperties: false,
+    });
     expect(document.paths).not.toHaveProperty("/v1/deployments");
     expect(document.paths).not.toHaveProperty("/v1/memory");
     expect(document.components.schemas.CreateAgentRequest).toMatchObject({

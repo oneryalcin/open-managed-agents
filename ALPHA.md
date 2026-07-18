@@ -243,7 +243,10 @@ Near-term target:
 
 Implementation plan: [0139](docs/plans/0139-pi-multi-provider-models.md).
 
-Status: implementation-ready plan; implementation not started.
+Status: implementation in progress. Durable `{provider,id}` identity, the
+shared Pi catalog/runtime boundary, authenticated discovery API, and
+secret-safe operator CLI are implemented. Console selection and the final
+provider smoke matrix remain.
 
 Goal: make model choice an OMA product capability rather than an Anthropic-only
 deployment assumption, while reusing Pi's provider catalog, protocol adapters,

@@ -111,6 +111,11 @@ import {
   createPiModelCatalog,
   type PiModelCatalog,
 } from "./models/catalog.ts";
+import { modelCatalogRoutes } from "./models/routes.ts";
+import {
+  DefaultModelCatalogService,
+  type ModelCatalogService,
+} from "./models/service.ts";
 import {
   parseModelDeploymentConfigFromEnv,
   type ModelDeploymentEnv,
@@ -156,6 +161,7 @@ export interface ControlPlaneServices {
   mcp?: McpOauthValidationDependencies;
   sessions: SessionService;
   sessionEvents: SessionEventsService;
+  models?: ModelCatalogService;
   auth?: ControlPlaneAuth;
   admission?: AdmissionLimits;
   // 0121 C2. Absent = no /health, no /metrics, no HTTP metrics middleware
@@ -348,6 +354,9 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     registerOpenApiRoutes(app, services.openapi);
   }
 
+  if (services.models) {
+    app.route("/v1/model-catalog", modelCatalogRoutes(services.models));
+  }
   app.route("/v1/agents", agentsRoutes(services.agents));
   app.route("/v1/environments", environmentsRoutes(services.environments));
   app.route(
@@ -837,6 +846,7 @@ export function createDeploymentControlPlane(
       },
     ),
     sessionEvents,
+    models: new DefaultModelCatalogService(modelCatalog),
     admission,
     observability: {
       health: {
@@ -997,6 +1007,7 @@ function isManagedAgentsRoute(path: string): boolean {
     // to wrk_default if someone forgets the auth prefix registration.
     "/v1/vaults",
     "/v1/sessions",
+    "/v1/model-catalog",
   ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 

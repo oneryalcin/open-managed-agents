@@ -1,7 +1,8 @@
 # 0139 — Pi-backed multi-provider models
 
-Status: implementation in progress. Slice 1 shipped in `ba05f0c`; Slice 2 is
-implemented and independently reviewed green on this branch. Slices 3-5 remain.
+Status: implementation in progress. Slice 1 shipped in `ba05f0c`; Slice 2
+shipped in `91860fe`; Slice 3 is implemented and independently reviewed green
+on this branch. Slices 4-5 remain.
 
 Branch: `dev/pi-multi-provider-models-plan`
 
@@ -20,8 +21,8 @@ mechanisms, but OMA bound one `provider` string to the whole deployment and
 persisted only `{id,speed}`. Slices 1-2 now persist exact provider/model pairs,
 construct one allowlisted OMA-owned Pi catalog, and use that same catalog for
 agent admission, session readiness, and warm/restart runtime resolution.
-Discovery, operator CLI, console selection, and the final smoke matrix remain
-in Slices 3-5.
+Authenticated discovery and the secret-safe operator CLI are now implemented.
+Console selection and the final smoke matrix remain in Slices 4-5.
 
 The implementation must preserve CMA-compatible Anthropic requests while
 adding an explicit OMA provider extension, persist the exact provider/model on

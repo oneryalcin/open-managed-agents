@@ -366,11 +366,12 @@ they are intentionally no longer repeated here.
 
 1. Fix console issue #156 so a reachable live server returning 5xx never falls
    back to bundled demo data.
-2. Implement plan 0139 in reviewable slices: durable `{provider,id}` model
-   identity and migration; shared policy-aware Pi catalog/runtime; discovery
-   API and secret-safe CLI; console workflow; then multi-provider alpha smokes.
-   Reuse Pi's `AuthStorage`, `ModelRegistry`, built-in adapters, and
-   `models.json`; do not create a parallel OMA model catalog or provider format.
+2. Continue plan 0139 with the live console provider/model workflow, then the
+   multi-provider alpha smoke matrix. Durable `{provider,id}` identity, shared
+   policy-aware Pi catalog/runtime, authenticated discovery API, and secret-safe
+   CLI are implemented. Keep reusing Pi's `AuthStorage`, `ModelRegistry`,
+   built-in adapters, and `models.json`; do not create a parallel OMA model
+   catalog or provider format.
 3. Run the final clean-checkout alpha audit after at least one non-Anthropic and
    one operator-defined compatible endpoint pass end to end.
 4. Then return to the broader Python/Node environment-image usability story or

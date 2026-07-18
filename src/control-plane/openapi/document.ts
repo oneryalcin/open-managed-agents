@@ -16,6 +16,7 @@ const TAG_DESCRIPTIONS: Record<OpenApiTag, string> = {
   Vaults: "Vault and MCP credential lifecycle.",
   Sessions: "Managed Agent session lifecycle.",
   "Session events": "User input, event history, and SSE streaming.",
+  "Models (OMA)": "OMA-specific provider/model readiness catalog.",
   "Administration (OMA)": "OMA-specific local workspace and API-key administration.",
   "Operations (OMA)": "OMA-specific health and metrics endpoints.",
 };
@@ -30,6 +31,7 @@ export type OpenApiTag =
   | "Vaults"
   | "Sessions"
   | "Session events"
+  | "Models (OMA)"
   | "Administration (OMA)"
   | "Operations (OMA)";
 
@@ -215,6 +217,8 @@ export const OPENAPI_ROUTE_CONTRACTS: readonly OpenApiRouteContract[] = [
   route({ method: "get", path: "/v1/sessions/{sessionId}/events", operationId: "listSessionEvents", tag: "Session events", summary: "List session events", auth: "workspace", beta: "managed", parameters: [sessionId, limit, page, queryParam("order", { type: "string", enum: ["asc", "desc"] }), queryParam("types[]", { type: "array", items: { type: "string", enum: DOCUMENTED_EVENT_TYPES } }, "Repeat to filter by an event type currently emitted by OMA.")], success: { schema: ref("EventPage") } }),
   route({ method: "get", path: "/v1/sessions/{sessionId}/events/stream", operationId: "streamSessionEvents", tag: "Session events", summary: "Stream persisted session events over SSE", description: "OMA streams complete persisted events. Assistant text is emitted as a buffered `agent.message` after generation, not as token-preview deltas. The unsupported `event_deltas[]` query parameter is rejected with HTTP 400.", auth: "workspace", beta: "managed", parameters: [sessionId, headerParam("last-event-id", { type: "string" }, false, "Resume after this event ID.")], success: { schema: { type: "string", description: "SSE frames with id, event, and JSON data fields." }, mediaType: "text/event-stream", description: "SSE stream" } }),
 
+  route({ method: "get", path: "/v1/model-catalog", operationId: "listModelCatalog", tag: "Models (OMA)", summary: "List deployment-enabled model catalog entries", description: "OMA-specific discovery endpoint for provider/model readiness. It never returns base URLs, credential sources, header values, file paths, raw Pi config, or secrets.", auth: "workspace", beta: "managed", parameters: [queryParam("provider", { type: "string", minLength: 1 }, "Exact provider id."), queryParam("available", { type: "boolean", default: false }, "When true, include only models with configured local credentials."), limit, page], success: { schema: ref("ModelCatalogPage") } }),
+
   route({ method: "post", path: "/admin/workspaces", operationId: "adminCreateWorkspace", tag: "Administration (OMA)", summary: "Create a workspace", auth: "admin", requestBody: jsonBody(ref("AdminCreateWorkspaceRequest")), success: { status: 201, schema: ref("AdminWorkspace") } }),
   route({ method: "get", path: "/admin/workspaces", operationId: "adminListWorkspaces", tag: "Administration (OMA)", summary: "List workspaces", auth: "admin", success: { schema: { type: "array", items: ref("AdminWorkspace") } } }),
   route({ method: "get", path: "/admin/workspaces/{id}", operationId: "adminGetWorkspace", tag: "Administration (OMA)", summary: "Retrieve a workspace", auth: "admin", parameters: [pathParam("id", "Workspace ID.")], success: { schema: ref("AdminWorkspace") } }),
@@ -255,6 +259,7 @@ const schemas: Record<string, JsonSchema> = {
   DeletedSession: { type: "object", required: ["id", "type"], properties: { id: { type: "string" }, type: { const: "session_deleted" } }, additionalProperties: false },
   Event: { type: "object", required: ["id", "type", "processed_at"], properties: { id: { type: "string" }, type: { type: "string", enum: DOCUMENTED_EVENT_TYPES }, processed_at: { type: ["string", "null"], format: "date-time" } }, additionalProperties: true },
   SendEventsRequest: { type: "object", required: ["events"], properties: { events: { type: "array", minItems: 1, maxItems: 200, items: { oneOf: [{ type: "object", required: ["type", "content"], properties: { type: { const: "user.message" }, content: { type: "array", items: ref("JsonObject") } }, additionalProperties: false }, { type: "object", required: ["type"], properties: { type: { const: "user.interrupt" } }, additionalProperties: false }, { type: "object", required: ["type", "custom_tool_use_id"], properties: { type: { const: "user.custom_tool_result" }, custom_tool_use_id: { type: "string" }, content: { type: "array", items: ref("JsonObject") }, is_error: { type: "boolean" } }, additionalProperties: false }, { type: "object", required: ["type", "tool_use_id", "result"], properties: { type: { const: "user.tool_confirmation" }, tool_use_id: { type: "string" }, result: { enum: ["allow", "deny"] }, deny_message: ref("NullableString") }, additionalProperties: false }] } } }, additionalProperties: false },
+  ModelCatalogEntry: { type: "object", required: ["type", "provider", "id", "name", "provider_name", "reasoning", "input", "context_window", "max_output_tokens", "credentials_configured", "default"], properties: { type: { const: "model" }, provider: { type: "string" }, id: { type: "string" }, name: { type: "string" }, provider_name: { type: "string" }, reasoning: { type: "boolean" }, input: { type: "array", items: { type: "string" } }, context_window: { type: "integer", minimum: 0 }, max_output_tokens: { type: "integer", minimum: 0 }, credentials_configured: { type: "boolean" }, default: { type: "boolean" } }, additionalProperties: false },
   AdminCreateWorkspaceRequest: { type: "object", required: ["name"], properties: { name: { type: "string", minLength: 1 } }, additionalProperties: false },
   AdminMintKeyRequest: { type: "object", properties: { label: { type: "string", minLength: 1, default: "default" } }, additionalProperties: false },
   AdminWorkspace: { type: "object", required: ["id", "name", "created_at"], properties: { id: { type: "string" }, name: { type: "string" }, created_at: { type: "string", format: "date-time" } }, additionalProperties: false },
@@ -289,6 +294,7 @@ schemas.FilePage = { type: "object", required: ["data", "has_more", "first_id", 
 schemas.SessionPage = { type: "object", required: ["data", "next_page", "prev_page"], properties: { data: { type: "array", items: ref("Session") }, next_page: { type: ["string", "null"] }, prev_page: { type: ["string", "null"] } }, additionalProperties: false };
 schemas.EventPage = { type: "object", required: ["data"], properties: { data: { type: "array", items: ref("Event") }, next_page: { type: ["string", "null"] } }, additionalProperties: false };
 schemas.GenericForwardPage = { type: "object", required: ["data", "has_more", "next_page"], properties: { data: { type: "array", items: ref("JsonObject") }, has_more: { type: "boolean" }, next_page: { type: ["string", "null"] } }, additionalProperties: false };
+schemas.ModelCatalogPage = { type: "object", required: ["data", "next_page"], properties: { data: { type: "array", items: ref("ModelCatalogEntry") }, next_page: { type: ["string", "null"] } }, additionalProperties: false };
 
 function betaParameter(kind: NonNullable<OpenApiRouteContract["beta"]>): OpenApiParameter {
   const feature = kind === "files" ? FILES_API_BETA : kind === "skills" ? SKILLS_API_BETA : MANAGED_AGENTS_BETA;
