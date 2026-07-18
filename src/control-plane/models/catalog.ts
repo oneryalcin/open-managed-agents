@@ -5,6 +5,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { scanModelConfigSecurity, type ModelConfigSecurityReport } from "./config-security.ts";
 
+export const PINNED_PI_MODEL_RUNTIME_VERSION = "0.80.6";
+
 export interface PiModelRef {
   provider: string;
   id: string;

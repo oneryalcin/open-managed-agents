@@ -1,0 +1,31 @@
+name: Provider smoke matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      lanes:
+        description: "Comma-separated lanes: local-compatible,anthropic,openai,google,openrouter"
+        required: true
+        default: "local-compatible"
+
+permissions:
+  contents: read
+
+jobs:
+  provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OMA_ALPHA_PROVIDER_LANES: ${{ inputs.lanes }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run alpha:smoke:providers

@@ -37,7 +37,7 @@ describe("oma CLI", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("oma up [--sandbox docker|microsandbox]");
-    expect(result.stdout).toContain("oma smoke");
+    expect(result.stdout).toContain("oma smoke [--sandbox docker|microsandbox] [--local-compatible]");
     expect(result.stdout).toContain("oma keys mint");
     expect(result.stdout).toContain("oma workspaces list");
     expect(result.stdout).toContain("oma providers status");

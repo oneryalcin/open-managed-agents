@@ -412,6 +412,27 @@ describe("gauges and admission counters", () => {
     ).toBe(1);
     plane.stores.close();
   });
+
+  it("counts model admission failures with bounded provider labels", async () => {
+    const plane = makePlane();
+    const rejected = await plane.app.request("/v1/agents", {
+      method: "POST",
+      headers: V1_HEADERS,
+      body: JSON.stringify({
+        name: "Unsupported provider",
+        model: { provider: "private-customer-gateway", id: "secret-model-name" },
+      }),
+    });
+    expect(rejected.status).toBe(400);
+    const exposition = await (await plane.app.request("/metrics")).text();
+    expect(sampleValue(exposition, "oma_model_admission_failures_total", {
+      reason: "provider_disabled",
+      provider: "custom",
+    })).toBe(1);
+    expect(exposition).not.toContain("private-customer-gateway");
+    expect(exposition).not.toContain("secret-model-name");
+    plane.stores.close();
+  });
 });
 
 describe("turn outcome metrics (post-commit chokepoint, end-to-end)", () => {

@@ -21,6 +21,9 @@ export const SANDBOX_PROVIDERS = [
   "docker-local", "microsandbox-local", "host-passthrough", "none", "other",
 ];
 const LOG_LEVELS = ["debug", "info", "warn", "error", "audit", "other"];
+const MODEL_ADMISSION_REASONS = ["provider_disabled", "model_unavailable", "credentials_missing", "other"];
+const MODEL_PROVIDER_LABELS = ["anthropic", "openai", "google", "openrouter", "custom", "other"];
+const NAMED_MODEL_PROVIDER_LABELS = new Set(["anthropic", "openai", "google", "openrouter"]);
 
 const HTTP_BUCKETS = [0.005, 0.02, 0.1, 0.5, 2, 10];
 // Extends past the 15-min idle TTL so TTL-adjacent turns don't vanish into
@@ -39,6 +42,7 @@ export interface ControlPlaneMetrics {
   logEvents: Counter;
   mcpToolCalls: Counter;
   mcpConnections: Counter;
+  modelAdmissionFailures: Counter;
 }
 
 export function createControlPlaneMetrics(): ControlPlaneMetrics {
@@ -96,7 +100,17 @@ export function createControlPlaneMetrics(): ControlPlaneMetrics {
       "MCP server connection attempts, by outcome (plan 0122).",
       { event: MCP_CONNECTION_EVENTS },
     ),
+    modelAdmissionFailures: registry.counter(
+      "oma_model_admission_failures_total",
+      "Model admission failures, by bounded reason and provider class.",
+      { reason: MODEL_ADMISSION_REASONS, provider: MODEL_PROVIDER_LABELS },
+    ),
   };
+}
+
+export function modelProviderMetricLabel(provider: string): string {
+  if (NAMED_MODEL_PROVIDER_LABELS.has(provider)) return provider;
+  return provider.length > 0 ? "custom" : "other";
 }
 
 const MCP_TOOL_CALL_OUTCOMES = ["ok", "error", "denied", "timeout", "aborted"];

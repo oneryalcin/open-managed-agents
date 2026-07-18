@@ -1,8 +1,8 @@
 # 0139 — Pi-backed multi-provider models
 
-Status: implementation in progress. Slice 1 shipped in `ba05f0c`; Slice 2
-shipped in `91860fe`; Slice 3 shipped in `322dd5f`; Slice 4 is implemented on
-this branch. Slice 5 remains.
+Status: implementation complete on this branch; final independent review and
+clean-checkout release verification are pending. Slice 1 shipped in `ba05f0c`,
+Slice 2 in `91860fe`, Slice 3 in `322dd5f`, and Slice 4 in `6e55760`.
 
 Branch: `dev/pi-multi-provider-models-plan`
 
@@ -21,9 +21,9 @@ mechanisms, but OMA bound one `provider` string to the whole deployment and
 persisted only `{id,speed}`. Slices 1-2 now persist exact provider/model pairs,
 construct one allowlisted OMA-owned Pi catalog, and use that same catalog for
 agent admission, session readiness, and warm/restart runtime resolution.
-Authenticated discovery, the secret-safe operator CLI, and live console
-selection/readiness are now implemented. The final smoke matrix remains in
-Slice 5.
+Authenticated discovery, the secret-safe operator CLI, live console
+selection/readiness, and the deterministic/gated provider smoke matrix are
+implemented. The remaining work is the final review and clean-checkout gate.
 
 The implementation must preserve CMA-compatible Anthropic requests while
 adding an explicit OMA provider extension, persist the exact provider/model on
@@ -744,6 +744,21 @@ Deliver:
   without a paid external call;
 - gated live Anthropic/OpenAI/Google/OpenRouter lanes;
 - final clean-checkout alpha audit with at least one non-Anthropic provider.
+
+Implementation:
+
+- `oma smoke --local-compatible` runs a deterministic loopback OpenAI Chat
+  Completions fixture through Pi, a real Docker sandbox tool call, and the
+  post-tool model response without a paid API;
+- `OMA_ALPHA_MODEL_PROVIDER` selects the exact explicit pair while an omitted
+  provider preserves the CMA Anthropic string path;
+- `npm run alpha:smoke:providers` always supports the local lane and runs
+  Anthropic/OpenAI/Google/OpenRouter only when selected/configured;
+- the manual-only provider-smoke workflow never spends provider credits on an
+  ordinary pull request;
+- catalog startup logs contain only Pi version, allowed providers, and bounded
+  ready/missing counts; model-admission metrics use bounded reason/provider
+  labels and never model IDs or custom provider names.
 
 ## 6. Test plan
 

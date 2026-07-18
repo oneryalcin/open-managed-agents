@@ -15,6 +15,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "alpha:smoke": "node scripts/alpha-smoke.mjs",
+    "alpha:smoke:providers": "node scripts/alpha-provider-smoke-matrix.mjs",
     "ui:dev": "node ui/managed-agents-console/serve.mjs"
   },
   "dependencies": {

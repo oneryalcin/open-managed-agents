@@ -364,16 +364,15 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Continue plan 0139 with the multi-provider alpha smoke matrix. Durable
-   `{provider,id}` identity, shared policy-aware Pi catalog/runtime,
-   authenticated discovery API, secret-safe CLI, and live console
-   provider/model selection are implemented. The console now fails visibly on
-   live API errors instead of substituting bundled demo rows (issue #156).
-   Keep reusing Pi's `AuthStorage`, `ModelRegistry`,
-   built-in adapters, and `models.json`; do not create a parallel OMA model
-   catalog or provider format.
-2. Run the final clean-checkout alpha audit after at least one non-Anthropic and
-   one operator-defined compatible endpoint pass end to end.
+1. Finish plan 0139's final independent review and clean-checkout alpha audit.
+   The deterministic `oma smoke --local-compatible` lane has already proven an
+   operator-defined non-Anthropic model across both Pi requests and a real
+   Docker tool round trip; `npm run alpha:smoke:providers` supplies strict,
+   credential-gated Anthropic/OpenAI/Google/OpenRouter lanes. Keep reusing Pi's
+   catalog/adapters rather than creating a parallel OMA provider layer.
+2. Confirm the final branch from a fresh checkout with `npm ci`, typecheck, and
+   the local-compatible smoke; then mark plan 0139 complete only after the
+   independent code/security review is clear.
 3. Then return to the broader Python/Node environment-image usability story or
    continue the pre-v1 sequence with web tools.
 4. Track publication-pipeline promotion hardening separately in issue #194; it

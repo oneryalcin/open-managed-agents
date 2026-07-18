@@ -14,6 +14,7 @@ import {
 } from "./observability/routes.ts";
 import {
   createControlPlaneMetrics,
+  modelProviderMetricLabel,
   registerProcessGauges,
   type ControlPlaneMetrics,
 } from "./observability/instruments.ts";
@@ -108,6 +109,7 @@ import {
 } from "./sessions/pi/mcp/bridge.ts";
 import { createDefaultMcpRuntime } from "./sessions/pi/mcp/runtime.ts";
 import {
+  PINNED_PI_MODEL_RUNTIME_VERSION,
   createPiModelCatalog,
   type PiModelCatalog,
 } from "./models/catalog.ts";
@@ -624,12 +626,16 @@ export function createDeploymentControlPlane(
     stores.close();
     throw error;
   }
+  const registeredModels = modelCatalog.list();
+  const readyModelCount = registeredModels.filter((model) => modelCatalog.hasConfiguredAuth(model)).length;
   log.info("model_catalog_loaded", {
+    piVersion: PINNED_PI_MODEL_RUNTIME_VERSION,
     providers: [...modelCatalog.allowedProviders],
     defaultProvider: modelCatalog.defaultModel.provider,
     defaultModel: modelCatalog.defaultModel.id,
-    authPath: modelConfig.authPath,
-    modelsPath: modelConfig.modelsPath,
+    registeredModelCount: registeredModels.length,
+    readyModelCount,
+    missingCredentialModelCount: registeredModels.length - readyModelCount,
   });
   for (const detail of modelCatalog.securityReport.warnings) {
     log.warn("model_config_warning", { detail });
@@ -637,6 +643,10 @@ export function createDeploymentControlPlane(
   const modelAvailability = {
     resolve(model: { provider: string; id: string }) {
       if (!modelCatalog.allowedProviders.has(model.provider)) {
+        metrics?.modelAdmissionFailures.inc({
+          reason: "provider_disabled",
+          provider: modelProviderMetricLabel(model.provider),
+        });
         throw new ApiError(
           400,
           "invalid_request_error",
@@ -645,6 +655,10 @@ export function createDeploymentControlPlane(
       }
       const resolved = modelCatalog.resolve(model);
       if (!resolved) {
+        metrics?.modelAdmissionFailures.inc({
+          reason: "model_unavailable",
+          provider: modelProviderMetricLabel(model.provider),
+        });
         throw new ApiError(
           400,
           "invalid_request_error",
@@ -659,6 +673,10 @@ export function createDeploymentControlPlane(
     assertReady(model: { provider: string; id: string }): void {
       const resolved = this.resolve(model);
       if (!modelCatalog.hasConfiguredAuth(resolved)) {
+        metrics?.modelAdmissionFailures.inc({
+          reason: "credentials_missing",
+          provider: modelProviderMetricLabel(model.provider),
+        });
         throw new ApiError(
           400,
           "invalid_request_error",

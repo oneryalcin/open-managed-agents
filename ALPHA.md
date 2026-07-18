@@ -243,10 +243,11 @@ Near-term target:
 
 Implementation plan: [0139](docs/plans/0139-pi-multi-provider-models.md).
 
-Status: implementation in progress. Durable `{provider,id}` identity, the
-shared Pi catalog/runtime boundary, authenticated discovery API, secret-safe
-operator CLI, and live console provider/model selection are implemented. The
-final provider smoke matrix remains.
+Status: implementation complete; final independent review and clean-checkout
+release verification are pending. Durable `{provider,id}` identity, the shared
+Pi catalog/runtime boundary, authenticated discovery API, secret-safe operator
+CLI, live console selection, a no-paid-API custom compatible-provider smoke,
+and credential-gated live provider lanes are implemented.
 
 Goal: make model choice an OMA product capability rather than an Anthropic-only
 deployment assumption, while reusing Pi's provider catalog, protocol adapters,
@@ -266,6 +267,11 @@ Required before the final alpha audit:
 - fail closed when provider policy, model registration, or configured auth is
   missing—never fall back to another model;
 - verify at least one non-Anthropic and one local custom compatible provider.
+
+The deterministic proof is `oma smoke --local-compatible`; the opt-in live
+matrix is `npm run alpha:smoke:providers`. Paid provider lanes run only when
+selected/configured, and the ordinary smoke still exercises CMA's Anthropic
+string-model input.
 
 The alpha claim is “Pi-supported when operator-enabled and configured,” not
 “every Pi model is independently certified by OMA.” Documentation must separate

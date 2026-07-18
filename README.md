@@ -43,13 +43,27 @@ public tool/result/message events, and cleans up. Useful overrides:
 
 ```bash
 OMA_ALPHA_MODEL=claude-sonnet-5 oma smoke
+OMA_ALPHA_MODEL_PROVIDER=openai OMA_ALPHA_MODEL=gpt-4.1-mini oma smoke
 oma smoke --sandbox microsandbox
+oma smoke --local-compatible
 OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 OMA_ALPHA_API_KEY=oma_... oma smoke
 ```
 
 The repo-local `npm run alpha:smoke` alias remains available. Existing-server
 smoke mode assumes that server already has an explicit sandbox provider and
 therefore skips local sandbox prerequisite checks.
+
+`oma smoke --local-compatible` is the no-paid-API multi-provider proof: it
+starts a deterministic loopback OpenAI-compatible endpoint, writes a private
+temporary Pi `models.json`, verifies the exact custom provider/model through
+both model requests and a real Docker `bash` round trip, then removes all
+temporary state. To run every credentialed lane available in your environment:
+
+```bash
+npm run alpha:smoke:providers
+# Or select strict lanes; a requested lane fails if its credential is absent:
+OMA_ALPHA_PROVIDER_LANES=local-compatible,openai npm run alpha:smoke:providers
+```
 
 ### Choose another Pi model provider
 

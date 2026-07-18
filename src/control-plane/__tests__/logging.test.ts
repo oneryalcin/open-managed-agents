@@ -403,6 +403,33 @@ describe("default writer", () => {
     log.warn("spy_check", { sessionId: "ses_1" });
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('"event":"spy_check"'));
   });
+
+  it("logs bounded model catalog counts without configuration paths", () => {
+    const home = tempModelHome();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const plane = createDeploymentControlPlane({ OMA_HOME: home });
+    try {
+      const line = infoSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((candidate) => candidate.includes('"event":"model_catalog_loaded"'));
+      expect(line).toBeTruthy();
+      const record = JSON.parse(line!);
+      expect(record).toMatchObject({
+        piVersion: "0.80.6",
+        providers: ["anthropic"],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-5",
+      });
+      expect(record.registeredModelCount).toBeGreaterThan(0);
+      expect(record.readyModelCount + record.missingCredentialModelCount).toBe(record.registeredModelCount);
+      expect(line).not.toContain(home);
+      expect(line).not.toContain("authPath");
+      expect(line).not.toContain("modelsPath");
+    } finally {
+      plane.stores.close();
+    }
+  });
 });
 
 describe("request_failed on 5xx", () => {

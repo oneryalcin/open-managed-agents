@@ -242,6 +242,7 @@ async function runModelProvisioning(provisioningArgs) {
 
 async function runSmoke(commandArgs) {
   let sandbox;
+  let localCompatible = false;
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
     if (arg === "--sandbox") {
@@ -249,6 +250,10 @@ async function runSmoke(commandArgs) {
       if (value === undefined) fail("--sandbox requires docker or microsandbox");
       sandbox = normalizeSandbox(value);
       index += 1;
+      continue;
+    }
+    if (arg === "--local-compatible") {
+      localCompatible = true;
       continue;
     }
     fail(`Unknown option for oma smoke: ${arg}`);
@@ -259,6 +264,7 @@ async function runSmoke(commandArgs) {
     {
       ...process.env,
       ...(sandbox === undefined ? {} : { OMA_ALPHA_SANDBOX_PROVIDER: sandbox }),
+      ...(localCompatible ? { OMA_ALPHA_LOCAL_COMPATIBLE: "1" } : {}),
     },
   );
 }
@@ -341,7 +347,7 @@ function printHelp() {
 
 Usage:
   oma up [--sandbox docker|microsandbox]
-  oma smoke [--sandbox docker|microsandbox]
+  oma smoke [--sandbox docker|microsandbox] [--local-compatible]
   oma keys mint [--workspace id] [--label label]
   oma keys list [--workspace id]
   oma workspaces list
@@ -372,6 +378,8 @@ Environment:
   OMA_MODEL_PROVIDERS     Enabled provider allowlist (default: anthropic).
   OMA_DEFAULT_MODEL_PROVIDER / OMA_DEFAULT_MODEL
                            Default exact model pair.
+  OMA_ALPHA_MODEL_PROVIDER / OMA_ALPHA_MODEL
+                           Exact provider/model used by oma smoke.
   OMA_PI_AUTH_FILE        Pi auth storage path (default: $OMA_HOME/pi/auth.json).
   OMA_PI_MODELS_FILE      Pi models.json path (default: $OMA_HOME/pi/models.json).
   OMA_HOME                Durable data directory (default: ~/.oma).

@@ -149,6 +149,43 @@ Support tiers:
 - **Operator-defined:** compatible entries supplied through Pi `models.json`;
   advanced until the operator verifies the target endpoint.
 
+### Provider verification
+
+The ordinary smoke preserves CMA's Anthropic string-model input. Name a
+provider to exercise OMA's explicit pair instead:
+
+```bash
+OMA_ALPHA_MODEL_PROVIDER=openai OMA_ALPHA_MODEL=gpt-4.1-mini oma smoke
+```
+
+The deterministic local lane needs no provider credential or paid model call:
+
+```bash
+oma smoke --local-compatible
+```
+
+It starts a loopback OpenAI Chat Completions fixture, generates a private
+temporary `models.json` with Pi's `oma-local-keyless` placeholder, then proves
+the exact `oma-local/oma-smoke-model` pair across the initial tool call and the
+post-tool model response. The smoke also checks that workspace model discovery
+reports the pair ready without exposing base URLs, headers, credential values,
+or configuration paths.
+
+For the opt-in live matrix, configure any desired provider credentials and run:
+
+```bash
+npm run alpha:smoke:providers
+OMA_ALPHA_PROVIDER_LANES=local-compatible,anthropic,openai,google,openrouter \
+  npm run alpha:smoke:providers
+```
+
+The second form is strict: every named live lane must have its Pi-recognized
+environment credential. Defaults are deliberately low-cost models and may be
+overridden with `OMA_ALPHA_ANTHROPIC_MODEL`, `OMA_ALPHA_OPENAI_MODEL`,
+`OMA_ALPHA_GOOGLE_MODEL`, and `OMA_ALPHA_OPENROUTER_MODEL`. The GitHub Actions
+**Provider smoke matrix** workflow is manual-only so paid calls never run from
+an ordinary pull request.
+
 The workspace-safe discovery endpoint is `GET /v1/model-catalog`. It requires
 the ordinary workspace key and Managed Agents beta header, and returns only
 model identity/capabilities/readiness—never base URLs, headers, credential

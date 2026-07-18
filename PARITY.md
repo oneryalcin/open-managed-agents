@@ -263,8 +263,9 @@ early adopter can build and iterate a credible single-agent product.
 4. **Pi-backed multi-provider models** — exact `{provider,id}` identity,
    immutable revision persistence, shared Pi catalog/runtime resolution,
    provider policy, authenticated model discovery, secret-safe operator CLI,
-   and live console selection/readiness are implemented. The final
-   non-Anthropic/custom compatible-provider smoke matrix remains. Existing CMA
+   live console selection/readiness, and the deterministic plus credential-gated
+   provider smoke matrix are implemented. Final clean-checkout/review gating is
+   in progress. Existing CMA
    Anthropic input stays valid; non-Anthropic and custom compatible endpoints
    are an OMA extension.
    Implementation plan:

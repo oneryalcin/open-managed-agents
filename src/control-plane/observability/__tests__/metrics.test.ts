@@ -3,7 +3,7 @@
 // spot-checks (§9 Opus M1: the escaping footgun is prevented by closed-enum
 // labels; these tests prove the rest of the format).
 import { describe, expect, it } from "vitest";
-import { createControlPlaneMetrics } from "../instruments.ts";
+import { createControlPlaneMetrics, modelProviderMetricLabel } from "../instruments.ts";
 import { EXPOSITION_CONTENT_TYPE, MetricsRegistry } from "../metrics.ts";
 
 interface ParsedSample {
@@ -117,6 +117,18 @@ describe("metrics registry", () => {
     expect(
       sample(samples, "oma_mcp_connections_total", { event: "auth_failed" })?.value,
     ).toBe(1);
+  });
+
+  it("bounds model admission labels without exposing model ids or custom provider names", () => {
+    const instruments = createControlPlaneMetrics();
+    instruments.modelAdmissionFailures.inc({
+      reason: "credentials_missing",
+      provider: modelProviderMetricLabel("private-customer-gateway"),
+    });
+    const exposition = instruments.registry.exposition();
+    expect(exposition).toContain('oma_model_admission_failures_total{reason="credentials_missing",provider="custom"} 1');
+    expect(exposition).not.toContain("private-customer-gateway");
+    expect(modelProviderMetricLabel("openai")).toBe("openai");
   });
 
   it("accounts histogram buckets cumulatively with +Inf equal to count", () => {
