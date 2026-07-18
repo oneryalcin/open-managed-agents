@@ -283,7 +283,7 @@ function sessionRow(version: number): SessionRow {
 function agentRowWithTools(tools: AgentRow["tools"], version: number): AgentRow {
   return {
     id: "agent_1", workspace_id: "wrk_default", type: "agent", name: "Agent",
-    model: { id: "claude-opus-4-7", speed: "standard" }, system: null,
+    model: { provider: "anthropic", id: "claude-opus-4-7", speed: "standard" }, system: null,
     description: null, tools, skills: [], mcp_servers: [], metadata: {},
     multiagent: null, version, created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z", archived_at: null,
@@ -314,7 +314,7 @@ function fixture(
     workspace_id: "wrk_default",
     type: "agent",
     name: "Agent",
-    model: { id: "claude-opus-4-7", speed: "standard" },
+    model: { provider: "anthropic", id: "claude-opus-4-7", speed: "standard" },
     system: null,
     description: null,
     tools: agent.tools,

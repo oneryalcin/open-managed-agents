@@ -51,7 +51,7 @@ const MULTIAGENT_UNSUPPORTED_MESSAGE =
   "The `multiagent` configuration is not supported by this deployment.";
 
 export interface AgentModelAvailability {
-  assertAvailable(modelId: string): void;
+  assertAvailable(model: ManagedAgentsModelConfig): void;
 }
 
 const ACCEPT_ANY_MODEL: AgentModelAvailability = { assertAvailable: () => {} };
@@ -69,7 +69,7 @@ export class DefaultAgentService implements AgentService {
   ): ManagedAgentsAgent {
     const req = parseCreateAgent(input);
     const model = normalizeModel(req.model);
-    this.models.assertAvailable(model.id);
+    this.models.assertAvailable(model);
     this.assertSkillAttachments(workspaceId, req.skills ?? []);
     const now = new Date().toISOString();
     const id = newAgentId();
@@ -134,7 +134,7 @@ export class DefaultAgentService implements AgentService {
         patch.multiagent === undefined && current.multiagent !== null,
     });
     const model = normalizeModel(req.model);
-    this.models.assertAvailable(model.id);
+    this.models.assertAvailable(model);
     this.assertSkillAttachments(workspaceId, req.skills ?? []);
     const candidate = {
       ...current,
@@ -344,6 +344,18 @@ function modelField(obj: Record<string, unknown>): ManagedAgentsModel {
   if (typeof value === "string" && value.length > 0) return value;
   if (isJsonObject(value)) {
     const modelObj = value;
+    for (const key of Object.keys(modelObj)) {
+      if (key !== "provider" && key !== "id" && key !== "speed") {
+        throw invalidRequest(`Unknown field \`model.${key}\``);
+      }
+    }
+    const provider = modelObj.provider;
+    if (
+      provider !== undefined &&
+      (typeof provider !== "string" || provider.length === 0)
+    ) {
+      throw invalidRequest("`model.provider` must be a non-empty string");
+    }
     const id = stringField(modelObj, "id", { required: true });
     const speed = modelObj.speed;
     if (
@@ -353,7 +365,11 @@ function modelField(obj: Record<string, unknown>): ManagedAgentsModel {
     ) {
       throw invalidRequest("`model.speed` must be `standard` or `fast`");
     }
-    return speed === undefined ? { id } : { id, speed };
+    return {
+      ...(provider === undefined ? {} : { provider }),
+      id,
+      ...(speed === undefined ? {} : { speed }),
+    };
   }
   throw invalidRequest("`model` must be a non-empty string or model object");
 }
@@ -833,7 +849,11 @@ function sameAgentConfiguration(a: AgentRow, b: AgentRow): boolean {
 
 function normalizeModel(model: ManagedAgentsModel): ManagedAgentsModelConfig {
   if (typeof model === "string") {
-    return { id: model, speed: "standard" };
+    return { provider: "anthropic", id: model, speed: "standard" };
   }
-  return { id: model.id, speed: model.speed ?? "standard" };
+  return {
+    provider: model.provider ?? "anthropic",
+    id: model.id,
+    speed: model.speed ?? "standard",
+  };
 }

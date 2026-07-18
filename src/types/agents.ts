@@ -5,11 +5,13 @@ export type ManagedAgentsModelSpeed = "standard" | "fast";
 export type ManagedAgentsModel =
   | string
   | {
+      provider?: string;
       id: string;
       speed?: ManagedAgentsModelSpeed;
     };
 
 export interface ManagedAgentsModelConfig {
+  provider: string;
   id: string;
   speed: ManagedAgentsModelSpeed;
 }

@@ -594,12 +594,15 @@ export function createDeploymentControlPlane(
   const modelCatalog =
     opts.runner?.modelCatalog ?? createPiModelCatalog(opts.runner?.provider);
   const modelAvailability = {
-    assertAvailable(modelId: string): void {
-      if (!modelCatalog.modelRegistry.find(modelCatalog.provider, modelId)) {
+    assertAvailable(model: { provider: string; id: string }): void {
+      if (
+        model.provider !== modelCatalog.provider ||
+        !modelCatalog.modelRegistry.find(model.provider, model.id)
+      ) {
         throw new ApiError(
           400,
           "invalid_request_error",
-          `Model ${modelId} is not available on this deployment`,
+          `Model ${model.id} is not available on this deployment`,
         );
       }
     },

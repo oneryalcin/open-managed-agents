@@ -28,11 +28,82 @@ describe("AgentService + AgentStore", () => {
       );
 
     const store = new SqliteAgentStore(db);
+    expect(store.retrieveAny("wrk_default", "agent_legacy")?.model).toEqual({
+      provider: "anthropic",
+      id: "claude-opus-4-7",
+      speed: "standard",
+    });
     expect(store.retrieveVersion("wrk_default", "agent_legacy", 1)).toMatchObject({
       id: "agent_legacy",
       version: 1,
       name: "Legacy",
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-7",
+        speed: "standard",
+      },
     });
+  });
+
+  it("migrates legacy heads and existing immutable revisions before backfill", () => {
+    const db = new DatabaseSync(":memory:");
+    new SqliteAgentStore(db);
+    insertRawAgent(db, {
+      id: "agent_legacy_versions",
+      version: 2,
+      model: { id: "claude-opus-4-7", speed: "fast" },
+    });
+    insertRawAgentVersion(db, {
+      id: "agent_legacy_versions",
+      version: 1,
+      model: { id: "claude-opus-4-6", speed: "standard" },
+    });
+
+    const store = new SqliteAgentStore(db);
+    expect(store.retrieveVersion("wrk_default", "agent_legacy_versions", 1)?.model)
+      .toEqual({
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+        speed: "standard",
+      });
+    expect(store.retrieveVersion("wrk_default", "agent_legacy_versions", 2)?.model)
+      .toEqual({
+        provider: "anthropic",
+        id: "claude-opus-4-7",
+        speed: "fast",
+      });
+    expect(new SqliteAgentStore(db).retrieveAny(
+      "wrk_default",
+      "agent_legacy_versions",
+    )?.model.provider).toBe("anthropic");
+  });
+
+  it("rolls back the entire startup migration when any model row is malformed", () => {
+    const db = new DatabaseSync(":memory:");
+    new SqliteAgentStore(db);
+    insertRawAgent(db, {
+      id: "agent_migration_rollback",
+      version: 2,
+      model: { id: "claude-opus-4-7", speed: "standard" },
+    });
+    insertRawAgentVersion(db, {
+      id: "agent_migration_rollback",
+      version: 1,
+      model: { id: 42, speed: "standard" },
+    });
+
+    expect(() => new SqliteAgentStore(db)).toThrow(
+      "Invalid persisted model id for agent version agent_migration_rollback@1",
+    );
+    const head = db.prepare("SELECT model FROM agents WHERE id = ?")
+      .get("agent_migration_rollback") as { model: string };
+    expect(JSON.parse(head.model)).toEqual({
+      id: "claude-opus-4-7",
+      speed: "standard",
+    });
+    expect(db.prepare(
+      "SELECT count(*) AS count FROM agent_versions WHERE agent_id = ?",
+    ).get("agent_migration_rollback")).toEqual({ count: 1 });
   });
 
   it("rolls back create when revision one insertion fails", () => {
@@ -223,8 +294,8 @@ describe("AgentService + AgentStore", () => {
   it("rejects unavailable models before create or update persistence", () => {
     const store = SqliteAgentStore.open(":memory:");
     const service = new DefaultAgentService(store, undefined, {
-      assertAvailable: (modelId) => {
-        if (modelId !== "allowed") throw new Error(`unavailable:${modelId}`);
+      assertAvailable: (model) => {
+        if (model.id !== "allowed") throw new Error(`unavailable:${model.id}`);
       },
     });
     expect(() => service.create("wrk_default", { ...REQUEST, model: "blocked" }))
@@ -236,6 +307,89 @@ describe("AgentService + AgentStore", () => {
       model: "blocked",
     })).toThrow("unavailable:blocked");
     expect(service.retrieve("wrk_default", created.id).version).toBe(1);
+  });
+
+  it("normalizes CMA model inputs without using deployment defaults", () => {
+    const store = SqliteAgentStore.open(":memory:");
+    const seen: Array<{ provider: string; id: string }> = [];
+    const service = new DefaultAgentService(store, undefined, {
+      assertAvailable: (model) => seen.push(model),
+    });
+
+    const stringModel = service.create("wrk_default", REQUEST);
+    const providerless = service.create("wrk_default", {
+      ...REQUEST,
+      name: "Providerless",
+      model: { id: "claude-sonnet-5", speed: "fast" },
+    });
+    const explicit = service.create("wrk_default", {
+      ...REQUEST,
+      name: "Explicit",
+      model: { provider: "openai", id: "gpt-5.4" },
+    });
+
+    expect(stringModel.model).toEqual({
+      provider: "anthropic",
+      id: "claude-opus-4-7",
+      speed: "standard",
+    });
+    expect(providerless.model).toEqual({
+      provider: "anthropic",
+      id: "claude-sonnet-5",
+      speed: "fast",
+    });
+    expect(explicit.model).toEqual({
+      provider: "openai",
+      id: "gpt-5.4",
+      speed: "standard",
+    });
+    expect(seen).toEqual([
+      stringModel.model,
+      providerless.model,
+      explicit.model,
+    ]);
+  });
+
+  it("rejects malformed provider extensions and unknown model fields", () => {
+    const service = new DefaultAgentService(
+      SqliteAgentStore.open(":memory:"),
+      undefined,
+    );
+    expect(() => service.create("wrk_default", {
+      ...REQUEST,
+      model: { provider: "", id: "gpt-5.4" },
+    })).toThrow("`model.provider` must be a non-empty string");
+    expect(() => service.create("wrk_default", {
+      ...REQUEST,
+      model: { provider: "openai", id: "gpt-5.4", fallback: true },
+    })).toThrow("Unknown field `model.fallback`");
+    expect(service.list("wrk_default").data).toEqual([]);
+  });
+
+  it("includes provider identity in no-op and immutable-version comparison", () => {
+    const service = new DefaultAgentService(
+      SqliteAgentStore.open(":memory:"),
+      undefined,
+    );
+    const v1 = service.create("wrk_default", {
+      ...REQUEST,
+      model: { provider: "openai", id: "shared-id" },
+    });
+    const noOp = service.update("wrk_default", v1.id, {
+      version: 1,
+      model: { provider: "openai", id: "shared-id" },
+    });
+    const v2 = service.update("wrk_default", v1.id, {
+      version: 1,
+      model: { provider: "anthropic", id: "shared-id" },
+    });
+
+    expect(noOp.version).toBe(1);
+    expect(v2).toMatchObject({
+      version: 2,
+      model: { provider: "anthropic", id: "shared-id", speed: "standard" },
+    });
+    expect(service.retrieve("wrk_default", v1.id, 1).model.provider).toBe("openai");
   });
 
   it("accepts exactly twenty distinct skill attachments", () => {
@@ -268,3 +422,51 @@ describe("AgentService + AgentStore", () => {
     expect(service.create("wrk_default", { ...REQUEST, skills }).skills).toEqual(skills);
   });
 });
+
+function insertRawAgent(
+  db: DatabaseSync,
+  input: { id: string; version: number; model: unknown },
+): void {
+  db.prepare(`INSERT INTO agents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      input.id,
+      "wrk_default",
+      "agent",
+      "Legacy",
+      JSON.stringify(input.model),
+      null,
+      null,
+      "[]",
+      "[]",
+      "[]",
+      "{}",
+      null,
+      input.version,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+      null,
+    );
+}
+
+function insertRawAgentVersion(
+  db: DatabaseSync,
+  input: { id: string; version: number; model: unknown },
+): void {
+  db.prepare(`INSERT INTO agent_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      "wrk_default",
+      input.id,
+      input.version,
+      "Legacy",
+      JSON.stringify(input.model),
+      null,
+      null,
+      "[]",
+      "[]",
+      "[]",
+      "{}",
+      null,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+    );
+}

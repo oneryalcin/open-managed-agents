@@ -57,6 +57,23 @@ describe("OpenAPI and interactive documentation", () => {
     expect(document.components.schemas.UpdateAgentRequest).toMatchObject({
       properties: { multiagent: { type: "null" } },
     });
+    expect(document.components.schemas.ModelInput).toMatchObject({
+      oneOf: expect.arrayContaining([
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            provider: { type: "string", minLength: 1 },
+          }),
+        }),
+      ]),
+    });
+    expect(document.components.schemas.Agent).toMatchObject({
+      properties: {
+        model: {
+          required: ["provider", "id", "speed"],
+          properties: { provider: { type: "string" } },
+        },
+      },
+    });
     for (const name of [
       "ForwardAgentPage",
       "ForwardEnvironmentPage",
