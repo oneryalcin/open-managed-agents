@@ -247,6 +247,12 @@ public Bash tool and Docker provider instead of depending on the base image's
 `/bin/sh` implementation. The final gated live microsandbox smoke passed the
 exact promoted digest after both boundary fixes.
 
+The clean-checkout CI gate then exposed the same hidden cache dependency in
+Docker-local: `docker run` may pull a missing digest and had inherited the
+ordinary 10-second operation timeout. Docker now uses the same separately
+bounded five-minute startup deadline, with a delayed fake-command regression
+proving startup can exceed the ordinary tool timeout without weakening it.
+
 ### D7 -- Publish before pinning the runtime default
 
 1. Land or push the complete image source and smoke gates on the dev branch.

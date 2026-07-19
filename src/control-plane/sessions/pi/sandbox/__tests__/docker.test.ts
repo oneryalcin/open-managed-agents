@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_DOCKER_STARTUP_TIMEOUT_MS,
   assertInsideUploadsPath,
   assertInsideDockerWorkspace,
   buildDockerBashCommand,
@@ -471,6 +472,27 @@ describe("Docker sandbox provider command construction", () => {
 });
 
 describe("Docker sandbox provider factory", () => {
+  it("uses a separate bounded startup timeout for a cold image pull", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oma-docker-startup-timeout-"));
+    const dockerPath = join(dir, "docker");
+    await writeFile(
+      dockerPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "run" ]]; then sleep 0.1; fi
+`,
+    );
+    await chmod(dockerPath, 0o755);
+
+    const provider = await createDockerSandboxProvider("wrk", "sesn", {
+      dockerCommand: dockerPath,
+      operationTimeoutMs: 25,
+      startupTimeoutMs: 1_000,
+    });
+    provider.dispose();
+    await rm(dir, { recursive: true, force: true });
+  });
+
   it("uses the bounded alpha coding resource profile by default", async () => {
     const dir = await mkdtemp(join(tmpdir(), "oma-docker-coding-defaults-"));
     const logPath = join(dir, "docker.log");
@@ -493,6 +515,7 @@ printf '%s\n' "$*" >> "${logPath}"
     expect(run).toContain("--memory 1g");
     expect(run).toContain("--pids-limit 128");
     expect(run).toContain("size=256m");
+    expect(DEFAULT_DOCKER_STARTUP_TIMEOUT_MS).toBe(5 * 60_000);
     await rm(dir, { recursive: true, force: true });
   });
 
