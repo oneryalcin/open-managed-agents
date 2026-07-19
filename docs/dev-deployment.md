@@ -69,15 +69,15 @@ execution stays off until a sandbox provider is configured (see
 ## Model providers and custom compatible endpoints
 
 OMA uses the `AuthStorage`, `ModelRegistry`, built-in catalog, and request
-adapters from its pinned Pi release. The operator chooses which providers are
-visible; workspace callers cannot register providers, change base URLs, or
-write credentials.
+adapters from its pinned Pi release. Anthropic, OpenAI, and OpenRouter are
+visible by default; the operator can replace that allowlist with
+`OMA_MODEL_PROVIDERS`. Workspace callers cannot register providers, change
+base URLs, or write credentials.
 
 Enable a built-in provider and store its API key without placing the secret in
 shell history:
 
 ```bash
-export OMA_MODEL_PROVIDERS="anthropic,openai"
 export OMA_DEFAULT_MODEL_PROVIDER="anthropic"
 export OMA_DEFAULT_MODEL="claude-sonnet-5"
 
@@ -130,7 +130,7 @@ Then:
 ```bash
 chmod 700 ~/.oma ~/.oma/pi
 chmod 600 ~/.oma/pi/models.json
-export OMA_MODEL_PROVIDERS="anthropic,ollama"
+export OMA_MODEL_PROVIDERS="anthropic,openai,openrouter,ollama"
 oma models validate
 oma models list --provider ollama --available
 oma up

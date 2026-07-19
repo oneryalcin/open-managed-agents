@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MODEL_ID,
   DEFAULT_MODEL_PROVIDER,
+  DEFAULT_MODEL_PROVIDERS,
   MODEL_DEPLOYMENT_ENV_KEYS,
   parseModelDeploymentConfigFromEnv,
   validateModelDeploymentConfigAgainstCatalog,
@@ -10,11 +11,11 @@ import {
 } from "../deployment-config.ts";
 
 describe("model deployment config", () => {
-  it("uses the alpha Anthropic defaults and OMA-owned Pi paths", () => {
+  it("enables the curated alpha providers while keeping Anthropic as the default", () => {
     const config = parseModelDeploymentConfigFromEnv({}, { home: "/tmp/oma-home" });
 
     expect(config).toEqual({
-      allowedProviders: [DEFAULT_MODEL_PROVIDER],
+      allowedProviders: [...DEFAULT_MODEL_PROVIDERS],
       defaultModel: {
         provider: DEFAULT_MODEL_PROVIDER,
         id: DEFAULT_MODEL_ID,

@@ -404,7 +404,7 @@ Commands:
 
 Environment:
   ANTHROPIC_API_KEY       Anthropic model credential used by the control plane.
-  OMA_MODEL_PROVIDERS     Enabled provider allowlist (default: anthropic).
+  OMA_MODEL_PROVIDERS     Enabled provider allowlist (default: anthropic,openai,openrouter).
   OMA_DEFAULT_MODEL_PROVIDER / OMA_DEFAULT_MODEL
                            Default exact model pair.
   OMA_ALPHA_MODEL_PROVIDER / OMA_ALPHA_MODEL

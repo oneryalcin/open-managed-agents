@@ -115,6 +115,7 @@ describe("deployment custom tools", () => {
   it("exposes persisted agent custom tools to the Pi session", async () => {
     const app = createDeploymentControlPlaneApp({
       OMA_SANDBOX_PROVIDER: "none",
+      OMA_MODEL_PROVIDERS: "anthropic",
     });
     const agent = await createAgent(app);
     const environment = await createEnvironment(app);
@@ -137,6 +138,7 @@ describe("deployment custom tools", () => {
   it("keeps custom tools available for active sessions after the agent is archived", async () => {
     const app = createDeploymentControlPlaneApp({
       OMA_SANDBOX_PROVIDER: "none",
+      OMA_MODEL_PROVIDERS: "anthropic",
     });
     const agent = await createAgent(app);
     const environment = await createEnvironment(app);

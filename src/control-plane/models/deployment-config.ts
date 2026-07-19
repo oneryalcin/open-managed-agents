@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 export const DEFAULT_MODEL_PROVIDER = "anthropic";
 export const DEFAULT_MODEL_ID = "claude-sonnet-5";
+export const DEFAULT_MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 
 export const MODEL_DEPLOYMENT_ENV_KEYS = [
   "OMA_HOME",
@@ -83,7 +84,7 @@ export function validateModelDeploymentConfigAgainstCatalog(
 
 function parseAllowedProviders(raw: string | undefined): readonly string[] {
   const value = optionalEnvString(raw, "OMA_MODEL_PROVIDERS");
-  if (value === undefined) return [DEFAULT_MODEL_PROVIDER];
+  if (value === undefined) return [...DEFAULT_MODEL_PROVIDERS];
   const providers = value.split(",").map((entry) => entry.trim());
   if (providers.some((provider) => provider.length === 0)) {
     throw new Error("OMA_MODEL_PROVIDERS must be comma-separated provider names");
