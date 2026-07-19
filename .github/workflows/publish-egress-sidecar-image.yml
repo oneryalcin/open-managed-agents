@@ -29,7 +29,10 @@ permissions:
   id-token: write
 
 env:
-  IMAGE_NAME: ghcr.io/oneryalcin/open-managed-agents-egress-sidecar
+  # Publish a distinct sidecar manifest under the already-public OMA runtime
+  # package. GHCR visibility is package-scoped; a brand-new package defaults
+  # private and would make `oma up` fail for anonymous alpha users.
+  IMAGE_NAME: ghcr.io/oneryalcin/open-managed-agents-sandbox
   MAX_COMPRESSED_BYTES: "104857600"
 
 jobs:
@@ -45,13 +48,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME#egress-sidecar-v}"
+            tag="egress-${GITHUB_REF_NAME#egress-sidecar-v}"
           elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.image_tag }}"
+            tag="egress-${{ inputs.image_tag }}"
           else
-            tag="0.1.0-dev.${GITHUB_SHA:0:12}"
+            tag="egress-0.1.0-dev.${GITHUB_SHA:0:12}"
           fi
-          [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          [[ "$tag" =~ ^egress-[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
           echo "value=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
