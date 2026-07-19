@@ -11,6 +11,10 @@ import {
 } from "../src/control-plane/models/deployment-config.ts";
 import { createReadOnlyPiModelCatalog, type ReadOnlyAuthData } from "../src/control-plane/models/catalog.ts";
 import { DEFAULT_OMA_SANDBOX_IMAGE } from "../src/control-plane/sessions/pi/sandbox/image.ts";
+import {
+  DEFAULT_OMA_EGRESS_SIDECAR_IMAGE,
+  resolveOmaUpEgressEnvironment,
+} from "../src/control-plane/egress/image.ts";
 
 type CheckStatus = "pass" | "warn" | "fail";
 
@@ -118,6 +122,28 @@ export async function inspectOma(
         ? "The pinned OMA sandbox image is already present locally."
         : "The pinned OMA sandbox image is not present locally; oma doctor did not download it.",
     ));
+    try {
+      const effective = resolveOmaUpEgressEnvironment(env, "docker-local");
+      if (effective.OMA_ENABLE_EGRESS === "false") {
+        checks.push(check(
+          "egress.sidecar",
+          "warn",
+          "Approved HTTPS egress is explicitly disabled; only offline environments can run.",
+        ));
+      } else {
+        const sidecarImage = effective.OMA_EGRESS_SIDECAR_IMAGE ?? DEFAULT_OMA_EGRESS_SIDECAR_IMAGE;
+        const sidecar = command("docker", ["image", "inspect", sidecarImage], { encoding:"utf8" });
+        checks.push(check(
+          "egress.sidecar",
+          sidecar.status === 0 ? "pass" : "warn",
+          sidecar.status === 0
+            ? "The effective digest-pinned OMA egress sidecar is present locally."
+            : "The effective digest-pinned OMA egress sidecar is not present locally; oma doctor did not download it.",
+        ));
+      }
+    } catch (error) {
+      checks.push(check("egress.sidecar", "fail", safeError("Egress configuration is invalid", error)));
+    }
   } else {
     const executable = env.OMA_MICROSANDBOX_COMMAND?.trim() || "msb";
     const version = command(executable, ["--version"], { encoding: "utf8" });
@@ -130,6 +156,11 @@ export async function inspectOma(
       "sandbox.image",
       "warn",
       "Microsandbox image presence is not inspected in read-only mode; no image was downloaded.",
+    ));
+    checks.push(check(
+      "egress.sidecar",
+      "warn",
+      "Approved HTTPS egress presets are not supported by microsandbox-local in this alpha.",
     ));
   }
 

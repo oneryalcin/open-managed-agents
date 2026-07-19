@@ -31,6 +31,7 @@ npm ci
 npm link
 oma doctor
 oma smoke --local-compatible
+oma smoke --egress
 export ANTHROPIC_API_KEY="..."
 oma up
 ```
@@ -40,11 +41,17 @@ OMA server, loopback OpenAI-compatible model fixture, and Docker-local sandbox,
 then verifies model discovery, agent/session creation, a real `bash` tool call,
 events, and cleanup.
 
+`oma smoke --egress` extends that deterministic proof through the real
+Docker-local egress boundary: npm, uv/PyPI, and GitHub must work under the
+reviewed preset while an unrelated HTTPS destination remains denied.
+
 `oma up` starts the durable local appliance in the foreground, stores data
 under `~/.oma`, and prints the console URL plus the first workspace API key
-once. Use that workspace key in the bundled console to create an agent,
-environment, session, and prompt. If the key was not saved, mint another while
-the server is running:
+once. Docker deployments have the pinned approved-HTTPS sidecar capability,
+but every environment remains offline unless its immutable allowlist selects a
+reviewed preset or custom hosts. Use that workspace key in the bundled console
+to create an agent, environment, session, and prompt. If the key was not saved,
+mint another while the server is running:
 
 ```bash
 oma keys mint

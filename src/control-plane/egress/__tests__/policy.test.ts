@@ -247,6 +247,7 @@ describe("hosted CMA networking", () => {
     expect(hooks.shouldTerminateTLS!("api.example.com", 443)).toBe(true);
     expect(hooks.allowOpaqueTunnel!("api.example.com", 443)).toBe(false);
     expect(hooks.shouldTerminateTLS!("www.wild.example.com", 443)).toBe(true);
+    expect(hooks.allowOpaqueTunnel!("www.wild.example.com", 443)).toBe(false);
     expect(hooks.filter!(443, "a.b.wild.example.com", undefined as never)).toBe(true);
     expect(hooks.filter!(443, "wild.example.com", undefined as never)).toBe(false);
   });

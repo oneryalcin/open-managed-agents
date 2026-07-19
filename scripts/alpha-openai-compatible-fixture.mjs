@@ -40,7 +40,7 @@ export async function startAlphaOpenAICompatibleFixture(options) {
               type: "function",
               function: {
                 name: "bash",
-                arguments: JSON.stringify({ command: `printf ${options.token}` }),
+                arguments: JSON.stringify({ command: options.command ?? `printf ${options.token}` }),
               },
             }],
           }),

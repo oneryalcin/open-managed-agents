@@ -13,7 +13,9 @@ import {
   buildSidecarRunArgs,
   egressProxyUrl,
   reapEgressSidecars,
+  SIDECAR_NETWORK_ALIAS,
   sidecarLabels,
+  sidecarNetworkConnectArgs,
 } from "../docker-egress.ts";
 
 describe("egress sidecar arg construction (0117d)", () => {
@@ -79,6 +81,16 @@ describe("egress sidecar arg construction (0117d)", () => {
       labels: {},
     });
     expect(args).toContain("/repo:/app:ro");
+  });
+
+  it("uses a short per-network DNS alias for production-length session IDs", () => {
+    const containerName = "oma-egress-proxy-sesn_019f7a4d-3a93-7488-a619-38c18189c1aa-mrrrdpwc-1xnj6o";
+    const networkName = "oma-egress-sesn_019f7a4d-3a93-7488-a619-38c-mrrrdpwc-1xnj6o";
+    expect(containerName.length).toBeGreaterThan(63);
+    expect(SIDECAR_NETWORK_ALIAS.length).toBeLessThanOrEqual(63);
+    expect(sidecarNetworkConnectArgs(networkName, containerName)).toEqual([
+      "network", "connect", "--alias", "oma-egress-proxy", networkName, containerName,
+    ]);
   });
 
   it("percent-encodes the auth token so a URL delimiter cannot malform the proxy URL", () => {

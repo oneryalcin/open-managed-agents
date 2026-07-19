@@ -378,13 +378,13 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. **Make safe network access selectable and understandable**
-   ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199)). The
-   console currently creates only
-   `limited` + `allowed_hosts: []`. Preserve that offline default, then add
-   reviewed npm/PyPI, GitHub + registries, and custom-allowlist choices plus a
-   supported `oma up` egress path. Do not expose unrestricted networking, and
-   do not couple tool installation to implicit egress.
+1. **Safe network access is implemented; final review/merge is pending**
+   ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199), plan
+   0141). Offline remains the console default. Docker `oma up` makes the pinned
+   sidecar capability available, and reviewed npm/PyPI, GitHub + registries,
+   and validated Custom policies are selectable. `oma smoke --egress` proves
+   real allowed traffic, unrelated-host denial, and cleanup. Microsandbox
+   remains offline-only; unrestricted networking remains absent.
 2. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
    owned by [Getting Started](docs/getting-started.md):
    `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,

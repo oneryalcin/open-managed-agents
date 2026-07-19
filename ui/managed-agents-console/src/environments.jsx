@@ -5,6 +5,29 @@ const DEFAULT_ENV_CONFIG = {
   networking: { type: "limited", allowed_hosts: [] },
 };
 
+function presetCopy(preset) {
+  return {
+    label: preset.label || preset.id,
+    description: preset.description || "Deployment-defined limited egress preset.",
+  };
+}
+
+function networkingConfigForHosts(hosts) {
+  return { networking: { type: "limited", allowed_hosts: hosts } };
+}
+
+function splitCustomHosts(text) {
+  return text
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function previewHosts(hosts) {
+  if (!hosts.length) return "No hosts; all outbound network access remains blocked.";
+  return hosts.join("\n");
+}
+
 function EnvironmentError({ error }) {
   if (!error) return null;
   return (
@@ -18,18 +41,62 @@ function EnvironmentError({ error }) {
   );
 }
 
-function CreateEnvironmentModal({ mode, onClose, onCreated, onAuthExpired, api = window.OmaConsoleApi }) {
+function CreateEnvironmentModal({ mode, networkingCatalog, onClose, onCreated, onAuthExpired, api = window.OmaConsoleApi }) {
   const [name, setName] = useStateE("");
+  const catalog = networkingCatalog?.presets?.length
+    ? networkingCatalog.presets
+    : [{ id:"offline-v1", label:"Offline", description:"No external network access.", allowed_hosts:[], config:DEFAULT_ENV_CONFIG }];
+  const deployment = networkingCatalog?.deployment ?? {
+    provider:null,
+    egress_supported:false,
+    reason:"Networking capability was not reported by this deployment.",
+  };
+  const [presetId, setPresetId] = useStateE(catalog[0].id);
+  const [customHostsText, setCustomHostsText] = useStateE("");
+  const [validatedHosts, setValidatedHosts] = useStateE(null);
+  const [validationBusy, setValidationBusy] = useStateE(false);
   const [busy, setBusy] = useStateE(false);
   const [error, setError] = useStateE(null);
   const trimmed = name.trim();
-  const valid = trimmed.length > 0 && mode === "api" && !busy;
+  const selectedPreset = catalog.find((preset) => preset.id === presetId) ?? catalog[0];
+  const selectedCopy = presetId === "custom"
+    ? { label:"Custom allowlist", description:"Validated custom limited egress." }
+    : presetCopy(selectedPreset);
+  const customHosts = splitCustomHosts(customHostsText);
+  const selectedHosts = presetId === "custom"
+    ? (validatedHosts ?? [])
+    : (selectedPreset?.config?.networking?.allowed_hosts ?? selectedPreset?.allowed_hosts ?? []);
+  const selectedConfig = networkingConfigForHosts(selectedHosts);
+  const selectedNeedsEgress = selectedHosts.length > 0;
+  const capabilityReady = !selectedNeedsEgress || deployment.egress_supported === true;
+  const customValid = presetId !== "custom" || (Array.isArray(validatedHosts) && validatedHosts.length > 0);
+  const valid = trimmed.length > 0 && mode === "api" && !busy && !validationBusy && customValid && capabilityReady;
+
+  const choosePreset = (id) => {
+    setPresetId(id);
+    setValidatedHosts(null);
+    setError(null);
+  };
+
+  const validateCustom = () => {
+    if (mode !== "api" || !customHosts.length || validationBusy || busy) return;
+    setValidationBusy(true);
+    setError(null);
+    api.validateEnvironmentNetworkingHosts(customHosts)
+      .then((hosts) => setValidatedHosts(hosts))
+      .catch((err) => {
+        if (err.status === 401 && onAuthExpired) onAuthExpired();
+        setValidatedHosts(null);
+        setError(err);
+      })
+      .finally(() => setValidationBusy(false));
+  };
 
   const submit = () => {
     if (!valid) return;
     setBusy(true);
     setError(null);
-    api.createEnvironment({ name: trimmed, config: DEFAULT_ENV_CONFIG })
+    api.createEnvironment({ name: trimmed, config: selectedConfig })
       .then(onCreated)
       .catch((err) => {
         if (err.status === 401 && onAuthExpired) onAuthExpired();
@@ -39,7 +106,7 @@ function CreateEnvironmentModal({ mode, onClose, onCreated, onAuthExpired, api =
   };
 
   return (
-    <Modal icon="database" title="Create environment" sub="Create a default-deny alpha environment for the configured sandbox provider." onClose={busy ? () => {} : onClose}
+    <Modal icon="database" title="Create environment" sub="Create an immutable sandbox environment with an explicit limited-network policy." onClose={busy ? () => {} : onClose}
       footer={<>
         <span className="left">Sends to <span className="mono">POST /v1/environments</span></span>
         <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
@@ -57,12 +124,57 @@ function CreateEnvironmentModal({ mode, onClose, onCreated, onAuthExpired, api =
         <input id="create-environment-name" name="name" className="input" autoFocus placeholder="e.g. default-docker-local" value={name}
           disabled={busy} onChange={(e) => { setName(e.target.value); setError(null); }} />
       </Labeled>
-      <Labeled label="Preset" hint="Default-deny networking is the only field sent; model and sandbox-provider readiness are reported by action-time server errors.">
-        <div className="env-preset" aria-label="Default-deny alpha preset">
+      <Labeled label="Networking preset" hint="Policy controls allowed destinations. The server separately reports whether this deployment can enforce egress.">
+        <div className={deployment.egress_supported ? "inline-ok" : "inline-warn"} role="status">
+          <Icon name={deployment.egress_supported ? "checkCircle" : "alert"} size={14} />
+          <span>{deployment.egress_supported
+            ? `${deployment.provider || "This deployment"} supports approved HTTPS egress.`
+            : (deployment.reason || "This deployment cannot run network-enabled environments.")}</span>
+        </div>
+        <div className="env-preset-grid" role="radiogroup" aria-label="Networking preset">
+          {catalog.map((preset) => {
+            const copy = presetCopy(preset);
+            return (
+              <button type="button" className={'env-choice' + (presetId === preset.id ? ' on' : '')} key={preset.id}
+                disabled={busy || (preset.config?.networking?.allowed_hosts?.length > 0 && !deployment.egress_supported)} role="radio" aria-checked={presetId === preset.id} onClick={() => choosePreset(preset.id)}>
+                <span className="dot-r" />
+                <span>
+                  <span className="r-main">{copy.label}</span>
+                  <span className="r-sub">{copy.description}</span>
+                </span>
+              </button>
+            );
+          })}
+          <button type="button" className={'env-choice' + (presetId === "custom" ? ' on' : '')}
+            disabled={busy || !deployment.egress_supported} role="radio" aria-checked={presetId === "custom"} onClick={() => choosePreset("custom")}>
+            <span className="dot-r" />
+            <span>
+              <span className="r-main">Custom allowlist</span>
+              <span className="r-sub">Enter exact hosts or supported leading wildcards.</span>
+            </span>
+          </button>
+        </div>
+      </Labeled>
+      {presetId === "custom" && (
+        <Labeled label="Allowed hosts" htmlFor="create-environment-hosts" hint="Use commas or new lines. A wildcard such as *.example.com matches subdomains only; add example.com separately for the bare domain.">
+          <textarea id="create-environment-hosts" className="textarea" value={customHostsText} disabled={busy}
+            placeholder={"registry.npmjs.org\n*.pypi.org\nfiles.pythonhosted.org"}
+            onChange={(event) => { setCustomHostsText(event.target.value); setValidatedHosts(null); setError(null); }} />
+          <div className="env-actions">
+            <button className="btn btn-sm" disabled={!customHosts.length || validationBusy || busy || mode !== "api"} onClick={validateCustom}>
+              <Icon name={validationBusy ? "refresh" : "checkCircle"} size={14} />{validationBusy ? "Validating..." : "Validate hosts"}
+            </button>
+            <span className="field-hint">{validatedHosts ? `${validatedHosts.length} normalized host(s) accepted by server validation.` : "Create remains disabled until validation succeeds."}</span>
+          </div>
+        </Labeled>
+      )}
+      <Labeled label="Exact generated hosts" hint="Environment policies are immutable. To change networking, create a new environment and start a new session. No secrets are stored in the environment or shown to the guest.">
+        <div className="env-preset" aria-label="Generated networking policy preview">
           <div className="tool-ico"><Icon name="database" size={18} /></div>
-          <div>
-            <div className="cell-strong">Deployment sandbox · default-deny networking</div>
-            <div className="mono env-config">{JSON.stringify({ config: DEFAULT_ENV_CONFIG })}</div>
+          <div className="grow">
+            <div className="cell-strong">{presetId === "custom" ? "Custom limited egress" : selectedCopy.label}</div>
+            <pre className="mono env-host-preview">{previewHosts(selectedHosts)}</pre>
+            <div className="mono env-config">{JSON.stringify({ config: selectedConfig })}</div>
           </div>
         </div>
       </Labeled>
@@ -197,7 +309,7 @@ function EnvironmentsView({ environments = [], mode = "api", dataState = "loaded
           <div className="trow env-row" key={environment.id}>
             <span className="td mono" style={{ width:150, fontSize:12, color:'var(--soft)' }}>{environment.id}</span>
             <span className="td grow cell-strong">{environment.label}</span>
-            <span className="td mono" style={{ width:230, fontSize:12, color:'var(--soft)' }}>{environment.image}</span>
+            <span className="td mono" style={{ width:230, fontSize:12, color:'var(--soft)' }}>{environment.networkingSummary || environment.image}</span>
             <span className="td" style={{ width:90 }}><St k={environment.archived ? "archived" : "active"} /></span>
             <span className="td mono" style={{ width:70, color:'var(--faint)' }}>{environment.created || "—"}</span>
           </div>

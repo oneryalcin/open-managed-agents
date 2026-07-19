@@ -386,6 +386,25 @@ a.dl { text-decoration:none; }
   display:flex; gap:12px; align-items:flex-start; padding:12px 14px;
   border:1px solid var(--border); border-radius:var(--r-md); background:var(--bg);
 }
+.env-preset-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+.env-choice {
+  appearance:none; font:inherit; text-align:left; display:flex; gap:10px; align-items:flex-start;
+  padding:11px 12px; border:1px solid var(--border); border-radius:var(--r-md);
+  background:var(--bg); color:var(--ink); cursor:pointer; transition:border-color .12s, background .12s;
+}
+.env-choice:hover { border-color:var(--border-2); }
+.env-choice.on { border-color:var(--accent-line); background:var(--accent-wash); }
+.env-choice .dot-r { width:15px; height:15px; border-radius:50%; border:2px solid var(--border-2); flex:0 0 auto; position:relative; margin-top:2px; }
+.env-choice.on .dot-r { border-color:var(--accent); }
+.env-choice.on .dot-r::after { content:""; position:absolute; inset:3px; border-radius:50%; background:var(--accent); }
+.env-choice .r-main { display:block; font-size:13px; font-weight:550; color:var(--ink); }
+.env-choice .r-sub { display:block; margin-top:2px; font-size:11.5px; line-height:1.45; color:var(--faint); }
+.env-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.env-host-preview {
+  min-height:36px; max-height:120px; overflow:auto; margin:5px 0 0;
+  padding:8px 9px; border:1px solid var(--border); border-radius:var(--r-sm);
+  background:#14171c; color:var(--soft); font-size:11.5px; line-height:1.55; white-space:pre-wrap;
+}
 .env-config { margin-top:4px; color:var(--faint); font-size:11.5px; white-space:normal; overflow-wrap:anywhere; }
 .trow.env-row { cursor:default; }
 .trow.env-row:hover { background:transparent; }

@@ -55,3 +55,5 @@ jobs:
           OMA_PLAYWRIGHT_MANAGED_BROWSER: "1"
       - name: Run deterministic Docker onboarding proof
         run: node bin/oma.mjs smoke --local-compatible
+      - name: Run deterministic approved-egress onboarding proof
+        run: node bin/oma.mjs smoke --egress

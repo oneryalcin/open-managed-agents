@@ -18,6 +18,7 @@ describe("alpha onboarding documentation contract", () => {
       "npm ci",
       "oma doctor",
       "oma smoke --local-compatible",
+      "oma smoke --egress",
       "oma up",
       "Workspace",
       "Create an agent",
@@ -26,6 +27,26 @@ describe("alpha onboarding documentation contract", () => {
     ]) expect(guide, anchor).toContain(anchor);
     expect(readme.slice(0, 3000)).toContain("docs/getting-started.md");
     expect(index.slice(0, 2200)).toContain("getting-started.md");
+  });
+
+  it("documents approved HTTPS as an explicit immutable environment choice", () => {
+    const guide = read("docs/getting-started.md");
+    const readme = read("README.md");
+    const deployment = read("docs/dev-deployment.md");
+    const dockerTutorial = read("docs/tutorials/docker-local-first-run.md");
+    const publicDocs = `${guide}\n${readme}\n${deployment}\n${dockerTutorial}`;
+    for (const statement of [
+      "Offline",
+      "npm + PyPI",
+      "GitHub + package registries",
+      "Custom",
+      "offline by default",
+      "oma smoke --egress",
+      "Microsandbox-local remains offline-only",
+    ]) expect(publicDocs, statement).toContain(statement);
+    expect(publicDocs).toContain("does not include `example.com`");
+    expect(publicDocs).toMatch(/immutable|cannot be edited/);
+    expect(publicDocs).not.toMatch(/unrestricted networking (?:is|becomes) available/i);
   });
 
   it("does not advertise unshipped public installers or obsolete scratch scripts as onboarding", () => {

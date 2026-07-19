@@ -1,0 +1,8 @@
+{
+  "name": "open-managed-agents-egress-sidecar",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "node-forge": "1.4.0"
+  }
+}

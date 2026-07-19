@@ -37,6 +37,7 @@ import { environmentsRoutes } from "./environments/routes.ts";
 import { DefaultEnvironmentService } from "./environments/service.ts";
 import { SqliteEnvironmentStore } from "./environments/store.ts";
 import type { EnvironmentService } from "./environments/types.ts";
+import type { EnvironmentNetworkingDeploymentCapability } from "./egress/presets.ts";
 import { sessionEventsRoutes } from "./events/routes.ts";
 import { DefaultSessionEventsService } from "./events/service.ts";
 import { SessionEventBroadcaster } from "./events/broadcaster.ts";
@@ -60,6 +61,7 @@ import {
   createDeploymentPiSessionRunner,
   parseDeploymentRuntimeConfigFromEnv,
   type DeploymentPiSessionRunnerOptions,
+  type DeploymentRuntimeConfig,
   type DeploymentRuntimeEnv,
 } from "./deployment-runtime-config.ts";
 import {
@@ -154,6 +156,7 @@ export interface ControlPlaneServices {
   openapi?: OpenApiRoutesConfig;
   agents: AgentService;
   environments: EnvironmentService;
+  environmentNetworking?: EnvironmentNetworkingDeploymentCapability;
   files?: FileService;
   skills?: SkillsService;
   // Absent = no secrets backend wired; the routes still register and return
@@ -185,6 +188,7 @@ export interface InMemoryControlPlaneAppOptions {
     runner: RuntimeEventRunner;
     translate: RuntimeEventTranslator;
   };
+  environmentNetworking?: EnvironmentNetworkingDeploymentCapability;
 }
 
 export interface DeploymentControlPlaneAppOptions {
@@ -360,7 +364,10 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     app.route("/v1/model-catalog", modelCatalogRoutes(services.models));
   }
   app.route("/v1/agents", agentsRoutes(services.agents));
-  app.route("/v1/environments", environmentsRoutes(services.environments));
+  app.route(
+    "/v1/environments",
+    environmentsRoutes(services.environments, services.environmentNetworking),
+  );
   app.route(
     "/v1/files",
     filesRoutes(
@@ -812,6 +819,7 @@ export function createDeploymentControlPlane(
       modelAvailability,
     ),
     environments: new DefaultEnvironmentService(stores.environments),
+    environmentNetworking: environmentNetworkingCapability(runtimeConfig),
     files: new DefaultFileService(stores.files),
     skills: new DefaultSkillsService(stores.skills),
     secrets: new DefaultSecretsService(stores.secrets),
@@ -980,6 +988,9 @@ export function createInMemoryControlPlaneApp(
     ...(openapiRoot === undefined ? {} : { openapi: { root: openapiRoot } }),
     agents: new DefaultAgentService(agentStore, skillsStore),
     environments: new DefaultEnvironmentService(environmentStore),
+    ...(opts.environmentNetworking === undefined
+      ? {}
+      : { environmentNetworking: opts.environmentNetworking }),
     files: new DefaultFileService(fileStorage),
     skills: new DefaultSkillsService(skillsStore),
     vaults: vaultService,
@@ -1009,6 +1020,21 @@ export function parseBetaFeatures(header: string | undefined): Set<string> {
       .map((value) => value.trim())
       .filter((value) => value.length > 0),
   );
+}
+
+function environmentNetworkingCapability(
+  runtimeConfig: DeploymentRuntimeConfig,
+): EnvironmentNetworkingDeploymentCapability {
+  const provider = runtimeConfig.sandboxProviderSelection?.type ?? null;
+  if (runtimeConfig.egress !== undefined) {
+    return { provider, egress_supported: true, reason: null };
+  }
+  const reason = provider === "docker-local"
+    ? "Docker-local is configured without the OMA egress sidecar. Restart through `oma up` to use networked presets."
+    : provider === null || provider === "none"
+      ? "No sandbox provider with egress support is configured."
+      : `Environment allowlists are not supported by ${provider}.`;
+  return { provider, egress_supported: false, reason };
 }
 
 function isManagedAgentsRoute(path: string): boolean {
