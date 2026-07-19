@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented; final independent review pending. Implements GitHub issue
+Implemented and independently approved; PR #203 is pending merge. Implements GitHub issue
 [#199](https://github.com/oneryalcin/open-managed-agents/issues/199) and closes
 the registry-backed acceptance gap left by #200.
 
@@ -476,3 +476,11 @@ so `$autoresearch-goal` and `$performance-goal` are not the primary paths.
   explicit complete-pair override semantics, and empirically minimized hosts.
 - Added server-side canonical persistence and a read-only validation endpoint
   so browser hostname grammar cannot drift from runtime policy.
+- Normal review found the publication smoke used a malformed policy shape and
+  proved readiness only. The smoke now uses a real bundle and requires an
+  authenticated default-deny response; the image itself is non-root by
+  default as well as provider-launched with `--user`.
+- Adversarial review found no blocker after HTTPS-only plaintext-CONNECT
+  denial, real npm/uv/GitHub success, unrelated-host denial, read-only doctor,
+  and cleanup were rerun. The reviewed artifact is pinned by multi-arch digest
+  after anonymous pull/smoke, size, and CRITICAL-vulnerability gates.
