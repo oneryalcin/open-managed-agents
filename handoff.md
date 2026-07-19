@@ -372,17 +372,18 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Complete alpha onboarding hardening on `dev/alpha-onboarding-hardening`.
-   The source-checkout path is owned by [Getting Started](docs/getting-started.md):
+1. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
+   owned by [Getting Started](docs/getting-started.md):
    `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,
    `oma up`, workspace-key console login, create agent/environment/session, and
-   send a prompt.
+   send a prompt. Automated CLI, doctor, docs, browser, and Docker gates are
+   green; the real-human timing gate remains pending.
 2. Preserve the `oma doctor` invariant: it is read-only and secret-safe. It
    must not create `~/.oma`, Pi auth/model files, lock files, databases, or pull
    Docker images.
-3. Run the automated onboarding gates: CLI help, doctor read-only behavior,
-   docs command contract, browser console happy path, and Docker-backed
-   local-compatible smoke.
+3. The default provider allowlist is `anthropic,openai,openrouter`; credentials
+   still gate session admission, Anthropic remains the default model provider,
+   and `OMA_MODEL_PROVIDERS` replaces this allowlist when explicitly set.
 4. Run the human onboarding gate in
    [docs/references/alpha-onboarding-observation.md](docs/references/alpha-onboarding-observation.md):
    local-compatible median <=10 minutes, credential-supplied console median

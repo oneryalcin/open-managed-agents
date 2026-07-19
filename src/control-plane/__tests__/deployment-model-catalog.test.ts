@@ -23,7 +23,10 @@ function home(): string {
 
 describe("deployment model catalog admission", () => {
   it("rejects disabled providers before persisting an agent", async () => {
-    const app = createDeploymentControlPlaneApp({ OMA_HOME: home() });
+    const app = createDeploymentControlPlaneApp({
+      OMA_HOME: home(),
+      OMA_MODEL_PROVIDERS: "anthropic",
+    });
 
     const rejected = await app.request("/v1/agents", {
       method: "POST",

@@ -417,7 +417,7 @@ describe("default writer", () => {
       const record = JSON.parse(line!);
       expect(record).toMatchObject({
         piVersion: "0.80.6",
-        providers: ["anthropic"],
+        providers: ["anthropic", "openai", "openrouter"],
         defaultProvider: "anthropic",
         defaultModel: "claude-sonnet-5",
       });

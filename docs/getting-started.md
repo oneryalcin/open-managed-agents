@@ -134,16 +134,19 @@ claim generic sandbox health before a session exercises the provider.
 
 ## Use Another Model Provider
 
-OMA reuses Pi's provider catalog and request adapters. To enable a built-in
-provider such as OpenAI:
+OMA reuses Pi's provider catalog and request adapters. Anthropic, OpenAI, and
+OpenRouter are enabled for discovery by default; a provider still cannot run a
+session until its credentials are configured. For OpenAI:
 
 ```bash
-export OMA_MODEL_PROVIDERS="anthropic,openai"
 oma auth set openai
 oma auth status openai
 oma models list --provider openai --available
 oma up
 ```
+
+Use `OMA_MODEL_PROVIDERS` to narrow the deployment or add another Pi provider;
+it replaces the default allowlist rather than extending it.
 
 Restart `oma up` after `oma auth` changes. During alpha, the running appliance
 does not promise hot reload of credential mutations.

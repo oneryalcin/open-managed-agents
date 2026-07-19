@@ -252,7 +252,9 @@ OMA_PI_MODELS_FILE=/optional/operator/path/models.json
 
 Rules:
 
-- unset `OMA_MODEL_PROVIDERS` means `anthropic` only;
+- unset `OMA_MODEL_PROVIDERS` originally meant `anthropic` only; the alpha
+  onboarding follow-up now enables the curated built-ins `anthropic`, `openai`,
+  and `openrouter` for discovery while credential admission remains fail-closed;
 - when both default variables are unset, the effective default pair is
   `anthropic/claude-sonnet-5`; setting either variable requires setting both;
 - trim entries, reject empty names/duplicates, and preserve deterministic order;

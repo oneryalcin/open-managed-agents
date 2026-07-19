@@ -43,6 +43,7 @@ describe("oma CLI", () => {
     expect(result.stdout).toContain("oma providers status");
     expect(result.stdout).toContain("oma models list");
     expect(result.stdout).toContain("oma auth set <provider>");
+    expect(result.stdout).toContain("default: anthropic,openai,openrouter");
     expect(result.stdout).toContain("oma admin init");
     expect(result.stdout).toContain("oma admin status");
     expect(result.stdout).toContain("Planned, not implemented yet:");
