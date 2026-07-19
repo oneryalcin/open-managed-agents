@@ -265,8 +265,21 @@ Near-term target:
 - [x] include pinned Bash and ripgrep for the documented smoke and grep paths;
 - [x] verify anonymous pull of the digest-pinned GHCR image and use it as the
   Docker-local and microsandbox-local default (#187 / plan 0138 / PR #193);
-- keep Python/Node/package-rich images as a later environment arc unless the
-  smoke path requires them.
+- [ ] replace or complement the execution-minimal image with a useful alpha
+  coding image containing pinned Node/npm, Python/uv, Git, curl, jq, archive
+  tools, and a deliberate native-build-tool policy while preserving the
+  digest-pinned, multi-architecture, non-root/read-only security contract
+  ([#200](https://github.com/oneryalcin/open-managed-agents/issues/200));
+- [ ] make safe network-enabled environments usable from the console: keep
+  offline as the default, add reviewed npm/PyPI and GitHub presets plus a
+  custom hostname allowlist, and replace the internal sidecar-knob sequence
+  with a supported `oma up` egress path
+  ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199)).
+
+The coding image and networking UX are separate delivery slices. The image
+must never widen egress by itself, and networking presets must remain useful
+only when the deployment has explicitly enabled the Docker-local egress
+boundary.
 
 ### 8. Pi-backed multi-provider models
 
