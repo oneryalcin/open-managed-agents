@@ -250,12 +250,19 @@ early adopter can build and iterate a credible single-agent product.
    with 409, retain historical retrieval after archive, and select latest or an
    explicitly pinned version at session creation. OMA now implements immutable
    revisions and exact-version runtime pinning. Implementation plan: [`docs/plans/0133-cma-agent-update-versioning.md`](docs/plans/0133-cma-agent-update-versioning.md).
-2. **Usable environment image story** — the first narrow foundation is in
-   review: a digest-pinned, multi-architecture OMA image with Bash and ripgrep
-   (plan 0138 / issue #187). A batteries-included Python/Node runtime and a
-   reviewed per-environment image override remain. Image selection is a
-   security boundary and needs allowlisting/pinning, not a raw untrusted Docker
-   string.
+2. **Usable environment image and networking story** — the narrow foundation
+   is shipped: a digest-pinned, multi-architecture OMA image with Bash and
+   ripgrep (plan 0138 / issue #187 / PR #193). Alpha user testing showed that
+   this execution-minimal image is not yet a useful coding environment and
+   that the console exposes only an offline environment preset. The next two
+   bounded slices are a pinned Node/npm + Python/uv + Git coding image
+   ([#200](https://github.com/oneryalcin/open-managed-agents/issues/200)) and
+   safe console networking presets/custom allowlists with supported egress
+   onboarding
+   ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199)).
+   Image selection remains a security boundary and needs allowlisting/pinning,
+   not a raw untrusted Docker string; installing tools must never widen network
+   policy implicitly.
 3. **Web tools** — re-probe CMA `web_fetch` / `web_search` shapes, decide which
    leg owns execution, and integrate them with the shipped egress policy rather
    than exposing Pi's host-network defaults. This is now unblocked but is still

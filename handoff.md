@@ -372,19 +372,32 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
+1. **Make the first sandbox useful for coding**
+   ([#200](https://github.com/oneryalcin/open-managed-agents/issues/200)). The
+   current public image is intentionally only Alpine + Bash + ripgrep and was
+   verified to lack Node/npm, Python/uv, Git, curl, jq, and build tools. Ship a
+   measured, digest-pinned multi-arch coding image without weakening non-root,
+   read-only-root, capability, provenance/SBOM, or provider-smoke gates.
+2. **Make safe network access selectable and understandable**
+   ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199)). The
+   console currently creates only
+   `limited` + `allowed_hosts: []`. Preserve that offline default, then add
+   reviewed npm/PyPI, GitHub + registries, and custom-allowlist choices plus a
+   supported `oma up` egress path. Do not expose unrestricted networking, and
+   do not couple tool installation to implicit egress.
+3. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
    owned by [Getting Started](docs/getting-started.md):
    `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,
    `oma up`, workspace-key console login, create agent/environment/session, and
    send a prompt. Automated CLI, doctor, docs, browser, and Docker gates are
    green; the real-human timing gate remains pending.
-2. Preserve the `oma doctor` invariant: it is read-only and secret-safe. It
+4. Preserve the `oma doctor` invariant: it is read-only and secret-safe. It
    must not create `~/.oma`, Pi auth/model files, lock files, databases, or pull
    Docker images.
-3. The default provider allowlist is `anthropic,openai,openrouter`; credentials
+5. The default provider allowlist is `anthropic,openai,openrouter`; credentials
    still gate session admission, Anthropic remains the default model provider,
    and `OMA_MODEL_PROVIDERS` replaces this allowlist when explicitly set.
-4. Run the human onboarding gate in
+6. Run the human onboarding gate in
    [docs/references/alpha-onboarding-observation.md](docs/references/alpha-onboarding-observation.md):
    local-compatible median <=10 minutes, credential-supplied console median
    <=15 minutes, and zero undocumented intervention.
