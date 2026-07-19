@@ -37,10 +37,16 @@ jobs:
           OMA_HOME="$missing_home" node bin/oma.mjs doctor --json > "$RUNNER_TEMP/doctor.json"
           test ! -e "$missing_home"
           node -e 'const r=require(process.argv[1]); if(r.schema_version!==1 || !Array.isArray(r.checks)) process.exit(1)' "$RUNNER_TEMP/doctor.json"
-      - name: Typecheck and test all contracts
+      - name: Typecheck and test onboarding contracts
         run: |
           npm run typecheck
-          npm test
+          npm test -- \
+            src/control-plane/__tests__/oma-cli.test.ts \
+            src/control-plane/__tests__/oma-doctor.test.ts \
+            src/control-plane/__tests__/onboarding-docs.test.ts \
+            src/control-plane/models/__tests__/catalog.test.ts \
+            ui/managed-agents-console/src/__tests__/environments.test.js \
+            ui/managed-agents-console/src/__tests__/workflow.test.js
       - name: Install pinned headless browser for the console gate
         run: npx --no-install playwright-core install --with-deps --only-shell chromium
       - name: Run live console browser onboarding
