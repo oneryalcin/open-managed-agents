@@ -1,9 +1,9 @@
 # Development and deployment setup
 
-This document is the practical entry point for running OMA locally and for
-thinking about how the current runtime shape should become a real deployment.
-It is deliberately boring: the Make targets are thin wrappers around the
-commands already used in the repo.
+This document covers deployment knobs and operator details after the
+[Getting Started](getting-started.md) flow is working. It is deliberately
+boring: the Make targets are thin wrappers around the commands already used in
+the repo.
 
 ## Deployment modes
 
@@ -12,23 +12,24 @@ Use these labels consistently in docs, issues, and PRs:
 | Mode | Status | Shape | What it is for |
 | --- | --- | --- | --- |
 | Local development | Current | Host-run OMA process, local Docker daemon, Docker-local sandbox containers. | Contributor development and smoke tests. |
-| Single-node demo | Current | One OMA process with in-memory deployment stores and Docker-local sandboxes. | Local workshop parity and trusted demos. State is ephemeral. |
-| Single-node durable | Intended next target | One OMA process with shared file-backed transactional storage, local object storage, and Docker-local sandboxes. | Self-hosted single-operator deployments that need restart persistence. |
+| Single-node demo | Current | One OMA process with temporary deployment stores and Docker-local sandboxes. | Local workshop parity and trusted demos. State is ephemeral. |
+| Single-node durable | Current alpha | One OMA process with shared file-backed transactional storage, local object storage, and Docker-local or microsandbox-local sandboxes. | Self-hosted single-operator deployments that need restart persistence. |
 | Multi-worker production | Future | API/control-plane service, durable metadata store, object storage, runtime worker pool, and remote or node-local sandbox providers. | Real scaling and multi-owner runtime execution. |
 
-Do not describe the current server as "production" or "durable" until the
-single-node durable storage work lands. The current owner/generation runtime
-ledger is useful, but with the deployment app's current in-memory stores it is
-not a cross-process coordination mechanism.
+Do not describe the current server as multi-worker production. The alpha shape
+is a single durable appliance: one process, one local storage root, one local
+sandbox provider, and no cross-process runtime coordination.
 
 ## Appliance quickstart
 
+For first-time setup, follow [Getting Started](getting-started.md). This page
+documents deployment knobs and operator details after the canonical source
+checkout path is working.
+
 One command boots a durable, authenticated server
-([plan 0115](plans/0115-appliance-entrypoint.md)). From a checkout (Node ≥ 22.19):
+([plan 0115](plans/0115-appliance-entrypoint.md)). From a prepared checkout:
 
 ```bash
-npm install
-npm link
 export ANTHROPIC_API_KEY="..."
 oma up
 ```
@@ -217,6 +218,18 @@ The useful targets are:
 working local Docker daemon. `make cwc-smoke` and `make gated-smoke` also need
 the Python example environment and a reachable OMA server. The example `.env`
 file lives at `examples/ship-your-first-managed-agent/.env.example`.
+
+The alpha console browser gate is also available directly:
+
+```bash
+npm run alpha:console-browser
+```
+
+Locally it reuses installed Google Chrome, or the executable named by
+`OMA_BROWSER_EXECUTABLE`. CI installs the Chromium headless shell pinned to the
+checked-in `playwright-core` version and sets
+`OMA_PLAYWRIGHT_MANAGED_BROWSER=1`; the checkout does not rely on an ambient CI
+browser and does not download a browser during `oma doctor` or ordinary setup.
 
 ## Docker's role
 
@@ -570,24 +583,23 @@ Metrics: `oma_mcp_tool_calls_total{outcome}` and
 
 ## Deployment target shape
 
-The current MVP is suitable for local development and single-node demos.
-Follow-up work is tracked in
+The current alpha appliance is suitable for local development and
+single-operator tinkering. Scale-out follow-up work is tracked in
 [#103](https://github.com/oneryalcin/open-managed-agents/issues/103), with the
 accepted plan in
 [0103 - Deployment Hardening](plans/0103-deployment-hardening.md).
 
-The next target is single-node durable:
+The current single-node durable shape is:
 
 1. **One control-plane process:** HTTP API, SSE, request validation, session
    state, event append/replay, custom-tool and confirmation orchestration.
 2. **Shared file-backed transactional store:** agents, environments, sessions,
    event rows, file metadata, runtime ownership, and pending waits in one
-   transaction-capable deployment boundary. This replaces the deployment app's
-   current separate in-memory stores for durable mode.
+   transaction-capable deployment boundary.
 3. **Local object storage:** uploaded files, internal snapshots, and session
    outputs.
-4. **Docker-local sandbox provider:** one sandbox container per live session
-   handle, with no Docker socket in the sandbox.
+4. **Local sandbox provider:** Docker-local or microsandbox-local, one sandbox
+   per live session handle, with no Docker socket in the sandbox.
 
 The future multi-worker target splits responsibilities further:
 

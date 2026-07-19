@@ -1,29 +1,30 @@
 # open-managed-agents docs
 
-Design-first home for an open-source clone of Anthropic's [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview), self-hostable on Modal / K8s / Docker.
+Design-first home for an open-source clone of Anthropic's [Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview), self-hostable on your own machines.
 
-**Status:** MVP control plane with proven Docker-local execution. The repo has
-working TypeScript for persisted agents, environments, sessions, session
-events, SSE replay, Pi runtime wiring, custom tools, and a deployment-gated
-Docker-local sandbox provider. Full Anthropic Managed Agents tutorial parity is
-still tracked separately in the roadmap.
+**Status:** pre-v1 alpha. The synchronous single-agent core works: versioned
+agents, environments, sessions, session events, SSE replay, Pi runtime wiring,
+provider-owned tools, skills, MCP/vault credentials, Docker-local and
+microsandbox-local execution, and the bundled console. Full Claude Managed
+Agents product parity remains tracked in [PARITY.md](../PARITY.md).
 
 ## Reading order
 
-1. [Scope](scope.md) — what's in the MVP slice, what's deferred, what's a non-goal
-2. [Architecture](architecture.md) — the three-tier decomposition and how Pi's `AgentSession` primitives map to Managed Agents endpoints
-3. [Roadmap](roadmap.md) — current implementation state and the next cycles
-4. [References](references.md) — upstream docs, SDK docs, related projects we evaluated
-5. [Examples](examples.md) — executable parity examples against external tutorial flows
-6. [Development and deployment setup](dev-deployment.md) — Make targets,
+1. [Getting Started](getting-started.md) — the canonical source-checkout alpha flow
+2. [Scope](scope.md) — what's in the current slice, what's deferred, what's a non-goal
+3. [Architecture](architecture.md) — the three-tier decomposition and how Pi's `AgentSession` primitives map to Managed Agents endpoints
+4. [Roadmap](roadmap.md) — current implementation state and the next cycles
+5. [References](references.md) — upstream docs, SDK docs, related projects we evaluated
+6. [Examples](examples.md) — executable parity examples against external tutorial flows
+7. [Development and deployment setup](dev-deployment.md) — Make targets,
    Docker-local's role, parallel-session smoke, workspace authentication and
    key provisioning, and production deployment shape
 
 ## Tutorials
 
-- [First Docker-local run](tutorials/docker-local-first-run.md) — run the
-  current MVP path with deployment config, Pi, Docker-local bash, translated
-  tool events, and cleanup verification.
+- [First Docker-local run](tutorials/docker-local-first-run.md) — Docker-local
+  details and lower-level smoke context after the canonical
+  [Getting Started](getting-started.md) flow.
 
 ## Cookbooks
 
@@ -105,21 +106,25 @@ still tracked separately in the roadmap.
   design/audit plan for extending `Idempotency-Key` from `events.send` to
   session creation without duplicating sessions, snapshots, or runtime prep.
 
-## Current smoke checks
+## Current onboarding checks
 
 Run from the repo root:
 
 ```bash
-npm test
+npm ci
+node bin/oma.mjs --help
+node bin/oma.mjs doctor
+node bin/oma.mjs smoke --local-compatible
 npm run typecheck
-npx tsx scratch/05-event-store.ts
-npx tsx scratch/06-agents-api.ts
-npx tsx scratch/07-b1-api.ts
-npx tsx scratch/23-e3-deployment-docker-smoke.ts
-npx tsx scratch/40-docker-parallel-sessions-smoke.ts
+npm test
 ```
 
-The Makefile wraps the common checks:
+`oma doctor` is a diagnostic command: it may exit `1` until blocking local
+readiness issues such as Docker availability or port conflicts are fixed.
+Missing model credentials are a warning so the no-paid local-compatible proof
+remains available. Doctor must always remain read-only.
+
+The Makefile still wraps lower-level developer checks:
 
 ```bash
 make check

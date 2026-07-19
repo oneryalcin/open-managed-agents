@@ -45,4 +45,27 @@ describe("environment console slice", () => {
     expect(env).toContain("err.status === 401 && onAuthExpired");
     expect(env).toContain("disabled={!valid}");
   });
+
+  it("uses live model readiness and never invents browser-visible sandbox health", () => {
+    const env = source("environments.jsx");
+    const app = source("app.jsx");
+    expect(app).toContain("<ReadinessView agents={agents} environments={environments} models={models}");
+    expect(app).toContain("onCreateAgent={createAgent}");
+    expect(app).toContain("onCreateSession={() => createSession(null)}");
+    expect(env).toContain("models.some((model) => model.credentials_configured)");
+    expect(env).toContain("none report configured credentials");
+    expect(env).toContain("Sandbox execution is verified by the first session tool run, not guessed by the browser");
+    expect(env).toContain("Sandbox execution remains unverified until a session runs a tool");
+    expect(env).not.toMatch(/sandbox.*healthy/i);
+  });
+
+  it("defines every literal icon used by the console", () => {
+    const iconSource = source("icons.jsx");
+    const defined = new Set([...iconSource.matchAll(/^\s{2}([A-Za-z][A-Za-z0-9]*):/gm)].map((match) => match[1]));
+    const files = ["app.jsx", "auth.jsx", "detail.jsx", "environments.jsx", "forms.jsx", "ui.jsx"];
+    const used = files.flatMap((file) =>
+      [...source(file).matchAll(/<Icon\s+name="([^"]+)"/g)].map((match) => match[1]),
+    );
+    expect([...new Set(used)].filter((name) => !defined.has(name))).toEqual([]);
+  });
 });

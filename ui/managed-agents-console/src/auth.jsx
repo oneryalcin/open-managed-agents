@@ -6,7 +6,7 @@
 const { useState: useStateA, useEffect: useEffectA } = React;
 
 function LoginView({ onAdminLogin, onWorkspaceLogin, error, busy }) {
-  const [tier, setTier] = useStateA('admin');
+  const [tier, setTier] = useStateA('workspace');
   const [key, setKey] = useStateA('');
   const valid = key.trim().length > 0 && !busy;
   const submit = (e) => {

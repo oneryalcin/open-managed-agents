@@ -12,7 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-14 (`main`; PR #188 and plan 0134 complete)._
+_Last updated 2026-07-19 (`dev/alpha-onboarding-hardening`; alpha onboarding
+hardening in progress)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -21,16 +22,19 @@ _Last updated 2026-07-14 (`main`; PR #188 and plan 0134 complete)._
   its full backlog here.
 - The synchronous single-agent core is substantially shipped: agents, sessions,
   Docker/microsandbox providers, tools, skills, MCP, vault credentials, SSE,
-  CMA `glob`, and bidirectional session pagination. Sandbox and egress controls
+  CMA `glob`, CMA `grep`, immutable agent versioning, multi-provider model
+  selection, and bidirectional session pagination. Sandbox and egress controls
   intentionally exceed the hosted self-hosted baseline in several areas.
 - PR #184 shipped provider-owned, bounded, cancellable CMA `glob`; PR #188
   shipped provider-owned CMA `grep`.
 - PR #185 shipped session-specific `{data,next_page,prev_page}` pagination with
   signed, workspace-bound cursors and preserved ascending/descending order.
-- Probe 67 established hosted agent update/version behavior. Plan 0133 now
-  implements immutable revisions, optimistic updates, authenticated version
-  history, exact-version runtime pinning, and shared model-catalog admission in
-  PR #186. The final warmup-version blocker was fixed before merge.
+- Probe 67 established hosted agent update/version behavior. Plan 0133 shipped
+  immutable revisions, optimistic updates, authenticated version history,
+  exact-version runtime pinning, and shared model-catalog admission in PR #186.
+- Plan 0139 shipped Pi-backed multi-provider models in PR #195: durable
+  `{provider,id}` identity, one shared Pi catalog/auth owner, secret-safe
+  CLI/API/console discovery, and local-compatible smoke coverage.
 - Standing follow-ups remain `#103`, `#118`, and `#119`; consult GitHub rather
   than this file for their current status.
 
@@ -358,22 +362,37 @@ load-bearing additions are:
   the full live microsandbox smoke pass. Microsandbox initializes upload mounts
   as root-owned/read-only and output mounts as writable by UID 65534 while the
   image itself remains non-root by default.
+- **Pi-backed multi-provider models** (PR #195; plan 0139):
+  agent revisions persist exact provider/model identity, the runtime and
+  admission paths share one Pi catalog/auth owner, and `oma smoke
+  --local-compatible` proves a no-paid-API custom compatible provider path.
 
 Older shipped arcs remain documented in their ADRs, plans, and merge history;
 they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. Plan 0139 is complete on `dev/pi-multi-provider-models-plan`. Its final
-   independent review returned `APPROVE` with architecture `CLEAR`; a fresh
-   checkout passed `npm ci`, typecheck, the full suite, and the Docker-backed
-   `oma smoke --local-compatible` lane. The optional live provider matrix stays
-   credential-gated and manual-only.
-2. Return to the broader Python/Node environment-image usability story or
-   continue the pre-v1 sequence with web tools.
-3. Track publication-pipeline promotion hardening separately in issue #194; it
+1. Complete alpha onboarding hardening on `dev/alpha-onboarding-hardening`.
+   The source-checkout path is owned by [Getting Started](docs/getting-started.md):
+   `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,
+   `oma up`, workspace-key console login, create agent/environment/session, and
+   send a prompt.
+2. Preserve the `oma doctor` invariant: it is read-only and secret-safe. It
+   must not create `~/.oma`, Pi auth/model files, lock files, databases, or pull
+   Docker images.
+3. Run the automated onboarding gates: CLI help, doctor read-only behavior,
+   docs command contract, browser console happy path, and Docker-backed
+   local-compatible smoke.
+4. Run the human onboarding gate in
+   [docs/references/alpha-onboarding-observation.md](docs/references/alpha-onboarding-observation.md):
+   local-compatible median <=10 minutes, credential-supplied console median
+   <=15 minutes, and zero undocumented intervention.
+5. Track public npm, `npx`, curl, and Homebrew distribution separately in issue
+   #196. It is a release/supply-chain project, not part of source-checkout
+   onboarding cleanup.
+6. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
-4. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+7. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

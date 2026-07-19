@@ -1,10 +1,10 @@
 # First Docker-Local Run
 
-This guide runs Open Managed Agents with the Docker-local sandbox provider.
+This guide explains Docker-local details after the canonical
+[Getting Started](../getting-started.md) flow is working.
 
-It is a developer quickstart for the current MVP: one local control-plane run,
-one model-driven bash tool call, and a Docker container that is created,
-used, and cleaned up.
+It is a developer reference for one local control-plane run, one model-driven
+bash tool call, and a Docker container that is created, used, and cleaned up.
 
 ## What This Proves
 
@@ -18,12 +18,9 @@ OMA_* deployment config
   -> agent.tool_use / agent.tool_result events
 ```
 
-It does not prove full Anthropic Managed Agents tutorial parity yet. File
-resources are supported on the Docker-local path, but this smoke does not
-exercise uploads or `/mnt/session/uploads` materialization; use
-`scratch/27-file-resource-docker-materialization.ts` for that path. Permission
-prompts and durable custom-tool recovery are implemented on their own API paths;
-managed remote providers are still tracked separately.
+It does not prove full Claude Managed Agents product parity. File resources,
+permission prompts, durable custom-tool recovery, and model-provider paths are
+covered by their own focused tests and smokes.
 
 ## Prerequisites
 
@@ -35,23 +32,34 @@ managed remote providers are still tracked separately.
 Check the basics:
 
 ```bash
-npm install
-npm run typecheck
-npm test
+oma doctor
 docker info
-test -n "$ANTHROPIC_API_KEY"
 ```
 
 ## Run The Smoke
 
-From the repo root:
+For the no-paid-API path, run:
+
+```bash
+oma smoke --local-compatible
+```
+
+For the default Anthropic model path, set credentials and run:
+
+```bash
+export ANTHROPIC_API_KEY="..."
+oma smoke
+```
+
+The older low-level deployment smoke remains useful when changing Docker-local
+internals:
 
 ```bash
 npx tsx scratch/23-e3-deployment-docker-smoke.ts
 ```
 
-The probe configures Docker-local through the same deployment config shape an
-operator would use:
+Both paths configure Docker-local through the same deployment config shape an
+operator uses:
 
 ```text
 OMA_SANDBOX_PROVIDER=docker-local
@@ -103,8 +111,8 @@ IN_DOCKER=no PWD=<host temp directory>
 
 ## Manual Deployment Config
 
-If you are wiring your own server entrypoint, use the deployment app
-constructor:
+Most users should run `oma up`. If you are wiring your own server entrypoint,
+use the deployment app constructor:
 
 ```ts
 import { serve } from "@hono/node-server";
