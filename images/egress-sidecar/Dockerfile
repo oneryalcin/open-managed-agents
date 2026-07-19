@@ -15,4 +15,5 @@ RUN npm ci --omit=dev --ignore-scripts \
 COPY src ./src
 
 ENV HOME=/tmp
+USER 65534:65534
 CMD ["node", "--experimental-transform-types", "--disable-warning=ExperimentalWarning", "src/egress-proxy-main.ts"]
