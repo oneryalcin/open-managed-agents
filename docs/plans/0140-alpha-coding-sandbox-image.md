@@ -212,6 +212,12 @@ apply to an official Node base that is already approximately 78 MiB compressed.
 - Keep issue #194's publish-before-gates limitation explicit; do not claim this
   slice fixes tag promotion ordering.
 
+The local multi-platform OCI build measured 255.78 MiB compressed for amd64
+and 247.63 MiB for arm64. The implementation therefore tightens the release
+ceiling to 295 MiB per platform before publication. Registry measurements from
+the promoted digest remain authoritative and must be recorded after the
+workflow completes.
+
 ### D7 -- Publish before pinning the runtime default
 
 1. Land or push the complete image source and smoke gates on the dev branch.

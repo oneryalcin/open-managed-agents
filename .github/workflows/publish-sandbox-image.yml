@@ -19,9 +19,9 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/oneryalcin/open-managed-agents-sandbox
-  # Initial alpha coding-image ceiling (300 MiB/platform). Tighten to no more
-  # than 15% above the first verified multi-arch publication.
-  MAX_COMPRESSED_BYTES: "314572800"
+  # 295 MiB/platform: the rounded-up approximately-15% margin above the larger
+  # measured local OCI platform (amd64, 255.78 MiB).
+  MAX_COMPRESSED_BYTES: "309329920"
 
 jobs:
   publish:
