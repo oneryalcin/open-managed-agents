@@ -19,7 +19,9 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/oneryalcin/open-managed-agents-sandbox
-  MAX_COMPRESSED_BYTES: "26214400"
+  # 295 MiB/platform: the rounded-up approximately-15% margin above the larger
+  # measured local OCI platform (amd64, 255.78 MiB).
+  MAX_COMPRESSED_BYTES: "309329920"
 
 jobs:
   publish:
@@ -48,6 +50,12 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build and smoke the native coding image
+        run: |
+          set -euo pipefail
+          docker build -f images/sandbox/Dockerfile -t oma-sandbox:ci images/sandbox
+          node scripts/smoke-coding-sandbox-image.mjs oma-sandbox:ci
 
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
@@ -81,6 +89,15 @@ jobs:
 
       - name: Enforce compressed-size budget
         run: node scripts/check-oci-image-size.mjs "${IMAGE_NAME}@${{ steps.build.outputs.digest }}" "$MAX_COMPRESSED_BYTES"
+
+      - name: Prove anonymous pull and smoke the published digest
+        run: |
+          set -euo pipefail
+          ref="${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          DOCKER_CONFIG="$anonymous_config" docker pull "$ref"
+          DOCKER_CONFIG="$anonymous_config" node scripts/smoke-coding-sandbox-image.mjs "$ref"
 
       - name: Scan published image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

@@ -62,7 +62,7 @@ function dockerInspectRaw(ref) {
 }
 
 async function main() {
-  const [ref, limitText = "26214400"] = process.argv.slice(2);
+  const [ref, limitText = "309329920"] = process.argv.slice(2);
   const limit = Number(limitText);
   if (!ref || !Number.isSafeInteger(limit) || limit <= 0) {
     throw new Error("usage: check-oci-image-size.mjs <image-ref> [max-compressed-bytes]");

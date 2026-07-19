@@ -56,12 +56,13 @@ const DEFAULT_WORKSPACE = "/workspace";
 const DEFAULT_UPLOADS_PATH = "/mnt/session/uploads";
 const DEFAULT_OUTPUTS_PATH = "/mnt/session/outputs";
 const DEFAULT_SKILLS_PATH = "/workspace/skills";
-const DEFAULT_MEMORY = "384m";
+const DEFAULT_MEMORY = "1g";
 const DEFAULT_CPUS = "1";
-const DEFAULT_PIDS_LIMIT = "64";
-const DEFAULT_TMPFS_SIZE = "64m";
+const DEFAULT_PIDS_LIMIT = "128";
+const DEFAULT_TMPFS_SIZE = "256m";
 const DEFAULT_OUTPUTS_TMPFS_SIZE = "100m";
 const DEFAULT_OPERATION_TIMEOUT_MS = 10_000;
+export const DEFAULT_DOCKER_STARTUP_TIMEOUT_MS = 5 * 60_000;
 const SANDBOX_LABEL_KEY = "open-managed-agents.sandbox";
 const SANDBOX_LABEL_VALUE = "docker-local";
 const OWNER_LABEL_KEY = "open-managed-agents.owner";
@@ -75,6 +76,8 @@ export interface DockerSandboxOptions {
   workspacePath?: string;
   envAllowlist?: string[];
   operationTimeoutMs?: number;
+  /** Bounded separately because a cold `docker run` may pull the pinned image. */
+  startupTimeoutMs?: number;
   containerNamePrefix?: string;
   memory?: string;
   cpus?: string;
@@ -155,6 +158,7 @@ interface DockerSandboxResolvedOptions {
   outputsPath: string;
   envAllowlist: Set<string>;
   operationTimeoutMs: number;
+  startupTimeoutMs: number;
   containerNamePrefix: string;
   memory: string;
   cpus: string;
@@ -323,7 +327,7 @@ export async function createDockerSandboxProvider(
           ...resolved.extraLabels,
         },
       }),
-      { timeoutMs: resolved.operationTimeoutMs },
+      { timeoutMs: resolved.startupTimeoutMs },
     );
   } catch (error) {
     // Sandbox creation failed after the sidecar was already stood up. The
@@ -1638,6 +1642,7 @@ function resolveDockerOptions(
     outputsPath: DEFAULT_OUTPUTS_PATH,
     envAllowlist: new Set(opts.envAllowlist ?? []),
     operationTimeoutMs: opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+    startupTimeoutMs: opts.startupTimeoutMs ?? DEFAULT_DOCKER_STARTUP_TIMEOUT_MS,
     containerNamePrefix: opts.containerNamePrefix ?? "oma-sandbox",
     memory: opts.memory ?? DEFAULT_MEMORY,
     cpus: opts.cpus ?? DEFAULT_CPUS,

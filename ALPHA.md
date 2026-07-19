@@ -265,11 +265,13 @@ Near-term target:
 - [x] include pinned Bash and ripgrep for the documented smoke and grep paths;
 - [x] verify anonymous pull of the digest-pinned GHCR image and use it as the
   Docker-local and microsandbox-local default (#187 / plan 0138 / PR #193);
-- [ ] replace or complement the execution-minimal image with a useful alpha
+- [x] replace the execution-minimal image with a useful alpha
   coding image containing pinned Node/npm, Python/uv, Git, curl, jq, archive
   tools, and a deliberate native-build-tool policy while preserving the
   digest-pinned, multi-architecture, non-root/read-only security contract
-  ([#200](https://github.com/oneryalcin/open-managed-agents/issues/200));
+  ([#200](https://github.com/oneryalcin/open-managed-agents/issues/200), plan
+  0140, PR #202). Registry-backed install proof remains coupled to the
+  separately tracked network presets in #199;
 - [ ] make safe network-enabled environments usable from the console: keep
   offline as the default, add reviewed npm/PyPI and GitHub presets plus a
   custom hostname allowlist, and replace the internal sidecar-knob sequence
@@ -344,4 +346,4 @@ Before inviting external tinkering:
 - Webhooks.
 - Outcomes/evaluation.
 - Full hosted environment provisioning parity.
-- Python/Node/package-rich environment images.
+- Arbitrary user-selected sandbox images and broad language/runtime profiles.

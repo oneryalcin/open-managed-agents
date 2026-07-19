@@ -4,6 +4,7 @@ import {
   DEFAULT_MICROSANDBOX_MAX_BUFFER,
   DEFAULT_MICROSANDBOX_IMAGE,
   DEFAULT_MICROSANDBOX_OUTPUTS_PATH,
+  DEFAULT_MICROSANDBOX_STARTUP_TIMEOUT_MS,
   DEFAULT_MICROSANDBOX_UPLOADS_PATH,
   DEFAULT_MICROSANDBOX_WORKSPACE,
   NodeMicrosandboxCli,
@@ -77,7 +78,7 @@ describe("microsandbox command builders", () => {
       "--cpus",
       "1",
       "--memory",
-      "512M",
+      "1G",
       "--oci-upper-size",
       "1G",
       "--max-duration",
@@ -163,10 +164,10 @@ describe("microsandbox command builders", () => {
       "exec",
       "oma-sbx",
       "--",
-      "/bin/sh",
+      "/bin/bash",
       "-lc",
       "cat \"$1\"",
-      "sh",
+      "bash",
       `${DEFAULT_MICROSANDBOX_UPLOADS_PATH}/input.txt`,
     ]);
     expect(
@@ -337,7 +338,7 @@ describe("microsandbox command builders", () => {
     ]);
     expect(command.script).toContain("__OMA_DISPATCHED__");
     expect(command.script).toContain("__OMA_TERMINAL__");
-    expect(command.script).toContain("setsid /bin/sh -lc");
+    expect(command.script).toContain("setsid /bin/bash -lc");
     expect(command.script).toContain("kill -KILL \"-$pid\"");
     expect(buildMicrosandboxKillProcessGroupCommand("/workspace/pid")).toMatchObject({
       args: ["/workspace/pid"],
@@ -532,7 +533,7 @@ describe("microsandbox CLI adapter", () => {
 
     expect(cli.calls.map((call) => call.args.join(" "))).toEqual([
       "volume create --name oma-vol",
-      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-sbx --mount-named oma-vol:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 512M --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet`,
+      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-sbx --mount-named oma-vol:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 1G --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet`,
       "volume remove oma-vol",
     ]);
     expect(cli.calls.map((call) => call.mode)).toEqual([
@@ -569,6 +570,10 @@ describe("microsandbox sandbox provider", () => {
       "oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx",
     ]);
     expect(calls[1]).toContain("--no-net");
+    expect(cli.calls[0]?.opts?.timeoutMs).toBe(10_000);
+    expect(cli.calls[1]?.opts?.timeoutMs).toBe(
+      DEFAULT_MICROSANDBOX_STARTUP_TIMEOUT_MS,
+    );
     expect(calls.at(-2)).toEqual([
       "remove",
       "--force",
@@ -597,7 +602,7 @@ describe("microsandbox sandbox provider", () => {
 
     expect(cli.calls.map((call) => call.args.join(" "))).toEqual([
       "volume create --name oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx",
-      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-wrk-sesn-sandbox-mppxg2io-4fzzzx --mount-named oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 512M --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet --label open-managed-agents.sandbox=microsandbox-local --label open-managed-agents.owner=open-managed-agents --label open-managed-agents.workspace-id=wrk --label open-managed-agents.session-id=sesn --label open-managed-agents.created-at=2026-05-28T20:10:00.000Z`,
+      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-wrk-sesn-sandbox-mppxg2io-4fzzzx --mount-named oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 1G --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet --label open-managed-agents.sandbox=microsandbox-local --label open-managed-agents.owner=open-managed-agents --label open-managed-agents.workspace-id=wrk --label open-managed-agents.session-id=sesn --label open-managed-agents.created-at=2026-05-28T20:10:00.000Z`,
       "remove --force oma-wrk-sesn-sandbox-mppxg2io-4fzzzx",
       "volume remove oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx",
     ]);
@@ -622,6 +627,7 @@ describe("microsandbox sandbox provider", () => {
     const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
       cli,
       operationTimeoutMs: 2500,
+      startupTimeoutMs: 123_000,
       now: () => 1_779_999_000_000,
       random: () => 0.123456789,
     });
@@ -675,6 +681,8 @@ describe("microsandbox sandbox provider", () => {
       "exec",
     ]);
     expect(cli.calls[2]?.opts?.timeoutMs).toBe(4500);
+    expect(cli.calls[0]?.opts?.timeoutMs).toBe(2500);
+    expect(cli.calls[1]?.opts?.timeoutMs).toBe(123_000);
     expect(cli.calls[3]?.args).toContain("--stream");
     expect(cli.calls[3]?.opts?.input).toBe("hello");
     expect(provider.invocations.byTool.write).toBe(2);

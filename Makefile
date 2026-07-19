@@ -20,7 +20,7 @@ help:
 	@printf '%s\n' '  make docker-smoke            run deterministic Docker-local deployment smoke'
 	@printf '%s\n' '  make parallel-docker-smoke   run N Docker-local sandboxes concurrently'
 	@printf '%s\n' '  make console-image-smoke     build the appliance image and smoke /console'
-	@printf '%s\n' '  make sandbox-image-smoke     build and verify the minimal OMA sandbox image'
+	@printf '%s\n' '  make sandbox-image-smoke     build and verify the OMA coding sandbox image'
 	@printf '%s\n' '  make cwc-smoke               run the Python SDK CWC happy-path smoke'
 	@printf '%s\n' '  make gated-smoke             run the Python SDK ask-gated smoke'
 	@printf '%s\n' ''
@@ -58,7 +58,7 @@ console-image-smoke:
 
 sandbox-image-smoke:
 	docker build -f images/sandbox/Dockerfile -t oma-sandbox:dev images/sandbox
-	docker run --rm oma-sandbox:dev sh -lc 'test "$$(id -u)" = 65534 && bash --version >/dev/null && rg --version | grep -Fqx "ripgrep 14.1.1"'
+	node scripts/smoke-coding-sandbox-image.mjs oma-sandbox:dev
 
 cwc-smoke:
 	cd examples/ship-your-first-managed-agent && uv run --with-requirements requirements.txt python smoke.py

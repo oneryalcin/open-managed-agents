@@ -50,8 +50,9 @@ export const DEFAULT_MICROSANDBOX_UPLOADS_PATH = "/mnt/session/uploads";
 export const DEFAULT_MICROSANDBOX_OUTPUTS_PATH = "/mnt/session/outputs";
 export const DEFAULT_MICROSANDBOX_MAX_BUFFER = 16 * 1024 * 1024;
 const DEFAULT_MICROSANDBOX_OPERATION_TIMEOUT_MS = 10_000;
+export const DEFAULT_MICROSANDBOX_STARTUP_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_MICROSANDBOX_CPUS = "1";
-const DEFAULT_MICROSANDBOX_MEMORY = "512M";
+const DEFAULT_MICROSANDBOX_MEMORY = "1G";
 const DEFAULT_MICROSANDBOX_OCI_UPPER_SIZE = "1G";
 const DEFAULT_MICROSANDBOX_MAX_DURATION = "2h";
 const DEFAULT_MICROSANDBOX_SECURITY = "restricted";
@@ -116,6 +117,8 @@ export interface MicrosandboxSandboxOptions {
   command?: string;
   workspacePath?: string;
   operationTimeoutMs?: number;
+  /** Bounded separately because a cold `msb create --pull if-missing` downloads the image. */
+  startupTimeoutMs?: number;
   resourceNamePrefix?: string;
   cpus?: string;
   memory?: string;
@@ -148,6 +151,7 @@ interface MicrosandboxResolvedOptions {
   uploadsPath: string;
   outputsPath: string;
   operationTimeoutMs: number;
+  startupTimeoutMs: number;
   resourceNamePrefix: string;
   cpus: string;
   memory: string;
@@ -305,7 +309,7 @@ export async function createMicrosandboxSandboxProvider(
           ).toISOString(),
         },
       }),
-      { timeoutMs: resolved.operationTimeoutMs },
+      { timeoutMs: resolved.startupTimeoutMs },
     );
     sandboxCreated = true;
     await microsandboxChecked(
@@ -1045,7 +1049,7 @@ export function buildMicrosandboxShellExecArgs(opts: {
     timeout: opts.timeout,
     stream: opts.stream,
     user: opts.user,
-    command: ["/bin/sh", "-lc", opts.script, "sh", ...(opts.args ?? [])],
+    command: ["/bin/bash", "-lc", opts.script, "bash", ...(opts.args ?? [])],
   });
 }
 
@@ -1427,7 +1431,7 @@ export function buildMicrosandboxBashCommand(
       "printf '%s\\n' \"__OMA_DISPATCHED__:${dispatch_token}\"",
       "terminal_exit() { printf '%s\\n' \"__OMA_TERMINAL__:${dispatch_token}:exit:$1\"; }",
       "terminal_timeout() { printf '%s\\n' \"__OMA_TERMINAL__:${dispatch_token}:timeout:137\"; }",
-      "setsid /bin/sh -lc \"$command\" &",
+      "setsid /bin/bash -lc \"$command\" &",
       "pid=$!",
       "printf '%s' \"$pid\" > \"$pidfile\"",
       "(",
@@ -1783,6 +1787,8 @@ function resolveMicrosandboxOptions(
     outputsPath: DEFAULT_MICROSANDBOX_OUTPUTS_PATH,
     operationTimeoutMs:
       opts.operationTimeoutMs ?? DEFAULT_MICROSANDBOX_OPERATION_TIMEOUT_MS,
+    startupTimeoutMs:
+      opts.startupTimeoutMs ?? DEFAULT_MICROSANDBOX_STARTUP_TIMEOUT_MS,
     resourceNamePrefix: opts.resourceNamePrefix ?? "oma",
     cpus: opts.cpus ?? DEFAULT_MICROSANDBOX_CPUS,
     memory: opts.memory ?? DEFAULT_MICROSANDBOX_MEMORY,
