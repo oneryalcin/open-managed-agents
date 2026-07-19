@@ -129,6 +129,42 @@ export function parseNetworkingConfig(
   );
 }
 
+/**
+ * Validate networking and return the durable canonical representation.
+ *
+ * Native OMA policies are already structured records and are preserved after
+ * validation. CMA-shaped host lists are normalized to lowercase using the
+ * exact parser that runtime enforcement uses, so the console/API never show a
+ * different policy from the one the proxy will enforce.
+ */
+export function canonicalizeNetworkingConfig(config: JsonObject): JsonObject {
+  const networking = config["networking"];
+  if (networking === undefined) return config;
+  if (!isPlainObject(networking)) {
+    throw new EgressPolicyError("networking must be an object");
+  }
+  if (isHostedNetworkingShape(networking)) {
+    const policy = parseHostedNetworkingConfig(networking);
+    return {
+      ...config,
+      networking: {
+        ...networking,
+        allowed_hosts: policy?.allow.map((entry) => entry.host) ?? [],
+      },
+    };
+  }
+  parseNativeNetworkingConfig(networking);
+  return config;
+}
+
+export function canonicalizeHostedAllowedHosts(input: unknown): string[] {
+  const policy = parseHostedNetworkingConfig({
+    type: "limited",
+    allowed_hosts: input,
+  });
+  return policy?.allow.map((entry) => entry.host) ?? [];
+}
+
 function isHostedNetworkingShape(
   networking: Record<string, unknown>,
 ): boolean {

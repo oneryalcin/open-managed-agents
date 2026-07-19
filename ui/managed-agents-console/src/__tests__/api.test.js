@@ -10,14 +10,17 @@ import {
   createSession,
   followSessionEvents,
   hasWorkspaceKey,
+  listEnvironmentNetworkingPresets,
   listVaultCredentials,
   listVaults,
+  loadConsoleData,
   listModelCatalog,
   modelInputForSelection,
   mintKey,
   sendSessionEvents,
   setWorkspaceKey,
   toUiSessionEvent,
+  validateEnvironmentNetworkingHosts,
   validateMcpOauthCredential,
 } from "../api.js";
 
@@ -165,6 +168,28 @@ describe("workspace write capability", () => {
       expect.objectContaining({ method:"POST" }),
     );
     await expect(validateMcpOauthCredential("a", "b", "mock")).rejects.toThrow("live API mode");
+  });
+
+  it("allows only the exact environment networking validation wrapper", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify({ allowed_hosts:["registry.npmjs.org", "*.pypi.org"] })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(validateEnvironmentNetworkingHosts(["registry.npmjs.org", "*.pypi.org"]))
+      .resolves.toEqual(["registry.npmjs.org", "*.pypi.org"]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/environments/networking-presets/validate",
+      expect.objectContaining({
+        method:"POST",
+        body:JSON.stringify({ allowed_hosts:["registry.npmjs.org", "*.pypi.org"] }),
+      }),
+    );
+    await expect(__testRequest("/v1/environments/networking-presets", { method:"POST", body:{} }))
+      .rejects.toThrow("not permitted");
   });
 
   it("creates agents through the narrow wrapper with workspace auth, beta, and JSON headers", async () => {
@@ -388,6 +413,97 @@ describe("workspace write capability", () => {
     expect(fetchMock.mock.calls[0][1].headers).toMatchObject({
       "x-api-key":"oma_workspace",
       "anthropic-beta":expect.stringContaining("managed-agents-2026-04-01"),
+    });
+  });
+
+  it("reads and normalizes networking presets for the environment modal", async () => {
+    setWorkspaceKey("oma_workspace");
+    const fetchMock = vi.fn(() => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify({
+        type:"environment_networking_presets",
+        deployment:{ provider:"docker-local", egress_supported:true, reason:null },
+        presets:[
+          { id:"offline-v1", version:1, name:"Offline", description:"No network access.", networking:{ type:"limited", allowed_hosts:[] } },
+          { id:"npm-pypi-v1", version:1, name:"npm + PyPI", description:"Package registries.", networking:{ type:"limited", allowed_hosts:["registry.npmjs.org", "pypi.org"] } },
+        ],
+        custom:{ https_only:true, wildcard_matches_bare_domain:false },
+      })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listEnvironmentNetworkingPresets()).resolves.toEqual({
+      deployment:{ provider:"docker-local", egress_supported:true, reason:null },
+      presets:[
+        {
+          id:"offline-v1",
+          version:1,
+          label:"Offline",
+          description:"No network access.",
+          allowed_hosts:[],
+          config:{ networking:{ type:"limited", allowed_hosts:[] } },
+        },
+        {
+          id:"npm-pypi-v1",
+          version:1,
+          label:"npm + PyPI",
+          description:"Package registries.",
+          allowed_hosts:["registry.npmjs.org", "pypi.org"],
+          config:{ networking:{ type:"limited", allowed_hosts:["registry.npmjs.org", "pypi.org"] } },
+        },
+      ],
+      custom:{ https_only:true, wildcard_matches_bare_domain:false },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/environments/networking-presets",
+      expect.objectContaining({
+        method:"GET",
+        headers:expect.objectContaining({
+          "x-api-key":"oma_workspace",
+          "anthropic-beta":expect.stringContaining("managed-agents-2026-04-01"),
+        }),
+      }),
+    );
+  });
+
+  it("loads networking presets with the rest of the console data", async () => {
+    const page = (data) => JSON.stringify({ data, has_more:false, next_page:null });
+    const fetchMock = vi.fn((url) => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(
+        url.startsWith("/v1/environments/networking-presets") ? JSON.stringify({
+          deployment:{ provider:"docker-local", egress_supported:true, reason:null },
+          presets:[{ id:"offline-v1", version:1, name:"Offline", description:"No network access.", networking:{ type:"limited", allowed_hosts:[] } }],
+          custom:{ https_only:true, wildcard_matches_bare_domain:false },
+        }) :
+        url.startsWith("/v1/model-catalog") ? page([{ provider:"anthropic", id:"claude-sonnet-5" }]) :
+        url.startsWith("/v1/files") ? JSON.stringify({ data:[], has_more:false, last_id:null }) :
+        page([]),
+      ),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", { location: { origin: "http://oma.local" } });
+
+    await expect(loadConsoleData()).resolves.toMatchObject({
+      agents:[],
+      sessions:[],
+      environments:[],
+      files:[],
+      models:[{ provider:"anthropic", id:"claude-sonnet-5" }],
+      networkingCatalog:{
+        deployment:{ provider:"docker-local", egress_supported:true, reason:null },
+        presets:[{
+          id:"offline-v1",
+          version:1,
+          label:"Offline",
+          description:"No network access.",
+          allowed_hosts:[],
+          config:{ networking:{ type:"limited", allowed_hosts:[] } },
+        }],
+        custom:{ https_only:true, wildcard_matches_bare_domain:false },
+      },
     });
   });
 });

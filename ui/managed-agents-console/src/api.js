@@ -10,6 +10,7 @@ const PAGE_LIMIT = 100;
 const EVENT_PAGE_LIMIT = 1000;
 const MAX_AUTO_PAGES = 100;
 const VALIDATE_CAPABILITY = Symbol("validate-mcp-oauth-credential");
+const VALIDATE_ENVIRONMENT_NETWORKING_CAPABILITY = Symbol("validate-environment-networking");
 const CREATE_AGENT_CAPABILITY = Symbol("create-agent");
 const CREATE_ENVIRONMENT_CAPABILITY = Symbol("create-environment");
 const CREATE_SESSION_CAPABILITY = Symbol("create-session");
@@ -70,6 +71,11 @@ function isExactValidatePath(path) {
   return /^\/v1\/vaults\/[^/]+\/credentials\/[^/]+\/mcp_oauth_validate$/.test(pathname);
 }
 
+function isExactEnvironmentNetworkingValidatePath(path) {
+  const pathname = new URL(path, "http://oma.local").pathname;
+  return pathname === "/v1/environments/networking-presets/validate";
+}
+
 async function request(path, { method = "GET", body, capability, headers: extraHeaders } = {}) {
   // Normalize the verb once so the guard and fetch see the same value. The
   // guard is already fail-closed for any casing (a lowercase "post" is
@@ -117,6 +123,7 @@ async function request(path, { method = "GET", body, capability, headers: extraH
 function isAllowedWorkspaceWrite(path, method, capability) {
   return (
     (capability === VALIDATE_CAPABILITY && method === "POST" && isExactValidatePath(path)) ||
+    (capability === VALIDATE_ENVIRONMENT_NETWORKING_CAPABILITY && method === "POST" && isExactEnvironmentNetworkingValidatePath(path)) ||
     (capability === CREATE_AGENT_CAPABILITY && method === "POST" && path === "/v1/agents") ||
     (capability === CREATE_ENVIRONMENT_CAPABILITY && method === "POST" && path === "/v1/environments") ||
     (capability === CREATE_SESSION_CAPABILITY && method === "POST" && path === "/v1/sessions") ||
@@ -229,6 +236,36 @@ export function createEnvironment(body) {
     body,
     capability: CREATE_ENVIRONMENT_CAPABILITY,
   }).then(toUiEnvironment);
+}
+
+export function listEnvironmentNetworkingPresets() {
+  return request("/v1/environments/networking-presets")
+    .then((response) => {
+      const rows = Array.isArray(response?.presets) ? response.presets : [];
+      return {
+        deployment: response?.deployment ?? {
+          provider:null,
+          egress_supported:false,
+          reason:"Networking capability was not reported by this deployment.",
+        },
+        presets: rows.map(toUiNetworkingPreset),
+        custom: response?.custom ?? {
+          https_only:true,
+          wildcard_matches_bare_domain:false,
+        },
+      };
+    });
+}
+
+export function validateEnvironmentNetworkingHosts(allowedHosts) {
+  return request("/v1/environments/networking-presets/validate", {
+    method: "POST",
+    body: { allowed_hosts: allowedHosts },
+    capability: VALIDATE_ENVIRONMENT_NETWORKING_CAPABILITY,
+  }).then((response) => {
+    const hosts = response?.allowed_hosts ?? response?.normalized_allowed_hosts ?? response?.data?.allowed_hosts;
+    return Array.isArray(hosts) ? hosts : [];
+  });
 }
 
 export function createSession(body, { intent, agentNames } = {}) {
@@ -364,13 +401,14 @@ async function fetchFilePages(path, { limit = PAGE_LIMIT } = {}) {
 }
 
 export async function loadConsoleData() {
-  const [agentsPage, sessionsPage, environmentsPage, filesPage, modelsPage] =
+  const [agentsPage, sessionsPage, environmentsPage, filesPage, modelsPage, networkingCatalog] =
     await Promise.all([
       fetchCursorPages("/v1/agents?include_archived=true"),
       fetchCursorPages("/v1/sessions?include_archived=true&order=desc"),
       fetchCursorPages("/v1/environments"),
       fetchFilePages("/v1/files"),
       listModelCatalog(),
+      listEnvironmentNetworkingPresets(),
     ]);
 
   const agents = agentsPage.data.map(toUiAgent);
@@ -387,7 +425,7 @@ export async function loadConsoleData() {
     ["models", modelsPage],
   ]);
 
-  return { agents, sessions, environments, files, models: modelsPage.data, warnings };
+  return { agents, sessions, environments, files, models: modelsPage.data, networkingCatalog, warnings };
 }
 
 async function hydrateSession(session) {
@@ -464,16 +502,42 @@ function toUiEnvironment(environment) {
     ? networking.allowed_hosts.length
     : 0;
   const provider = environment.config?.sandbox_provider ?? "deployment provider";
+  const networkingSummary = networking?.type === "limited"
+    ? (allowedHosts ? `${allowedHosts} allowed host${allowedHosts === 1 ? "" : "s"}` : "offline")
+    : "deployment policy";
   return {
     id: environment.id,
     label: environment.name || environment.id,
     image: networking?.type === "limited"
-      ? `${provider} · default-deny${allowedHosts ? ` · ${allowedHosts} hosts` : ""}`
+      ? `${provider} · ${networkingSummary}`
       : provider,
+    networkingSummary,
+    allowedHosts,
     created: shortDate(environment.created_at),
     config: environment.config ?? {},
     archived: Boolean(environment.archived_at),
   };
+}
+
+function toUiNetworkingPreset(preset) {
+  const rawHosts = preset.networking?.allowed_hosts ?? [];
+  const allowedHosts = Array.isArray(rawHosts) ? rawHosts : [];
+  const id = String(preset.id ?? (allowedHosts.length ? "custom" : "offline-v1"));
+  return {
+    id,
+    version: preset.version ?? 1,
+    label: preset.name ?? titleForPresetId(id),
+    description: preset.description ?? "",
+    allowed_hosts: allowedHosts,
+    config: { networking: { type: "limited", allowed_hosts: allowedHosts } },
+  };
+}
+
+function titleForPresetId(id) {
+  if (id === "offline-v1") return "Offline";
+  if (id === "npm-pypi-v1") return "npm + PyPI";
+  if (id === "github-packages-v1") return "GitHub + package registries";
+  return id.replace(/[-_]+/g, " ");
 }
 
 function toUiFile(file) {
@@ -746,6 +810,8 @@ if (typeof window !== "undefined") {
     modelInputForSelection,
     listModelCatalog,
     createEnvironment,
+    listEnvironmentNetworkingPresets,
+    validateEnvironmentNetworkingHosts,
     createSession,
     sendSessionEvents,
     followSessionEvents,

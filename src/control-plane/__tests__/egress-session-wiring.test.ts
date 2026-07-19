@@ -207,7 +207,7 @@ describe("fail-closed session-create gate", () => {
     plane.stores.close();
   });
 
-  it("accepts limited hosted networking and preserves the caller's config", async () => {
+  it("accepts limited hosted networking and persists its canonical config", async () => {
     const plane = createDeploymentControlPlane({});
     const config = {
       type: "cloud",
@@ -224,7 +224,15 @@ describe("fail-closed session-create gate", () => {
     });
     expect(res.status).toBe(200);
     const environment = (await res.json()) as ManagedAgentsEnvironment;
-    expect(environment.config).toEqual(config);
+    expect(environment.config).toEqual({
+      ...config,
+      networking: {
+        type: "limited",
+        allowed_hosts: ["api.example.com", "*.example.org"],
+        allow_package_managers: false,
+        allow_mcp_servers: false,
+      },
+    });
     const listed = await request(plane.app, "/v1/environments");
     expect(((await listed.json()) as { data: unknown[] }).data).toHaveLength(1);
     plane.stores.close();
