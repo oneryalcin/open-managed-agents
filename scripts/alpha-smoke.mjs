@@ -229,7 +229,7 @@ async function main() {
   await bestEffort(() => requestJson(baseUrl, apiKey, `/v1/sessions/${session.id}`, { method: "DELETE" }));
   await bestEffort(() => requestJson(baseUrl, apiKey, `/v1/agents/${agent.id}/archive`, { method: "POST" }));
   if (egressSmoke) {
-    assertNoSessionDockerResources(session.id);
+    await assertNoSessionDockerResources(session.id);
     ok("No session sandbox, sidecar, or internal network remained after delete");
   }
   ok("Cleanup attempted");
@@ -360,15 +360,24 @@ async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl, eg
   throw new Error(`Timed out waiting for OMA startup logs.\n${logs.trim()}`);
 }
 
-function assertNoSessionDockerResources(sessionId) {
+async function assertNoSessionDockerResources(sessionId) {
   const filters = ["container", "network"];
-  for (const resource of filters) {
-    const args = resource === "container"
-      ? ["ps", "-aq", "--filter", `label=open-managed-agents.session-id=${sessionId}`]
-      : ["network", "ls", "-q", "--filter", `label=open-managed-agents.session-id=${sessionId}`];
-    const result = spawnSync("docker", args, { encoding:"utf8" });
-    if (result.status !== 0) throw new Error(`Could not inspect Docker ${resource} cleanup: ${result.stderr || result.stdout}`);
-    if (result.stdout.trim() !== "") throw new Error(`Docker ${resource} resources remain for ${sessionId}: ${result.stdout.trim()}`);
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const remaining = [];
+    for (const resource of filters) {
+      const args = resource === "container"
+        ? ["ps", "-aq", "--filter", `label=open-managed-agents.session-id=${sessionId}`]
+        : ["network", "ls", "-q", "--filter", `label=open-managed-agents.session-id=${sessionId}`];
+      const result = spawnSync("docker", args, { encoding:"utf8" });
+      if (result.status !== 0) throw new Error(`Could not inspect Docker ${resource} cleanup: ${result.stderr || result.stdout}`);
+      if (result.stdout.trim() !== "") remaining.push(`${resource}: ${result.stdout.trim()}`);
+    }
+    if (remaining.length === 0) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`Docker resources remain for ${sessionId}: ${remaining.join("; ")}`);
+    }
+    await delay(100);
   }
 }
 
