@@ -18,133 +18,43 @@ files, and sandboxes live on your machines, under your policies.
 
 ## Quickstart
 
-From a checkout (Node ≥ 22.19, Docker running):
+Start with the canonical source-checkout guide:
+
+**[Getting Started](docs/getting-started.md)**
+
+The alpha path is:
 
 ```bash
-npm install
+git clone https://github.com/oneryalcin/open-managed-agents.git
+cd open-managed-agents
+npm ci
 npm link
+oma doctor
+oma smoke --local-compatible
 export ANTHROPIC_API_KEY="..."
 oma up
 ```
 
-`oma up` starts the durable appliance in the foreground with Docker-local
-sandboxing, stores data under `~/.oma`, and prints the console URL and first
-workspace API key once. Visiting the bare server URL redirects to the console.
-Press Ctrl-C to stop it. In another terminal, run the disposable
-end-to-end check with:
+`oma smoke --local-compatible` is the no-paid-API proof: it starts a temporary
+OMA server, loopback OpenAI-compatible model fixture, and Docker-local sandbox,
+then verifies model discovery, agent/session creation, a real `bash` tool call,
+events, and cleanup.
 
-```bash
-oma smoke
-```
-
-The smoke starts an isolated temporary OMA server, creates an
-agent/environment/session, requires a real `bash` sandbox call, verifies the
-public tool/result/message events, and cleans up. Useful overrides:
-
-```bash
-OMA_ALPHA_MODEL=claude-sonnet-5 oma smoke
-OMA_ALPHA_MODEL_PROVIDER=openai OMA_ALPHA_MODEL=gpt-4.1-mini oma smoke
-oma smoke --sandbox microsandbox
-oma smoke --local-compatible
-OMA_ALPHA_BASE_URL=http://127.0.0.1:4180 OMA_ALPHA_API_KEY=oma_... oma smoke
-```
-
-The repo-local `npm run alpha:smoke` alias remains available. Existing-server
-smoke mode assumes that server already has an explicit sandbox provider and
-therefore skips local sandbox prerequisite checks.
-
-`oma smoke --local-compatible` is the no-paid-API multi-provider proof: it
-starts a deterministic loopback OpenAI-compatible endpoint, writes a private
-temporary Pi `models.json`, verifies the exact custom provider/model through
-both model requests and a real Docker `bash` round trip, then removes all
-temporary state. To run every credentialed lane available in your environment:
-
-```bash
-npm run alpha:smoke:providers
-# Or select strict lanes; a requested lane fails if its credential is absent:
-OMA_ALPHA_PROVIDER_LANES=local-compatible,openai npm run alpha:smoke:providers
-```
-
-### Choose another Pi model provider
-
-OMA reuses the provider catalog and request adapters from its pinned Pi
-release. Providers are operator-enabled, and agents persist an exact
-`{provider,id}` pair. For a built-in provider such as OpenAI:
-
-```bash
-export OMA_MODEL_PROVIDERS="anthropic,openai"
-oma auth set openai             # hidden prompt; use --stdin for automation
-oma providers status
-oma models list --provider openai --available
-oma up                          # restart after any `oma auth` mutation
-```
-
-The console's Create Agent dialog reads the same authenticated catalog and
-shows whether the selected model has configured credentials. Missing
-credentials do not prevent defining an agent, but session creation fails
-closed until the operator configures them and restarts `oma up`.
-
-Operator-defined OpenAI-, Anthropic-, and Google-compatible endpoints use Pi's
-existing `models.json` format at `~/.oma/pi/models.json` (or
-`OMA_PI_MODELS_FILE`). Validate configuration before starting:
-
-```bash
-oma models validate
-```
-
-See [development/deployment setup](docs/dev-deployment.md#model-providers-and-custom-compatible-endpoints)
-for a complete local-compatible example and the support tiers. OMA does not
-expose provider base URLs or credentials through its workspace API or console.
-
-To choose microsandbox for the durable server:
-
-```bash
-oma up --sandbox microsandbox
-```
-
-If the one-time first-boot key was not saved, mint another against the local
-appliance database while the server is running:
+`oma up` starts the durable local appliance in the foreground, stores data
+under `~/.oma`, and prints the console URL plus the first workspace API key
+once. Use that workspace key in the bundled console to create an agent,
+environment, session, and prompt. If the key was not saved, mint another while
+the server is running:
 
 ```bash
 oma keys mint
-oma keys list
-oma workspaces list
 ```
-
-Use `--workspace`, `--label`, or `--db` when operating on a non-default local
-workspace/database. Appliance-wide admin mode remains opt-in:
-
-```bash
-oma admin init     # writes ~/.oma/admin.key with mode 0600 and prints it once
-oma admin status
-# restart oma up after initialization
-```
-
-`oma up` automatically uses that local admin-key file when present. It is not
-created on ordinary first boot because most single-workspace users do not need
-cross-workspace admin HTTP routes. Rotation is deliberately deferred.
-
-Detached lifecycle commands (`oma up --detach`, `oma
-logs`, and `oma down`) are planned but not implemented; keep the foreground
-terminal open for now.
 
 Interactive, air-gap-safe OpenAPI documentation is served at `/docs/`, with
 the same schema available to tools at `/openapi.json`. The documentation lists
-only routes OMA currently ships; workspace and admin credentials entered in
-the UI stay in page memory and are not persisted.
+only routes OMA currently ships; workspace and admin credentials entered in the
+UI stay in page memory and are not persisted.
 
-Alternatively, run the appliance with Docker Compose:
-
-```bash
-docker compose up -d
-docker compose logs oma | grep x-api-key
-```
-
-First boot initializes durable storage (default `~/.oma`, `/data` in the
-container) and prints your workspace API key **once**. Open the bundled
-console at `http://127.0.0.1:4180/console` and log in with that key to browse
-your workspace — or set `OMA_ADMIN_KEY` to manage workspaces and mint keys
-from the browser ([setup](docs/dev-deployment.md#the-admin-api-and-console-admin-mode)).
 Then point the ordinary Anthropic SDK at it — no OMA-specific client:
 
 ```python
@@ -174,7 +84,7 @@ with client.beta.sessions.events.stream(session.id) as stream:
 A complete working example (file mounts, custom tools, tool confirmations,
 Streamlit UI) lives in
 [examples/ship-your-first-managed-agent](examples/ship-your-first-managed-agent/README.md).
-Config overrides and key provisioning:
+Config overrides, model providers, and key provisioning:
 [Development and deployment setup](docs/dev-deployment.md).
 
 ## Why This Exists
@@ -263,8 +173,8 @@ What's still missing — the
 the authoritative sequencing:
 
 - session usage metering (`usage` is `null`);
-- agent versioning, broader event-topology parity, file-upload idempotency,
-  remote sandbox providers, RBAC within a workspace, and CI.
+- broader event-topology parity, file-upload idempotency, remote sandbox
+  providers, and RBAC within a workspace.
 
 ## Architecture
 
@@ -305,7 +215,7 @@ a later alpha usability slice.
 ## Development
 
 ```bash
-npm install
+npm ci
 npm run typecheck
 npm test
 ```

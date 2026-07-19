@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,156 @@ describe("oma CLI", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("oma 0.0.1");
+  });
+
+  it("makes every documented command and action help discoverable without side effects", () => {
+    const home = join(tmpdir(), `oma-cli-help-missing-${process.pid}-${Date.now()}`);
+    const topics = [
+      ["up"], ["smoke"], ["keys"], ["keys", "mint"], ["keys", "list"],
+      ["workspaces"], ["workspaces", "list"], ["providers"], ["providers", "status"],
+      ["models"], ["models", "list"], ["models", "validate"], ["auth"],
+      ["auth", "set"], ["auth", "status"], ["auth", "remove"], ["admin"],
+      ["admin", "init"], ["admin", "status"], ["doctor"], ["version"],
+    ];
+    for (const topic of topics) {
+      const direct = run([...topic, "--help"], { OMA_HOME: home });
+      expect(direct.status, topic.join(" ")).toBe(0);
+      expect(direct.stdout, topic.join(" ")).toContain(`Usage: oma ${topic.join(" ")}`);
+      expect(direct.stdout, topic.join(" ")).toContain("Exit status:");
+      const routed = run(["help", ...topic], { OMA_HOME: home });
+      expect(routed.status, `help ${topic.join(" ")}`).toBe(0);
+      expect(routed.stdout, `help ${topic.join(" ")}`).toContain(`Usage: oma ${topic.join(" ")}`);
+    }
+    expect(existsSync(home)).toBe(false);
+  });
+
+  it("runs doctor as a read-only, secret-safe JSON diagnostic", () => {
+    const parent = mkdtempSync(join(tmpdir(), "oma-cli-doctor-"));
+    tempHomes.push(parent);
+    const home = join(parent, "missing-home");
+    const sentinel = "oma-secret-sentinel-never-print";
+    const result = run(["doctor", "--sandbox", "microsandbox", "--json"], {
+      OMA_HOME: home,
+      OMA_MICROSANDBOX_COMMAND: "oma-command-that-does-not-exist",
+      ANTHROPIC_API_KEY: sentinel,
+      OMA_PORT: "65534",
+    });
+
+    expect([0, 1]).toContain(result.status);
+    const report = JSON.parse(result.stdout);
+    expect(report).toMatchObject({ schema_version: 1, ok: expect.any(Boolean) });
+    expect(report.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "node.version" }),
+      expect.objectContaining({ id: "models.catalog" }),
+      expect.objectContaining({ id: "models.credentials", status: "pass" }),
+      expect.objectContaining({ id: "sandbox.runtime", status: "fail" }),
+    ]));
+    expect(result.stdout).not.toContain(sentinel);
+    expect(result.stderr).not.toContain(sentinel);
+    expect(existsSync(home)).toBe(false);
+  }, 20_000);
+
+  it("does not rewrite or lock an existing auth snapshot while diagnosing it", () => {
+    const home = mkdtempSync(join(tmpdir(), "oma-cli-doctor-existing-"));
+    tempHomes.push(home);
+    const pi = join(home, "pi");
+    mkdirSync(pi, { mode: 0o700 });
+    const sentinel = "oma-existing-auth-secret";
+    const authPath = join(pi, "auth.json");
+    writeFileSync(authPath, JSON.stringify({ anthropic: { type: "api_key", key: sentinel } }), { mode: 0o600 });
+    const before = readFileSync(authPath, "utf8");
+    const entriesBefore = readdirSync(pi);
+
+    const result = run(["doctor", "--sandbox", "microsandbox", "--json"], {
+      OMA_HOME: home,
+      OMA_MICROSANDBOX_COMMAND: "oma-command-that-does-not-exist",
+      OMA_PORT: "65533",
+    });
+
+    expect([0, 1]).toContain(result.status);
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(readdirSync(pi)).toEqual(entriesBefore);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(sentinel);
+  }, 20_000);
+
+  it("fails closed before reading an auth file with unsafe permissions", () => {
+    const home = mkdtempSync(join(tmpdir(), "oma-cli-doctor-unsafe-auth-"));
+    tempHomes.push(home);
+    const pi = join(home, "pi");
+    mkdirSync(pi, { mode: 0o700 });
+    const sentinel = "oma-world-readable-secret";
+    writeFileSync(join(pi, "auth.json"), JSON.stringify({ anthropic: { type: "api_key", key: sentinel } }), { mode: 0o644 });
+
+    const result = run(["doctor", "--sandbox", "microsandbox", "--json"], {
+      OMA_HOME: home,
+      OMA_MICROSANDBOX_COMMAND: "oma-command-that-does-not-exist",
+      OMA_PORT: "65532",
+    });
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).checks).toContainEqual(expect.objectContaining({
+      id: "paths.pi_auth",
+      status: "fail",
+    }));
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(sentinel);
+  }, 20_000);
+
+  it("does not echo malformed auth contents", () => {
+    const home = mkdtempSync(join(tmpdir(), "oma-cli-doctor-malformed-auth-"));
+    tempHomes.push(home);
+    const pi = join(home, "pi");
+    mkdirSync(pi, { mode: 0o700 });
+    const sentinel = "oma-malformed-secret-sentinel";
+    writeFileSync(join(pi, "auth.json"), `{"anthropic":{"type":"api_key","key":"${sentinel}",}}`, { mode: 0o600 });
+
+    const result = run(["doctor", "--sandbox", "microsandbox", "--json"], {
+      OMA_HOME: home,
+      OMA_MICROSANDBOX_COMMAND: "oma-command-that-does-not-exist",
+      OMA_PORT: "65531",
+    });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(sentinel);
+    expect(JSON.parse(result.stdout).checks).toContainEqual(expect.objectContaining({
+      id: "models.catalog",
+      status: "fail",
+      summary: expect.stringContaining("auth.json is not valid JSON"),
+    }));
+  }, 20_000);
+
+  it("fails before following an unsafe OMA_HOME symlink", () => {
+    const parent = mkdtempSync(join(tmpdir(), "oma-cli-doctor-home-symlink-"));
+    tempHomes.push(parent);
+    const target = join(parent, "target");
+    const pi = join(target, "pi");
+    mkdirSync(pi, { recursive: true, mode: 0o700 });
+    const sentinel = "oma-symlinked-home-secret";
+    writeFileSync(join(pi, "auth.json"), JSON.stringify({ anthropic: { type: "api_key", key: sentinel } }), { mode: 0o600 });
+    const linkedHome = join(parent, "linked-home");
+    symlinkSync(target, linkedHome);
+
+    const result = run(["doctor", "--sandbox", "microsandbox", "--json"], {
+      OMA_HOME: linkedHome,
+      OMA_MICROSANDBOX_COMMAND: "oma-command-that-does-not-exist",
+      OMA_PORT: "65530",
+    });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(sentinel);
+    expect(JSON.parse(result.stdout).checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "paths.oma_home", status: "fail" }),
+      expect.objectContaining({ id: "models.catalog", status: "fail" }),
+    ]));
+  }, 20_000);
+
+  it("uses stable nonzero exit codes and points invalid input to the nearest help", () => {
+    const badOption = run(["models", "list", "--wat"]);
+    expect(badOption.status).toBe(2);
+    expect(badOption.stderr).toContain("oma help models list");
+
+    const badDoctor = run(["doctor", "--wat"]);
+    expect(badDoctor.status).toBe(2);
+    expect(badDoctor.stderr).toContain("oma doctor --help");
   });
 
   it("fails honestly for detached lifecycle commands", () => {

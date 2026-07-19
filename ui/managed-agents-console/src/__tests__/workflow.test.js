@@ -11,6 +11,12 @@ function source(name) {
 }
 
 describe("alpha console workflow", () => {
+  it("defaults first-time login to the ordinary workspace-key path", () => {
+    const auth = source("auth.jsx");
+    expect(auth).toContain("useStateA('workspace')");
+    expect(auth).not.toContain("useStateA('admin')");
+  });
+
   it("keeps live API mutations enabled while unsupported lifecycle writes stay disabled", () => {
     const app = source("app.jsx");
     expect(app).toContain("const mutationReadOnly = apiState.state !== 'loaded'");

@@ -14,13 +14,25 @@ checkNode();
 
 const command = args[0];
 if (command === undefined || command === "help" || command === "--help" || command === "-h") {
+  if (command === "help" && args.length > 1) {
+    printCommandHelp(args.slice(1));
+    process.exit(0);
+  }
   printHelp();
   process.exit(0);
 }
-if (command === "version" || command === "--version" || command === "-v") {
+if ((command === "version" && args.length === 1) || command === "--version" || command === "-v") {
   console.log(`oma ${packageJson.version}`);
   process.exit(0);
 }
+const commandArgs = args.slice(1);
+const helpIndex = commandArgs.findIndex((arg) => arg === "--help" || arg === "-h");
+if (helpIndex !== -1) {
+  if (helpIndex !== commandArgs.length - 1) fail(`Help must be the last argument. Run \`oma help ${[command, ...commandArgs.slice(0, helpIndex)].join(" ")}\`.`);
+  printCommandHelp([command, ...commandArgs.slice(0, helpIndex)]);
+  process.exit(0);
+}
+
 if (command === "up") {
   await runUp(args.slice(1));
 } else if (command === "smoke") {
@@ -37,10 +49,25 @@ if (command === "up") {
   await runModels(args.slice(1));
 } else if (command === "auth") {
   await runAuth(args.slice(1));
+} else if (command === "doctor") {
+  await runDoctor(args.slice(1));
 } else if (command === "down" || command === "logs" || command === "status") {
   fail(`${command} is not implemented yet. Run \`oma up\` in the foreground and use Ctrl-C to stop it.`);
 } else {
   fail(`Unknown command: ${command}\n\nRun \`oma --help\` for usage.`);
+}
+
+async function runDoctor(commandArgs) {
+  await runChild(
+    process.execPath,
+    [
+      "--experimental-transform-types",
+      "--disable-warning=ExperimentalWarning",
+      join(root, "scripts", "oma-doctor.ts"),
+      ...commandArgs,
+    ],
+    process.env,
+  );
 }
 
 async function runUp(commandArgs) {
@@ -57,7 +84,7 @@ async function runUp(commandArgs) {
     if (arg === "--detach" || arg === "-d") {
       fail("Detached mode is not implemented yet. Run `oma up` in the foreground for now.");
     }
-    fail(`Unknown option for oma up: ${arg}`);
+    fail(`Unknown option for oma up: ${arg}\nRun \`oma help up\` for usage.`);
   }
 
   checkSandbox(sandbox);
@@ -93,7 +120,7 @@ function runAdmin(commandArgs) {
       if (arg === "--file") {
         path = requiredOption(rest, ++index, arg);
       } else {
-        fail(`Unknown option for oma admin init: ${arg}`);
+        fail(`Unknown option for oma admin init: ${arg}\nRun \`oma help admin init\` for usage.`);
       }
     }
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -153,7 +180,7 @@ async function runKeys(commandArgs) {
     } else if (arg === "--db") {
       db = requiredOption(rest, ++index, arg);
     } else {
-      fail(`Unknown option for oma keys ${action}: ${arg}`);
+      fail(`Unknown option for oma keys ${action}: ${arg}\nRun \`oma help keys ${action}\` for usage.`);
     }
   }
   const provisioningArgs = action === "mint"
@@ -171,7 +198,7 @@ async function runWorkspaces(commandArgs) {
     if (arg === "--db") {
       db = requiredOption(rest, ++index, arg);
     } else {
-      fail(`Unknown option for oma workspaces list: ${arg}`);
+      fail(`Unknown option for oma workspaces list: ${arg}\nRun \`oma help workspaces list\` for usage.`);
     }
   }
   await runProvisioning(["list-workspaces", "--db", db]);
@@ -256,7 +283,7 @@ async function runSmoke(commandArgs) {
       localCompatible = true;
       continue;
     }
-    fail(`Unknown option for oma smoke: ${arg}`);
+    fail(`Unknown option for oma smoke: ${arg}\nRun \`oma help smoke\` for usage.`);
   }
   await runChild(
     process.execPath,
@@ -357,6 +384,7 @@ Usage:
   oma auth set <provider> [--stdin]
   oma auth status [provider]
   oma auth remove <provider>
+  oma doctor [--sandbox docker|microsandbox] [--json]
   oma admin init
   oma admin status
   oma version
@@ -370,6 +398,7 @@ Commands:
   providers   Inspect enabled Pi model providers and credential readiness.
   models      List or validate enabled Pi models.
   auth        Store, remove, or inspect model provider API-key credentials.
+  doctor      Run secret-safe, read-only local readiness diagnostics.
   admin       Initialize or inspect local appliance admin mode.
   version     Print the installed OMA version.
 
@@ -386,12 +415,51 @@ Environment:
   OMA_HOST                Bind address (default: 127.0.0.1).
   OMA_PORT                Listen port (default: 4180).
 
+Exit status:
+  0   Command or help completed successfully.
+  1   A readiness or runtime verification failed.
+  2   The invocation or local configuration was invalid.
+  130/143  Interrupted by SIGINT/SIGTERM.
+
 Planned, not implemented yet:
   oma up --detach
   oma status
   oma logs
   oma down
   oma admin rotate`);
+}
+
+function commandHelpFor(key) {
+  return ({
+  up: ["Usage: oma up [--sandbox docker|microsandbox]", "Start OMA in the foreground. Docker is the default.", "Example: oma up --sandbox docker"],
+  smoke: ["Usage: oma smoke [--sandbox docker|microsandbox] [--local-compatible]", "Run the disposable end-to-end alpha proof.", "Example: oma smoke --local-compatible"],
+  keys: ["Usage: oma keys <mint|list> [options]", "Manage workspace API keys in the local SQLite database.", "Examples: oma keys mint --workspace wrk_default; oma keys list --workspace wrk_default"],
+  "keys mint": ["Usage: oma keys mint [--workspace id] [--label label] [--db path]", "Mint a workspace key and print its plaintext once.", "Example: oma keys mint --workspace wrk_default --label console"],
+  "keys list": ["Usage: oma keys list [--workspace id] [--db path]", "List workspace key metadata without plaintext secrets.", "Example: oma keys list --workspace wrk_default"],
+  workspaces: ["Usage: oma workspaces list [--db path]", "List local workspaces.", "Example: oma workspaces list"],
+  "workspaces list": ["Usage: oma workspaces list [--db path]", "List local workspaces.", "Example: oma workspaces list --db ~/.oma/oma.sqlite"],
+  providers: ["Usage: oma providers status", "Inspect enabled Pi providers and credential readiness.", "Example: oma providers status"],
+  "providers status": ["Usage: oma providers status", "Inspect enabled Pi providers and credential readiness.", "Example: oma providers status"],
+  models: ["Usage: oma models <list|validate>", "Discover enabled models or validate models.json.", "Examples: oma models list --available; oma models validate"],
+  "models list": ["Usage: oma models list [--provider name] [--available]", "List enabled Pi models without exposing credentials.", "Example: oma models list --provider openai --available"],
+  "models validate": ["Usage: oma models validate [--file path]", "Validate deployment policy and Pi models.json without calling a provider.", "Example: oma models validate --file ~/.oma/pi/models.json"],
+  auth: ["Usage: oma auth <set|status|remove>", "Manage provider API-key credentials.", "Examples: printf '%s\\n' \"$OPENAI_API_KEY\" | oma auth set openai --stdin; oma auth status"],
+  "auth set": ["Usage: oma auth set <provider> [--stdin]", "Store a provider key without accepting it as a command-line argument.", "Example: printf '%s\\n' \"$OPENAI_API_KEY\" | oma auth set openai --stdin"],
+  "auth status": ["Usage: oma auth status [provider]", "Show credential readiness without secret values.", "Example: oma auth status openai"],
+  "auth remove": ["Usage: oma auth remove <provider>", "Remove a stored provider credential idempotently.", "Example: oma auth remove openai"],
+  admin: ["Usage: oma admin <init|status>", "Initialize or inspect appliance-wide admin mode.", "Examples: oma admin init; oma admin status"],
+  "admin init": ["Usage: oma admin init [--file path]", "Create a new owner-only admin key file; existing files are never overwritten.", "Example: oma admin init"],
+  "admin status": ["Usage: oma admin status", "Inspect admin configuration without printing the key.", "Example: oma admin status"],
+  doctor: ["Usage: oma doctor [--sandbox docker|microsandbox] [--json]", "Run read-only readiness checks. This command creates no OMA files and downloads no images.", "Examples: oma doctor; oma doctor --json", "Exit codes: 0 ready (warnings allowed), 1 readiness failures, 2 invalid invocation or internal diagnostic failure."],
+  version: ["Usage: oma version", "Print the installed OMA package version.", "Example: oma version"],
+  })[key];
+}
+
+function printCommandHelp(parts) {
+  const key = parts.join(" ");
+  const lines = commandHelpFor(key);
+  if (lines === undefined) fail(`Unknown help topic: ${key}\n\nRun \`oma --help\` for available commands.`);
+  console.log(`${lines.join("\n\n")}\n\nExit status: 0 success/help, 1 readiness or runtime failure, 2 invalid invocation/configuration, 130/143 interruption.\n\nAll command help exits 0 and performs no storage or network mutation.`);
 }
 
 function fail(message) {

@@ -41,17 +41,33 @@ Goal: prove the documented setup works from a fresh checkout.
 
 Deliverables:
 
-- Verify the README quickstart from a clean checkout.
-- Add one canonical "hello managed agent" flow.
+- Maintain one canonical source-checkout guide:
+  [Getting Started](docs/getting-started.md).
+- Keep the README as a short launchpad, and make docs/index, deployment docs,
+  Docker tutorial, ALPHA, and handoff link back to the canonical guide instead
+  of duplicating the full flow.
+- Verify the canonical guide from a clean checkout.
+- Add one canonical "hello managed agent" flow:
+  `clone -> npm ci -> npm link -> oma doctor -> oma smoke --local-compatible
+  -> oma up -> workspace-key console login -> create agent/environment/session
+  -> send prompt`.
 - Add the repo-local `oma` CLI (`npm link` after install):
   - `oma up` starts the durable foreground appliance with Docker-local by default;
   - `oma up --sandbox microsandbox` selects the opt-in provider;
   - `oma smoke` runs the disposable verification path;
+  - `oma doctor` runs read-only, secret-safe local readiness diagnostics;
   - `oma keys mint|list` and `oma workspaces list` cover local operator recovery;
   - `oma admin init|status` provides explicit, owner-only local admin setup;
   - the server prints the console URL and redirects `/` to `/console/`;
   - detached lifecycle (`oma up --detach`, `oma logs`, `oma down`) is documented
     but explicitly not implemented yet.
+- Complete CLI discovery:
+  - nested `--help` for every command and subcommand;
+  - examples and exit-code semantics for ordinary failure modes;
+  - `oma doctor --json` for automation.
+- `oma doctor` invariant: it must not create `~/.oma`, Pi auth/model files,
+  lock files, databases, or pull Docker images. If a production constructor
+  mutates missing paths, doctor must use a separate read-only inspection seam.
 - Add a local smoke command, `oma smoke` (also available as
   `npm run alpha:smoke`), that:
   - verifies local sandbox/runtime prerequisites when it starts its own server;
@@ -76,14 +92,27 @@ Deliverables:
   - default-deny networking;
   - port already in use;
   - custom image missing expected tools.
+- Add automated source-checkout gates for:
+  - CLI help;
+  - doctor read-only behavior;
+  - docs command contract;
+  - browser console happy path;
+  - Docker-backed local-compatible smoke.
+- Run the human onboarding gate before broad alpha invitation:
+  - local-compatible proof median at or below 10 minutes;
+  - credential-supplied console flow median at or below 15 minutes;
+  - zero undocumented intervention.
+- Track npm, `npx`, curl, and Homebrew distribution separately in GitHub issue
+  #196. Do not hide release/supply-chain work inside onboarding cleanup.
 
 Current commands:
 
 ```bash
-npm install
+npm ci
 npm link
+oma doctor
+oma smoke --local-compatible
 oma up
-oma smoke
 ```
 
 Useful overrides:

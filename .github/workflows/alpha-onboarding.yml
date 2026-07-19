@@ -1,0 +1,51 @@
+name: Alpha onboarding gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checkout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.18.0"
+          cache: npm
+      - name: Install from the lockfile
+        run: npm ci
+      - name: Verify CLI discovery and read-only doctor
+        run: |
+          set -euo pipefail
+          node bin/oma.mjs --help >/dev/null
+          for topic in \
+            "up" "smoke" "keys" "keys mint" "keys list" \
+            "workspaces" "workspaces list" "providers" "providers status" \
+            "models" "models list" "models validate" "auth" "auth set" \
+            "auth status" "auth remove" "admin" "admin init" "admin status" \
+            "doctor" "version"; do
+            node bin/oma.mjs help $topic >/dev/null
+          done
+          missing_home="$RUNNER_TEMP/oma-doctor-must-not-create"
+          OMA_HOME="$missing_home" node bin/oma.mjs doctor --json > "$RUNNER_TEMP/doctor.json"
+          test ! -e "$missing_home"
+          node -e 'const r=require(process.argv[1]); if(r.schema_version!==1 || !Array.isArray(r.checks)) process.exit(1)' "$RUNNER_TEMP/doctor.json"
+      - name: Typecheck and test all contracts
+        run: |
+          npm run typecheck
+          npm test
+      - name: Install pinned headless browser for the console gate
+        run: npx --no-install playwright-core install --with-deps --only-shell chromium
+      - name: Run live console browser onboarding
+        run: npm run alpha:console-browser
+        env:
+          OMA_PLAYWRIGHT_MANAGED_BROWSER: "1"
+      - name: Run deterministic Docker onboarding proof
+        run: node bin/oma.mjs smoke --local-compatible

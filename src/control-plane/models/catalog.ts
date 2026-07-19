@@ -13,6 +13,7 @@ export interface PiModelRef {
 }
 
 export type PiResolvedModel = NonNullable<ReturnType<ModelRegistry["find"]>>;
+export type ReadOnlyAuthData = NonNullable<Parameters<typeof AuthStorage.inMemory>[0]>;
 
 export interface PiModelCatalog {
   defaultModel: PiModelRef;
@@ -36,6 +37,25 @@ export interface CreatePiModelCatalogConfig {
 }
 
 export function createPiModelCatalog(config: CreatePiModelCatalogConfig): PiModelCatalog {
+  return createCatalog(config, AuthStorage.fromStorage(config.authBackend));
+}
+
+/**
+ * Read-only catalog construction for diagnostics. The caller supplies an
+ * already-read credential snapshot, so Pi never opens, locks, or creates an
+ * auth file. Runtime code must continue to use createPiModelCatalog().
+ */
+export function createReadOnlyPiModelCatalog(
+  config: Omit<CreatePiModelCatalogConfig, "authBackend">,
+  authData: ReadOnlyAuthData = {},
+): PiModelCatalog {
+  return createCatalog(config, AuthStorage.inMemory(authData));
+}
+
+function createCatalog(
+  config: Omit<CreatePiModelCatalogConfig, "authBackend">,
+  authStorage: AuthStorage,
+): PiModelCatalog {
   const allowedProviders = new Set(config.allowedProviders);
   if (allowedProviders.size !== config.allowedProviders.length) {
     throw new Error("OMA_MODEL_PROVIDERS must not contain duplicate providers");
@@ -51,7 +71,6 @@ export function createPiModelCatalog(config: CreatePiModelCatalogConfig): PiMode
     allowCommands: config.allowModelAuthCommands,
   });
 
-  const authStorage = AuthStorage.fromStorage(config.authBackend);
   const authErrors = authStorage.drainErrors();
   if (authErrors.length > 0) {
     throw new Error(`Failed to load model auth storage: ${authErrors.map((error) => error.message).join("; ")}`);

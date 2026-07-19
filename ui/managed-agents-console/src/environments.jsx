@@ -70,11 +70,18 @@ function CreateEnvironmentModal({ mode, onClose, onCreated, onAuthExpired, api =
   );
 }
 
-function ReadinessView({ agents = [], environments = [], mode = "api", workspaceLoaded = false, go, onCreateEnvironment, onCreateAgent }) {
+function ReadinessView({ agents = [], environments = [], models = [], mode = "api", workspaceLoaded = false, go, onCreateEnvironment, onCreateAgent, onCreateSession }) {
   const authReady = mode === "demo" || workspaceLoaded;
-  const agentReady = agents.some((agent) => agent.status !== "archived");
+  const activeAgents = agents.filter((agent) => agent.status !== "archived");
   const envReady = environments.length > 0;
-  const ready = authReady && agentReady && envReady;
+  const modelReady = models.length > 0;
+  const credentialReady = models.some((model) => model.credentials_configured);
+  const readyModelKeys = new Set(models.filter((model) => model.credentials_configured).map((model) => `${model.provider}/${model.id}`));
+  const agentModelKey = (agent) => agent.modelProvider && agent.modelId
+    ? `${agent.modelProvider}/${agent.modelId}`
+    : String(agent.model || "").includes("/") ? String(agent.model) : `anthropic/${agent.model}`;
+  const agentReady = activeAgents.some((agent) => readyModelKeys.has(agentModelKey(agent)));
+  const ready = authReady && agentReady && envReady && modelReady && credentialReady;
   const items = [
     {
       key: "auth",
@@ -83,12 +90,26 @@ function ReadinessView({ agents = [], environments = [], mode = "api", workspace
       detail: authReady ? "The console can read workspace-scoped /v1 resources." : "Enter a workspace key or browse from Admin.",
     },
     {
+      key: "model",
+      title: "Model and credentials",
+      ok: modelReady && credentialReady,
+      detail: !modelReady
+        ? "No selectable models were returned by this deployment."
+        : credentialReady
+          ? `${models.filter((model) => model.credentials_configured).length} selectable model(s) report configured credentials.`
+          : "Models are registered, but none report configured credentials. Run oma doctor, then oma auth set <provider>.",
+    },
+    {
       key: "agent",
-      title: "Agent present",
+      title: "Runnable agent present",
       ok: agentReady,
-      detail: agentReady ? `${agents.filter((agent) => agent.status !== "archived").length} active agent(s) available.` : "Create an agent before starting a session.",
+      detail: agentReady
+        ? `${activeAgents.filter((agent) => readyModelKeys.has(agentModelKey(agent))).length} active agent(s) use a credential-ready model.`
+        : activeAgents.length > 0
+          ? "Active agents exist, but none use a credential-ready model. Create an agent with a ready model."
+          : "Create an agent before starting a session.",
       action: agentReady ? () => go("agents") : onCreateAgent,
-      actionLabel: agentReady ? "View agents" : "Open agents",
+      actionLabel: agentReady ? "View agents" : "Create agent",
     },
     {
       key: "environment",
@@ -98,6 +119,12 @@ function ReadinessView({ agents = [], environments = [], mode = "api", workspace
       action: envReady ? () => go("environments") : onCreateEnvironment,
       actionLabel: envReady ? "View environments" : "Create environment",
     },
+    {
+      key: "sandbox",
+      title: "Sandbox verification",
+      ok: null,
+      detail: "Sandbox execution is verified by the first session tool run, not guessed by the browser. Run oma doctor for local prerequisite checks.",
+    },
   ];
   return (
     <div className="main-scroll scroll fade-in">
@@ -105,7 +132,7 @@ function ReadinessView({ agents = [], environments = [], mode = "api", workspace
       <div className="readiness-summary panel">
         <div>
           <h2>{ready ? "Ready for session creation" : "Workspace setup is incomplete"}</h2>
-          <p>Readiness is limited to authenticated workspace access plus agent and environment presence. Model, credential, and sandbox-provider failures appear during the action that hits them.</p>
+          <p>Readiness uses the live workspace model catalog and credential flags. Sandbox execution remains unverified until a session runs a tool.</p>
         </div>
         <St k={ready ? "active" : "idle"} />
       </div>
@@ -114,7 +141,7 @@ function ReadinessView({ agents = [], environments = [], mode = "api", workspace
           <div className="panel readiness-card" key={item.key}>
             <div className="readiness-card-head">
               <span className={'readiness-mark ' + (item.ok ? 'ok' : 'todo')}>
-                <Icon name={item.ok ? "checkCircle" : "alert"} size={16} />
+                <Icon name={item.ok === null ? "info" : item.ok ? "checkCircle" : "alert"} size={16} />
               </span>
               <div>
                 <h3>{item.title}</h3>
@@ -125,6 +152,7 @@ function ReadinessView({ agents = [], environments = [], mode = "api", workspace
           </div>
         ))}
       </div>
+      {ready && <button className="btn btn-primary" onClick={onCreateSession}><Icon name="plus" size={15} />Create session</button>}
     </div>
   );
 }

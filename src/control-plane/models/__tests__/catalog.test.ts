@@ -3,10 +3,10 @@ import {
   type AuthStorageBackend,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createPiModelCatalog } from "../catalog.ts";
+import { createPiModelCatalog, createReadOnlyPiModelCatalog } from "../catalog.ts";
 
 const roots: string[] = [];
 
@@ -42,6 +42,21 @@ function createTestCatalog(options: {
 }
 
 describe("createPiModelCatalog", () => {
+  it("constructs a diagnostic catalog from an in-memory snapshot without creating auth storage", () => {
+    const root = tempRoot();
+    const authPath = join(root, "missing", "auth.json");
+    const catalog = createReadOnlyPiModelCatalog({
+      allowedProviders: ["anthropic"],
+      defaultModel: { provider: "anthropic", id: "claude-sonnet-5" },
+      authPath,
+      modelsPath: join(root, "missing", "models.json"),
+    }, { anthropic: { type: "api_key", key: "diagnostic-only" } });
+
+    expect(catalog.resolve(catalog.defaultModel)).toBeDefined();
+    expect(catalog.hasConfiguredAuth(catalog.resolve(catalog.defaultModel)!)).toBe(true);
+    expect(() => readFileSync(authPath, "utf8")).toThrow();
+  });
+
   it("resolves and lists only exact allowed provider/model pairs", () => {
     const catalog = createTestCatalog({ providers: ["anthropic", "openai"] });
 

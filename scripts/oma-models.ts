@@ -47,8 +47,10 @@ export async function runModelsCli(
     switch (command) {
       case "providers-status":
         return ok(providersStatus(loadCatalog(runtime.env)));
-      case "models-list":
-        return ok(modelsList(loadCatalog(runtime.env), parseModelsListArgs(args)));
+      case "models-list": {
+        const options = parseModelsListArgs(args);
+        return ok(modelsList(loadCatalog(runtime.env), options));
+      }
       case "models-validate":
         return ok(modelsValidate(runtime.env, parseModelsValidateArgs(args)));
       case "auth-set":
@@ -56,6 +58,7 @@ export async function runModelsCli(
       case "auth-remove":
         return ok(authRemove(runtime.env, args));
       case "auth-status":
+        assertAuthStatusArgs(args);
         return ok(authStatus(loadCatalog(runtime.env), args));
       default:
         return fail(`Unknown command: ${command}\n\n${USAGE}`);
@@ -186,7 +189,6 @@ function authRemove(
 }
 
 function authStatus(catalog: PiModelCatalog, args: string[]): string {
-  if (args.length > 1) throw new Error("Usage: oma auth status [provider]");
   const providers = args.length === 1 ? [args[0]!] : [...catalog.allowedProviders].sort();
   const lines = ["provider\tstored\tready_models\ttotal_models"];
   for (const provider of providers) {
@@ -204,6 +206,12 @@ function authStatus(catalog: PiModelCatalog, args: string[]): string {
   return `${lines.join("\n")}\n`;
 }
 
+function assertAuthStatusArgs(args: string[]): void {
+  if (args.length > 1 || args[0]?.startsWith("--")) {
+    throw new Error("Usage: oma auth status [provider]");
+  }
+}
+
 function parseModelsListArgs(args: string[]): { provider?: string; availableOnly: boolean } {
   const options: { provider?: string; availableOnly: boolean } = { availableOnly: false };
   for (let index = 0; index < args.length; index += 1) {
@@ -215,7 +223,7 @@ function parseModelsListArgs(args: string[]): { provider?: string; availableOnly
     } else if (arg === "--available") {
       options.availableOnly = true;
     } else {
-      throw new Error(`Unknown option for oma models list: ${arg}`);
+      throw new Error(`Unknown option for oma models list: ${arg}\nRun \`oma help models list\` for usage.`);
     }
   }
   return options;
@@ -228,7 +236,7 @@ function parseModelsValidateArgs(args: string[]): { file?: string } {
     if (arg === "--file") {
       options.file = requiredOption(args, ++index, arg);
     } else {
-      throw new Error(`Unknown option for oma models validate: ${arg}`);
+      throw new Error(`Unknown option for oma models validate: ${arg}\nRun \`oma help models validate\` for usage.`);
     }
   }
   return options;
@@ -243,7 +251,7 @@ function parseAuthSetArgs(args: string[]): { provider: string; stdin: boolean } 
     if (arg === "--stdin") {
       stdin = true;
     } else if (arg.startsWith("--")) {
-      throw new Error(`Unknown option for oma auth set: ${arg}`);
+      throw new Error(`Unknown option for oma auth set: ${arg}\nRun \`oma help auth set\` for usage.`);
     } else {
       throw new Error("oma auth set does not accept API keys as command-line arguments. Use --stdin or the hidden prompt.");
     }

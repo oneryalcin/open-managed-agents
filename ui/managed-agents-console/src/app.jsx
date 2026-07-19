@@ -386,7 +386,7 @@ function App() {
   );
   else if (route.name === 'admin') view = <AdminPanel onBrowseWorkspace={browseAsWorkspace} onReauth={reauth} onCredentialHealth={(workspaceId) => { const next = { name:'credentialHealth', workspaceId }; setRoute(next); writeRouteHash(next); }} />;
   else if (route.name === 'credentialHealth') view = <CredentialHealthView workspaceId={route.workspaceId} onBack={() => go('admin')} onReauth={reauth} />;
-  else if (route.name === 'start') view = <ReadinessView agents={agents} environments={environments} mode={apiState.mode} workspaceLoaded={workspaceLoaded || demoMode} go={go} onCreateAgent={() => go('agents')} onCreateEnvironment={createEnvironment} />;
+  else if (route.name === 'start') view = <ReadinessView agents={agents} environments={environments} models={models} mode={apiState.mode} workspaceLoaded={workspaceLoaded || demoMode} go={go} onCreateAgent={createAgent} onCreateEnvironment={createEnvironment} onCreateSession={() => createSession(null)} />;
   else if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={mutationReadOnly} />;
   else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} onSessionStateChange={onSessionStateChange} onRefreshSession={refreshOpenSession} dataState={dataState} apiMode={apiState.mode} readOnly={mutationReadOnly} lifecycleReadOnly={lifecycleReadOnly} onAuthExpired={workspaceReauth} />;
   else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={dataState} readOnly={mutationReadOnly} />;
