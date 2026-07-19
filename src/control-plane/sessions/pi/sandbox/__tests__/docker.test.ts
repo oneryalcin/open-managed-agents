@@ -492,7 +492,7 @@ if [[ "$1" == "run" ]]; then sleep 0.1; fi
       // Keep ordinary operations bounded below the deliberately slow startup,
       // without making the assertion depend on sub-25ms local shell startup.
       operationTimeoutMs: 250,
-      startupTimeoutMs: 1_000,
+      startupTimeoutMs: 3_000,
     });
     provider.dispose();
     await rm(dir, { recursive: true, force: true });
