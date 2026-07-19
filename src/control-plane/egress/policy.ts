@@ -218,6 +218,9 @@ function parseHostedNetworkingConfig(
       );
     }
     seen.add(host);
+    // Hosted limited networking is explicitly HTTPS-only. Termination is what
+    // lets the proxy distinguish TLS from arbitrary plaintext sent through a
+    // CONNECT tunnel; no credential or path grant is synthesized here.
     allow.push({ host, port: 443, protocol: "https", opaqueTunnel: false });
   });
 

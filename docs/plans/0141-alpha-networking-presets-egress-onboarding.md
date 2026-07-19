@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved by deliberate architecture and critic review. Implements GitHub issue
+Implemented; final independent review pending. Implements GitHub issue
 [#199](https://github.com/oneryalcin/open-managed-agents/issues/199) and closes
 the registry-backed acceptance gap left by #200.
 

@@ -44,6 +44,17 @@ For the no-paid-API path, run:
 oma smoke --local-compatible
 ```
 
+To exercise the pinned egress sidecar and the reviewed GitHub + package
+registries policy with the same deterministic local model fixture:
+
+```bash
+oma smoke --egress
+```
+
+That proof installs a pinned Python package through uv, queries npm, reaches
+GitHub clone/archive endpoints, denies an unrelated HTTPS destination, and
+asserts that the sandbox, sidecar, and internal network are gone afterward.
+
 For the default Anthropic model path, set credentials and run:
 
 ```bash
@@ -145,6 +156,15 @@ native-build baseline while retaining the provider's non-root, read-only-root,
 capability, pids, memory, and default-deny network controls. Package downloads
 remain unavailable unless the environment explicitly allows the required
 registry hosts.
+
+`oma up` makes the pinned Docker egress sidecar capability available by
+default, while the environment policy stays Offline by default. Select a
+reviewed preset or validated Custom host list in the console. There is no
+unrestricted option, wildcards match subdomains only, and environment policies
+cannot be edited after creation. Use a new environment and session to change
+network access. Set `OMA_ENABLE_EGRESS=false` on `oma up` to run an explicitly
+offline-only Docker deployment. Microsandbox-local remains offline-only in
+this alpha.
 
 Docker-local also enables a label-scoped orphan-container reaper by default.
 It removes stale Open Managed Agents Docker-local containers older than 24

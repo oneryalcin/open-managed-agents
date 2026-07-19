@@ -963,6 +963,12 @@ function buildEgressRunArgs(egress: SandboxEgressWiring): string[] {
     GIT_SSL_CAINFO: SANDBOX_CA_CERT_PATH,
     CURL_CA_BUNDLE: SANDBOX_CA_CERT_PATH,
     REQUESTS_CA_BUNDLE: SANDBOX_CA_CERT_PATH,
+    // Git/libcurl does not reliably negotiate the sidecar's Basic proxy auth
+    // from the URL alone and otherwise reports "Proxy CONNECT aborted". Pin
+    // only the proxy auth method; the credential remains the per-session URL.
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.proxyAuthMethod",
+    GIT_CONFIG_VALUE_0: "basic",
     HTTPS_PROXY: egress.proxyUrl,
     HTTP_PROXY: egress.proxyUrl,
     https_proxy: egress.proxyUrl,

@@ -107,6 +107,9 @@ describe("Docker sandbox provider command construction", () => {
     // CA mounted read-only; trust + proxy env point the sandbox at the sidecar.
     expect(args).toContain("/host/oma-egress/shared:/etc/oma:ro");
     expect(args).toContain("SSL_CERT_FILE=/etc/oma/ca.crt");
+    expect(args).toContain("GIT_CONFIG_COUNT=1");
+    expect(args).toContain("GIT_CONFIG_KEY_0=http.proxyAuthMethod");
+    expect(args).toContain("GIT_CONFIG_VALUE_0=basic");
     expect(args).toContain("NODE_EXTRA_CA_CERTS=/etc/oma/ca.crt");
     expect(args).toContain("HTTPS_PROXY=http://srt:tok@oma-egress-proxy-sess:8080");
     expect(args).toContain("https_proxy=http://srt:tok@oma-egress-proxy-sess:8080");
@@ -486,7 +489,9 @@ if [[ "$1" == "run" ]]; then sleep 0.1; fi
 
     const provider = await createDockerSandboxProvider("wrk", "sesn", {
       dockerCommand: dockerPath,
-      operationTimeoutMs: 25,
+      // Keep ordinary operations bounded below the deliberately slow startup,
+      // without making the assertion depend on sub-25ms local shell startup.
+      operationTimeoutMs: 250,
       startupTimeoutMs: 1_000,
     });
     provider.dispose();
@@ -1047,7 +1052,7 @@ describe("Wired egress session path (plan 0117e-4)", () => {
         "BEGIN CERTIFICATE",
       );
       expect(await run(granted, 'printf "%s" "$HTTPS_PROXY"')).toMatch(
-        /^http:\/\/srt:[0-9a-f]+@oma-egress-proxy-/,
+        /^http:\/\/srt:[0-9a-f]+@oma-egress-proxy:/,
       );
 
       // CONNECT-layer enforcement with the per-session token, derived
@@ -1145,7 +1150,7 @@ describe("Wired egress session path (plan 0117e-4)", () => {
       expect(tokenEnv).toMatch(/^oma-sentinel-[0-9a-f]{32}$/);
       expect(tokenEnv).not.toContain("REAL-TOKEN");
       expect(await run(provider, 'printf "%s" "$HTTPS_PROXY"')).toMatch(
-        /^http:\/\/srt:[0-9a-f]+@oma-egress-proxy-/,
+        /^http:\/\/srt:[0-9a-f]+@oma-egress-proxy:/,
       );
       const connect = (host: string, withAuth: boolean): string =>
         'H="${HTTPS_PROXY#http://}"; CRED="${H%%@*}"; HP="${H#*@}"; ' +

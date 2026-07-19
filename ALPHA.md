@@ -272,11 +272,12 @@ Near-term target:
   ([#200](https://github.com/oneryalcin/open-managed-agents/issues/200), plan
   0140, PR #202). Registry-backed install proof remains coupled to the
   separately tracked network presets in #199;
-- [ ] make safe network-enabled environments usable from the console: keep
+- [x] make safe network-enabled environments usable from the console: keep
   offline as the default, add reviewed npm/PyPI and GitHub presets plus a
   custom hostname allowlist, and replace the internal sidecar-knob sequence
   with a supported `oma up` egress path
-  ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199)).
+  ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199), plan
+  0141). The deterministic acceptance proof is `oma smoke --egress`.
 
 The coding image and networking UX are separate delivery slices. The image
 must never widen egress by itself, and networking presets must remain useful

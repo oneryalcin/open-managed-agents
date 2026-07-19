@@ -96,7 +96,10 @@ oma up
 ```
 
 `oma up` runs the durable local appliance in the foreground, stores data under
-`~/.oma`, enables Docker-local sandboxing, and prints:
+`~/.oma`, enables Docker-local sandboxing, and makes the pinned HTTPS egress
+sidecar available for approved environment allowlists. Environments remain
+offline by default: enabling the deployment capability does not grant a
+session network access. Startup prints:
 
 - the API URL;
 - the console URL;
@@ -141,8 +144,29 @@ system libraries may still require a future reviewed image profile.
 
 The toolchain and network policy are separate. A newly created environment is
 offline by default, so npm/PyPI/GitHub access fails closed until its required
-hosts are explicitly allowed. The supported console presets and egress
-onboarding for those registries are tracked in issue #199.
+hosts are explicitly allowed. The console offers four choices:
+
+- **Offline** (default): no proxy and no network route;
+- **npm + PyPI**: HTTPS/443 access to the exact npm and Python registry hosts;
+- **GitHub + package registries**: the registry hosts plus reviewed GitHub
+  clone/archive/download hosts;
+- **Custom**: exact hostnames and leading wildcards such as
+  `*.example.com` (which does not include `example.com`).
+
+The modal shows the exact normalized host list before creation. Environments
+are immutable, so changing networking means creating a new environment and a
+new session. OMA does not offer unrestricted networking. Microsandbox-local
+remains offline-only in this alpha.
+
+To prove the supported Docker egress path without a paid model credential:
+
+```bash
+oma smoke --egress
+```
+
+This uses the deterministic local model fixture and a real Docker sandbox to
+verify npm, uv/PyPI, and GitHub access, denial of an unrelated HTTPS host, and
+cleanup of the sandbox, sidecar, and internal network.
 
 ## Use Another Model Provider
 
@@ -199,7 +223,7 @@ admin API.
 | Port already in use | Set `OMA_PORT=...` before `oma up`. |
 | Session rejects model | Confirm the provider is enabled, the model exists, and credentials are configured. OMA fails closed rather than falling back to a different model. |
 | Console login fails | Use a workspace key for ordinary workspace operations. Use the admin key only for admin routes. |
-| Networking fails inside the sandbox | Environment networking is default-deny unless explicitly configured. |
+| Networking fails inside the sandbox | Confirm Docker was selected, `oma up` printed the approved-HTTPS capability, and the environment selected a matching preset/custom allowlist. Existing environments are immutable. Run `oma smoke --egress` for the supported end-to-end proof. |
 
 ## What This Does Not Cover
 

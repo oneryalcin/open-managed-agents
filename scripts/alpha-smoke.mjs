@@ -13,6 +13,19 @@ import {
 
 const BETA = "managed-agents-2026-04-01";
 const SMOKE_TOKEN = "OMA_ALPHA_SMOKE_OK";
+const EGRESS_COMMAND = [
+  "set -euo pipefail",
+  "work=/workspace/.oma-egress-smoke",
+  "trap 'rm -rf \"$work\"' EXIT",
+  "mkdir -p \"$work\"",
+  "npm view is-number version --registry=https://registry.npmjs.org >/dev/null",
+  "uv venv \"$work/venv\" >/dev/null",
+  "uv pip install --python \"$work/venv/bin/python\" packaging==25.0 >/dev/null",
+  "git ls-remote https://github.com/octocat/Hello-World.git HEAD >/dev/null",
+  "curl -fsSL --max-time 30 -o \"$work/source.zip\" https://github.com/octocat/Hello-World/archive/refs/heads/master.zip",
+  "if curl -fsS --max-time 5 https://example.com >/dev/null 2>&1; then echo unexpected-egress >&2; exit 93; fi",
+  `printf ${SMOKE_TOKEN}`,
+].join("\n");
 const DEFAULT_SANDBOX_PROVIDER = "docker-local";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const KEY_LINE = /x-api-key: (oma_[A-Za-z0-9_-]+)/;
@@ -22,6 +35,10 @@ const state = {
   child: undefined,
   fixture: undefined,
   home: undefined,
+  logs: "",
+  baseUrl: undefined,
+  apiKey: undefined,
+  sessionId: undefined,
   keepHome: process.env.OMA_ALPHA_KEEP_HOME === "1",
 };
 
@@ -38,6 +55,7 @@ try {
 } catch (error) {
   console.error("");
   fail(error instanceof Error ? error.message : String(error));
+  if (state.logs.trim()) console.error(`\nTemporary OMA logs:\n${redactLogs(state.logs.trim().slice(-12_000))}`);
   await cleanup();
   process.exit(1);
 }
@@ -50,6 +68,10 @@ async function main() {
   const configuredBaseUrl = process.env.OMA_ALPHA_BASE_URL;
   const configuredApiKey = process.env.OMA_ALPHA_API_KEY;
   const localCompatible = process.env.OMA_ALPHA_LOCAL_COMPATIBLE === "1";
+  const egressSmoke = process.env.OMA_ALPHA_EGRESS_SMOKE === "1";
+  if (egressSmoke && !localCompatible) {
+    throw new Error("OMA_ALPHA_EGRESS_SMOKE requires the deterministic local-compatible model fixture");
+  }
   if (localCompatible && (configuredBaseUrl || configuredApiKey)) {
     throw new Error("OMA_ALPHA_LOCAL_COMPATIBLE cannot target an existing OMA server");
   }
@@ -74,10 +96,11 @@ async function main() {
         apiKey: LOCAL_ALPHA_API_KEY,
         modelId: model.id,
         token: SMOKE_TOKEN,
+        ...(egressSmoke ? { command: EGRESS_COMMAND } : {}),
       });
       ok(`Started deterministic OpenAI-compatible fixture at ${state.fixture.baseUrl}`);
     }
-    const started = await startTemporaryOma(sandboxProvider, model, state.fixture?.baseUrl);
+    const started = await startTemporaryOma(sandboxProvider, model, state.fixture?.baseUrl, egressSmoke);
     baseUrl = started.baseUrl;
     apiKey = started.apiKey;
   }
@@ -96,7 +119,7 @@ async function main() {
       system: [
         "You are running the Open Managed Agents alpha smoke test.",
         "You must use the bash tool exactly once.",
-        `Run this exact command: printf ${SMOKE_TOKEN}.`,
+        `Run the exact bash command provided by the user. It prints ${SMOKE_TOKEN} only after every check passes.`,
         `After the tool result, reply with the exact token ${SMOKE_TOKEN} and no extra prose.`,
       ].join(" "),
       tools: [
@@ -119,12 +142,25 @@ async function main() {
   }
   ok(`Agent ${agent.id} v${agent.version}`);
 
-  step("Creating default-deny environment");
+  let networking = { type: "limited", allowed_hosts: [] };
+  if (egressSmoke) {
+    step("Resolving the GitHub + package registries preset");
+    const catalog = await requestJson(baseUrl, apiKey, "/v1/environments/networking-presets", { method:"GET" });
+    if (catalog.deployment?.egress_supported !== true) {
+      throw new Error(`Deployment did not report egress support: ${catalog.deployment?.reason ?? "unknown reason"}`);
+    }
+    const preset = catalog.presets?.find((candidate) => candidate.id === "github-packages-v1");
+    if (!preset) throw new Error("Networking catalog did not contain github-packages-v1");
+    networking = preset.networking;
+    ok(`Using ${preset.name} (${networking.allowed_hosts.length} allowed hosts)`);
+  }
+
+  step(egressSmoke ? "Creating registry-enabled environment" : "Creating default-deny environment");
   const environment = await requestJson(baseUrl, apiKey, "/v1/environments", {
     method: "POST",
     body: {
       name: `${prefix}-environment`,
-      config: { networking: { type: "limited", allowed_hosts: [] } },
+      config: { networking },
     },
   });
   ok(`Environment ${environment.id}`);
@@ -139,6 +175,7 @@ async function main() {
       metadata: { alpha_smoke: "true", prefix },
     },
   });
+  state.sessionId = session.id;
   ok(`Session ${session.id}`);
 
   step("Sending prompt");
@@ -151,7 +188,9 @@ async function main() {
           content: [
             {
               type: "text",
-              text: `Use bash exactly once and run: printf ${SMOKE_TOKEN}`,
+              text: egressSmoke
+                ? `Use bash exactly once and run this exact command:\n${EGRESS_COMMAND}`
+                : `Use bash exactly once and run: printf ${SMOKE_TOKEN}`,
             },
           ],
         },
@@ -189,12 +228,17 @@ async function main() {
   step("Best-effort cleanup");
   await bestEffort(() => requestJson(baseUrl, apiKey, `/v1/sessions/${session.id}`, { method: "DELETE" }));
   await bestEffort(() => requestJson(baseUrl, apiKey, `/v1/agents/${agent.id}/archive`, { method: "POST" }));
+  if (egressSmoke) {
+    assertNoSessionDockerResources(session.id);
+    ok("No session sandbox, sidecar, or internal network remained after delete");
+  }
   ok("Cleanup attempted");
 
   console.log("");
   console.log("Alpha smoke passed.");
   console.log(`Model: ${model.provider}/${model.id}`);
   console.log(`Sandbox provider: ${sandboxProvider}`);
+  if (egressSmoke) console.log("Egress: npm, PyPI/uv, GitHub allowed; unrelated HTTPS denied");
   console.log(`Console: ${baseUrl}/console`);
 }
 
@@ -243,7 +287,7 @@ function checkMicrosandbox() {
   ok(`Microsandbox CLI reachable (${command})`);
 }
 
-async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl) {
+async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl, egressSmoke) {
   state.home = await mkdtemp(join(tmpdir(), "oma-alpha-smoke-"));
   const modelEnv = {};
   if (localFixtureBaseUrl !== undefined) {
@@ -274,6 +318,7 @@ async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl) {
         OMA_HOME: state.home,
         OMA_HOST: "127.0.0.1",
         OMA_PORT: "0",
+        ...(egressSmoke ? { OMA_SANDBOX_OPERATION_TIMEOUT_MS:"120000" } : {}),
         ...modelEnv,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -288,11 +333,13 @@ async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl) {
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk) => {
     logs += chunk;
+    state.logs = logs;
     baseUrl ??= URL_LINE.exec(logs)?.[1];
     apiKey ??= KEY_LINE.exec(logs)?.[1];
   });
   child.stderr.on("data", (chunk) => {
     logs += chunk;
+    state.logs = logs;
   });
 
   const startedAt = Date.now();
@@ -301,6 +348,8 @@ async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl) {
       throw new Error(`OMA exited during startup with code ${child.exitCode}.\n${logs.trim()}`);
     }
     if (baseUrl && apiKey) {
+      state.baseUrl = trimTrailingSlash(baseUrl);
+      state.apiKey = apiKey;
       ok(`Started temporary OMA at ${baseUrl}`);
       ok(`Temporary sandbox provider: ${sandboxProvider}`);
       ok(`Temporary data: ${state.home}`);
@@ -309,6 +358,18 @@ async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl) {
     await delay(100);
   }
   throw new Error(`Timed out waiting for OMA startup logs.\n${logs.trim()}`);
+}
+
+function assertNoSessionDockerResources(sessionId) {
+  const filters = ["container", "network"];
+  for (const resource of filters) {
+    const args = resource === "container"
+      ? ["ps", "-aq", "--filter", `label=open-managed-agents.session-id=${sessionId}`]
+      : ["network", "ls", "-q", "--filter", `label=open-managed-agents.session-id=${sessionId}`];
+    const result = spawnSync("docker", args, { encoding:"utf8" });
+    if (result.status !== 0) throw new Error(`Could not inspect Docker ${resource} cleanup: ${result.stderr || result.stdout}`);
+    if (result.stdout.trim() !== "") throw new Error(`Docker ${resource} resources remain for ${sessionId}: ${result.stdout.trim()}`);
+  }
 }
 
 async function waitForApi(baseUrl, apiKey) {
@@ -440,6 +501,21 @@ async function bestEffort(fn) {
 }
 
 async function cleanup() {
+  if (
+    state.child !== undefined &&
+    state.child.exitCode === null &&
+    state.baseUrl !== undefined &&
+    state.apiKey !== undefined &&
+    state.sessionId !== undefined
+  ) {
+    await bestEffort(() => requestJson(
+      state.baseUrl,
+      state.apiKey,
+      `/v1/sessions/${state.sessionId}`,
+      { method:"DELETE" },
+    ));
+    state.sessionId = undefined;
+  }
   if (state.child !== undefined && state.child.exitCode === null) {
     state.child.kill("SIGTERM");
     await Promise.race([
@@ -457,6 +533,10 @@ async function cleanup() {
   } else if (state.home !== undefined) {
     console.log(`Kept temporary OMA_HOME: ${state.home}`);
   }
+}
+
+function redactLogs(value) {
+  return value.replace(/oma_[A-Za-z0-9_-]+/g, "[redacted-workspace-key]");
 }
 
 function parsePositiveInt(value, fallback) {

@@ -38,6 +38,25 @@ oma up
 `oma up --sandbox microsandbox` for the opt-in provider. Detached lifecycle
 commands are planned but not implemented yet.
 
+For Docker-local, the supported `oma up` path enables the digest-pinned egress
+sidecar capability automatically. This is capability, not permission:
+environments still default to `limited` with an empty allowlist, create no
+sidecar, and have no network route. The console can create immutable Offline,
+npm + PyPI, GitHub + package registries, or validated Custom policies.
+Microsandbox-local remains offline-only in this alpha.
+
+Operators can explicitly disable Docker egress capability:
+
+```bash
+OMA_ENABLE_EGRESS=false oma up
+```
+
+Advanced sidecar overrides must provide `OMA_ENABLE_EGRESS=true` and
+`OMA_EGRESS_SIDECAR_IMAGE` together; OMA never fills in a partial override.
+Production defaults use the repository-pinned immutable digest, not a mutable
+tag. `oma doctor` checks whether the effective sidecar image is already local
+without pulling it.
+
 Alternatively, run the appliance with Docker Compose:
 
 ```bash
@@ -163,6 +182,14 @@ The deterministic local lane needs no provider credential or paid model call:
 
 ```bash
 oma smoke --local-compatible
+```
+
+The deterministic network lane additionally proves the supported Docker
+allowlist path with real npm, uv/PyPI, and GitHub traffic, an unrelated-host
+denial, and labeled-resource cleanup:
+
+```bash
+oma smoke --egress
 ```
 
 It starts a loopback OpenAI Chat Completions fixture, generates a private

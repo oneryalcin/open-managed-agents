@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveOmaUpEgressEnvironment } from "../src/control-plane/egress/image.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -88,12 +89,23 @@ async function runUp(commandArgs) {
   }
 
   checkSandbox(sandbox);
+  let runtimeEnv;
+  try {
+    runtimeEnv = resolveOmaUpEgressEnvironment(process.env, sandbox);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
   const sandboxEnv = sandbox === "docker-local"
     ? { OMA_SANDBOX_PROVIDER: sandbox, OMA_ALLOW_DOCKER_LOCAL: "true" }
     : { OMA_SANDBOX_PROVIDER: sandbox, OMA_ALLOW_MICROSANDBOX_LOCAL: "true" };
 
   const adminEnv = resolveAdminEnvironment();
   console.log(`Starting OMA with ${sandbox}`);
+  if (runtimeEnv.OMA_ENABLE_EGRESS === "true") {
+    console.log(`Approved HTTPS egress: ${runtimeEnv.OMA_EGRESS_SIDECAR_IMAGE}`);
+  } else {
+    console.log("Approved HTTPS egress: unavailable (offline environments only)");
+  }
   if (adminEnv.OMA_ADMIN_KEY_FILE !== undefined) {
     console.log(`Admin mode: ${adminEnv.OMA_ADMIN_KEY_FILE}`);
   } else if (process.env.OMA_ADMIN_KEY !== undefined) {
@@ -107,7 +119,7 @@ async function runUp(commandArgs) {
       "--disable-warning=ExperimentalWarning",
       join(root, "src", "main.ts"),
     ],
-    { ...process.env, ...sandboxEnv, ...adminEnv },
+    { ...runtimeEnv, ...sandboxEnv, ...adminEnv },
   );
 }
 
@@ -270,6 +282,7 @@ async function runModelProvisioning(provisioningArgs) {
 async function runSmoke(commandArgs) {
   let sandbox;
   let localCompatible = false;
+  let egress = false;
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
     if (arg === "--sandbox") {
@@ -283,6 +296,11 @@ async function runSmoke(commandArgs) {
       localCompatible = true;
       continue;
     }
+    if (arg === "--egress") {
+      egress = true;
+      localCompatible = true;
+      continue;
+    }
     fail(`Unknown option for oma smoke: ${arg}\nRun \`oma help smoke\` for usage.`);
   }
   await runChild(
@@ -292,6 +310,7 @@ async function runSmoke(commandArgs) {
       ...process.env,
       ...(sandbox === undefined ? {} : { OMA_ALPHA_SANDBOX_PROVIDER: sandbox }),
       ...(localCompatible ? { OMA_ALPHA_LOCAL_COMPATIBLE: "1" } : {}),
+      ...(egress ? { OMA_ALPHA_EGRESS_SMOKE: "1" } : {}),
     },
   );
 }
@@ -374,7 +393,7 @@ function printHelp() {
 
 Usage:
   oma up [--sandbox docker|microsandbox]
-  oma smoke [--sandbox docker|microsandbox] [--local-compatible]
+  oma smoke [--sandbox docker|microsandbox] [--local-compatible] [--egress]
   oma keys mint [--workspace id] [--label label]
   oma keys list [--workspace id]
   oma workspaces list
@@ -431,8 +450,8 @@ Planned, not implemented yet:
 
 function commandHelpFor(key) {
   return ({
-  up: ["Usage: oma up [--sandbox docker|microsandbox]", "Start OMA in the foreground. Docker is the default.", "Example: oma up --sandbox docker"],
-  smoke: ["Usage: oma smoke [--sandbox docker|microsandbox] [--local-compatible]", "Run the disposable end-to-end alpha proof.", "Example: oma smoke --local-compatible"],
+  up: ["Usage: oma up [--sandbox docker|microsandbox]", "Start OMA in the foreground. Docker is the default and includes the pinned HTTPS egress sidecar capability; environments remain default-deny.", "Examples: oma up; OMA_ENABLE_EGRESS=false oma up; oma up --sandbox microsandbox"],
+  smoke: ["Usage: oma smoke [--sandbox docker|microsandbox] [--local-compatible] [--egress]", "Run the disposable end-to-end alpha proof. --egress uses Docker plus the deterministic local-compatible model fixture to verify npm, PyPI/uv, GitHub, denial, and cleanup.", "Examples: oma smoke --local-compatible; oma smoke --egress"],
   keys: ["Usage: oma keys <mint|list> [options]", "Manage workspace API keys in the local SQLite database.", "Examples: oma keys mint --workspace wrk_default; oma keys list --workspace wrk_default"],
   "keys mint": ["Usage: oma keys mint [--workspace id] [--label label] [--db path]", "Mint a workspace key and print its plaintext once.", "Example: oma keys mint --workspace wrk_default --label console"],
   "keys list": ["Usage: oma keys list [--workspace id] [--db path]", "List workspace key metadata without plaintext secrets.", "Example: oma keys list --workspace wrk_default"],

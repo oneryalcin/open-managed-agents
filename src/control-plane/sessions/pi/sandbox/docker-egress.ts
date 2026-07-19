@@ -39,6 +39,7 @@ export const DEFAULT_SIDECAR_PORT = 8080;
 const DEFAULT_SIDECAR_MEMORY = "256m";
 const DEFAULT_SIDECAR_PIDS_LIMIT = "128";
 const DEFAULT_SIDECAR_TMPFS_SIZE = "64m";
+export const SIDECAR_NETWORK_ALIAS = "oma-egress-proxy";
 
 /** `<uid>:<gid>` the sidecar runs as: the control-plane's own ids. */
 function currentUserSpec(): string {
@@ -162,7 +163,7 @@ export async function createEgressSidecar(
     // egress); now attach the per-session internal net (sandbox side).
     dockerOrThrow(
       opts.dockerCommand,
-      ["network", "connect", networkName, containerName],
+      sidecarNetworkConnectArgs(networkName, containerName),
       opts.operationTimeoutMs,
     );
 
@@ -181,7 +182,10 @@ export async function createEgressSidecar(
 
     return {
       networkName,
-      proxyHost: containerName,
+      // Container names include full session IDs and can exceed DNS's 63-byte
+      // label limit. The network is per-session, so one short stable alias is
+      // both unambiguous and resolvable from the sandbox.
+      proxyHost: SIDECAR_NETWORK_ALIAS,
       proxyPort: port,
       proxyAuthToken: opts.bundle.proxyAuthToken,
       sharedDirHostPath: sharedDir,
@@ -191,6 +195,20 @@ export async function createEgressSidecar(
     dispose();
     throw error;
   }
+}
+
+export function sidecarNetworkConnectArgs(
+  networkName: string,
+  containerName: string,
+): string[] {
+  return [
+    "network",
+    "connect",
+    "--alias",
+    SIDECAR_NETWORK_ALIAS,
+    networkName,
+    containerName,
+  ];
 }
 
 /**
