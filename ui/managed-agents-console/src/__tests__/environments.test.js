@@ -29,7 +29,7 @@ describe("environment console slice", () => {
   it("posts only the safe environment schema with workspace auth headers", () => {
     const env = source("environments.jsx");
     const api = source("api.js");
-    expect(env).toContain('api.createEnvironment({ name: trimmed, config: DEFAULT_ENV_CONFIG })');
+    expect(env).toContain('api.createEnvironment({ name: trimmed, config: selectedConfig })');
     expect(api).toContain('if (creds.workspaceKey) headers["x-api-key"] = creds.workspaceKey');
     expect(api).toContain('headers["anthropic-beta"] = BETA_HEADER');
     expect(api).toContain('capability: CREATE_ENVIRONMENT_CAPABILITY');
@@ -44,6 +44,48 @@ describe("environment console slice", () => {
     expect(env).toContain("EnvironmentError error={error}");
     expect(env).toContain("err.status === 401 && onAuthExpired");
     expect(env).toContain("disabled={!valid}");
+  });
+
+  it("uses API-provided networking presets and validates custom hosts before create", () => {
+    const env = source("environments.jsx");
+    const app = source("app.jsx");
+    const api = source("api.js");
+    expect(api).toContain("listEnvironmentNetworkingPresets");
+    expect(api).toContain("validateEnvironmentNetworkingHosts");
+    expect(api).toContain("/v1/environments/networking-presets");
+    expect(api).toContain("/v1/environments/networking-presets/validate");
+    expect(app).toContain("const [networkingCatalog, setNetworkingCatalog] = useState(");
+    expect(app).toContain("setNetworkingCatalog(data.networkingCatalog)");
+    expect(app).toContain("networkingCatalog={networkingCatalog}");
+    expect(env).toContain("networkingCatalog");
+    expect(env).toContain("presetCopy");
+    expect(api).toContain('"Offline"');
+    expect(api).toContain('"npm + PyPI"');
+    expect(api).toContain('"GitHub + package registries"');
+    expect(env).toContain('Custom allowlist');
+    expect(env).toContain("api.validateEnvironmentNetworkingHosts(customHosts)");
+    expect(env).toContain('Create remains disabled until validation succeeds.');
+  });
+
+  it("renders exact host preview and explains immutable policy constraints", () => {
+    const env = source("environments.jsx");
+    expect(env).toContain("Exact generated hosts");
+    expect(env).toContain("previewHosts(selectedHosts)");
+    expect(env).toContain("*.example.com matches subdomains only");
+    expect(env).toContain("add example.com separately for the bare domain");
+    expect(env).toContain("The server separately reports whether this deployment can enforce egress");
+    expect(env).toContain("supports approved HTTPS egress");
+    expect(env).toContain("Environment policies are immutable");
+    expect(env).toContain("create a new environment and start a new session");
+    expect(env).toContain("No secrets are stored in the environment or shown to the guest");
+  });
+
+  it("labels existing environment rows as offline or allowed-host counts", () => {
+    const api = source("api.js");
+    const env = source("environments.jsx");
+    expect(api).toContain('allowedHosts ? `${allowedHosts} allowed host${allowedHosts === 1 ? "" : "s"}` : "offline"');
+    expect(api).toContain("networkingSummary");
+    expect(env).toContain("environment.networkingSummary || environment.image");
   });
 
   it("uses live model readiness and never invents browser-visible sandbox health", () => {

@@ -129,6 +129,11 @@ function App() {
   const [agents, setAgents] = useState(AGENTS);
   const [environments, setEnvironments] = useState(ENVIRONMENTS);
   const [files, setFiles] = useState(FILES);
+  const [networkingCatalog, setNetworkingCatalog] = useState({
+    deployment:{ provider:null, egress_supported:false, reason:"Networking capability has not been loaded." },
+    presets:[],
+    custom:{ https_only:true, wildcard_matches_bare_domain:false },
+  });
   const [models, setModels] = useState(demoMode ? MODELS.map((id) => ({
     type:'model', provider:'anthropic', id, name:id,
     credentials_configured:true, default:id === MODELS[0],
@@ -158,6 +163,7 @@ function App() {
       setSessions(data.sessions);
       setEnvironments(data.environments);
       setFiles(data.files);
+      setNetworkingCatalog(data.networkingCatalog);
       setModels(data.models);
       setApiState({ state:'loaded', mode:'api', error:null, warnings:data.warnings || [] });
       setWorkspaceLoaded(true);
@@ -188,6 +194,11 @@ function App() {
         setSessions([]);
         setEnvironments([]);
         setFiles([]);
+        setNetworkingCatalog({
+          deployment: { provider:null, egress_supported:false, reason:"Networking capability failed to load." },
+          presets:[],
+          custom:{ https_only:true, wildcard_matches_bare_domain:false },
+        });
         setModels([]);
         setWorkspaceLoaded(false);
         setApiState({ state:'error', mode:'error', error, warnings:[] });
@@ -409,6 +420,7 @@ function App() {
         <CreateAgent models={models} onClose={() => setModal(null)} onCreate={onAgentCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
       {modal && modal.kind === 'environment' &&
         <CreateEnvironmentModal mode={apiState.mode}
+          networkingCatalog={networkingCatalog}
           onClose={() => setModal(null)} onCreated={onEnvironmentCreated}
           onAuthExpired={workspaceReauth} />}
 
