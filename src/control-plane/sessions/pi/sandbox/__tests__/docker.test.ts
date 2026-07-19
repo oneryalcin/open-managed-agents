@@ -471,6 +471,31 @@ describe("Docker sandbox provider command construction", () => {
 });
 
 describe("Docker sandbox provider factory", () => {
+  it("uses the bounded alpha coding resource profile by default", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oma-docker-coding-defaults-"));
+    const logPath = join(dir, "docker.log");
+    const dockerPath = join(dir, "docker");
+    await writeFile(
+      dockerPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${logPath}"
+`,
+    );
+    await chmod(dockerPath, 0o755);
+
+    const provider = await createDockerSandboxProvider("wrk", "sesn", {
+      dockerCommand: dockerPath,
+    });
+    provider.dispose();
+
+    const run = (await readFile(logPath, "utf8")).split("\n")[0] ?? "";
+    expect(run).toContain("--memory 1g");
+    expect(run).toContain("--pids-limit 128");
+    expect(run).toContain("size=256m");
+    await rm(dir, { recursive: true, force: true });
+  });
+
   it("poisons the provider on a transport timeout before glob readiness", async () => {
     const dir = await mkdtemp(join(tmpdir(), "oma-docker-glob-poison-"));
     const logPath = join(dir, "docker.log");
@@ -1138,8 +1163,8 @@ describe("Docker sandbox provider integration", () => {
         hasDockerSocketBind: false,
         workspaceTmpfs: true,
         uploadsTmpfs: true,
-        pidsLimit: 64,
-        memory: 402653184,
+        pidsLimit: 128,
+        memory: 1073741824,
       });
 
       await provider.operations.write.mkdir("/workspace/src");

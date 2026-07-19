@@ -77,7 +77,7 @@ describe("microsandbox command builders", () => {
       "--cpus",
       "1",
       "--memory",
-      "512M",
+      "1G",
       "--oci-upper-size",
       "1G",
       "--max-duration",
@@ -532,7 +532,7 @@ describe("microsandbox CLI adapter", () => {
 
     expect(cli.calls.map((call) => call.args.join(" "))).toEqual([
       "volume create --name oma-vol",
-      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-sbx --mount-named oma-vol:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 512M --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet`,
+      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-sbx --mount-named oma-vol:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 1G --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet`,
       "volume remove oma-vol",
     ]);
     expect(cli.calls.map((call) => call.mode)).toEqual([
@@ -597,7 +597,7 @@ describe("microsandbox sandbox provider", () => {
 
     expect(cli.calls.map((call) => call.args.join(" "))).toEqual([
       "volume create --name oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx",
-      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-wrk-sesn-sandbox-mppxg2io-4fzzzx --mount-named oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 512M --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet --label open-managed-agents.sandbox=microsandbox-local --label open-managed-agents.owner=open-managed-agents --label open-managed-agents.workspace-id=wrk --label open-managed-agents.session-id=sesn --label open-managed-agents.created-at=2026-05-28T20:10:00.000Z`,
+      `create ${DEFAULT_MICROSANDBOX_IMAGE} --name oma-wrk-sesn-sandbox-mppxg2io-4fzzzx --mount-named oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx:/workspace --workdir /workspace --no-net --tmpfs /mnt/session/uploads:64M:nosuid,nodev,noexec --tmpfs /mnt/session/outputs:100M:nosuid,nodev,noexec --cpus 1 --memory 1G --oci-upper-size 1G --max-duration 2h --security restricted --pull if-missing --quiet --label open-managed-agents.sandbox=microsandbox-local --label open-managed-agents.owner=open-managed-agents --label open-managed-agents.workspace-id=wrk --label open-managed-agents.session-id=sesn --label open-managed-agents.created-at=2026-05-28T20:10:00.000Z`,
       "remove --force oma-wrk-sesn-sandbox-mppxg2io-4fzzzx",
       "volume remove oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx",
     ]);
