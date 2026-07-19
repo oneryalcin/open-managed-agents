@@ -8,8 +8,6 @@ on:
         required: true
         default: 0.1.0
   push:
-    branches:
-      - dev/alpha-network-presets-egress-onboarding
     tags:
       - egress-sidecar-v*
     paths:
