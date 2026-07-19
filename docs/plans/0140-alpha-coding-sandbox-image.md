@@ -1,8 +1,8 @@
 # Plan 0140 -- Alpha coding sandbox image
 
-Status: implementation in progress on `dev/alpha-coding-sandbox-image`;
-source, local Docker smoke, and local amd64/arm64 build gates pass; immutable
-publication and runtime-digest promotion remain pending
+Status: complete on `dev/alpha-coding-sandbox-image`; immutable publication,
+runtime-digest promotion, release gates, and live Docker/microsandbox provider
+proof pass; registry-backed npm/PyPI installation remains issue #199
 
 Date: 2026-07-19
 
@@ -215,8 +215,37 @@ apply to an official Node base that is already approximately 78 MiB compressed.
 The local multi-platform OCI build measured 255.78 MiB compressed for amd64
 and 247.63 MiB for arm64. The implementation therefore tightens the release
 ceiling to 295 MiB per platform before publication. Registry measurements from
-the promoted digest remain authoritative and must be recorded after the
-workflow completes.
+the promoted digest confirmed the same 255.78 MiB amd64 and 247.63 MiB arm64
+sizes. On macOS/arm64 with OrbStack, the first interrupted-and-resumed pull took
+about 86 seconds of active pull time; three warm hardened container starts took
+1.32, 0.31, and 0.26 seconds (the latter two reflect the steady-state path).
+
+The promoted multi-platform reference is:
+
+```text
+ghcr.io/oneryalcin/open-managed-agents-sandbox@sha256:6740cd54dfb3f4561b913e7790a58918969a4547b167ba4dbd15397b2907efe9
+```
+
+Workflow run 29683531169 proved anonymous pull, exact-digest coding smoke, the
+per-platform size gate, and zero CRITICAL findings. BuildKit provenance and
+SBOM are attached; GitHub artifact attestations are unavailable for this
+user-owned private repository, which the workflow reports explicitly.
+
+The first live microsandbox promotion attempt exposed a cold-start boundary:
+`msb create --pull if-missing` inherited the ordinary 10-second tool-operation
+timeout and killed the larger image pull. The provider now gives image startup
+its own bounded five-minute timeout while retaining the existing short timeout
+for volume, tool, cleanup, and steady-state operations. Unit coverage pins the
+two independent deadlines, and the live microsandbox smoke must pass after the
+fix before merge.
+
+That live gate also exposed a base-image portability assumption: microsandbox
+internal commands used `/bin/sh`, whose Debian implementation (`dash`) lacks
+the Bash/BusyBox `read -d` behavior used by NUL-framed output collection. The
+provider now invokes the image's pinned `/bin/bash` explicitly, matching the
+public Bash tool and Docker provider instead of depending on the base image's
+`/bin/sh` implementation. The final gated live microsandbox smoke passed the
+exact promoted digest after both boundary fixes.
 
 ### D7 -- Publish before pinning the runtime default
 

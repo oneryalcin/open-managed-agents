@@ -132,6 +132,18 @@ In the console:
 Sandbox readiness is verified by the actual session run. The console should not
 claim generic sandbox health before a session exercises the provider.
 
+The default Docker-local and microsandbox-local guest is a digest-pinned alpha
+coding image with Node/npm, Python/uv, Git, curl, jq, Bash, ripgrep, archive
+tools, and a basic C/C++ build toolchain. Project files, virtual environments,
+package caches, and npm globals are written under `/workspace`; the image runs
+as UID 65534 with a read-only root filesystem. Projects needing additional
+system libraries may still require a future reviewed image profile.
+
+The toolchain and network policy are separate. A newly created environment is
+offline by default, so npm/PyPI/GitHub access fails closed until its required
+hosts are explicitly allowed. The supported console presets and egress
+onboarding for those registries are tracked in issue #199.
+
 ## Use Another Model Provider
 
 OMA reuses Pi's provider catalog and request adapters. Anthropic, OpenAI, and

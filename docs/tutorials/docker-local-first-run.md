@@ -139,6 +139,13 @@ Docker-local is default-closed. If `OMA_ALLOW_DOCKER_LOCAL=true` is missing,
 the app fails during construction instead of silently running tools on the
 host.
 
+The default guest is OMA's digest-pinned alpha coding image. It provides
+Node/npm, Python/uv, Git, curl, jq, Bash, ripgrep, archive tools, and a basic
+native-build baseline while retaining the provider's non-root, read-only-root,
+capability, pids, memory, and default-deny network controls. Package downloads
+remain unavailable unless the environment explicitly allows the required
+registry hosts.
+
 Docker-local also enables a label-scoped orphan-container reaper by default.
 It removes stale Open Managed Agents Docker-local containers older than 24
 hours before the first Docker-local session starts in the process. Override

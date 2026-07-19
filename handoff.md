@@ -362,6 +362,12 @@ load-bearing additions are:
   the full live microsandbox smoke pass. Microsandbox initializes upload mounts
   as root-owned/read-only and output mounts as writable by UID 65534 while the
   image itself remains non-root by default.
+- **Alpha coding sandbox image** (PR #202; plan 0140; issue #200): the shared
+  Docker/microsandbox default is now a Debian/glibc coding guest with pinned
+  Node/npm, Python/uv, Git, curl, jq, Bash, ripgrep, archive tools, and native
+  build essentials. The immutable amd64/arm64 digest passed anonymous pull,
+  hardened offline smoke, the 295 MiB/platform transfer budget, and the
+  zero-CRITICAL scan. Installed tools do not widen environment egress.
 - **Pi-backed multi-provider models** (PR #195; plan 0139):
   agent revisions persist exact provider/model identity, the runtime and
   admission paths share one Pi catalog/auth owner, and `oma smoke
@@ -372,41 +378,35 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. **Make the first sandbox useful for coding**
-   ([#200](https://github.com/oneryalcin/open-managed-agents/issues/200)). The
-   current public image is intentionally only Alpine + Bash + ripgrep and was
-   verified to lack Node/npm, Python/uv, Git, curl, jq, and build tools. Ship a
-   measured, digest-pinned multi-arch coding image without weakening non-root,
-   read-only-root, capability, provenance/SBOM, or provider-smoke gates.
-2. **Make safe network access selectable and understandable**
+1. **Make safe network access selectable and understandable**
    ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199)). The
    console currently creates only
    `limited` + `allowed_hosts: []`. Preserve that offline default, then add
    reviewed npm/PyPI, GitHub + registries, and custom-allowlist choices plus a
    supported `oma up` egress path. Do not expose unrestricted networking, and
    do not couple tool installation to implicit egress.
-3. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
+2. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
    owned by [Getting Started](docs/getting-started.md):
    `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,
    `oma up`, workspace-key console login, create agent/environment/session, and
    send a prompt. Automated CLI, doctor, docs, browser, and Docker gates are
    green; the real-human timing gate remains pending.
-4. Preserve the `oma doctor` invariant: it is read-only and secret-safe. It
+3. Preserve the `oma doctor` invariant: it is read-only and secret-safe. It
    must not create `~/.oma`, Pi auth/model files, lock files, databases, or pull
    Docker images.
-5. The default provider allowlist is `anthropic,openai,openrouter`; credentials
+4. The default provider allowlist is `anthropic,openai,openrouter`; credentials
    still gate session admission, Anthropic remains the default model provider,
    and `OMA_MODEL_PROVIDERS` replaces this allowlist when explicitly set.
-6. Run the human onboarding gate in
+5. Run the human onboarding gate in
    [docs/references/alpha-onboarding-observation.md](docs/references/alpha-onboarding-observation.md):
    local-compatible median <=10 minutes, credential-supplied console median
    <=15 minutes, and zero undocumented intervention.
-5. Track public npm, `npx`, curl, and Homebrew distribution separately in issue
+6. Track public npm, `npx`, curl, and Homebrew distribution separately in issue
    #196. It is a release/supply-chain project, not part of source-checkout
    onboarding cleanup.
-6. Track publication-pipeline promotion hardening separately in issue #194; it
+7. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
-7. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
+8. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains
    gated on a concrete multi-process requirement per ADR 0014.
 
 ## Practical Rules for the Next Agent

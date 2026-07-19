@@ -100,6 +100,9 @@ Agents product parity remains tracked in [PARITY.md](../PARITY.md).
   exact provider/model identity on immutable agents, one shared Pi catalog and
   auth owner, operator-defined compatible endpoints, and secret-safe
   CLI/API/console discovery for the alpha path.
+- [Alpha coding sandbox image](plans/0140-alpha-coding-sandbox-image.md) —
+  the digest-pinned Node/npm, Python/uv, Git, and native-build guest shared by
+  Docker-local and microsandbox-local without widening default-deny egress.
 - [Single-node durable storage design](plans/0103-phase-2-storage-design.md) —
   implementation design for #103 Phase 2 storage consolidation.
 - [POST /v1/sessions idempotency](plans/0105-session-create-idempotency.md) —

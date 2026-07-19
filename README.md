@@ -208,9 +208,11 @@ and intentional deviations:
 | Sandbox providers | Docker-local and microsandbox-local, fail-closed selection |
 
 The default sandbox guest is an OMA-owned, multi-architecture image pinned by
-immutable digest. It is intentionally small (about 6.5 MiB compressed per
-platform) and currently contains Bash plus ripgrep; Python/Node-rich images are
-a later alpha usability slice.
+immutable digest. The alpha coding image includes Node/npm, Python/uv, Git,
+curl, jq, Bash, ripgrep, archive tools, and a basic native-build toolchain. It
+is about 256 MiB compressed per platform and remains non-root with a read-only
+root filesystem. Installed tools do not imply network access: environments are
+still default-deny and package-registry access must be explicitly allowlisted.
 
 ## Development
 

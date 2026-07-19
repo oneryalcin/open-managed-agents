@@ -4,6 +4,7 @@ import {
   DEFAULT_MICROSANDBOX_MAX_BUFFER,
   DEFAULT_MICROSANDBOX_IMAGE,
   DEFAULT_MICROSANDBOX_OUTPUTS_PATH,
+  DEFAULT_MICROSANDBOX_STARTUP_TIMEOUT_MS,
   DEFAULT_MICROSANDBOX_UPLOADS_PATH,
   DEFAULT_MICROSANDBOX_WORKSPACE,
   NodeMicrosandboxCli,
@@ -163,10 +164,10 @@ describe("microsandbox command builders", () => {
       "exec",
       "oma-sbx",
       "--",
-      "/bin/sh",
+      "/bin/bash",
       "-lc",
       "cat \"$1\"",
-      "sh",
+      "bash",
       `${DEFAULT_MICROSANDBOX_UPLOADS_PATH}/input.txt`,
     ]);
     expect(
@@ -337,7 +338,7 @@ describe("microsandbox command builders", () => {
     ]);
     expect(command.script).toContain("__OMA_DISPATCHED__");
     expect(command.script).toContain("__OMA_TERMINAL__");
-    expect(command.script).toContain("setsid /bin/sh -lc");
+    expect(command.script).toContain("setsid /bin/bash -lc");
     expect(command.script).toContain("kill -KILL \"-$pid\"");
     expect(buildMicrosandboxKillProcessGroupCommand("/workspace/pid")).toMatchObject({
       args: ["/workspace/pid"],
@@ -569,6 +570,10 @@ describe("microsandbox sandbox provider", () => {
       "oma-wrk-sesn-workspace-volume-mppxg2io-4fzzzx",
     ]);
     expect(calls[1]).toContain("--no-net");
+    expect(cli.calls[0]?.opts?.timeoutMs).toBe(10_000);
+    expect(cli.calls[1]?.opts?.timeoutMs).toBe(
+      DEFAULT_MICROSANDBOX_STARTUP_TIMEOUT_MS,
+    );
     expect(calls.at(-2)).toEqual([
       "remove",
       "--force",
@@ -622,6 +627,7 @@ describe("microsandbox sandbox provider", () => {
     const provider = await createMicrosandboxSandboxProvider("wrk", "sesn", {
       cli,
       operationTimeoutMs: 2500,
+      startupTimeoutMs: 123_000,
       now: () => 1_779_999_000_000,
       random: () => 0.123456789,
     });
@@ -675,6 +681,8 @@ describe("microsandbox sandbox provider", () => {
       "exec",
     ]);
     expect(cli.calls[2]?.opts?.timeoutMs).toBe(4500);
+    expect(cli.calls[0]?.opts?.timeoutMs).toBe(2500);
+    expect(cli.calls[1]?.opts?.timeoutMs).toBe(123_000);
     expect(cli.calls[3]?.args).toContain("--stream");
     expect(cli.calls[3]?.opts?.input).toBe("hello");
     expect(provider.invocations.byTool.write).toBe(2);

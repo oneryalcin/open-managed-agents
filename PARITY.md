@@ -251,14 +251,11 @@ early adopter can build and iterate a credible single-agent product.
    explicitly pinned version at session creation. OMA now implements immutable
    revisions and exact-version runtime pinning. Implementation plan: [`docs/plans/0133-cma-agent-update-versioning.md`](docs/plans/0133-cma-agent-update-versioning.md).
 2. **Usable environment image and networking story** — the narrow foundation
-   is shipped: a digest-pinned, multi-architecture OMA image with Bash and
-   ripgrep (plan 0138 / issue #187 / PR #193). Alpha user testing showed that
-   this execution-minimal image is not yet a useful coding environment and
-   that the console exposes only an offline environment preset. The next two
-   bounded slices are a pinned Node/npm + Python/uv + Git coding image
-   ([#200](https://github.com/oneryalcin/open-managed-agents/issues/200)) and
-   safe console networking presets/custom allowlists with supported egress
-   onboarding
+   is shipped: a digest-pinned, multi-architecture OMA image with Node/npm,
+   Python/uv, Git, curl, jq, Bash, ripgrep, archive tools, and a basic native
+   build baseline (plan 0140 / issue #200 / PR #202). The remaining bounded
+   usability slice is safe console networking presets/custom allowlists with
+   supported egress onboarding
    ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199)).
    Image selection remains a security boundary and needs allowlisting/pinning,
    not a raw untrusted Docker string; installing tools must never widen network
