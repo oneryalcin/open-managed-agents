@@ -1,6 +1,6 @@
 /** Dedicated, public, multi-platform OMA egress sidecar (plan 0141). */
 export const DEFAULT_OMA_EGRESS_SIDECAR_IMAGE =
-  "ghcr.io/oneryalcin/open-managed-agents-sandbox@sha256:5a830df1af072c0f03bc6fe05761f8a7f120dc7eec5b6ec921a10ead59963e30";
+  "ghcr.io/oneryalcin/open-managed-agents-sandbox@sha256:2b2a385584fc4f428d541edb930b93ecba5f029576db737fea605fb159994974";
 
 const KEYS = [
   "OMA_ENABLE_EGRESS",
