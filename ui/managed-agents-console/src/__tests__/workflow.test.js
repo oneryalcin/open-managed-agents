@@ -17,11 +17,15 @@ describe("alpha console workflow", () => {
     expect(auth).not.toContain("useStateA('admin')");
   });
 
-  it("keeps live API mutations enabled while unsupported lifecycle writes stay disabled", () => {
+  it("enables only API-backed lifecycle mutations in live mode", () => {
     const app = source("app.jsx");
     expect(app).toContain("const mutationReadOnly = apiState.state !== 'loaded'");
     expect(app).toContain("|| (apiState.mode !== 'api' && apiState.mode !== 'demo')");
-    expect(app).toContain("const lifecycleReadOnly = apiState.mode !== 'demo'");
+    expect(app).toContain("const lifecycleReadOnly = mutationReadOnly");
+    expect(app).toContain("await OmaConsoleApi.archiveAgent(a.id)");
+    expect(app).toContain("await OmaConsoleApi.updateAgentToolPermission(a, policy)");
+    expect(app).toContain("await OmaConsoleApi.archiveSession(s.id)");
+    expect(app).toContain("await OmaConsoleApi.deleteSession(s.id)");
     expect(app).toContain("apiMode={apiState.mode}");
     expect(app).toContain("archiveReadOnly={lifecycleReadOnly}");
   });
@@ -47,7 +51,15 @@ describe("alpha console workflow", () => {
     expect(forms).toContain("api.createSession(body");
     expect(forms).toContain("api.sendSessionEvents(session.id");
     expect(forms).toContain("status:'sent_after_retry'");
-    expect(forms).toContain("permission_policy:{ type:'always_ask' }");
+    expect(forms).toContain("permission_policy:{ type:toolPolicy }");
+    expect(forms).toContain("useStateF('always_ask')");
+    expect(forms).toContain("Allow automatically");
+    expect(forms).toContain("Sandbox and network restrictions still apply.");
+    const agents = source("agents-files.jsx");
+    expect(agents).toContain("Save new version");
+    expect(agents).toContain("Existing sessions keep their current policy.");
+    expect(agents).toContain("Archived agents cannot create new sessions.");
+    expect(agents).toContain("a.toolPermission === 'Mixed permissions'");
     expect(forms).toContain("createError.status === 401 && onAuthExpired");
     expect(forms).toContain("messageError.status === 401 && onAuthExpired");
     expect(forms).toContain("apiMode === 'api'");
@@ -65,6 +77,9 @@ describe("alpha console workflow", () => {
     expect(detail).toContain("result:decision");
     expect(detail).toContain("event.type === 'agent.mcp_tool_use'");
     expect(detail).toContain("if (apiMode === 'api')");
+    expect(detail).toContain("canSubmitToolConfirmation({ status, readOnly, actionBusy })");
+    expect(detail).toContain("Archived sessions are read-only.");
+    expect(detail).not.toContain("it can be restored");
   });
 
   it("keeps every browser-loaded JSX source parseable by the vendored Babel runtime", () => {

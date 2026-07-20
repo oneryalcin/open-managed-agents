@@ -33,9 +33,9 @@ function Labeled({ label, opt, hint, htmlFor, children }) {
 
 // ─────────── Create session ───────────
 function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAgent, onClose, onCreate, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
-  // active agents, plus the preset agent even if archived/just-created
-  const choices = agents.filter((a) => a.status === 'active' || (presetAgent && a.id === presetAgent.id));
-  const [agentId, setAgentId] = useStateF((presetAgent && presetAgent.id) || (choices[0] && choices[0].id));
+  const choices = agents.filter((a) => a.status === 'active');
+  const activePreset = presetAgent?.status === 'active' ? presetAgent : null;
+  const [agentId, setAgentId] = useStateF((activePreset && activePreset.id) || (choices[0] && choices[0].id));
   const [env, setEnv] = useStateF(() => apiMode === 'api'
     ? (environments[0]?.id || '')
     : (environments[0]?.id || ENVIRONMENTS[0].id));
@@ -182,6 +182,7 @@ function CreateAgent({ models = [], onClose, onCreate, onAuthExpired, apiMode = 
   const [model, setModel] = useStateF(defaultModel?.id || '');
   const [prompt, setPrompt] = useStateF('');
   const [tools, setTools] = useStateF(['bash']);
+  const [toolPolicy, setToolPolicy] = useStateF('always_ask');
   const [busy, setBusy] = useStateF(false);
   const [error, setError] = useStateF('');
 
@@ -204,7 +205,9 @@ function CreateAgent({ models = [], onClose, onCreate, onAuthExpired, apiMode = 
     name: name.trim(), model:`${provider}/${model}`, modelProvider:provider, modelId:model,
     status:'active', created:'Just now', updated:'Just now', version:'v1',
     tools: tools.length, system: prompt.trim() || 'No system prompt set.',
-    toolset:'agent_toolset_20260401', sessions:[],
+    toolset:'agent_toolset_20260401',
+    toolPermission:toolPolicy === 'always_allow' ? 'Allow automatically' : 'Ask before use',
+    sessions:[],
   });
 
   const submit = async () => {
@@ -225,7 +228,7 @@ function CreateAgent({ models = [], onClose, onCreate, onAuthExpired, apiMode = 
         configs: TOOL_OPTIONS.map((tool) => ({
           name:tool,
           enabled:tools.includes(tool),
-          ...(tools.includes(tool) ? { permission_policy:{ type:'always_ask' } } : {}),
+          ...(tools.includes(tool) ? { permission_policy:{ type:toolPolicy } } : {}),
         })),
       }],
     };
@@ -275,7 +278,7 @@ function CreateAgent({ models = [], onClose, onCreate, onAuthExpired, apiMode = 
         <textarea id="create-agent-system" name="system" className="textarea" placeholder="You help me navigate…" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
       </Labeled>
 
-      <Labeled label="Built-in tools" hint="Permissions default to “ask” and can be tuned after creation.">
+      <Labeled label="Built-in tools" hint="Choose which sandbox-backed tools the agent may use.">
         <div className="seg-tools">
           {TOOL_OPTIONS.map((t) => {
             const on = tools.includes(t);
@@ -289,6 +292,23 @@ function CreateAgent({ models = [], onClose, onCreate, onAuthExpired, apiMode = 
           })}
         </div>
       </Labeled>
+      <Labeled label="Tool approval" hint="This applies to every enabled built-in tool on this agent.">
+        <div className="env-preset-grid" role="radiogroup" aria-label="Tool approval policy">
+          <button type="button" className={'env-choice' + (toolPolicy === 'always_ask' ? ' on' : '')}
+            role="radio" aria-checked={toolPolicy === 'always_ask'} disabled={busy}
+            onClick={() => setToolPolicy('always_ask')}>
+            <span className="dot-r" />
+            <span><span className="r-main">Ask before use</span><span className="r-sub">Show Allow/Deny before each tool call.</span></span>
+          </button>
+          <button type="button" className={'env-choice' + (toolPolicy === 'always_allow' ? ' on' : '')}
+            role="radio" aria-checked={toolPolicy === 'always_allow'} disabled={busy}
+            onClick={() => setToolPolicy('always_allow')}>
+            <span className="dot-r" />
+            <span><span className="r-main">Allow automatically</span><span className="r-sub">No confirmation prompts. Sandbox and network restrictions still apply.</span></span>
+          </button>
+        </div>
+        {toolPolicy === 'always_allow' && <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>The model may run every enabled tool without asking. Use this for trusted, disposable coding sessions.</span></div>}
+      </Labeled>
       {live && <div className="field-hint">Only the currently supported sandbox-backed tools are offered. Disabled tools are persisted explicitly.</div>}
       {error && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{error}</span></div>}
     </Modal>
@@ -298,22 +318,23 @@ function CreateAgent({ models = [], onClose, onCreate, onAuthExpired, apiMode = 
 Object.assign(window, { Modal, CreateSession, CreateAgent, ConfirmDialog });
 
 // ─────────── Archive / delete confirmation ───────────
-function ConfirmDialog({ icon = 'archive', danger, title, message, confirmLabel, endpoint, onClose, onConfirm }) {
+function ConfirmDialog({ icon = 'archive', danger, title, message, confirmLabel, endpoint, onClose, onConfirm, busy = false, error = null }) {
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay" onClick={() => { if (!busy) onClose(); }}>
       <div className="modal sm" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="modal-head">
           <div className={'ic' + (danger ? ' danger' : '')}><Icon name={icon} size={18} /></div>
           <div><h2>{title}</h2></div>
-          <span className="kebab x" onClick={onClose}><Icon name="x" size={17} /></span>
+          <span className="kebab x" onClick={() => { if (!busy) onClose(); }}><Icon name="x" size={17} /></span>
         </div>
         <div className="modal-body">
           <div className="confirm-msg">{message}</div>
+          {error && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{error.message || String(error)}</span></div>}
         </div>
         <div className="modal-foot">
           {endpoint && <span className="left">Sends to <span className="mono">{endpoint}</span></span>}
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className={'btn ' + (danger ? 'btn-danger' : 'btn-primary')} onClick={onConfirm}>{confirmLabel}</button>
+          <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className={'btn ' + (danger ? 'btn-danger' : 'btn-primary')} disabled={busy} onClick={onConfirm}>{busy ? 'Working…' : confirmLabel}</button>
         </div>
       </div>
     </div>

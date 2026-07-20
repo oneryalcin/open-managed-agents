@@ -199,7 +199,11 @@ Output:
 Audit conclusion: the existing console was already a strong read-only inspector.
 The implementation now adds API-backed agent/environment/session creation,
 prompt and interrupt actions, authenticated live SSE, and real
-tool-confirmation handling.
+tool-confirmation handling. Agent creation and immutable updates expose
+`always_ask` versus `always_allow`; agent archive and idle-session
+archive/delete are real server mutations rather than browser-only state.
+Environment archive/delete remains unavailable because the service does not
+yet expose those lifecycle endpoints (tracked in [PARITY.md](PARITY.md)).
 CMA's conversational Quickstart, deployments, analytics, and pixel parity are
 deferred.
 

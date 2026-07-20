@@ -151,6 +151,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   const [message, setMessage] = useStateD('');
   const [actionBusy, setActionBusy] = useStateD(false);
   const [actionError, setActionError] = useStateD(null);
+  const [lifecycleBusy, setLifecycleBusy] = useStateD(false);
+  const [lifecycleError, setLifecycleError] = useStateD(null);
   const [streamState, setStreamState] = useStateD(apiMode === 'api' ? 'connecting' : 'closed');
   const aliveRef = useRefD(true);
   const idxRef = useRefD(1);
@@ -160,6 +162,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   const interruptIntentRef = useRefD(null);
   const confirmationIntentRef = useRefD(null);
   const running = status === 'running';
+  const archived = status === 'archived';
 
   useEffectD(() => {
     setStatus(displayStatus);
@@ -171,6 +174,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
     setQuery('');
     setMessage('');
     setActionError(null);
+    setLifecycleError(null);
     setStreamState(apiMode === 'api' ? 'connecting' : 'closed');
     messageIntentRef.current = OmaConsoleApi.createIdempotencyIntent();
     interruptIntentRef.current = OmaConsoleApi.createIdempotencyIntent();
@@ -322,7 +326,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   // resolve a pending tool confirmation → emit user.tool_confirmation + follow-up
   const resolveConfirm = async (decision) => {
     if (apiMode === 'api') {
-      if (!pendingTool || actionBusy) return;
+      if (!pendingTool || !OmaConsoleApi.canSubmitToolConfirmation({ status, readOnly, actionBusy })) return;
       setActionBusy(true);
       setActionError(null);
       setConfirmState('submitting');
@@ -394,6 +398,10 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   const renderConfirmCard = () => {
     if ((confirmState !== 'pending' && confirmState !== 'submitting') || !pendingTool) return null;
     const endpoint = 'POST /v1/sessions/:id/events';
+    const confirmationDisabled = !OmaConsoleApi.canSubmitToolConfirmation({ status, readOnly, actionBusy });
+    const confirmationTitle = archived
+      ? 'Archived sessions are read-only.'
+      : readOnly ? `Read-only API mode · ${endpoint}` : undefined;
     return (
       <div className="confirm-card">
         <div className="cc-head">
@@ -407,19 +415,19 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
           <div className="cc-tool"><span className="tn">{pendingTool.tool || 'tool'}</span><span style={{ color:'var(--faint)' }}>$</span>{pendingTool.cmd || JSON.stringify(pendingTool.source?.input || {})}</div>
         </div>
         <div className="cc-actions">
-          <button className="btn btn-accent" disabled={readOnly || actionBusy}
-            title={readOnly ? `Read-only API mode · ${endpoint}` : undefined}
-            onClick={() => !readOnly && resolveConfirm('allow')}>
+          <button className="btn btn-accent" disabled={confirmationDisabled}
+            title={confirmationTitle}
+            onClick={() => !confirmationDisabled && resolveConfirm('allow')}>
             <Icon name="checkCircle" size={14} />{actionBusy ? 'Submitting…' : 'Allow'}
           </button>
-          <button className="btn btn-danger" disabled={readOnly || actionBusy}
-            title={readOnly ? `Read-only API mode · ${endpoint}` : undefined}
-            onClick={() => !readOnly && resolveConfirm('deny')}>
+          <button className="btn btn-danger" disabled={confirmationDisabled}
+            title={confirmationTitle}
+            onClick={() => !confirmationDisabled && resolveConfirm('deny')}>
             <Icon name="x" size={14} />Deny
           </button>
           <span style={{ flex:1 }} />
           <span className="field-hint" style={{ alignSelf:'center' }}>
-            {readOnly ? <>Disabled · <span className="mono">{endpoint}</span></> : <>Emits <span className="mono">user.tool_confirmation</span></>}
+            {archived ? <>Disabled · archived sessions are read-only</> : readOnly ? <>Disabled · <span className="mono">{endpoint}</span></> : <>Emits <span className="mono">user.tool_confirmation</span></>}
           </span>
         </div>
       </div>
@@ -428,7 +436,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
 
   const sendMessage = async () => {
     const text = message.trim();
-    if (!text || running || readOnly || actionBusy) return;
+    if (!text || running || archived || readOnly || actionBusy) return;
     setActionBusy(true);
     setActionError(null);
     const event = { type:'user.message', content:[{ type:'text', text }] };
@@ -445,6 +453,23 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
       if (error.status === 401 && onAuthExpired) onAuthExpired();
     } finally {
       setActionBusy(false);
+    }
+  };
+
+  const runLifecycle = async (kind) => {
+    if (lifecycleBusy) return;
+    const action = kind === 'archive' ? onArchive : onDelete;
+    if (!action) return;
+    setLifecycleBusy(true);
+    setLifecycleError(null);
+    try {
+      await action(s);
+      if (kind === 'archive') setStatus('archived');
+      setDialog(null);
+    } catch (error) {
+      setLifecycleError(error);
+    } finally {
+      setLifecycleBusy(false);
     }
   };
 
@@ -589,8 +614,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
                   <div className="menu-item" onClick={() => { setMenuOpen(false); }}><Icon name="download" />Export events (JSON)</div>
                   {!lifecycleReadOnly && <>
                     <div className="menu-sep" />
-                    <div className="menu-item" onClick={() => { setMenuOpen(false); setDialog('archive'); }}><Icon name="archive" />Archive session</div>
-                    <div className="menu-item danger" onClick={() => { setMenuOpen(false); setDialog('delete'); }}><Icon name="x" />Delete session</div>
+                    {status !== 'archived' && <div className="menu-item" onClick={() => { setMenuOpen(false); setLifecycleError(null); setDialog('archive'); }}><Icon name="archive" />Archive session</div>}
+                    <div className="menu-item danger" onClick={() => { setMenuOpen(false); setLifecycleError(null); setDialog('delete'); }}><Icon name="x" />Delete session</div>
                   </>}
                 </div>
               </>
@@ -599,8 +624,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
           {running
             ? <button className="btn btn-danger" disabled={readOnly || actionBusy} title={readOnly ? 'Connect a live workspace to send session events.' : undefined}
                 onClick={() => !readOnly && interrupt()}><Icon name="stop" size={14} />Interrupt</button>
-            : <button className="btn btn-accent" disabled={readOnly} title={readOnly ? 'Connect a live workspace to send session events.' : undefined}
-                onClick={() => !readOnly && setView('transcript')}>
+            : <button className="btn btn-accent" disabled={archived || readOnly} title={archived ? 'Archived sessions are read-only.' : readOnly ? 'Connect a live workspace to send session events.' : undefined}
+                onClick={() => !archived && !readOnly && setView('transcript')}>
                 <Icon name="sparkles" size={15} />Ask Claude</button>}
         </div>
       </div>
@@ -644,16 +669,16 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
 
       {dialog === 'archive' &&
         <ConfirmDialog icon="archive" title="Archive this session?"
-          message={<>Archiving <b>{s.title}</b> hides it from the default list. Its events stay intact and it can be restored. </>}
+          message={<>Archiving <b>{s.title}</b> makes it read-only and hides it from the default list. Its events stay intact and remain available when archived sessions are included.</>}
           confirmLabel="Archive session" endpoint="POST /v1/sessions/:id/archive"
           onClose={() => setDialog(null)}
-          onConfirm={() => { setStatus('archived'); setDialog(null); onArchive && onArchive(s); }} />}
+          onConfirm={() => runLifecycle('archive')} busy={lifecycleBusy} error={lifecycleError} />}
       {dialog === 'delete' &&
         <ConfirmDialog icon="x" danger title="Delete this session?"
           message={<>Deleting <b>{s.title}</b> permanently removes the session and its events. This cannot be undone.</>}
           confirmLabel="Delete session" endpoint="DELETE /v1/sessions/:id"
           onClose={() => setDialog(null)}
-          onConfirm={() => { setDialog(null); onDelete && onDelete(s); }} />}
+          onConfirm={() => runLifecycle('delete')} busy={lifecycleBusy} error={lifecycleError} />}
 
       {renderStreamHeader()}
 
@@ -664,16 +689,16 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
       </div>
 
       {view !== 'files' && (
-        <div className={'composer' + (readOnly ? ' ro' : '')}>
+        <div className={'composer' + (readOnly || archived ? ' ro' : '')}>
           <Icon name="terminal" size={16} style={{ color:'var(--faint)' }} />
           <input id="session-message-composer" name="message" aria-label="Session message"
-            placeholder={readOnly ? 'Connect a live workspace to send session events.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'}
+            placeholder={archived ? 'Archived sessions are read-only.' : readOnly ? 'Connect a live workspace to send session events.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'}
             value={message} onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }}
-            disabled={running || readOnly || actionBusy} />
+            disabled={running || archived || readOnly || actionBusy} />
           {running
             ? <button className="btn btn-sm btn-danger" disabled={readOnly || actionBusy} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={() => !readOnly && interrupt()}><Icon name="stop" size={13} />{actionBusy ? 'Stopping…' : 'Interrupt'}</button>
-            : <button className="btn btn-sm btn-primary" disabled={readOnly || actionBusy || !message.trim()} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={sendMessage}><Icon name="send" size={13} />{actionBusy ? 'Sending…' : 'Send'}</button>}
+            : <button className="btn btn-sm btn-primary" disabled={archived || readOnly || actionBusy || !message.trim()} title={archived ? 'Archived sessions are read-only.' : readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={sendMessage}><Icon name="send" size={13} />{actionBusy ? 'Sending…' : 'Send'}</button>}
         </div>
       )}
     </div>

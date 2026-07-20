@@ -51,11 +51,49 @@ function AgentsList({ agents, openAgent, onCreate, dataState = 'loaded', readOnl
   );
 }
 
-function AgentDetail({ agent, go, onCreateSession, onArchive, createSessionReadOnly = false, archiveReadOnly = false }) {
+function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermission, createSessionReadOnly = false, archiveReadOnly = false }) {
   const a = agent;
   const [tab, setTab] = useStateA('agent');
   const [dialog, setDialog] = useStateA(false);
+  const [lifecycleBusy, setLifecycleBusy] = useStateA(false);
+  const [lifecycleError, setLifecycleError] = useStateA(null);
+  const currentToolPolicy = a.toolPermission === 'Ask before use'
+    ? 'always_ask'
+    : a.toolPermission === 'Always allow'
+      ? 'always_allow'
+      : a.toolPermission === 'Mixed permissions'
+        ? 'mixed'
+        : 'none';
+  const hasEnabledTools = a.toolPermission !== 'No enabled tools';
+  const [toolPolicy, setToolPolicy] = useStateA(currentToolPolicy);
+  const [toolPolicyBusy, setToolPolicyBusy] = useStateA(false);
+  const [toolPolicyError, setToolPolicyError] = useStateA(null);
   const archived = a.status === 'archived';
+  const confirmArchive = async () => {
+    if (!onArchive || lifecycleBusy) return;
+    setLifecycleBusy(true);
+    setLifecycleError(null);
+    try {
+      await onArchive();
+      setDialog(false);
+    } catch (error) {
+      setLifecycleError(error);
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+  const saveToolPolicy = async () => {
+    if (!onUpdateToolPermission || toolPolicyBusy || toolPolicy === currentToolPolicy) return;
+    setToolPolicyBusy(true);
+    setToolPolicyError(null);
+    try {
+      await onUpdateToolPermission(toolPolicy);
+    } catch (error) {
+      setToolPolicyError(error);
+    } finally {
+      setToolPolicyBusy(false);
+    }
+  };
   return (
     <div className="main-scroll scroll fade-in">
       <Crumbs items={[{ label:'Agents', onClick:() => go('agents') }, { label:a.name }]} />
@@ -65,12 +103,12 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, createSessionReadO
           <div className="meta-row mono" style={{ fontSize:12.5, color:'var(--faint)' }}>{a.id} · Last updated {a.updated}</div>
         </div>
         <div style={{ display:'flex', gap:9 }}>
-          <button className="btn" disabled={archived || archiveReadOnly} title={archiveReadOnly ? 'Agent archive is not enabled in the alpha console.' : undefined}
-            style={{ opacity: archived || archiveReadOnly ? .5 : 1 }} onClick={() => !archiveReadOnly && setDialog(true)}>
+          <button className="btn" disabled={archived || archiveReadOnly || lifecycleBusy} title={archiveReadOnly ? 'Connect a live workspace to archive this agent.' : undefined}
+            style={{ opacity: archived || archiveReadOnly ? .5 : 1 }} onClick={() => { if (!archiveReadOnly) { setLifecycleError(null); setDialog(true); } }}>
             <Icon name="archive" size={14} />{archived ? 'Archived' : 'Archive'}
           </button>
-          <button className="btn btn-primary" disabled={createSessionReadOnly} title={createSessionReadOnly ? 'Connect a live workspace to create a session.' : undefined}
-            onClick={() => !createSessionReadOnly && onCreateSession()}>
+          <button className="btn btn-primary" disabled={archived || createSessionReadOnly} title={archived ? 'Archived agents cannot create new sessions.' : createSessionReadOnly ? 'Connect a live workspace to create a session.' : undefined}
+            onClick={() => !archived && !createSessionReadOnly && onCreateSession()}>
             <Icon name="plus" size={15} />Create session
           </button>
         </div>
@@ -81,7 +119,7 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, createSessionReadO
           message={<>Archiving <b>{a.name}</b> hides it from the default list and stops it appearing in new-session pickers. Existing sessions are unaffected.</>}
           confirmLabel="Archive agent" endpoint="POST /v1/agents/:id/archive"
           onClose={() => setDialog(false)}
-          onConfirm={() => { setDialog(false); onArchive && onArchive(); }} />}
+          onConfirm={confirmArchive} busy={lifecycleBusy} error={lifecycleError} />}
 
       <div style={{ display:'flex', gap:20, borderBottom:'1px solid var(--border)', marginBottom:22 }}>
         {['agent','sessions'].map((t) => (
@@ -122,6 +160,24 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, createSessionReadO
                 </div>
                 <span style={{ display:'flex', alignItems:'center', gap:6, color:'var(--soft)', fontSize:12.5 }}>
                   <Icon name="checkCircle" size={14} style={{ color:'var(--green)' }} />{a.toolPermission || 'Always allow'}</span>
+              </div>
+              <div style={{ padding:'12px 14px', borderTop:'1px solid var(--border)' }}>
+                <div className="form-row two" style={{ alignItems:'end' }}>
+                  <Labeled label="Approval policy" htmlFor="agent-tool-approval" hint="Saving creates a new immutable agent version. Existing sessions keep their current policy.">
+                    <select id="agent-tool-approval" className="selectbox" value={toolPolicy}
+                      disabled={!hasEnabledTools || archived || archiveReadOnly || toolPolicyBusy}
+                      onChange={(event) => { setToolPolicy(event.target.value); setToolPolicyError(null); }}>
+                      {currentToolPolicy === 'mixed' && <option value="mixed" disabled>Mixed permissions</option>}
+                      {currentToolPolicy === 'none' && <option value="none" disabled>No enabled tools</option>}
+                      <option value="always_ask">Ask before use</option>
+                      <option value="always_allow">Allow automatically</option>
+                    </select>
+                  </Labeled>
+                  <button className="btn btn-primary" disabled={!hasEnabledTools || archived || archiveReadOnly || toolPolicyBusy || toolPolicy === currentToolPolicy}
+                    onClick={saveToolPolicy}>{toolPolicyBusy ? 'Saving…' : 'Save new version'}</button>
+                </div>
+                {toolPolicy === 'always_allow' && <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>Enabled tools can run without confirmation; sandbox and network restrictions still apply.</span></div>}
+                {toolPolicyError && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{toolPolicyError.message}</span></div>}
               </div>
             </div>
           </div>

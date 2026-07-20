@@ -42,8 +42,16 @@ try {
   let dialog = page.getByRole("dialog");
   await dialog.getByRole("heading", { name: "Create agent" }).waitFor();
   await dialog.locator("#create-agent-name").fill("alpha-browser-agent");
+  await dialog.getByRole("radio", { name:/Allow automatically/ }).click();
   await dialog.getByRole("button", { name: "Create agent" }).click();
   await page.getByRole("heading", { name: "alpha-browser-agent" }).waitFor();
+  await page.locator("#agent-tool-approval").waitFor();
+  if (await page.locator("#agent-tool-approval").inputValue() !== "always_allow") {
+    throw new Error("Created agent did not preserve automatic tool approval");
+  }
+  await page.locator("#agent-tool-approval").selectOption("always_ask");
+  await page.getByRole("button", { name:"Save new version" }).click();
+  await page.getByText("v2", { exact:true }).waitFor();
 
   await page.getByText("Start", { exact: true }).first().click();
   await page.getByRole("button", { name: "Create environment" }).click();
@@ -59,10 +67,34 @@ try {
   await dialog.getByRole("heading", { name: "Create session" }).waitFor();
   await dialog.getByRole("button", { name: "Create session" }).click();
   await page.waitForURL(/#session=/);
+  await page.getByRole("button", { name:"Actions" }).click();
+  await page.getByText("Archive session", { exact:true }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name:"Archive session" }).click();
+  await page.getByPlaceholder("Archived sessions are read-only.").waitFor();
+  if (!(await page.getByRole("button", { name:"Ask Claude" }).isDisabled())) {
+    throw new Error("Archived session kept Ask Claude enabled");
+  }
+
+  await page.getByRole("button", { name:"Actions" }).click();
+  await page.getByText("Delete session", { exact:true }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name:"Delete session" }).click();
+  await page.getByRole("heading", { name:"Sessions", exact:true }).waitFor();
+
+  await page.getByText("Agents", { exact:true }).first().click();
+  await page.getByText("alpha-browser-agent", { exact:true }).click();
+  await page.getByRole("button", { name:"Archive" }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name:"Archive agent" }).click();
+  await page.getByText("Archived", { exact:true }).first().waitFor();
+  if (!(await page.getByRole("button", { name:"Create session" }).isDisabled())) {
+    throw new Error("Archived agent kept Create session enabled");
+  }
   if ((await page.locator("body").innerText()).includes("Demo data")) {
     throw new Error("Console browser smoke observed demo fallback text");
   }
-  console.log("Alpha console browser smoke passed: workspace login, live readiness, and agent/environment/session mutations.");
+  console.log("Alpha console browser smoke passed: login, permission revision, session archive/delete, and agent archive gating.");
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   if (state.page) {
