@@ -1,11 +1,19 @@
-# MCP and vaults
+# MCP connector
 
-MCP servers and vault credentials extend an agent without exposing a secret directly to the sandbox.
+> [!NOTE] Status: **Shipped alpha for supported MCP servers and vault-backed authentication.**
 
-## MCP servers
+## Declare MCP servers on an agent
 
-Configure MCP servers as part of agent setup, then use the session transcript to inspect the resulting tool requests and outcomes.
+Configure an MCP server in the agent's versioned configuration. OMA resolves it when the session starts and records MCP tool use and result events in the session history.
 
-## Vault credentials
+## Configure available tools
 
-Vaults hold provider credentials for integrations. The console lets a workspace inspect vaults and credential health without displaying secret values to the guest environment.
+MCP tools remain subject to the agent's permission policy. Inspect the session event stream to see evaluation, confirmation, execution, and result behavior rather than treating a configured server as proof that every tool is usable.
+
+## Provide authentication
+
+Attach the needed [vault](#docs=vaults) at session creation. OMA supports the shipped static-bearer and MCP OAuth flows, including configured validation. Credentials are not rendered as plaintext in the console or passed as ordinary browser data.
+
+## Current boundaries
+
+OMA does not provide MCP tunnels, arbitrary rich content blocks, or long-output spill-to-file behavior. It also does not provide generic environment-variable credential injection.

@@ -436,6 +436,7 @@ a.dl { text-decoration:none; }
 .docs-crumbs span { margin:0 7px; color:var(--dim); }
 .docs-article h1 { margin:0 0 14px; color:var(--ink); font-size:31px; line-height:1.12; letter-spacing:-.7px; }
 .docs-article h2 { scroll-margin-top:20px; margin:38px 0 10px; color:var(--ink); font-size:19px; line-height:1.25; letter-spacing:-.25px; }
+.docs-article h3 { scroll-margin-top:20px; margin:26px 0 8px; color:var(--ink); font-size:15px; line-height:1.35; }
 .docs-article p, .docs-article li { color:var(--soft); font-size:14px; line-height:1.72; }
 .docs-article p { margin:0 0 14px; }
 .docs-article a { color:var(--accent-2); text-underline-offset:3px; }
@@ -478,6 +479,7 @@ a.dl { text-decoration:none; }
 .docs-toc { padding:46px 20px; border-left:1px solid var(--border); background:var(--bg); overflow:auto; }
 .docs-toc strong { display:block; margin:0 0 10px; color:var(--soft); font-size:12px; font-weight:600; }
 .docs-toc button { padding:4px 0; color:var(--faint); font-size:12px; line-height:1.45; }
+.docs-toc button.nested { padding-left:10px; font-size:11.5px; }
 .docs-toc button:hover { color:var(--accent-2); }
 .docs-nav-brand:focus-visible, .docs-nav-link:focus-visible, .docs-nav-console:focus-visible, .docs-toc button:focus-visible, .docs-card:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 

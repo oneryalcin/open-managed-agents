@@ -1,17 +1,23 @@
-# Tools, files, and skills
+# Tools
 
-OMA gives coding agents a deliberately bounded sandbox toolset and persistent inspection surfaces.
+> [!NOTE] Status: **Shipped alpha for the bounded coding toolset.**
 
-## Built-in tools
+## Available tools
 
-The alpha coding image supports Bash plus read, write, edit, glob, and provider-owned grep. It includes Node/npm, Python/uv, Git, curl, jq, common compilers, and archive tools.
+OMA supports `bash`, `read`, `write`, `edit`, `glob`, and provider-owned `grep` for the supported local providers. The pinned coding image contains Node/npm, Python/uv, Git, curl, jq, archive tools, and a basic native build baseline.
 
-## Files and skills
+## Configure a toolset
 
-Attach files and skills to the agent/session workflow, then inspect workspace uploads and session-scoped output files from the console. Current file-mount limits and path semantics remain documented alpha differences from CMA.
+Tool configuration lives on the agent. OMA validates known built-in names, rejects duplicate configuration, and supports `always_allow` and `always_ask` policies. Use [Permission policies](#docs=permissions) for the review workflow and timeout boundary.
 
-> [!WARNING] A session currently accepts at most 10 mounted files, not CMA's documented 100. OMA also rewrites mount paths under its session uploads root.
+## Custom tools
+
+Custom-tool calls are persisted as events and wait for a `user.custom_tool_result` response from the API client. They are not an invitation to run arbitrary code in the browser or appliance host.
 
 ## Web tools
 
-> [!WARNING] Web search and web fetch are not yet enabled. Approved Docker egress does not turn them into provider-owned tools.
+> [!WARNING] `web_fetch` and `web_search` are disabled. Approved Docker egress permits only the environment's HTTPS allowlist; it does not turn host-network access into provider-owned web tools.
+
+## Related resources
+
+Use [Files](#docs=files) for mounts and output, [Skills](#docs=skills) for reusable bundles, and [MCP connector](#docs=integrations) for external tool servers.

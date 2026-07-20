@@ -79,7 +79,10 @@
   - files and vault/credential health;
   - admin workspace/key management.
   - public in-console documentation overview, quickstart, configuration,
-    session, and reference pages.
+    session, integration, environment, and reference pages;
+  - a complete task-oriented documentation taxonomy modeled on CMA's public
+    structure, with first-class not-ready-in-v1 pages instead of omitted
+    navigation for deferred capabilities.
 - Content hierarchy: current state and blocking action first, primary task
   second, configuration detail third, raw/debug evidence always available but
   visually secondary.
@@ -184,7 +187,9 @@
   architecture, not its branded chrome or prose; documentation must state OMA's
   shipped alpha behavior and limitations directly. Markdown files under the
   console's local documentation tree are the single content source for both
-  rendered pages and the user-visible copy/open actions.
+  rendered pages and the user-visible copy/open actions. Each page declares a
+  shipped, partial, or not-ready-in-v1 status; the OpenAPI schema and
+  `PARITY.md` remain the implementation truth sources.
 - Performance constraints: bound automatic pagination; incrementally consume
   SSE; do not repeatedly reload full event history while a session runs.
 - Compatibility constraints: credentials remain in page memory only; admin and

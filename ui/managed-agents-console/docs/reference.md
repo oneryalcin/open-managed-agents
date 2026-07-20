@@ -1,18 +1,27 @@
-# API and alpha scope
+# API reference and compatibility
 
-Use the console for guided operations and the bundled OpenAPI reference for endpoint-level integration details.
+> [!NOTE] Status: **Shipped alpha reference.** The OpenAPI schema is the wire-contract authority.
 
-## Interactive API reference
+Use the console for guided operations and the bundled [OpenAPI reference](/docs/) for endpoint-level integration details. The machine-readable schema is available at `/openapi.json`.
 
-The appliance serves an air-gap-safe OpenAPI interface at `/docs/` and the machine-readable schema at `/openapi.json`.
+## Authentication and errors
 
-## Compatibility
+Managed-agent API requests are workspace-scoped and require a workspace key plus the managed-agents beta header. Successful POST operations use the documented API response shape; errors use a structured envelope with a request ID. Use the schema rather than this guide as the field-level authority.
 
-OMA follows CMA concepts and compatible request and response shapes where it ships them. It documents deliberate differences instead of claiming hosted-only functionality.
+## Shipped alpha scope
 
-## Current alpha scope
-
-| Status | Scope |
+| Area | Current behavior |
 | --- | --- |
-| Shipped | Single-agent sessions, Docker-backed environments, files, skills, MCP, vaults, manual or automatic tool approval, SSE inspection, and console/OpenAPI surfaces. |
-| Deferred | Multi-agent orchestration, memory, dreams, scheduled deployments, GitHub integration, webhooks, outcomes, session overrides, token previews, web tools, and hosted provisioning breadth. |
+| Agents | Create, retrieve, list, immutable update/version history, and archive. |
+| Environments | Create, retrieve, list, safe networking presets, and custom-host validation. No archive/delete yet. |
+| Sessions | Create, retrieve, list with bidirectional cursors, archive/delete when idle, send events, list events, and SSE resume. |
+| Tools | Bounded coding tools, tool confirmations, custom-tool result events, files, skills, MCP, and supported vault credentials. |
+| Console | Real API-backed alpha workflow and interactive OpenAPI documentation. |
+
+## Deliberate differences and deferred surfaces
+
+OMA is not a complete hosted CMA implementation. It currently lacks web tools, memory, dreams, outcomes, GitHub repository resources, webhooks, scheduled deployments, multi-agent threads, per-session overrides, live session updates, streaming token previews, and broad hosted-provisioning options. The corresponding pages in this guide explain each boundary.
+
+## Source of truth
+
+This documentation is a user guide. The appliance's OpenAPI schema is authoritative for wire contracts, while the repository's `PARITY.md` records evidence-backed compatibility work and known differences. When those sources change, this guide must be updated before the console advertises a new capability.

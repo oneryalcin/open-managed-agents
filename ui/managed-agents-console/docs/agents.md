@@ -1,17 +1,23 @@
-# Agent setup
+# Define your agent
 
-Agents hold the reusable, versioned instructions and capabilities that sessions run.
+> [!NOTE] Status: **Shipped alpha.** Agents are versioned, workspace-scoped configuration objects.
 
-## What belongs in an agent
+## Agent configuration
 
-An agent selects a model and system prompt, and can include built-in tools, attached skills, and MCP configuration. Updating an agent creates a new immutable version; existing sessions keep the version they started with.
+An agent selects an exact provider and model, system instructions, built-in tool configuration, skills, MCP servers, metadata, and a default confirmation policy. The model must be enabled by the appliance and have configured credentials before it can run a provider-backed session.
 
-## Tool confirmation
+## Create an agent
 
-Choose whether tool use requires confirmation or is automatically allowed. This policy is not a sandbox escape hatch: the environment still controls filesystem and network boundaries.
+Create an agent from the console or `POST /v1/agents`. The API validates built-in tool names and policies before persistence. Use the model catalog to discover deployment-enabled, credential-ready choices rather than assuming a hosted model name will work locally.
 
-> [!WARNING] A session awaiting tool confirmation is not automatically approved by the console. Review the tool request and explicitly allow or deny it. If no decision arrives within five minutes, OMA automatically denies the request; this differs from CMA's indefinite wait.
+## Update semantics
 
-## Model readiness
+Updating an agent creates a new immutable version with optimistic version checks. Existing sessions keep their originally selected version. Use the versions endpoint or console detail to inspect history.
 
-The console reports configured credentials from the live model catalog. A model cannot run until its provider credential is configured; browser-visible readiness is not a claim that a sandbox run has succeeded.
+## Agent lifecycle
+
+List active agents by default, include archived agents only when the API requests them, and archive an agent when it should no longer begin new work. Archiving is an API-backed lifecycle action, not a browser-only label.
+
+## What an agent does not define
+
+An agent does not grant network access, choose arbitrary images, or make a sandbox healthy. Those properties belong to the [environment](#docs=environments) and are exercised only when a session runs.
