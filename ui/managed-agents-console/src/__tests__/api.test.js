@@ -8,6 +8,9 @@ import {
   clearCredentials,
   clearKeyForPath,
   createAgent,
+  createSkill,
+  createVault,
+  createVaultCredential,
   createEnvironment,
   createIdempotencyIntent,
   createSession,
@@ -63,6 +66,7 @@ describe("buildRequestHeaders", () => {
     expect(headers["x-api-key"]).toBe("oma_workspace");
     expect(headers["x-admin-key"]).toBeUndefined();
     expect(headers["anthropic-beta"]).toContain("managed-agents-2026-04-01");
+    expect(headers["anthropic-beta"]).toContain("skills-2025-10-02");
   });
 
   it("does not treat /administrator or /v1x as credentialed paths", () => {
@@ -181,6 +185,8 @@ describe("workspace write capability", () => {
       { path: "/v1/vaults/a", method: "DELETE" },
       { path: "/v1/vaults/a/credentials/b/archive", method: "POST" },
       { path: "/v1/vaults/a/credentials/b/mcp_oauth_validate", method: "DELETE" },
+      { path: "/v1/vaults", method: "POST", body: {} },
+      { path: "/v1/skills", method: "POST", body: {} },
     ]) {
       await expect(__testRequest(attempt.path, attempt)).rejects.toThrow("not permitted");
     }
@@ -208,6 +214,19 @@ describe("workspace write capability", () => {
       expect.objectContaining({ method:"POST" }),
     );
     await expect(validateMcpOauthCredential("a", "b", "mock")).rejects.toThrow("live API mode");
+  });
+
+  it("allows only dedicated vault, credential, and multipart-skill writes", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok:true, status:200, text:() => Promise.resolve("{}") }));
+    vi.stubGlobal("fetch", fetchMock);
+    await createVault({ display_name:"Notion" });
+    await createVaultCredential("vlt_a", { auth:{ type:"static_bearer", mcp_server_url:"https://mcp.example.test/mcp", token:"token-long-enough" } });
+    await createSkill("Support", [new Blob(["---\nname: support\n---"], { type:"text/markdown" })]);
+    expect(fetchMock).toHaveBeenCalledWith("/v1/vaults", expect.objectContaining({ method:"POST", body:JSON.stringify({ display_name:"Notion" }) }));
+    expect(fetchMock).toHaveBeenCalledWith("/v1/vaults/vlt_a/credentials", expect.objectContaining({ method:"POST" }));
+    const skillCall = fetchMock.mock.calls.find(([path]) => path === "/v1/skills");
+    expect(skillCall?.[1]).toEqual(expect.objectContaining({ method:"POST", body:expect.any(FormData) }));
+    expect(skillCall?.[1].headers["content-type"]).toBeUndefined();
   });
 
   it("allows only the exact environment networking validation wrapper", async () => {

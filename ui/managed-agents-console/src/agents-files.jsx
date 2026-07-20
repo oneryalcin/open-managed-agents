@@ -53,6 +53,8 @@ function AgentsList({ agents, openAgent, onCreate, dataState = 'loaded', readOnl
 
 function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermission, createSessionReadOnly = false, archiveReadOnly = false }) {
   const a = agent;
+  const mcpServers = Array.isArray(a.mcpServers) ? a.mcpServers : [];
+  const configuredSkills = Array.isArray(a.skills) ? a.skills : [];
   const [tab, setTab] = useStateA('agent');
   const [dialog, setDialog] = useStateA(false);
   const [lifecycleBusy, setLifecycleBusy] = useStateA(false);
@@ -140,6 +142,7 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermis
             <div className="sec-label" style={{ marginBottom:8 }}>Model</div>
             <div className="mono" style={{ fontSize:14 }}>{a.model}</div>
           </div>
+          {a.description && <div className="section"><div className="sec-label" style={{ marginBottom:8 }}>Description</div><div style={{ color:'var(--soft)', fontSize:13.5 }}>{a.description}</div></div>}
           <div className="section">
             <div className="sec-label" style={{ marginBottom:8 }}>System prompt</div>
             <div className="prompt-box">{a.system}</div>
@@ -161,6 +164,11 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermis
                 <span style={{ display:'flex', alignItems:'center', gap:6, color:'var(--soft)', fontSize:12.5 }}>
                   <Icon name="checkCircle" size={14} style={{ color:'var(--green)' }} />{a.toolPermission || 'Always allow'}</span>
               </div>
+              {mcpServers.map((server) => <div className="tool-card" key={server.name}>
+                <div className="tool-ico"><Icon name="database" size={18} /></div>
+                <div><div className="cell-strong" style={{ fontSize:13.5 }}>{server.name}</div>
+                  <div className="mono" style={{ fontSize:11.5, color:'var(--faint)', marginTop:2 }}>{server.url}</div></div>
+              </div>)}
               <div style={{ padding:'12px 14px', borderTop:'1px solid var(--border)' }}>
                 <div className="form-row two" style={{ alignItems:'end' }}>
                   <Labeled label="Approval policy" htmlFor="agent-tool-approval" hint="Saving creates a new immutable agent version. Existing sessions keep their current policy.">
@@ -183,8 +191,12 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermis
           </div>
           <div className="section">
             <div className="sec-label" style={{ marginBottom:8 }}>Skills</div>
-            <div style={{ color:'var(--faint)', fontSize:13.5 }}>No skills configured.</div>
+            {configuredSkills.length === 0 ? <div style={{ color:'var(--faint)', fontSize:13.5 }}>No skills configured.</div>
+              : <div className="panel">{configuredSkills.map((skill) => <div className="tool-card" key={`${skill.type}:${skill.skill_id}:${skill.version || 'latest'}`}>
+                <div className="tool-ico"><Icon name="fileText" size={18} /></div><div><div className="cell-strong" style={{ fontSize:13.5 }}>{skill.skill_id}</div><div className="mono" style={{ fontSize:11.5, color:'var(--faint)', marginTop:2 }}>{skill.type} · {skill.version || 'latest'}</div></div>
+              </div>)}</div>}
           </div>
+          {Object.keys(a.metadata || {}).length > 0 && <div className="section"><div className="sec-label" style={{ marginBottom:8 }}>Metadata</div><pre className="code" style={{ whiteSpace:'pre-wrap' }}>{JSON.stringify(a.metadata, null, 2)}</pre></div>}
         </div>
 
         <div className="panel" style={{ padding:'14px 16px' }}>

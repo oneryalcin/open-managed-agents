@@ -72,6 +72,7 @@ const NAV = [
   { key:'environments', label:'Environments', icon:'database' },
   { key:'files', label:'Files', icon:'folder' },
   { key:'vaults', label:'Vaults', icon:'database' },
+  { key:'skills', label:'Skills', icon:'fileText' },
 ];
 
 function WorkspaceSwitcher({ workspace, admin, onSelectWorkspace, onSwitchWorkspace, onSignOut }) {

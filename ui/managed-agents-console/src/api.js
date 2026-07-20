@@ -5,7 +5,8 @@ import { followEventStream } from "./sse.js";
 
 const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 const FILES_API_BETA = "files-api-2025-04-14";
-const BETA_HEADER = `${MANAGED_AGENTS_BETA}, ${FILES_API_BETA}`;
+const SKILLS_API_BETA = "skills-2025-10-02";
+const BETA_HEADER = `${MANAGED_AGENTS_BETA}, ${FILES_API_BETA}, ${SKILLS_API_BETA}`;
 const PAGE_LIMIT = 100;
 const EVENT_PAGE_LIMIT = 1000;
 const MAX_AUTO_PAGES = 100;
@@ -19,6 +20,9 @@ const ARCHIVE_AGENT_CAPABILITY = Symbol("archive-agent");
 const UPDATE_AGENT_CAPABILITY = Symbol("update-agent");
 const ARCHIVE_SESSION_CAPABILITY = Symbol("archive-session");
 const DELETE_SESSION_CAPABILITY = Symbol("delete-session");
+const CREATE_VAULT_CAPABILITY = Symbol("create-vault");
+const CREATE_VAULT_CREDENTIAL_CAPABILITY = Symbol("create-vault-credential");
+const CREATE_SKILL_CAPABILITY = Symbol("create-skill");
 const CMA_BUILTIN_TOOL_NAMES = [
   "bash",
   "edit",
@@ -93,7 +97,7 @@ function isExactEnvironmentNetworkingValidatePath(path) {
   return pathname === "/v1/environments/networking-presets/validate";
 }
 
-async function request(path, { method = "GET", body, capability, headers: extraHeaders } = {}) {
+async function request(path, { method = "GET", body, form, capability, headers: extraHeaders } = {}) {
   // Normalize the verb once so the guard and fetch see the same value. The
   // guard is already fail-closed for any casing (a lowercase "post" is
   // non-GET, so it is denied unless it exactly matches the capability clause);
@@ -114,6 +118,7 @@ async function request(path, { method = "GET", body, capability, headers: extraH
     headers["content-type"] = "application/json";
     init.body = JSON.stringify(body);
   }
+  if (form !== undefined) init.body = form;
   const response = await fetch(path, init);
   const text = await response.text();
   // A fronting proxy (TLS terminator, LB) can answer 502/504 with HTML; that
@@ -144,6 +149,13 @@ function isAllowedWorkspaceWrite(path, method, capability) {
     (capability === CREATE_AGENT_CAPABILITY && method === "POST" && path === "/v1/agents") ||
     (capability === CREATE_ENVIRONMENT_CAPABILITY && method === "POST" && path === "/v1/environments") ||
     (capability === CREATE_SESSION_CAPABILITY && method === "POST" && path === "/v1/sessions") ||
+    (capability === CREATE_VAULT_CAPABILITY && method === "POST" && path === "/v1/vaults") ||
+    (
+      capability === CREATE_VAULT_CREDENTIAL_CAPABILITY &&
+      method === "POST" &&
+      /^\/v1\/vaults\/[^/]+\/credentials$/.test(new URL(path, "http://oma.local").pathname)
+    ) ||
+    (capability === CREATE_SKILL_CAPABILITY && method === "POST" && path === "/v1/skills") ||
     (
       capability === ARCHIVE_AGENT_CAPABILITY &&
       method === "POST" &&
@@ -224,6 +236,37 @@ export function listVaultCredentials(vaultId) {
   return fetchCursorPages(
     `/v1/vaults/${encodeURIComponent(vaultId)}/credentials?include_archived=true`,
   );
+}
+
+export function createVault(body) {
+  return request("/v1/vaults", {
+    method: "POST",
+    body,
+    capability: CREATE_VAULT_CAPABILITY,
+  });
+}
+
+export function createVaultCredential(vaultId, body) {
+  return request(`/v1/vaults/${encodeURIComponent(vaultId)}/credentials`, {
+    method: "POST",
+    body,
+    capability: CREATE_VAULT_CREDENTIAL_CAPABILITY,
+  });
+}
+
+export function listSkills() {
+  return fetchCursorPages("/v1/skills");
+}
+
+export function createSkill(displayTitle, files) {
+  const form = new FormData();
+  if (displayTitle) form.set("display_title", displayTitle);
+  for (const file of files) form.append("files[]", file, file.name);
+  return request("/v1/skills", {
+    method: "POST",
+    form,
+    capability: CREATE_SKILL_CAPABILITY,
+  });
 }
 
 export function listWorkspaceCredentialHealth(workspaceId, page) {
@@ -516,7 +559,7 @@ async function fetchFilePages(path, { limit = PAGE_LIMIT } = {}) {
 }
 
 export async function loadConsoleData() {
-  const [agentsPage, sessionsPage, environmentsPage, filesPage, modelsPage, networkingCatalog] =
+  const [agentsPage, sessionsPage, environmentsPage, filesPage, modelsPage, networkingCatalog, vaultsPage, skillsPage] =
     await Promise.all([
       fetchCursorPages("/v1/agents?include_archived=true"),
       fetchCursorPages("/v1/sessions?include_archived=true&order=desc"),
@@ -524,6 +567,8 @@ export async function loadConsoleData() {
       fetchFilePages("/v1/files"),
       listModelCatalog(),
       listEnvironmentNetworkingPresets(),
+      listVaults(),
+      listSkills(),
     ]);
 
   const agents = agentsPage.data.map(toUiAgent);
@@ -540,7 +585,7 @@ export async function loadConsoleData() {
     ["models", modelsPage],
   ]);
 
-  return { agents, sessions, environments, files, models: modelsPage.data, networkingCatalog, warnings };
+  return { agents, sessions, environments, files, models: modelsPage.data, networkingCatalog, vaults: vaultsPage.data, skills: skillsPage.data, warnings };
 }
 
 async function hydrateSession(session) {
@@ -586,6 +631,10 @@ function toUiAgent(agent) {
     version: `v${agent.version ?? 1}`,
     apiVersion: agent.version ?? 1,
     rawTools: Array.isArray(agent.tools) ? agent.tools : [],
+    mcpServers: Array.isArray(agent.mcp_servers) ? agent.mcp_servers : [],
+    skills: Array.isArray(agent.skills) ? agent.skills : [],
+    metadata: agent.metadata && typeof agent.metadata === "object" ? agent.metadata : {},
+    description: agent.description || null,
     tools: Array.isArray(agent.tools) ? agent.tools.length : 0,
     system: agent.system || "No system prompt set.",
     toolset: summarizeToolset(agent.tools),
@@ -940,6 +989,10 @@ if (typeof window !== "undefined") {
     logoutConsole,
     listVaults,
     listVaultCredentials,
+    createVault,
+    createVaultCredential,
+    listSkills,
+    createSkill,
     listWorkspaceCredentialHealth,
     validateMcpOauthCredential,
     createIdempotencyIntent,

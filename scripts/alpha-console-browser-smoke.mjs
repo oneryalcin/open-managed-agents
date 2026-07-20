@@ -33,7 +33,7 @@ try {
     throw new Error("Workspace key was not the default console login tier");
   }
   await page.locator("#console-credential-key").fill(started.apiKey);
-  await page.getByRole("button", { name: "Connect" }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.getByRole("heading", { name: "Start" }).waitFor();
   // A console login is an opaque HttpOnly session, not an in-memory raw key:
   // browser reload must restore the selected workspace without showing Connect.
