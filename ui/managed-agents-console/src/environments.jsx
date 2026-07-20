@@ -284,6 +284,10 @@ function EnvironmentsView({ environments = [], mode = "api", dataState = "loaded
         <Field wide placeholder="Search by environment ID" />
         <Select label="Networking" value="All" w={150} />
       </div>
+      <div className="inline-warn" role="status">
+        <Icon name="info" size={14} />
+        <span>Environments are immutable. This OMA build does not yet expose environment archive/delete endpoints; create a replacement environment when its configuration changes.</span>
+      </div>
       {partial && <PartialNotice resource="environments" />}
       {createdEnvironmentId && (
         <div className="inline-ok" role="status">

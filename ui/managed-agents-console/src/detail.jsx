@@ -151,6 +151,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   const [message, setMessage] = useStateD('');
   const [actionBusy, setActionBusy] = useStateD(false);
   const [actionError, setActionError] = useStateD(null);
+  const [lifecycleBusy, setLifecycleBusy] = useStateD(false);
+  const [lifecycleError, setLifecycleError] = useStateD(null);
   const [streamState, setStreamState] = useStateD(apiMode === 'api' ? 'connecting' : 'closed');
   const aliveRef = useRefD(true);
   const idxRef = useRefD(1);
@@ -171,6 +173,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
     setQuery('');
     setMessage('');
     setActionError(null);
+    setLifecycleError(null);
     setStreamState(apiMode === 'api' ? 'connecting' : 'closed');
     messageIntentRef.current = OmaConsoleApi.createIdempotencyIntent();
     interruptIntentRef.current = OmaConsoleApi.createIdempotencyIntent();
@@ -448,6 +451,23 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
     }
   };
 
+  const runLifecycle = async (kind) => {
+    if (lifecycleBusy) return;
+    const action = kind === 'archive' ? onArchive : onDelete;
+    if (!action) return;
+    setLifecycleBusy(true);
+    setLifecycleError(null);
+    try {
+      await action(s);
+      if (kind === 'archive') setStatus('archived');
+      setDialog(null);
+    } catch (error) {
+      setLifecycleError(error);
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+
   const inspectorVisible = view !== 'files';
 
   const renderStreamHeader = () => (
@@ -589,8 +609,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
                   <div className="menu-item" onClick={() => { setMenuOpen(false); }}><Icon name="download" />Export events (JSON)</div>
                   {!lifecycleReadOnly && <>
                     <div className="menu-sep" />
-                    <div className="menu-item" onClick={() => { setMenuOpen(false); setDialog('archive'); }}><Icon name="archive" />Archive session</div>
-                    <div className="menu-item danger" onClick={() => { setMenuOpen(false); setDialog('delete'); }}><Icon name="x" />Delete session</div>
+                    {status !== 'archived' && <div className="menu-item" onClick={() => { setMenuOpen(false); setLifecycleError(null); setDialog('archive'); }}><Icon name="archive" />Archive session</div>}
+                    <div className="menu-item danger" onClick={() => { setMenuOpen(false); setLifecycleError(null); setDialog('delete'); }}><Icon name="x" />Delete session</div>
                   </>}
                 </div>
               </>
@@ -647,13 +667,13 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
           message={<>Archiving <b>{s.title}</b> hides it from the default list. Its events stay intact and it can be restored. </>}
           confirmLabel="Archive session" endpoint="POST /v1/sessions/:id/archive"
           onClose={() => setDialog(null)}
-          onConfirm={() => { setStatus('archived'); setDialog(null); onArchive && onArchive(s); }} />}
+          onConfirm={() => runLifecycle('archive')} busy={lifecycleBusy} error={lifecycleError} />}
       {dialog === 'delete' &&
         <ConfirmDialog icon="x" danger title="Delete this session?"
           message={<>Deleting <b>{s.title}</b> permanently removes the session and its events. This cannot be undone.</>}
           confirmLabel="Delete session" endpoint="DELETE /v1/sessions/:id"
           onClose={() => setDialog(null)}
-          onConfirm={() => { setDialog(null); onDelete && onDelete(s); }} />}
+          onConfirm={() => runLifecycle('delete')} busy={lifecycleBusy} error={lifecycleError} />}
 
       {renderStreamHeader()}
 

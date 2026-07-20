@@ -15,6 +15,10 @@ const CREATE_AGENT_CAPABILITY = Symbol("create-agent");
 const CREATE_ENVIRONMENT_CAPABILITY = Symbol("create-environment");
 const CREATE_SESSION_CAPABILITY = Symbol("create-session");
 const SEND_SESSION_EVENTS_CAPABILITY = Symbol("send-session-events");
+const ARCHIVE_AGENT_CAPABILITY = Symbol("archive-agent");
+const UPDATE_AGENT_CAPABILITY = Symbol("update-agent");
+const ARCHIVE_SESSION_CAPABILITY = Symbol("archive-session");
+const DELETE_SESSION_CAPABILITY = Symbol("delete-session");
 
 // Session-scoped credentials, in module memory only (plan 0120 §3.2):
 // never localStorage, sessionStorage, or a cookie — a reload means
@@ -128,6 +132,26 @@ function isAllowedWorkspaceWrite(path, method, capability) {
     (capability === CREATE_ENVIRONMENT_CAPABILITY && method === "POST" && path === "/v1/environments") ||
     (capability === CREATE_SESSION_CAPABILITY && method === "POST" && path === "/v1/sessions") ||
     (
+      capability === ARCHIVE_AGENT_CAPABILITY &&
+      method === "POST" &&
+      /^\/v1\/agents\/[^/]+\/archive$/.test(new URL(path, "http://oma.local").pathname)
+    ) ||
+    (
+      capability === UPDATE_AGENT_CAPABILITY &&
+      method === "POST" &&
+      /^\/v1\/agents\/[^/]+$/.test(new URL(path, "http://oma.local").pathname)
+    ) ||
+    (
+      capability === ARCHIVE_SESSION_CAPABILITY &&
+      method === "POST" &&
+      /^\/v1\/sessions\/[^/]+\/archive$/.test(new URL(path, "http://oma.local").pathname)
+    ) ||
+    (
+      capability === DELETE_SESSION_CAPABILITY &&
+      method === "DELETE" &&
+      /^\/v1\/sessions\/[^/]+$/.test(new URL(path, "http://oma.local").pathname)
+    ) ||
+    (
       capability === SEND_SESSION_EVENTS_CAPABILITY &&
       method === "POST" &&
       /^\/v1\/sessions\/[^/]+\/events$/.test(new URL(path, "http://oma.local").pathname)
@@ -217,6 +241,44 @@ export function createAgent(body) {
   }).then(toUiAgent);
 }
 
+export function archiveAgent(agentId) {
+  return request(`/v1/agents/${encodeURIComponent(agentId)}/archive`, {
+    method: "POST",
+    capability: ARCHIVE_AGENT_CAPABILITY,
+  }).then(toUiAgent);
+}
+
+export function updateAgentToolPermission(agent, policy) {
+  if (policy !== "always_allow" && policy !== "always_ask") {
+    return Promise.reject(new Error("Unsupported tool permission policy"));
+  }
+  if (!Number.isSafeInteger(agent?.apiVersion) || !Array.isArray(agent?.rawTools)) {
+    return Promise.reject(new Error("Agent configuration is incomplete; refresh before updating"));
+  }
+  const tools = agent.rawTools.map((toolset) => {
+    if (toolset?.type !== "agent_toolset_20260401") return toolset;
+    const defaultEnabled = toolset.default_config?.enabled !== false;
+    return {
+      ...toolset,
+      default_config: {
+        ...(toolset.default_config ?? {}),
+        permission_policy: { type:policy },
+      },
+      ...(Array.isArray(toolset.configs) ? {
+        configs: toolset.configs.map((config) =>
+          (config.enabled ?? defaultEnabled) === false
+            ? config
+            : { ...config, permission_policy:{ type:policy } }),
+      } : {}),
+    };
+  });
+  return request(`/v1/agents/${encodeURIComponent(agent.id)}`, {
+    method: "POST",
+    body: { version:agent.apiVersion, tools },
+    capability: UPDATE_AGENT_CAPABILITY,
+  }).then(toUiAgent);
+}
+
 export function modelInputForSelection(model) {
   if (!model || typeof model.provider !== "string" || typeof model.id !== "string") {
     throw new Error("A deployment model must be selected");
@@ -275,6 +337,20 @@ export function createSession(body, { intent, agentNames } = {}) {
     capability: CREATE_SESSION_CAPABILITY,
     headers: { "idempotency-key": keyForIntent(intent, body) },
   }).then((session) => toUiSession(session, agentNames ?? new Map()));
+}
+
+export function archiveSession(sessionId) {
+  return request(`/v1/sessions/${encodeURIComponent(sessionId)}/archive`, {
+    method: "POST",
+    capability: ARCHIVE_SESSION_CAPABILITY,
+  });
+}
+
+export function deleteSession(sessionId) {
+  return request(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    capability: DELETE_SESSION_CAPABILITY,
+  });
 }
 
 export function sendSessionEvents(sessionId, events, { intent } = {}) {
@@ -469,6 +545,8 @@ function toUiAgent(agent) {
     created: shortDate(agent.created_at),
     updated: shortDate(agent.updated_at),
     version: `v${agent.version ?? 1}`,
+    apiVersion: agent.version ?? 1,
+    rawTools: Array.isArray(agent.tools) ? agent.tools : [],
     tools: Array.isArray(agent.tools) ? agent.tools.length : 0,
     system: agent.system || "No system prompt set.",
     toolset: summarizeToolset(agent.tools),
@@ -807,12 +885,16 @@ if (typeof window !== "undefined") {
     validateMcpOauthCredential,
     createIdempotencyIntent,
     createAgent,
+    archiveAgent,
+    updateAgentToolPermission,
     modelInputForSelection,
     listModelCatalog,
     createEnvironment,
     listEnvironmentNetworkingPresets,
     validateEnvironmentNetworkingHosts,
     createSession,
+    archiveSession,
+    deleteSession,
     sendSessionEvents,
     followSessionEvents,
     toUiSessionEvent,

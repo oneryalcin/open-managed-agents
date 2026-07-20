@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testRequest,
+  archiveAgent,
+  archiveSession,
   buildRequestHeaders,
   clearCredentials,
   clearKeyForPath,
@@ -8,6 +10,7 @@ import {
   createEnvironment,
   createIdempotencyIntent,
   createSession,
+  deleteSession,
   followSessionEvents,
   hasWorkspaceKey,
   listEnvironmentNetworkingPresets,
@@ -20,6 +23,7 @@ import {
   sendSessionEvents,
   setWorkspaceKey,
   toUiSessionEvent,
+  updateAgentToolPermission,
   validateEnvironmentNetworkingHosts,
   validateMcpOauthCredential,
 } from "../api.js";
@@ -244,6 +248,97 @@ describe("workspace write capability", () => {
           model:"claude-sonnet-4-6",
           system:"Be concise.",
           tools:[{ type:"agent_toolset_20260401" }],
+        }),
+      }),
+    );
+  });
+
+  it("allows only exact agent/session lifecycle routes through narrow wrappers", async () => {
+    setWorkspaceKey("oma_workspace");
+    const fetchMock = vi.fn((path, init) => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify(path.includes("/agents/") ? {
+        id:"agent_1234567890",
+        type:"agent",
+        name:"Archived agent",
+        model:{ provider:"anthropic", id:"claude-sonnet-5" },
+        tools:[],
+        version:1,
+        created_at:"2026-07-14T10:00:00Z",
+        updated_at:"2026-07-14T10:00:00Z",
+        archived_at:"2026-07-14T11:00:00Z",
+      } : { id:"sesn_1234567890", method:init.method })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(archiveAgent("agent/a")).resolves.toMatchObject({ status:"archived" });
+    await expect(archiveSession("session/a")).resolves.toMatchObject({ method:"POST" });
+    await expect(deleteSession("session/a")).resolves.toMatchObject({ method:"DELETE" });
+
+    expect(fetchMock.mock.calls.map(([path, init]) => [path, init.method])).toEqual([
+      ["/v1/agents/agent%2Fa/archive", "POST"],
+      ["/v1/sessions/session%2Fa/archive", "POST"],
+      ["/v1/sessions/session%2Fa", "DELETE"],
+    ]);
+
+    await expect(__testRequest("/v1/agents/a/archive/extra", { method:"POST" }))
+      .rejects.toThrow("not permitted");
+    await expect(__testRequest("/v1/sessions/a/events", { method:"DELETE" }))
+      .rejects.toThrow("not permitted");
+  });
+
+  it("creates an immutable agent revision when tool approval changes", async () => {
+    setWorkspaceKey("oma_workspace");
+    const rawTools = [{
+      type:"agent_toolset_20260401",
+      default_config:{ enabled:true, permission_policy:{ type:"always_ask" } },
+      configs:[
+        { name:"bash", enabled:true, permission_policy:{ type:"always_ask" } },
+        { name:"write", enabled:false },
+      ],
+    }];
+    const fetchMock = vi.fn((_path, init) => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(JSON.stringify({
+        id:"agent_1234567890",
+        type:"agent",
+        name:"Updated agent",
+        model:{ provider:"anthropic", id:"claude-sonnet-5" },
+        tools:JSON.parse(init.body).tools,
+        version:4,
+        created_at:"2026-07-14T10:00:00Z",
+        updated_at:"2026-07-14T11:00:00Z",
+        archived_at:null,
+      })),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateAgentToolPermission({
+      id:"agent_1234567890",
+      apiVersion:3,
+      rawTools,
+    }, "always_allow")).resolves.toMatchObject({
+      version:"v4",
+      apiVersion:4,
+      toolPermission:"Always allow",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/agents/agent_1234567890",
+      expect.objectContaining({
+        method:"POST",
+        body:JSON.stringify({
+          version:3,
+          tools:[{
+            type:"agent_toolset_20260401",
+            default_config:{ enabled:true, permission_policy:{ type:"always_allow" } },
+            configs:[
+              { name:"bash", enabled:true, permission_policy:{ type:"always_allow" } },
+              { name:"write", enabled:false },
+            ],
+          }],
         }),
       }),
     );

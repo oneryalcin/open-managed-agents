@@ -285,7 +285,7 @@ function App() {
   };
   const mutationReadOnly = apiState.state !== 'loaded'
     || (apiState.mode !== 'api' && apiState.mode !== 'demo');
-  const lifecycleReadOnly = apiState.mode !== 'demo';
+  const lifecycleReadOnly = mutationReadOnly;
 
   const createSession = (preset) => {
     if (mutationReadOnly) return;
@@ -338,20 +338,67 @@ function App() {
         : current));
   };
 
-  const archiveSession = (s) => {
+  const archiveSession = async (s) => {
     if (lifecycleReadOnly) return;
+    if (apiState.mode === 'api') {
+      try {
+        await OmaConsoleApi.archiveSession(s.id);
+      } catch (error) {
+        if (error.status === 401) workspaceReauth();
+        throw error;
+      }
+    }
     setSessions((prev) => prev.map((x) => x.id === s.id ? { ...x, status:'archived' } : x));
   };
-  const deleteSession = (s) => {
+  const deleteSession = async (s) => {
     if (lifecycleReadOnly) return;
+    if (apiState.mode === 'api') {
+      try {
+        await OmaConsoleApi.deleteSession(s.id);
+      } catch (error) {
+        if (error.status === 401) workspaceReauth();
+        throw error;
+      }
+    }
     setSessions((prev) => prev.filter((x) => x.id !== s.id));
     go('sessions');
   };
-  const archiveAgent = (a) => {
+  const archiveAgent = async (a) => {
     if (lifecycleReadOnly) return;
-    const upd = { ...a, status:'archived' };
+    let upd = { ...a, status:'archived' };
+    if (apiState.mode === 'api') {
+      try {
+        upd = { ...await OmaConsoleApi.archiveAgent(a.id), sessions:a.sessions || [] };
+      } catch (error) {
+        if (error.status === 401) workspaceReauth();
+        throw error;
+      }
+    }
     setAgents((prev) => prev.map((x) => x.id === a.id ? upd : x));
-    setRoute({ name:'agent', agent: upd });
+    const next = { name:'agent', agent:upd };
+    setRoute(next);
+    writeRouteHash(next);
+  };
+  const updateAgentToolPermission = async (a, policy) => {
+    if (mutationReadOnly) return;
+    let upd;
+    try {
+      upd = apiState.mode === 'api'
+        ? { ...await OmaConsoleApi.updateAgentToolPermission(a, policy), sessions:a.sessions || [] }
+        : {
+            ...a,
+            version:`v${(a.apiVersion || Number(String(a.version).replace(/^v/, '')) || 1) + 1}`,
+            apiVersion:(a.apiVersion || 1) + 1,
+            toolPermission:policy === 'always_allow' ? 'Always allow' : 'Ask before use',
+          };
+    } catch (error) {
+      if (error.status === 401) workspaceReauth();
+      throw error;
+    }
+    setAgents((prev) => prev.map((x) => x.id === a.id ? upd : x));
+    const next = { name:'agent', agent:upd };
+    setRoute(next);
+    writeRouteHash(next);
   };
 
   if (auth.phase === 'login') {
@@ -401,7 +448,7 @@ function App() {
   else if (route.name === 'sessions') view = <SessionsList sessions={sessions} openSession={openSession} onCreate={() => createSession(null)} dataState={dataState} readOnly={mutationReadOnly} />;
   else if (route.name === 'session') view = <SessionDetail session={route.session} layout={t.layout} go={go} onArchive={archiveSession} onDelete={deleteSession} onSessionStateChange={onSessionStateChange} onRefreshSession={refreshOpenSession} dataState={dataState} apiMode={apiState.mode} readOnly={mutationReadOnly} lifecycleReadOnly={lifecycleReadOnly} onAuthExpired={workspaceReauth} />;
   else if (route.name === 'agents') view = <AgentsList agents={agents} openAgent={openAgent} onCreate={createAgent} dataState={dataState} readOnly={mutationReadOnly} />;
-  else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} createSessionReadOnly={mutationReadOnly} archiveReadOnly={lifecycleReadOnly} />;
+  else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} onUpdateToolPermission={(policy) => updateAgentToolPermission(route.agent, policy)} createSessionReadOnly={mutationReadOnly} archiveReadOnly={lifecycleReadOnly} />;
   else if (route.name === 'environments') view = <EnvironmentsView environments={environments} mode={apiState.mode} dataState={dataState} onCreate={createEnvironment} createdEnvironmentId={createdEnvironmentId} />;
   else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} readOnly={true} />;
   else if (route.name === 'vaults') view = <VaultsView mode={apiState.mode} initialVaultId={route.vaultId} onOpenVault={(vaultId) => { const next = { name:'vaults', vaultId }; setRoute(next); writeRouteHash(next); }} onBackToVaults={() => go('vaults')} />;

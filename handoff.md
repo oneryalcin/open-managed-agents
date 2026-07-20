@@ -35,6 +35,11 @@ hardening in progress)._
 - Plan 0139 shipped Pi-backed multi-provider models in PR #195: durable
   `{provider,id}` identity, one shared Pi catalog/auth owner, secret-safe
   CLI/API/console discovery, and local-compatible smoke coverage.
+- The alpha console exposes built-in tool approval (`always_ask` or
+  `always_allow`) at agent creation and through immutable agent updates. Agent
+  archive and idle-session archive/delete are API-backed; environment
+  archive/delete remains a named service/API gap rather than a browser-only
+  fake action.
 - Standing follow-ups remain `#103`, `#118`, and `#119`; consult GitHub rather
   than this file for their current status.
 
