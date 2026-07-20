@@ -39,6 +39,10 @@ describe("in-console documentation", () => {
     expect(docs).toContain("fetch(current.path");
     expect(docs).toContain("navigator.clipboard.writeText(markdown)");
     expect(docs).toContain("Open Markdown");
+    expect(docs).toContain("Copy page as Markdown");
+    expect(docs).toContain("Search documentation");
+    expect(docs).toContain("docs-topbar");
+    expect(docs).toContain("skipTitle");
     expect(docs).toContain("Beyond v1");
     expect(docs).toContain("#{1,3}");
     const pages = [

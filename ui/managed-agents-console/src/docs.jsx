@@ -43,7 +43,7 @@ function InlineMarkdown({ text, onNavigate }) {
   })}</>;
 }
 
-function MarkdownDocument({ markdown, onNavigate }) {
+function MarkdownDocument({ markdown, onNavigate, skipTitle = false }) {
   const rendered = useMemoDocs(() => {
     const lines = markdown.replace(/\r\n/g, '\n').split('\n');
     const nodes = [];
@@ -66,7 +66,9 @@ function MarkdownDocument({ markdown, onNavigate }) {
       if (heading) {
         const [, marks, text] = heading;
         const id = slug(text);
-        if (marks.length === 1) nodes.push(<h1 key={`h1-${id}`}>{text}</h1>);
+        if (marks.length === 1) {
+          if (!skipTitle) nodes.push(<h1 key={`h1-${id}`}>{text}</h1>);
+        }
         else if (marks.length === 2) {
           headings.push([id, text]);
           nodes.push(<h2 id={id} key={`h2-${id}`}>{text}</h2>);
@@ -125,18 +127,26 @@ function markdownHeadings(markdown) {
   }) || [];
 }
 
+function markdownTitle(markdown, fallback) {
+  return /^#\s+(.+)$/m.exec(markdown)?.[1] || fallback;
+}
+
 function DocsView({ page = 'overview', onNavigate, goConsole }) {
   const activePage = DOC_PAGES[page] ? page : 'overview';
   const current = DOC_PAGES[activePage];
   const [markdown, setMarkdown] = useStateDocs('');
   const [state, setState] = useStateDocs('loading');
   const [copied, setCopied] = useStateDocs(false);
+  const [menuOpen, setMenuOpen] = useStateDocs(false);
+  const [query, setQuery] = useStateDocs('');
   const headings = markdownHeadings(markdown);
+  const title = markdownTitle(markdown, current.label);
 
   useEffectDocs(() => {
     const controller = new AbortController();
     setState('loading');
     setCopied(false);
+    setMenuOpen(false);
     fetch(current.path, { signal:controller.signal })
       .then((response) => response.ok ? response.text() : Promise.reject(new Error(`Documentation unavailable (${response.status})`)))
       .then((text) => { setMarkdown(text); setState('loaded'); })
@@ -154,20 +164,35 @@ function DocsView({ page = 'overview', onNavigate, goConsole }) {
   };
   const openMarkdown = () => window.open(new URL(current.path, window.location.href).toString(), '_blank', 'noopener,noreferrer');
   const go = (next) => onNavigate(DOC_PAGES[next] ? next : 'overview');
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleNav = DOC_NAV.map((section) => ({
+    ...section,
+    pages: normalizedQuery
+      ? section.pages.filter(([, label]) => label.toLowerCase().includes(normalizedQuery))
+      : section.pages,
+  })).filter((section) => section.pages.length > 0);
 
   return <div className="docs-shell">
+    <header className="docs-topbar">
+      <button type="button" className="docs-topbar-brand" onClick={() => goConsole('start')}><span className="brand-mark">O</span><span>Open Managed Agents</span></button>
+      <nav className="docs-topbar-nav" aria-label="Documentation sections"><span>Managed Agents</span><span className="active">Documentation</span></nav>
+      <div className="docs-topbar-actions"><a href="/docs/" className="docs-topbar-link"><Icon name="terminal" size={15} />API reference</a><button type="button" className="docs-topbar-console" onClick={() => goConsole('start')}><Icon name="arrowRight" size={15} />Console</button></div>
+    </header>
     <nav className="docs-nav scroll" aria-label="Documentation navigation">
-      <button type="button" className="docs-nav-brand" onClick={() => goConsole('start')}><span className="brand-mark">O</span><span>OMA Documentation<small>Alpha guide</small></span></button>
-      {DOC_NAV.map((section) => <div className="docs-nav-group" key={section.label}><div className="docs-nav-label">{section.label}</div>{section.pages.map(([id, label]) => <button key={id} className={'docs-nav-link' + (id === activePage ? ' active' : '')} onClick={() => go(id)}>{label}</button>)}</div>)}
-      <div className="docs-nav-footer"><a className="docs-nav-api" href="/docs/"><Icon name="terminal" size={15} />OpenAPI reference</a><button type="button" className="docs-nav-console" onClick={() => goConsole('start')}><Icon name="arrowRight" size={15} />Open console</button></div>
+      <label className="docs-search"><Icon name="search" size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search documentation" aria-label="Search documentation" /><kbd>⌘K</kbd></label>
+      {visibleNav.map((section) => <div className="docs-nav-group" key={section.label}><div className="docs-nav-label">{section.label}</div>{section.pages.map(([id, label]) => <button key={id} className={'docs-nav-link' + (id === activePage ? ' active' : '')} onClick={() => go(id)}>{label}</button>)}</div>)}
+      {visibleNav.length === 0 && <div className="docs-nav-empty">No pages match “{query}”.</div>}
+      <div className="docs-nav-footer"><span>OMA documentation</span><small>Local alpha guide</small></div>
     </nav>
-    <article className="docs-article scroll">
-      <div className="docs-crumbs">Documentation <span>/</span> {current.crumb}</div>
-      <div className="docs-page-actions"><button type="button" className="btn" onClick={copyMarkdown} disabled={state !== 'loaded'}><Icon name="copy" size={15} />{copied ? 'Copied Markdown' : 'Copy as Markdown'}</button><button type="button" className="btn" onClick={openMarkdown}><Icon name="arrowRight" size={15} />Open Markdown</button></div>
+    <main className="docs-main scroll">
+      <article className="docs-article">
+      <div className="docs-crumbs">Managed Agents <span>/</span> {current.crumb}</div>
+      <div className="docs-title-row"><h1>{title}</h1><div className="docs-page-actions"><button type="button" className="docs-copy-main" onClick={copyMarkdown} disabled={state !== 'loaded'}><Icon name="copy" size={15} />{copied ? 'Copied!' : 'Copy page'}</button><button type="button" className="docs-copy-caret" aria-label="Documentation actions" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>⌄</button>{menuOpen && <div className="docs-copy-menu"><button type="button" onClick={() => { copyMarkdown(); setMenuOpen(false); }}><Icon name="copy" size={14} />Copy page as Markdown</button><button type="button" onClick={() => { openMarkdown(); setMenuOpen(false); }}><Icon name="arrowRight" size={14} />Open Markdown</button></div>}</div></div>
       {state === 'loading' && <div className="docs-loading" aria-busy="true">Loading documentation…</div>}
       {state === 'error' && <div className="docs-loading error"><Icon name="alert" size={16} />The local Markdown source could not be loaded.</div>}
-      {state === 'loaded' && <MarkdownDocument markdown={markdown} onNavigate={go} />}
-    </article>
+      {state === 'loaded' && <MarkdownDocument markdown={markdown} onNavigate={go} skipTitle />}
+      </article>
+    </main>
     <aside className="docs-toc" aria-label="On this page"><strong>On this page</strong>{headings.map(([id, label, nested]) => <button key={id} className={nested ? 'nested' : ''} onClick={() => document.getElementById(id)?.scrollIntoView({ behavior:'smooth', block:'start' })}>{label}</button>)}</aside>
   </div>;
 }

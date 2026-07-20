@@ -20,7 +20,10 @@
 - Trust signals: explicit workspace identity, visible runtime state, raw event
   access, concrete endpoint/error details, and no hidden credential persistence.
 - Avoid: consumer-chat gloss, silent mock behavior, controls that imply an
-  unsupported action, fake real-time state, and pixel imitation of CMA.
+  unsupported action, and fake real-time state. The console and documentation
+  reader may deliberately use CMA's dense dark visual language as a close
+  reference, while retaining OMA naming, mark, content, links, information
+  architecture, and interaction behavior.
 
 ## Product goals
 
@@ -32,10 +35,10 @@
   - keep CMA-compatible concepts and terminology where OMA ships them;
   - make OMA-specific operational and security behavior explicit.
 - Non-goals:
-  - full CMA console cloning;
+  - copying CMA branding, dashboard/billing surfaces, hosted-only concepts, or
+    interaction behavior that OMA cannot support;
   - conversational agent generation, deployments, memory, analytics, or rich
-    observability before their backend capabilities exist;
-  - pixel parity.
+    observability before their backend capabilities exist.
 - Success signals:
   - a fresh workspace can reach a successful sandbox-backed session from the
     console;
@@ -102,15 +105,16 @@
 
 ## Visual language
 
-- Color: retain the warm graphite surfaces and amber primary accent already
-  defined in `console.css`; semantic green/red/idle and event-role colors carry
-  meaning and must not be decorative-only.
-- Typography: Geist/system sans for UI and Geist Mono/system monospace for IDs,
-  endpoints, commands, and raw payloads.
-- Spacing/layout rhythm: dense operator tables with 26px default gutters and a
-  compact option; avoid large marketing-style whitespace.
-- Shape/radius/elevation: existing 6/9/13px radius scale, restrained borders,
-  and shallow elevation.
+- Color: use near-black graphite surfaces, quiet gray borders, off-white
+  primary controls, and a restrained OMA amber accent. Semantic green/red/idle
+  and event-role colors carry meaning and must not be decorative-only.
+- Typography: Geist/system sans for console UI and Geist Mono/system monospace
+  for IDs, endpoints, commands, and raw payloads; documentation headings may
+  use the local system serif stack for the approved editorial reference.
+- Spacing/layout rhythm: dense operator tables, 30px default desktop gutters,
+  and a compact option; avoid large marketing-style whitespace.
+- Shape/radius/elevation: a compact 7/9/12px radius scale, quiet borders, and
+  shallow elevation.
 - Motion: short state transitions only; respect `prefers-reduced-motion`.
 - Imagery/iconography: functional line icons and status marks; no decorative
   illustration requirement.
@@ -182,9 +186,11 @@
 - Framework/styling system: vendored React/ReactDOM with in-browser Babel and a
   single CSS file; no build step or CDN.
 - Design-token constraints: extend existing CSS custom properties and component
-  patterns.
-- Documentation constraints: borrow CMA's task-oriented information
-  architecture, not its branded chrome or prose; documentation must state OMA's
+  patterns. Shared console styling must remain in `console.css`; do not copy
+  CMA markup or introduce a second UI system.
+- Documentation constraints: use CMA's task-oriented information architecture
+  and approved close docs-shell reference without importing Claude branding,
+  prose, logos, links, or product claims. Documentation must state OMA's
   shipped alpha behavior and limitations directly. Markdown files under the
   console's local documentation tree are the single content source for both
   rendered pages and the user-visible copy/open actions. Each page declares a

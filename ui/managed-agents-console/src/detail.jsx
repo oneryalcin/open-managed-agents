@@ -161,10 +161,12 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   const messageIntentRef = useRefD(null);
   const interruptIntentRef = useRefD(null);
   const confirmationIntentRef = useRefD(null);
+  const archivedRef = useRefD(displayStatus === 'archived');
   const running = status === 'running';
   const archived = status === 'archived';
 
   useEffectD(() => {
+    archivedRef.current = displayStatus === 'archived';
     setStatus(displayStatus);
     setWorking(isLive);
     setConfirmState(isConfirm ? 'pending' : null);
@@ -217,6 +219,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
       signal: controller.signal,
       lastEventId: lastPersistedId,
       onState: ({ status: next, error }) => {
+        if (archivedRef.current) return;
         setStreamState(next);
         if (next === 'failed') {
           setActionError(error?.message || 'The live event stream failed. Persisted history remains available.');
@@ -224,6 +227,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
         }
       },
       onEvent: (event) => {
+        if (archivedRef.current) return;
         const mapped = OmaConsoleApi.toUiSessionEvent(event);
         setShown((current) => current.some((item) => item.id === mapped.id)
           ? current
@@ -266,6 +270,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   }, [shown, view, running]);
 
   const interrupt = async () => {
+    if (archivedRef.current) return;
     if (apiMode === 'api') {
       if (actionBusy) return;
       setActionBusy(true);
@@ -464,7 +469,13 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
     setLifecycleError(null);
     try {
       await action(s);
-      if (kind === 'archive') setStatus('archived');
+      if (kind === 'archive') {
+        archivedRef.current = true;
+        setStatus('archived');
+        setWorking(false);
+        setConfirmState(null);
+        if (onSessionStateChange) onSessionStateChange(s.id, { status:'archived', requiresAction:false });
+      }
       setDialog(null);
     } catch (error) {
       setLifecycleError(error);
