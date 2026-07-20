@@ -201,7 +201,11 @@ function App() {
         }
         return loadLiveData();
       })
-      .then(() => { if (alive) setAuth((a) => ({ ...a, phase:'ready' })); })
+      // When the server requires authentication but this browser has no
+      // console session, the preceding branch intentionally returns
+      // `undefined`. Keep the login screen visible instead of immediately
+      // overwriting it with the ready/no-workspace state.
+      .then((loaded) => { if (alive && loaded !== undefined) setAuth((a) => ({ ...a, phase:'ready' })); })
       .catch((error) => {
         if (!alive) return;
         if (error.status === 401) {
