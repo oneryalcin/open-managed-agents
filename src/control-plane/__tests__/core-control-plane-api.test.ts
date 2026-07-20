@@ -60,6 +60,69 @@ describe("Core control-plane API", () => {
     });
   });
 
+  it("archives environments idempotently, hides them by default, and protects referenced rows from deletion", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+    const existingSession = await createSession(app, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+
+    const archive = await app.request(`/v1/environments/${environment.id}/archive`, {
+      method: "POST",
+    });
+    expect(archive.status).toBe(200);
+    const archived = await archive.json() as ManagedAgentsEnvironment;
+    expect(archived.archived_at).toEqual(expect.any(String));
+
+    const repeated = await app.request(`/v1/environments/${environment.id}/archive`, {
+      method: "POST",
+    });
+    await expect(repeated.json()).resolves.toEqual(archived);
+    expect((await app.request(`/v1/environments/${environment.id}`)).status).toBe(200);
+    expect(await (await app.request("/v1/environments")).json()).toEqual({
+      data: [], has_more: false, next_page: null,
+    });
+    expect(await (await app.request("/v1/environments?include_archived=true")).json()).toEqual({
+      data: [archived], has_more: false, next_page: null,
+    });
+    await expectError(
+      await app.request("/v1/environments?include_archived=yes"),
+      400,
+      "invalid_request_error",
+      "`include_archived` must be `true` or `false`",
+    );
+    expect((await app.request(`/v1/sessions/${existingSession.id}`)).status).toBe(200);
+    await expectError(
+      await app.request("/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: agent.id, environment_id: environment.id }),
+      }),
+      400,
+      "invalid_request_error",
+      `Environment ${environment.id} is archived.`,
+    );
+    await expectError(
+      await app.request(`/v1/environments/${environment.id}`, { method: "DELETE" }),
+      409,
+      "invalid_request_error",
+      "Environment cannot be deleted while sessions reference it",
+    );
+
+    const disposable = await createEnvironment(app);
+    const deleted = await app.request(`/v1/environments/${disposable.id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    await expect(deleted.json()).resolves.toEqual({ type: "environment_deleted", id: disposable.id });
+    await expectError(
+      await app.request(`/v1/environments/${disposable.id}`),
+      404,
+      "not_found_error",
+      `Environment ${disposable.id} not found`,
+    );
+  });
+
   it("creates sessions from string and object agent refs and returns canonical agent refs", async () => {
     const app = createInMemoryControlPlaneApp();
     const agent = await createAgent(app);

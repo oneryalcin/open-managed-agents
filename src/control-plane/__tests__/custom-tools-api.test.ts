@@ -1452,6 +1452,12 @@ class CollidingSessionStore implements SessionStore {
     ).length;
   }
 
+  hasEnvironmentReference(workspaceId: string, environmentId: string): boolean {
+    return [...this.rows.values()].some(
+      (row) => row.workspace_id === workspaceId && row.environment_id === environmentId,
+    );
+  }
+
   retrieve(workspaceId: string, sessionId: string): SessionRow | undefined {
     const row = this.retrieveAny(workspaceId, sessionId);
     if (!row || row.archived_at !== null) return undefined;

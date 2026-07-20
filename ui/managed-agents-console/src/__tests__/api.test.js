@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testRequest,
   archiveAgent,
+  archiveEnvironment,
   archiveSession,
   buildRequestHeaders,
   canSubmitToolConfirmation,
@@ -14,6 +15,7 @@ import {
   createEnvironment,
   createIdempotencyIntent,
   createSession,
+  deleteEnvironment,
   deleteSession,
   followSessionEvents,
   hasWorkspaceKey,
@@ -497,6 +499,21 @@ describe("workspace write capability", () => {
       name:"Console env",
       config:{ type:"cloud" },
     }));
+  });
+
+  it("archives and deletes environments only through exact lifecycle wrappers", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok:true, status:200, text:() => Promise.resolve(JSON.stringify({
+      id:"env_123", type:"environment", name:"Console env", config:{ type:"cloud" }, created_at:"2026-07-20T00:00:00Z", updated_at:"2026-07-20T00:00:00Z", archived_at:"2026-07-20T00:01:00Z",
+    })) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await archiveEnvironment("env/a");
+    await deleteEnvironment("env/a");
+    expect(fetchMock.mock.calls[0][0]).toBe("/v1/environments/env%2Fa/archive");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method:"POST" }));
+    expect(fetchMock.mock.calls[1][0]).toBe("/v1/environments/env%2Fa");
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method:"DELETE" }));
+    await expect(__testRequest("/v1/environments/env/a/archive", { method:"POST" })).rejects.toThrow("not permitted");
+    await expect(__testRequest("/v1/environments/env/a", { method:"DELETE" })).rejects.toThrow("not permitted");
   });
 
   it("creates sessions with a reused idempotency key for the same intent and rotates when the payload changes", async () => {

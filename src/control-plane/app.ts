@@ -982,7 +982,7 @@ export function createDeploymentControlPlane(
       stores.skills,
       modelAvailability,
     ),
-    environments: new DefaultEnvironmentService(stores.environments),
+    environments: new DefaultEnvironmentService(stores.environments, stores.sessions),
     environmentNetworking: environmentNetworkingCapability(runtimeConfig),
     files: new DefaultFileService(stores.files),
     skills: new DefaultSkillsService(stores.skills),
@@ -1151,7 +1151,7 @@ export function createInMemoryControlPlaneApp(
   return createControlPlaneApp({
     ...(openapiRoot === undefined ? {} : { openapi: { root: openapiRoot } }),
     agents: new DefaultAgentService(agentStore, skillsStore),
-    environments: new DefaultEnvironmentService(environmentStore),
+    environments: new DefaultEnvironmentService(environmentStore, sessionStore),
     ...(opts.environmentNetworking === undefined
       ? {}
       : { environmentNetworking: opts.environmentNetworking }),

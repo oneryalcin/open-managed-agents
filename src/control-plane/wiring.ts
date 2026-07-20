@@ -24,7 +24,7 @@ import type {
  */
 export function createSessionEgressBundleResolver(stores: {
   sessions: Pick<SessionStore, "retrieveAny">;
-  environments: Pick<SqliteEnvironmentStore, "retrieve">;
+  environments: Pick<SqliteEnvironmentStore, "retrieveAny">;
   secrets?: Pick<SecretsStore, "reveal">;
 }): EgressBundleResolver {
   return async (workspaceId, sessionId, context) => {
@@ -39,7 +39,7 @@ export function createSessionEgressBundleResolver(stores: {
         : undefined;
     if (environmentId === undefined && !session) return undefined;
     const resolvedEnvironmentId = environmentId ?? session!.environment_id;
-    const environment = stores.environments.retrieve(
+    const environment = stores.environments.retrieveAny(
       workspaceId,
       resolvedEnvironmentId,
     );

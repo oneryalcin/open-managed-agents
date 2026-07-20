@@ -14,6 +14,8 @@ The smallest end-to-end flow that proves the architecture **and preserves the "b
 - `POST /v1/environments` — create an environment config object. B.1 persists and returns config; Modal sandbox interpretation lands with sandbox runtime. Response: full environment object with field `id` (not `environment_id`).
 - `GET /v1/environments` — list environments (paginated).
 - `GET /v1/environments/{id}` — read one environment.
+- `POST /v1/environments/{id}/archive` — archive an environment; it remains retrievable and existing sessions retain it.
+- `DELETE /v1/environments/{id}` — delete an unreferenced environment. OMA refuses deletion while any durable session references it.
 
 **Agents:**
 - `POST /v1/agents` — persist an agent config (`name`, `model`, `system`, `tools`). Response: full agent object with field `id` (not `agent_id`).

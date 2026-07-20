@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_WORKSPACE_ID } from "../../workspace.ts";
 import { DefaultEnvironmentService } from "../service.ts";
 import { SqliteEnvironmentStore } from "../store.ts";
+import { SqliteSessionStore } from "../../sessions/store.ts";
 
 const OTHER_WORKSPACE_ID = "wrk_other";
 
@@ -43,5 +44,23 @@ describe("environment service/store", () => {
       has_more: false,
       next_page: null,
     });
+  });
+
+  it("keeps archive and physical deletion workspace scoped", () => {
+    const store = SqliteEnvironmentStore.open(":memory:");
+    const sessions = SqliteSessionStore.open(":memory:");
+    const service = new DefaultEnvironmentService(store, sessions);
+    const environment = service.create(DEFAULT_WORKSPACE_ID, {
+      name: "Default",
+      config: { type: "cloud" },
+    });
+
+    expect(() => service.archive(OTHER_WORKSPACE_ID, environment.id)).toThrow(
+      `Environment ${environment.id} not found`,
+    );
+    expect(() => service.delete(OTHER_WORKSPACE_ID, environment.id)).toThrow(
+      `Environment ${environment.id} not found`,
+    );
+    expect(service.retrieve(DEFAULT_WORKSPACE_ID, environment.id).archived_at).toBeNull();
   });
 });

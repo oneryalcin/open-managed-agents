@@ -64,8 +64,9 @@ describe("alpha console workflow", () => {
     expect(forms).toContain("createError.status === 401 && onAuthExpired");
     expect(forms).toContain("messageError.status === 401 && onAuthExpired");
     expect(forms).toContain("apiMode === 'api'");
-    expect(forms).toContain("? (environments[0]?.id || '')");
-    expect(forms).toContain("Create an environment first…");
+    expect(forms).toContain("activeEnvironments = environments.filter");
+    expect(forms).toContain("? (activeEnvironments[0]?.id || '')");
+    expect(forms).toContain("Create an active environment first…");
   });
 
   it("wires authenticated SSE, prompt, interrupt, and tool confirmation without synthetic live rows", () => {

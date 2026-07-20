@@ -103,6 +103,10 @@ export interface SessionStore {
     sessionId: string,
   ): SessionRow | undefined;
   countActive(workspaceId: WorkspaceId): number;
+  hasEnvironmentReference(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+  ): boolean;
   archive(
     workspaceId: WorkspaceId,
     sessionId: string,

@@ -185,7 +185,8 @@ function CreateEnvironmentModal({ mode, networkingCatalog, onClose, onCreated, o
 function ReadinessView({ agents = [], environments = [], models = [], mode = "api", workspaceLoaded = false, go, onCreateEnvironment, onCreateAgent, onCreateSession }) {
   const authReady = mode === "demo" || workspaceLoaded;
   const activeAgents = agents.filter((agent) => agent.status !== "archived");
-  const envReady = environments.length > 0;
+  const activeEnvironments = environments.filter((environment) => !environment.archived);
+  const envReady = activeEnvironments.length > 0;
   const modelReady = models.length > 0;
   const credentialReady = models.some((model) => model.credentials_configured);
   const readyModelKeys = new Set(models.filter((model) => model.credentials_configured).map((model) => `${model.provider}/${model.id}`));
@@ -227,7 +228,7 @@ function ReadinessView({ agents = [], environments = [], models = [], mode = "ap
       key: "environment",
       title: "Environment present",
       ok: envReady,
-      detail: envReady ? `${environments.length} environment(s) available for sessions.` : "Create a default-deny environment before starting a session.",
+      detail: envReady ? `${activeEnvironments.length} environment(s) available for sessions.` : "Create a default-deny environment before starting a session.",
       action: envReady ? () => go("environments") : onCreateEnvironment,
       actionLabel: envReady ? "View environments" : "Create environment",
     },
@@ -269,12 +270,29 @@ function ReadinessView({ agents = [], environments = [], models = [], mode = "ap
   );
 }
 
-function EnvironmentsView({ environments = [], mode = "api", dataState = "loaded", onCreate, createdEnvironmentId }) {
+function EnvironmentsView({ environments = [], mode = "api", dataState = "loaded", onCreate, createdEnvironmentId, onArchive, onDelete }) {
+  const [confirm, setConfirm] = useStateE(null);
+  const [actionBusy, setActionBusy] = useStateE(false);
+  const [actionError, setActionError] = useStateE(null);
   const loading = dataState === "loading";
   const error = dataState === "error";
   const partial = dataState === "partial";
   const empty = dataState === "empty" || environments.length === 0;
   const readOnly = mode !== "api";
+  const runLifecycle = async () => {
+    if (!confirm || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      if (confirm.kind === 'archive') await onArchive(confirm.environment);
+      else await onDelete(confirm.environment);
+      setConfirm(null);
+    } catch (error) {
+      setActionError(error);
+    } finally {
+      setActionBusy(false);
+    }
+  };
   return (
     <div className="main-scroll scroll fade-in">
       <PageHead title="Environments" sub="Sandbox execution environment configuration."
@@ -284,9 +302,9 @@ function EnvironmentsView({ environments = [], mode = "api", dataState = "loaded
         <Field wide placeholder="Search by environment ID" />
         <Select label="Networking" value="All" w={150} />
       </div>
-      <div className="inline-warn" role="status">
+      <div className="inline-note" role="status">
         <Icon name="info" size={14} />
-        <span>Environments are immutable. This OMA build does not yet expose environment archive/delete endpoints; create a replacement environment when its configuration changes.</span>
+        <span>Environment configurations are immutable. Archive hides an environment from new sessions while preserving it for existing sessions; deletion is available only when no session references it.</span>
       </div>
       {partial && <PartialNotice resource="environments" />}
       {createdEnvironmentId && (
@@ -308,6 +326,7 @@ function EnvironmentsView({ environments = [], mode = "api", dataState = "loaded
           <span className="th" style={{ width:230 }}>Preset</span>
           <span className="th" style={{ width:90 }}>Status</span>
           <span className="th" style={{ width:70 }}>Created</span>
+          <span className="th" style={{ width:170 }}>Actions</span>
         </div>
         {environments.map((environment) => (
           <div className="trow env-row" key={environment.id}>
@@ -316,11 +335,25 @@ function EnvironmentsView({ environments = [], mode = "api", dataState = "loaded
             <span className="td mono" style={{ width:230, fontSize:12, color:'var(--soft)' }}>{environment.networkingSummary || environment.image}</span>
             <span className="td" style={{ width:90 }}><St k={environment.archived ? "archived" : "active"} /></span>
             <span className="td mono" style={{ width:70, color:'var(--faint)' }}>{environment.created || "—"}</span>
+            <span className="td" style={{ width:170, display:'flex', gap:6, justifyContent:'flex-end' }}>
+              {!environment.archived && <button className="btn btn-sm" disabled={readOnly} title={readOnly ? 'Connect a live workspace to archive this environment.' : undefined} onClick={() => { setActionError(null); setConfirm({ kind:'archive', environment }); }}><Icon name="archive" size={13} />Archive</button>}
+              <button className="btn btn-sm btn-danger" disabled={readOnly} title={readOnly ? 'Connect a live workspace to delete this environment.' : undefined} onClick={() => { setActionError(null); setConfirm({ kind:'delete', environment }); }}><Icon name="trash" size={13} />Delete</button>
+            </span>
           </div>
         ))}
       </div>
       <Pager />
       </>}
+      {confirm && <ConfirmDialog
+        icon={confirm.kind === 'archive' ? 'archive' : 'trash'}
+        danger={confirm.kind === 'delete'}
+        title={confirm.kind === 'archive' ? 'Archive environment' : 'Delete environment'}
+        message={confirm.kind === 'archive'
+          ? <>Archive <b>{confirm.environment.label}</b>? It will no longer be available for new sessions. Existing sessions retain their environment.</>
+          : <>Delete <b>{confirm.environment.label}</b>? This is permanent. OMA refuses deletion when any session still references it.</>}
+        confirmLabel={confirm.kind === 'archive' ? 'Archive environment' : 'Delete environment'}
+        endpoint={confirm.kind === 'archive' ? 'POST /v1/environments/:id/archive' : 'DELETE /v1/environments/:id'}
+        onClose={() => !actionBusy && setConfirm(null)} onConfirm={runLifecycle} busy={actionBusy} error={actionError} />}
     </div>
   );
 }

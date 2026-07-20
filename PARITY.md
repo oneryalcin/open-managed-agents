@@ -226,10 +226,9 @@ the risk of silent contradiction, not by how easy they first appear.
     `permission_policy.type: "always_allow"`) and an empty `configs` array on
     create/get responses when omitted.
 
-- [ ] **Environment archive/delete endpoints missing**
-  - CMA: `POST /v1/environments/{id}/archive`, `DELETE /v1/environments/{id}` (`environments.md:568,574`).
-  - OMA: `environments/routes.ts` has only create/list/get; `archived_at` column exists but nothing sets it. Environments accumulate with no lifecycle path.
-  - Fix: add archive + delete routes (delete only if unreferenced), mirroring the agents/sessions archive pattern.
+- [x] **Environment archive/delete lifecycle** *(DONE 2026-07-20; #206; plan 0142; probe 69)*
+  - CMA `[Doc, Obs]`: archive is idempotent, archived rows stay retrievable but leave the default list, and new sessions reject archived environments. The current hosted probe also observed deletion succeeding even with an idle referencing session, contrary to the downloaded documentation.
+  - OMA `[OMA]`: `POST /v1/environments/{id}/archive`, `GET ...?include_archived=`, and `DELETE /v1/environments/{id}` now exist. OMA deliberately rejects deletion while **any** durable session references the environment: its runtime reconstructs sandbox/egress configuration from that record, so copying the hosted delete result would silently orphan a session. The console exposes both real actions and displays the server conflict verbatim.
 
 - [x] **Unsupported `event_deltas[]` fails closed** *(DONE 2026-07-15; plan 0137)*
   - CMA: streaming text previews via opt-in `event_deltas[]`; unknown values 400 (`events-and-streaming.md:1074`).

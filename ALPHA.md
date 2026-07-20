@@ -202,8 +202,9 @@ prompt and interrupt actions, authenticated live SSE, and real
 tool-confirmation handling. Agent creation and immutable updates expose
 `always_ask` versus `always_allow`; agent archive and idle-session
 archive/delete are real server mutations rather than browser-only state.
-Environment archive/delete remains unavailable because the service does not
-yet expose those lifecycle endpoints (tracked in [PARITY.md](PARITY.md)).
+Environment archive/delete is now available: archive preserves existing
+sessions but prevents new ones, and OMA refuses deletion while any durable
+session references the environment (tracked in [PARITY.md](PARITY.md)).
 CMA's conversational Quickstart, deployments, analytics, and pixel parity are
 deferred.
 

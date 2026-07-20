@@ -356,6 +356,20 @@ export class DefaultSessionService implements SessionService {
     }
   }
 
+  private requireActiveEnvironment(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+  ): EnvironmentRow {
+    const environment = this.environments.retrieveAny(workspaceId, environmentId);
+    if (!environment) {
+      throw invalidRequest(`Environment ${environmentId} not found`);
+    }
+    if (environment.archived_at !== null) {
+      throw invalidRequest(`Environment ${environmentId} is archived.`);
+    }
+    return environment;
+  }
+
   private async createInternalReserved(
     workspaceId: WorkspaceId,
     input: unknown,
@@ -395,10 +409,7 @@ export class DefaultSessionService implements SessionService {
         }
       }
     }
-    const environment = this.environments.retrieve(workspaceId, req.environment_id);
-    if (!environment) {
-      throw invalidRequest(`Environment ${req.environment_id} not found`);
-    }
+    const environment = this.requireActiveEnvironment(workspaceId, req.environment_id);
     this.assertVaultsUsable(workspaceId, req.vault_ids ?? []);
     this.assertEgressHonorable(environment);
 
@@ -474,6 +485,10 @@ export class DefaultSessionService implements SessionService {
         );
         runtimePrepared = true;
       }
+      // File and runtime preparation may await. Re-read immediately before the
+      // synchronous durable write so an archive/delete that completed while
+      // preparation was in flight cannot leave an orphaned session reference.
+      this.requireActiveEnvironment(workspaceId, row.environment_id);
       const record = {
         row,
         snapshots: sessionSnapshots,

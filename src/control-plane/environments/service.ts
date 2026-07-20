@@ -1,5 +1,5 @@
 import { newEnvironmentId } from "../ids.ts";
-import { invalidRequest, notFound } from "../errors.ts";
+import { conflict, invalidRequest, notFound } from "../errors.ts";
 import {
   canonicalizeNetworkingConfig,
   EgressPolicyError,
@@ -15,9 +15,13 @@ import type {
   ListEnvironmentsOptions,
 } from "./types.ts";
 import type { WorkspaceId } from "../workspace.ts";
+import type { SessionStore } from "../sessions/types.ts";
 
 export class DefaultEnvironmentService implements EnvironmentService {
-  constructor(private readonly store: EnvironmentStore) {}
+  constructor(
+    private readonly store: EnvironmentStore,
+    private readonly sessions?: Pick<SessionStore, "hasEnvironmentReference">,
+  ) {}
 
   create(
     workspaceId: WorkspaceId,
@@ -42,7 +46,7 @@ export class DefaultEnvironmentService implements EnvironmentService {
     workspaceId: WorkspaceId,
     environmentId: string,
   ): ManagedAgentsEnvironment {
-    const row = this.store.retrieve(workspaceId, environmentId);
+    const row = this.store.retrieveAny(workspaceId, environmentId);
     if (!row) {
       throw notFound(`Environment ${environmentId} not found`);
     }
@@ -59,6 +63,39 @@ export class DefaultEnvironmentService implements EnvironmentService {
       has_more: page.has_more,
       next_page: page.next_page,
     };
+  }
+
+  archive(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+  ): ManagedAgentsEnvironment {
+    const row = this.store.archive(
+      workspaceId,
+      environmentId,
+      new Date().toISOString(),
+    );
+    if (!row) {
+      throw notFound(`Environment ${environmentId} not found`);
+    }
+    return toManagedEnvironment(row);
+  }
+
+  delete(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+  ): { type: "environment_deleted"; id: string } {
+    const existing = this.store.retrieveAny(workspaceId, environmentId);
+    if (!existing) {
+      throw notFound(`Environment ${environmentId} not found`);
+    }
+    if (!this.sessions) {
+      throw conflict("Environment deletion is unavailable without session reference checks");
+    }
+    if (this.sessions.hasEnvironmentReference(workspaceId, environmentId)) {
+      throw conflict("Environment cannot be deleted while sessions reference it");
+    }
+    this.store.delete(workspaceId, environmentId);
+    return { type: "environment_deleted", id: environmentId };
   }
 }
 
