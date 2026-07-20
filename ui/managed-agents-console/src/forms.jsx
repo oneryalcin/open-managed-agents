@@ -34,11 +34,12 @@ function Labeled({ label, opt, hint, htmlFor, children }) {
 // ─────────── Create session ───────────
 function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = [], presetAgent, onClose, onCreate, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
   const choices = agents.filter((a) => a.status === 'active');
+  const activeEnvironments = environments.filter((environment) => !environment.archived);
   const activePreset = presetAgent?.status === 'active' ? presetAgent : null;
   const [agentId, setAgentId] = useStateF((activePreset && activePreset.id) || (choices[0] && choices[0].id));
   const [env, setEnv] = useStateF(() => apiMode === 'api'
-    ? (environments[0]?.id || '')
-    : (environments[0]?.id || ENVIRONMENTS[0].id));
+    ? (activeEnvironments[0]?.id || '')
+    : (activeEnvironments[0]?.id || ENVIRONMENTS[0].id));
   const [customEnv, setCustomEnv] = useStateF('');
   const [title, setTitle] = useStateF('');
   const [msg, setMsg] = useStateF('');
@@ -150,13 +151,13 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
 
       <Labeled label="Environment" htmlFor="create-session-environment" hint="Pick an existing environment or enter an ID manually.">
         <select id="create-session-environment" name="environment" className="selectbox" value={env} onChange={(e) => setEnv(e.target.value)}>
-          {live && environments.length === 0 && <option value="" disabled>Create an environment first…</option>}
-          {environments.map((en) => <option key={en.id} value={en.id}>{en.label} — {en.image}</option>)}
+          {live && activeEnvironments.length === 0 && <option value="" disabled>Create an active environment first…</option>}
+          {activeEnvironments.map((en) => <option key={en.id} value={en.id}>{en.label} — {en.image}</option>)}
           <option value="__custom">Enter an environment ID manually…</option>
         </select>
       </Labeled>
-      {live && environments.length === 0 && !usingCustom && (
-        <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>No live environments exist yet. Close this dialog and create one, or select “Enter an environment ID manually”.</span></div>
+      {live && activeEnvironments.length === 0 && !usingCustom && (
+        <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>No active live environments exist. Close this dialog and create one, or select “Enter an environment ID manually”.</span></div>
       )}
       {usingCustom && (
         <Labeled label="Environment ID" htmlFor="create-session-environment-id">

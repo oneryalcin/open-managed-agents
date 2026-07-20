@@ -33,6 +33,19 @@ export interface EnvironmentStore {
     workspaceId: WorkspaceId,
     environmentId: string,
   ): EnvironmentRow | undefined;
+  retrieveAny(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+  ): EnvironmentRow | undefined;
+  archive(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+    archivedAt: string,
+  ): EnvironmentRow | undefined;
+  delete(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+  ): EnvironmentRow | undefined;
   list(
     workspaceId: WorkspaceId,
     opts?: ListEnvironmentsOptions,
@@ -53,6 +66,14 @@ export interface EnvironmentService {
     workspaceId: WorkspaceId,
     opts?: ListEnvironmentsOptions,
   ): ManagedAgentsListPage<ManagedAgentsEnvironment>;
+  archive(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+  ): ManagedAgentsEnvironment;
+  delete(
+    workspaceId: WorkspaceId,
+    environmentId: string,
+  ): { type: "environment_deleted"; id: string };
 }
 
 export type { CreateManagedEnvironmentRequest, ManagedAgentsEnvironment };

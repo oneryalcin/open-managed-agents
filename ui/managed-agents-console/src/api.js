@@ -14,6 +14,8 @@ const VALIDATE_CAPABILITY = Symbol("validate-mcp-oauth-credential");
 const VALIDATE_ENVIRONMENT_NETWORKING_CAPABILITY = Symbol("validate-environment-networking");
 const CREATE_AGENT_CAPABILITY = Symbol("create-agent");
 const CREATE_ENVIRONMENT_CAPABILITY = Symbol("create-environment");
+const ARCHIVE_ENVIRONMENT_CAPABILITY = Symbol("archive-environment");
+const DELETE_ENVIRONMENT_CAPABILITY = Symbol("delete-environment");
 const CREATE_SESSION_CAPABILITY = Symbol("create-session");
 const SEND_SESSION_EVENTS_CAPABILITY = Symbol("send-session-events");
 const ARCHIVE_AGENT_CAPABILITY = Symbol("archive-agent");
@@ -148,6 +150,16 @@ function isAllowedWorkspaceWrite(path, method, capability) {
     (capability === VALIDATE_ENVIRONMENT_NETWORKING_CAPABILITY && method === "POST" && isExactEnvironmentNetworkingValidatePath(path)) ||
     (capability === CREATE_AGENT_CAPABILITY && method === "POST" && path === "/v1/agents") ||
     (capability === CREATE_ENVIRONMENT_CAPABILITY && method === "POST" && path === "/v1/environments") ||
+    (
+      capability === ARCHIVE_ENVIRONMENT_CAPABILITY &&
+      method === "POST" &&
+      /^\/v1\/environments\/[^/]+\/archive$/.test(new URL(path, "http://oma.local").pathname)
+    ) ||
+    (
+      capability === DELETE_ENVIRONMENT_CAPABILITY &&
+      method === "DELETE" &&
+      /^\/v1\/environments\/[^/]+$/.test(new URL(path, "http://oma.local").pathname)
+    ) ||
     (capability === CREATE_SESSION_CAPABILITY && method === "POST" && path === "/v1/sessions") ||
     (capability === CREATE_VAULT_CAPABILITY && method === "POST" && path === "/v1/vaults") ||
     (
@@ -382,6 +394,20 @@ export function createEnvironment(body) {
   }).then(toUiEnvironment);
 }
 
+export function archiveEnvironment(environmentId) {
+  return request(`/v1/environments/${encodeURIComponent(environmentId)}/archive`, {
+    method: "POST",
+    capability: ARCHIVE_ENVIRONMENT_CAPABILITY,
+  }).then(toUiEnvironment);
+}
+
+export function deleteEnvironment(environmentId) {
+  return request(`/v1/environments/${encodeURIComponent(environmentId)}`, {
+    method: "DELETE",
+    capability: DELETE_ENVIRONMENT_CAPABILITY,
+  });
+}
+
 export function listEnvironmentNetworkingPresets() {
   return request("/v1/environments/networking-presets")
     .then((response) => {
@@ -563,7 +589,7 @@ export async function loadConsoleData() {
     await Promise.all([
       fetchCursorPages("/v1/agents?include_archived=true"),
       fetchCursorPages("/v1/sessions?include_archived=true&order=desc"),
-      fetchCursorPages("/v1/environments"),
+      fetchCursorPages("/v1/environments?include_archived=true"),
       fetchFilePages("/v1/files"),
       listModelCatalog(),
       listEnvironmentNetworkingPresets(),
@@ -1002,6 +1028,8 @@ if (typeof window !== "undefined") {
     modelInputForSelection,
     listModelCatalog,
     createEnvironment,
+    archiveEnvironment,
+    deleteEnvironment,
     listEnvironmentNetworkingPresets,
     validateEnvironmentNetworkingHosts,
     createSession,

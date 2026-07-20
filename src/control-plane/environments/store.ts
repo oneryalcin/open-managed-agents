@@ -36,6 +36,9 @@ export class SqliteEnvironmentStore implements EnvironmentStore {
   private readonly db: DatabaseSync;
   private readonly insertStmt: StatementSync;
   private readonly retrieveActiveStmt: StatementSync;
+  private readonly retrieveAnyStmt: StatementSync;
+  private readonly archiveStmt: StatementSync;
+  private readonly deleteStmt: StatementSync;
   private readonly listActiveStmt: StatementSync;
   private readonly listAllStmt: StatementSync;
   private readonly listActiveSinceStmt: StatementSync;
@@ -52,6 +55,18 @@ export class SqliteEnvironmentStore implements EnvironmentStore {
     this.retrieveActiveStmt = this.db.prepare(
       `SELECT * FROM environments
        WHERE workspace_id = ? AND id = ? AND archived_at IS NULL`,
+    );
+    this.retrieveAnyStmt = this.db.prepare(
+      `SELECT * FROM environments WHERE workspace_id = ? AND id = ?`,
+    );
+    this.archiveStmt = this.db.prepare(
+      `UPDATE environments
+       SET archived_at = COALESCE(archived_at, ?),
+           updated_at = CASE WHEN archived_at IS NULL THEN ? ELSE updated_at END
+       WHERE workspace_id = ? AND id = ?`,
+    );
+    this.deleteStmt = this.db.prepare(
+      `DELETE FROM environments WHERE workspace_id = ? AND id = ?`,
     );
     this.listActiveStmt = this.db.prepare(
       `SELECT * FROM environments
@@ -107,6 +122,36 @@ export class SqliteEnvironmentStore implements EnvironmentStore {
       environmentId,
     ) as unknown as EnvironmentDbRow | undefined;
     return row ? deserialize(row) : undefined;
+  }
+
+  retrieveAny(
+    workspaceId: string,
+    environmentId: string,
+  ): EnvironmentRow | undefined {
+    const row = this.retrieveAnyStmt.get(
+      workspaceId,
+      environmentId,
+    ) as unknown as EnvironmentDbRow | undefined;
+    return row ? deserialize(row) : undefined;
+  }
+
+  archive(
+    workspaceId: string,
+    environmentId: string,
+    archivedAt: string,
+  ): EnvironmentRow | undefined {
+    this.archiveStmt.run(archivedAt, archivedAt, workspaceId, environmentId);
+    return this.retrieveAny(workspaceId, environmentId);
+  }
+
+  delete(
+    workspaceId: string,
+    environmentId: string,
+  ): EnvironmentRow | undefined {
+    const existing = this.retrieveAny(workspaceId, environmentId);
+    if (!existing) return undefined;
+    this.deleteStmt.run(workspaceId, environmentId);
+    return existing;
   }
 
   list(

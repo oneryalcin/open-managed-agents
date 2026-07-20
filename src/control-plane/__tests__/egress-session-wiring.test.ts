@@ -127,6 +127,27 @@ describe("createSessionEgressBundleResolver", () => {
     fixture.close();
   });
 
+  it("continues resolving a persisted session after its environment is archived", async () => {
+    const fixture = makeResolverFixture();
+    const sessionId = fixture.seedSession({
+      networking: { type: "limited", allowed_hosts: ["api.example.com"] },
+    });
+    fixture.archiveEnvironmentForSession(sessionId);
+
+    await expect(fixture.resolve("wrk_default", sessionId)).resolves.toEqual(
+      expect.objectContaining({
+        bundle: expect.objectContaining({
+          policy: expect.objectContaining({
+            allow: [
+              expect.objectContaining({ host: "api.example.com", port: 443 }),
+            ],
+          }),
+        }),
+      }),
+    );
+    fixture.close();
+  });
+
   it("builds a bundle with sentinels and the resolved secret for a granted environment", async () => {
     const fixture = makeResolverFixture();
     fixture.secrets.put("wrk_default", "github", "REAL-TOKEN");
@@ -546,6 +567,15 @@ function makeResolverFixture() {
     secrets,
     seedEnvironment,
     seedSession,
+    archiveEnvironmentForSession(sessionId: string): void {
+      const session = sessions.retrieveAny("wrk_default", sessionId);
+      if (!session) throw new Error(`missing seeded session ${sessionId}`);
+      environments.archive(
+        "wrk_default",
+        session.environment_id,
+        new Date().toISOString(),
+      );
+    },
     close: () => db.close(),
   };
 }

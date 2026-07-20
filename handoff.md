@@ -12,8 +12,8 @@ Do not optimize for cleverness. Optimize for correctness, legibility, and stable
 
 ## Current State
 
-_Last updated 2026-07-19 (`dev/alpha-onboarding-hardening`; alpha onboarding
-hardening in progress)._
+_Last updated 2026-07-20 (`main` is at PR #217; the current feature branch
+implements issue #206 and is awaiting review/merge)._
 
 - `main` is the integration branch. Feature/code slices use a short-lived
   `arc-*` or `issue-*` branch → PR → squash-merge. Docs and probe artifacts may
@@ -35,11 +35,17 @@ hardening in progress)._
 - Plan 0139 shipped Pi-backed multi-provider models in PR #195: durable
   `{provider,id}` identity, one shared Pi catalog/auth owner, secret-safe
   CLI/API/console discovery, and local-compatible smoke coverage.
+- PR #203 shipped safe Docker-local egress and reviewed environment-networking
+  presets. `oma smoke --egress` proves allowed traffic, unrelated-host denial,
+  and cleanup; microsandbox remains offline-only.
 - The alpha console exposes built-in tool approval (`always_ask` or
   `always_allow`) at agent creation and through immutable agent updates. Agent
-  archive and idle-session archive/delete are API-backed; environment
-  archive/delete remains a named service/API gap rather than a browser-only
-  fake action.
+  archive and idle-session archive/delete are API-backed. The current #206
+  feature branch also adds real environment archive/delete actions; deletion
+  fails safely while any durable session references the environment.
+- PR #217 refreshed the documentation reader and the full console visual
+  system, and fixed the archived-session UI race so late SSE status events
+  cannot re-enable archived-session actions.
 - Standing follow-ups remain `#103`, `#118`, and `#119`; consult GitHub rather
   than this file for their current status.
 
@@ -383,13 +389,12 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. **Safe network access is implemented; final review/merge is pending**
-   ([#199](https://github.com/oneryalcin/open-managed-agents/issues/199), plan
-   0141). Offline remains the console default. Docker `oma up` makes the pinned
-   sidecar capability available, and reviewed npm/PyPI, GitHub + registries,
-   and validated Custom policies are selectable. `oma smoke --egress` proves
-   real allowed traffic, unrelated-host denial, and cleanup. Microsandbox
-   remains offline-only; unrestricted networking remains absent.
+1. **Review and merge the environment lifecycle slice**
+   ([#206](https://github.com/oneryalcin/open-managed-agents/issues/206)). The
+   current branch captures the CMA contract, adds workspace-scoped archive and
+   reference-safe deletion, rejects new sessions on archived environments, and
+   proves the real console flow with Docker. On merge, update the issue and
+   remove this item from the queue.
 2. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
    owned by [Getting Started](docs/getting-started.md):
    `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,

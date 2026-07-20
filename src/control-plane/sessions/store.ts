@@ -141,6 +141,7 @@ export class SqliteSessionStore implements SessionStore {
   private readonly insertSkillSnapshotStmt: StatementSync;
   private readonly retrieveActiveStmt: StatementSync;
   private readonly countActiveStmt: StatementSync;
+  private readonly hasEnvironmentReferenceStmt: StatementSync;
   private readonly countAllActiveStmt: StatementSync;
   private readonly retrieveAnyStmt: StatementSync;
   private readonly archiveStmt: StatementSync;
@@ -199,6 +200,11 @@ export class SqliteSessionStore implements SessionStore {
     this.countActiveStmt = this.db.prepare(
       `SELECT COUNT(*) AS n FROM sessions
        WHERE workspace_id = ? AND archived_at IS NULL`,
+    );
+    this.hasEnvironmentReferenceStmt = this.db.prepare(
+      `SELECT EXISTS(
+        SELECT 1 FROM sessions WHERE workspace_id = ? AND environment_id = ?
+      ) AS exists_value`,
     );
     this.countAllActiveStmt = this.db.prepare(
       `SELECT COUNT(*) AS n FROM sessions WHERE archived_at IS NULL`,
@@ -395,6 +401,12 @@ export class SqliteSessionStore implements SessionStore {
 
   countActive(workspaceId: string): number {
     return (this.countActiveStmt.get(workspaceId) as { n: number }).n;
+  }
+
+  hasEnvironmentReference(workspaceId: string, environmentId: string): boolean {
+    return (this.hasEnvironmentReferenceStmt.get(workspaceId, environmentId) as {
+      exists_value: number;
+    }).exists_value === 1;
   }
 
   // Unscoped, for the /metrics gauge (0121 C2) — served by idx_sessions_live.

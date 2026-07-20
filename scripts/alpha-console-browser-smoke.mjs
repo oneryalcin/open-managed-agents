@@ -86,6 +86,25 @@ try {
   await dialog.getByRole("button", { name:"Delete session" }).click();
   await page.getByRole("heading", { name:"Sessions", exact:true }).waitFor();
 
+  await page.getByText("Environments", { exact:true }).first().click();
+  const environmentRow = page.locator(".env-row", { hasText:"alpha-browser-environment" });
+  await environmentRow.getByRole("button", { name:"Archive" }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name:"Archive environment" }).click();
+  await environmentRow.getByText("Archived", { exact:true }).waitFor();
+
+  await page.getByText("Start", { exact: true }).first().click();
+  await page.getByText("Create a default-deny environment before starting a session.").waitFor();
+  if (await page.getByRole("button", { name: "Create session" }).count()) {
+    throw new Error("Archived environment kept Start-page session creation enabled");
+  }
+
+  await page.getByText("Environments", { exact:true }).first().click();
+  await environmentRow.getByRole("button", { name:"Delete" }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name:"Delete environment" }).click();
+  await environmentRow.waitFor({ state:"detached" });
+
   await page.getByText("Agents", { exact:true }).first().click();
   await page.getByText("alpha-browser-agent", { exact:true }).click();
   await page.getByRole("button", { name:"Archive" }).click();
@@ -98,7 +117,7 @@ try {
   if ((await page.locator("body").innerText()).includes("Demo data")) {
     throw new Error("Console browser smoke observed demo fallback text");
   }
-  console.log("Alpha console browser smoke passed: login, permission revision, session archive/delete, and agent archive gating.");
+  console.log("Alpha console browser smoke passed: login, agent revision, session archive/delete, environment archive/delete, and agent archive gating.");
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   if (state.page) {

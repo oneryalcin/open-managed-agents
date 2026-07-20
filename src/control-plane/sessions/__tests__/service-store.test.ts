@@ -1286,6 +1286,38 @@ describe("session service/store", () => {
     expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
   });
 
+  it("does not create a session when its environment is archived during runtime preparation", async () => {
+    const runtime = new FakeRuntimePreparer();
+    const fixture = createFixture({ fileStorage: true, runtime });
+    const agent = fixture.createAgent(DEFAULT_WORKSPACE_ID, "Default Agent");
+    const environment = fixture.createEnvironment(DEFAULT_WORKSPACE_ID, "Default Env");
+    const source = await fixture.fileStorage!.create(DEFAULT_WORKSPACE_ID, {
+      filename: "probe.txt",
+      mimeType: "text/plain",
+      body: bytes("input"),
+    });
+    runtime.onPrepare = () => {
+      fixture.environmentStore.archive(
+        DEFAULT_WORKSPACE_ID,
+        environment.id,
+        new Date().toISOString(),
+      );
+    };
+
+    await expect(
+      fixture.sessions.create(DEFAULT_WORKSPACE_ID, {
+        agent: agent.id,
+        environment_id: environment.id,
+        resources: [{ type: "file", file_id: source.metadata.id }],
+      }),
+    ).rejects.toThrow(`Environment ${environment.id} is archived.`);
+
+    expect(fixture.sessionStore.list(DEFAULT_WORKSPACE_ID, { includeArchived: true }).data)
+      .toEqual([]);
+    expect(runtime.closed).toEqual([{ workspaceId: DEFAULT_WORKSPACE_ID, sessionId: expect.any(String) }]);
+    expect(fixture.fileStorage!.getWorkspaceBytesForTest(DEFAULT_WORKSPACE_ID)).toBe(5);
+  });
+
   it("rejects an unavailable pinned model before snapshots, runtime, or session rows", async () => {
     const runtime = new FakeRuntimePreparer();
     const fixture = createFixture({
@@ -1641,8 +1673,11 @@ class FakeRuntimePreparer implements RuntimeEventRunner {
       agent: opts.agent,
       skills: opts.skills,
     });
+    this.onPrepare?.();
     if (this.opts.throwOnPrepare) throw this.opts.throwOnPrepare;
   }
+
+  onPrepare: (() => void) | undefined;
 
   // Assigned by the fixture after construction so the fake can verify the
   // create path does not publish a half-materialized session row.
@@ -1691,6 +1726,7 @@ function failCreateStore(delegate: SqliteSessionStore): SessionStore {
     retrieve: delegate.retrieve.bind(delegate),
     retrieveAny: delegate.retrieveAny.bind(delegate),
     countActive: delegate.countActive.bind(delegate),
+    hasEnvironmentReference: delegate.hasEnvironmentReference.bind(delegate),
     archive: delegate.archive.bind(delegate),
     delete: delegate.delete.bind(delegate),
     getFileMountSnapshots: delegate.getFileMountSnapshots.bind(delegate),

@@ -977,6 +977,12 @@ class HookedSessionStore implements SessionStore {
     ).length;
   }
 
+  hasEnvironmentReference(workspaceId: WorkspaceId, environmentId: string): boolean {
+    return [...this.rows.values()].some(
+      (row) => row.workspace_id === workspaceId && row.environment_id === environmentId,
+    );
+  }
+
   retrieve(
     workspaceId: WorkspaceId,
     sessionId: string,
