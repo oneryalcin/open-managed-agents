@@ -20,7 +20,9 @@
 - Trust signals: explicit workspace identity, visible runtime state, raw event
   access, concrete endpoint/error details, and no hidden credential persistence.
 - Avoid: consumer-chat gloss, silent mock behavior, controls that imply an
-  unsupported action, fake real-time state, and pixel imitation of CMA.
+  unsupported action, and fake real-time state. The documentation reader may
+  deliberately use the CMA docs layout as a close visual reference, while
+  retaining OMA naming, mark, content, links, and interaction behavior.
 
 ## Product goals
 
@@ -32,10 +34,9 @@
   - keep CMA-compatible concepts and terminology where OMA ships them;
   - make OMA-specific operational and security behavior explicit.
 - Non-goals:
-  - full CMA console cloning;
+  - full CMA console cloning outside the documentation reader;
   - conversational agent generation, deployments, memory, analytics, or rich
-    observability before their backend capabilities exist;
-  - pixel parity.
+    observability before their backend capabilities exist.
 - Success signals:
   - a fresh workspace can reach a successful sandbox-backed session from the
     console;
@@ -104,9 +105,11 @@
 
 - Color: retain the warm graphite surfaces and amber primary accent already
   defined in `console.css`; semantic green/red/idle and event-role colors carry
-  meaning and must not be decorative-only.
+  meaning and must not be decorative-only. The documentation reader may use a
+  near-black editorial palette with the same OMA amber accent.
 - Typography: Geist/system sans for UI and Geist Mono/system monospace for IDs,
-  endpoints, commands, and raw payloads.
+  endpoints, commands, and raw payloads; documentation headings may use the
+  local system serif stack for the approved editorial reference.
 - Spacing/layout rhythm: dense operator tables with 26px default gutters and a
   compact option; avoid large marketing-style whitespace.
 - Shape/radius/elevation: existing 6/9/13px radius scale, restrained borders,
@@ -183,8 +186,9 @@
   single CSS file; no build step or CDN.
 - Design-token constraints: extend existing CSS custom properties and component
   patterns.
-- Documentation constraints: borrow CMA's task-oriented information
-  architecture, not its branded chrome or prose; documentation must state OMA's
+- Documentation constraints: use CMA's task-oriented information architecture
+  and approved close docs-shell reference without importing Claude branding,
+  prose, logos, links, or product claims. Documentation must state OMA's
   shipped alpha behavior and limitations directly. Markdown files under the
   console's local documentation tree are the single content source for both
   rendered pages and the user-visible copy/open actions. Each page declares a
