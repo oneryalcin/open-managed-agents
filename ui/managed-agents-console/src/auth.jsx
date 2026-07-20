@@ -1,8 +1,8 @@
 // auth.jsx — login view + admin panel (plan 0120 §3.4). → window
 //
-// Keys are session-scoped: they live in api.js module memory only and are
-// re-entered after a reload. The minted plaintext is rendered exactly once,
-// never stored, never logged.
+// Keys are used once to create an opaque, server-side console session. The
+// browser cannot read that HttpOnly session token; the minted plaintext is
+// still rendered exactly once, never stored, never logged.
 const { useState: useStateA, useEffect: useEffectA } = React;
 
 function LoginView({ onAdminLogin, onWorkspaceLogin, error, busy }) {
@@ -16,7 +16,7 @@ function LoginView({ onAdminLogin, onWorkspaceLogin, error, busy }) {
   };
   return (
     <div className="main-scroll scroll fade-in">
-      <PageHead title="Connect" sub="This OMA server requires a key. Nothing is stored — a reload asks again." />
+      <PageHead title="Connect" sub="Enter a key once to create a revocable console session on this device." />
       <div className="panel" style={{ maxWidth: 520, padding: 22 }}>
         <form onSubmit={submit}>
           <Labeled label="Credential">
@@ -32,8 +32,8 @@ function LoginView({ onAdminLogin, onWorkspaceLogin, error, busy }) {
           </Labeled>
           <Labeled label={tier === 'admin' ? 'OMA_ADMIN_KEY' : 'x-api-key'} htmlFor="console-credential-key"
             hint={tier === 'admin'
-              ? 'Manage workspaces and API keys via /admin.'
-              : 'Browse this workspace’s agents, sessions, and files via /v1.'}>
+              ? 'Operator access: manage workspaces and select one directly.'
+              : 'Open this workspace. The server stores only a session-token hash.'}>
             <input id="console-credential-key" name="credential" className="input mono" type="password" autoComplete="off"
               placeholder={tier === 'admin' ? 'base64 admin key…' : 'oma_…'}
               value={key} onChange={(e) => setKey(e.target.value)} autoFocus />

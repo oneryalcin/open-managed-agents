@@ -4,6 +4,8 @@
 
 Use the console to exercise the same workspace-scoped API that your integration will use. It is available at the URL printed by `oma up`; sign in with a workspace key.
 
+The key is used once to establish a revocable console session. The browser never stores or can read the session token; the server stores only its hash. A workspace-key session is invalidated as soon as its source key is revoked. When admin mode is enabled, an admin can use the workspace selector to open any workspace directly; the selected workspace remains a separate `/v1` session, not implicit admin access.
+
 ## Build an agent
 
 Create an agent, choose a credential-ready model, set instructions, and choose its tools and confirmation policy. Agent updates create immutable versions, so an existing session continues with the version it started with.

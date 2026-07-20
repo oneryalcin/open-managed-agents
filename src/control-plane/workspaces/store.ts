@@ -21,6 +21,16 @@ CREATE TABLE IF NOT EXISTS workspace_api_keys (
 );
 CREATE INDEX IF NOT EXISTS workspace_api_keys_by_workspace
   ON workspace_api_keys (workspace_id, key_sha256);
+CREATE TABLE IF NOT EXISTS console_sessions (
+  token_sha256      TEXT PRIMARY KEY,
+  kind              TEXT NOT NULL CHECK (kind IN ('workspace_key', 'admin', 'admin_workspace')),
+  workspace_id      TEXT REFERENCES workspaces(workspace_id),
+  credential_sha256 TEXT NOT NULL,
+  created_at        TEXT NOT NULL,
+  expires_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS console_sessions_by_expiry
+  ON console_sessions (expires_at);
 `;
 
 export const WORKSPACE_API_KEY_PREFIX = "oma_";
@@ -46,6 +56,22 @@ export interface MintedWorkspaceApiKey {
   label: string;
 }
 
+export type ConsoleSessionKind = "workspace_key" | "admin" | "admin_workspace";
+
+export interface ConsoleSessionRow {
+  token_sha256: string;
+  kind: ConsoleSessionKind;
+  workspace_id: WorkspaceId | null;
+  credential_sha256: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface MintedConsoleSession {
+  plaintextToken: string;
+  row: ConsoleSessionRow;
+}
+
 export function newWorkspaceId(): string {
   return `wrk_${uuidv7()}`;
 }
@@ -65,6 +91,9 @@ export class SqliteWorkspaceStore {
   private readonly listWorkspacesStmt: StatementSync;
   private readonly getKeyStmt: StatementSync;
   private readonly countKeysStmt: StatementSync;
+  private readonly insertConsoleSessionStmt: StatementSync;
+  private readonly getConsoleSessionStmt: StatementSync;
+  private readonly deleteConsoleSessionStmt: StatementSync;
 
   constructor(db: DatabaseSync) {
     this.db = db;
@@ -105,6 +134,19 @@ export class SqliteWorkspaceStore {
     );
     this.countKeysStmt = this.db.prepare(
       `SELECT COUNT(*) AS n FROM workspace_api_keys`,
+    );
+    this.insertConsoleSessionStmt = this.db.prepare(
+      `INSERT INTO console_sessions
+       (token_sha256, kind, workspace_id, credential_sha256, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    this.getConsoleSessionStmt = this.db.prepare(
+      `SELECT token_sha256, kind, workspace_id, credential_sha256, created_at, expires_at
+       FROM console_sessions
+       WHERE token_sha256 = ? AND expires_at > ?`,
+    );
+    this.deleteConsoleSessionStmt = this.db.prepare(
+      `DELETE FROM console_sessions WHERE token_sha256 = ?`,
     );
     this.db.prepare(
       `INSERT OR IGNORE INTO workspaces (workspace_id, name, created_at)
@@ -159,6 +201,50 @@ export class SqliteWorkspaceStore {
       | { workspace_id: WorkspaceId }
       | undefined;
     return row?.workspace_id;
+  }
+
+  authenticateKeySha256(keySha256: string): WorkspaceId | undefined {
+    const row = this.authenticateStmt.get(keySha256) as
+      | { workspace_id: WorkspaceId }
+      | undefined;
+    return row?.workspace_id;
+  }
+
+  mintConsoleSession(input: {
+    kind: ConsoleSessionKind;
+    workspaceId?: WorkspaceId;
+    credentialSha256: string;
+    expiresAt: Date;
+  }): MintedConsoleSession {
+    const plaintextToken = `ocs_${randomBytes(32).toString("base64url")}`;
+    const row: ConsoleSessionRow = {
+      token_sha256: hashWorkspaceApiKey(plaintextToken),
+      kind: input.kind,
+      workspace_id: input.workspaceId ?? null,
+      credential_sha256: input.credentialSha256,
+      created_at: new Date().toISOString(),
+      expires_at: input.expiresAt.toISOString(),
+    };
+    this.insertConsoleSessionStmt.run(
+      row.token_sha256,
+      row.kind,
+      row.workspace_id,
+      row.credential_sha256,
+      row.created_at,
+      row.expires_at,
+    );
+    return { plaintextToken, row };
+  }
+
+  getConsoleSession(plaintextToken: string): ConsoleSessionRow | undefined {
+    return this.getConsoleSessionStmt.get(
+      hashWorkspaceApiKey(plaintextToken),
+      new Date().toISOString(),
+    ) as ConsoleSessionRow | undefined;
+  }
+
+  revokeConsoleSession(plaintextToken: string): boolean {
+    return this.deleteConsoleSessionStmt.run(hashWorkspaceApiKey(plaintextToken)).changes > 0;
   }
 
   revokeKey(keySha256: string): boolean {

@@ -192,8 +192,13 @@
   `PARITY.md` remain the implementation truth sources.
 - Performance constraints: bound automatic pagination; incrementally consume
   SSE; do not repeatedly reload full event history while a session runs.
-- Compatibility constraints: credentials remain in page memory only; admin and
-  workspace keys never cross API tiers; `/v1` writes are individually
+- Compatibility constraints: a raw workspace or admin key exists in page memory
+  only for its login exchange. The server issues tier-separated, opaque HttpOnly
+  console-session cookies and stores only token hashes; workspace sessions are
+  invalidated when their source key is revoked and admin-derived sessions when
+  the admin key rotates. Admin access never directly authorizes `/v1`; an admin
+  must explicitly select a workspace. Cookie-authenticated writes require a
+  same-origin `Origin` header. `/v1` writes remain individually
   capability-gated rather than enabled through a generic transport switch;
   session creation and event submission use the backend's idempotency contract.
 - Test/screenshot expectations: contract-test every mutation payload and header;

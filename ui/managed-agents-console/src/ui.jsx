@@ -74,7 +74,45 @@ const NAV = [
   { key:'vaults', label:'Vaults', icon:'database' },
 ];
 
-function Sidebar({ route, go, showAdmin = false }) {
+function WorkspaceSwitcher({ workspace, admin, onSelectWorkspace, onSwitchWorkspace, onSignOut }) {
+  const [open, setOpen] = useState(false);
+  const [workspaces, setWorkspaces] = useState(null);
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && admin && workspaces === null) {
+      OmaConsoleApi.listWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
+    }
+  };
+  const label = workspace?.name || (admin ? 'Choose workspace' : 'Connect workspace');
+  return (
+    <div className="workspace-switcher">
+      <button className="ws" type="button" onClick={toggle} aria-expanded={open}>
+        <span className="ws-dot" /><span className="ws-name">{label}</span>
+        <Icon name="chevDown" size={14} className="ws-chev" />
+      </button>
+      {open && <div className="workspace-menu">
+        {admin && <>
+          <div className="workspace-menu-label">Switch workspace</div>
+          {workspaces === null ? <div className="workspace-menu-note">Loading workspaces…</div>
+            : workspaces.length === 0 ? <div className="workspace-menu-note">No workspaces yet.</div>
+            : workspaces.map((item) => <button key={item.id} type="button" className="workspace-menu-item"
+              onClick={() => { setOpen(false); onSelectWorkspace(item.id); }}>
+              <span>{item.name}</span><small className="mono">{item.id}</small>
+            </button>)}
+        </>}
+        {!admin && <button type="button" className="workspace-menu-item" onClick={() => { setOpen(false); onSwitchWorkspace(); }}>
+          Enter another workspace key
+        </button>}
+        <button type="button" className="workspace-menu-item workspace-signout" onClick={() => { setOpen(false); onSignOut(); }}>
+          Sign out
+        </button>
+      </div>}
+    </div>
+  );
+}
+
+function Sidebar({ route, go, showAdmin = false, workspace, admin = false, onSelectWorkspace, onSwitchWorkspace, onSignOut }) {
   const top = route === 'session' ? 'sessions' : route === 'agent' ? 'agents' : route;
   return (
     <aside className="sidebar">
@@ -82,10 +120,8 @@ function Sidebar({ route, go, showAdmin = false }) {
         <div className="brand-mark">O</div>
         <div className="brand-name">OMA Console<small>Managed Agents</small></div>
       </div>
-      <div className="ws">
-        <span className="ws-dot" /><span className="ws-name">Default</span>
-        <Icon name="chevDown" size={14} className="ws-chev" />
-      </div>
+      <WorkspaceSwitcher workspace={workspace} admin={admin} onSelectWorkspace={onSelectWorkspace}
+        onSwitchWorkspace={onSwitchWorkspace} onSignOut={onSignOut} />
       <div className="nav-label">Managed Agents</div>
       {NAV.map((n) => (
         <div key={n.key} className={'nav-item' + (top === n.key ? ' active' : '')} onClick={() => go(n.key)}>
