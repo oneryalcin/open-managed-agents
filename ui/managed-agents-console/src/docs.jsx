@@ -5,10 +5,12 @@
 const { useEffect: useEffectDocs, useMemo: useMemoDocs, useState: useStateDocs } = React;
 
 const DOC_NAV = [
-  { label:'First steps', pages:[['overview', 'Overview'], ['quickstart', 'Quickstart']] },
-  { label:'Configure OMA', pages:[['agents', 'Agent setup'], ['environments', 'Environments'], ['tools', 'Tools, files, and skills'], ['integrations', 'MCP and vaults']] },
-  { label:'Run work', pages:[['sessions', 'Sessions and events']] },
-  { label:'Reference', pages:[['reference', 'API and alpha scope']] },
+  { label:'First steps', pages:[['overview', 'Overview'], ['quickstart', 'Quickstart'], ['console', 'Prototype in Console'], ['migration', 'Migration']] },
+  { label:'Define your agent', pages:[['agents', 'Agent setup'], ['tools', 'Tools'], ['permissions', 'Permission policies'], ['skills', 'Skills'], ['integrations', 'MCP connector']] },
+  { label:'Configure agent environment', pages:[['environments', 'Environments'], ['sandbox-reference', 'Cloud sandbox reference'], ['self-hosted-sandboxes', 'Self-hosted sandboxes'], ['sandbox-security', 'Sandbox security']] },
+  { label:'Delegate work to your agent', pages:[['sessions', 'Start a session'], ['session-operations', 'Session operations'], ['events', 'Session event stream'], ['files', 'Files'], ['vaults', 'Vaults']] },
+  { label:'Beyond v1', pages:[['github', 'GitHub'], ['outcomes', 'Define outcomes'], ['memory', 'Memory'], ['dreams', 'Dreams'], ['multiagent', 'Multi-agent orchestration'], ['scheduled-deployments', 'Scheduled deployments'], ['webhooks', 'Webhooks']] },
+  { label:'Reference', pages:[['reference', 'API reference and compatibility']] },
 ];
 
 const DOC_PAGES = Object.fromEntries(DOC_NAV.flatMap((section) => section.pages.map(([id, label]) => [id, {
@@ -21,6 +23,10 @@ function slug(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
+function openDocumentationTarget(target) {
+  if (target.startsWith('/') || /^https:\/\//.test(target)) window.open(target, target.startsWith('https://') ? '_blank' : '_self', 'noopener,noreferrer');
+}
+
 function InlineMarkdown({ text, onNavigate }) {
   const parts = text.split(/(`[^`]+`|\[[^\]]+\]\([^\s)]+\)|\*\*[^*]+\*\*)/g);
   return <>{parts.map((part, index) => {
@@ -30,7 +36,8 @@ function InlineMarkdown({ text, onNavigate }) {
     if (link) {
       const [, label, target] = link;
       if (target.startsWith('#docs=')) return <button type="button" key={index} className="docs-inline-link" onClick={() => onNavigate(target.slice(6))}>{label}</button>;
-      return <span key={index}>{label} ({target})</span>;
+      if (target.startsWith('/') || /^https:\/\//.test(target)) return <button type="button" key={index} className="docs-inline-link" onClick={() => openDocumentationTarget(target)}>{label}</button>;
+      return <React.Fragment key={index}>{label}</React.Fragment>;
     }
     return <React.Fragment key={index}>{part}</React.Fragment>;
   })}</>;
@@ -45,7 +52,7 @@ function MarkdownDocument({ markdown, onNavigate }) {
 
     const paragraph = () => {
       const words = [];
-      while (index < lines.length && lines[index].trim() && !/^(#{1,2}\s|```|> \[!|[-*] |\d+\. |\|)/.test(lines[index])) {
+      while (index < lines.length && lines[index].trim() && !/^(#{1,3}\s|```|> \[!|[-*] |\d+\. |\|)/.test(lines[index])) {
         words.push(lines[index].trim());
         index += 1;
       }
@@ -55,14 +62,17 @@ function MarkdownDocument({ markdown, onNavigate }) {
     while (index < lines.length) {
       const line = lines[index];
       if (!line.trim()) { index += 1; continue; }
-      const heading = /^(#{1,2})\s+(.+)$/.exec(line);
+      const heading = /^(#{1,3})\s+(.+)$/.exec(line);
       if (heading) {
         const [, marks, text] = heading;
         const id = slug(text);
         if (marks.length === 1) nodes.push(<h1 key={`h1-${id}`}>{text}</h1>);
-        else {
+        else if (marks.length === 2) {
           headings.push([id, text]);
           nodes.push(<h2 id={id} key={`h2-${id}`}>{text}</h2>);
+        } else {
+          headings.push([id, text]);
+          nodes.push(<h3 id={id} key={`h3-${id}`}>{text}</h3>);
         }
         index += 1;
         continue;
@@ -109,9 +119,9 @@ function MarkdownDocument({ markdown, onNavigate }) {
 }
 
 function markdownHeadings(markdown) {
-  return markdown.match(/^##\s+.+$/gm)?.map((line) => {
-    const text = line.replace(/^##\s+/, '');
-    return [slug(text), text];
+  return markdown.match(/^#{2,3}\s+.+$/gm)?.map((line) => {
+    const text = line.replace(/^#{2,3}\s+/, '');
+    return [slug(text), text, line.startsWith('###')];
   }) || [];
 }
 
@@ -158,7 +168,7 @@ function DocsView({ page = 'overview', onNavigate, goConsole }) {
       {state === 'error' && <div className="docs-loading error"><Icon name="alert" size={16} />The local Markdown source could not be loaded.</div>}
       {state === 'loaded' && <MarkdownDocument markdown={markdown} onNavigate={go} />}
     </article>
-    <aside className="docs-toc" aria-label="On this page"><strong>On this page</strong>{headings.map(([id, label]) => <button key={id} onClick={() => document.getElementById(id)?.scrollIntoView({ behavior:'smooth', block:'start' })}>{label}</button>)}</aside>
+    <aside className="docs-toc" aria-label="On this page"><strong>On this page</strong>{headings.map(([id, label, nested]) => <button key={id} className={nested ? 'nested' : ''} onClick={() => document.getElementById(id)?.scrollIntoView({ behavior:'smooth', block:'start' })}>{label}</button>)}</aside>
   </div>;
 }
 

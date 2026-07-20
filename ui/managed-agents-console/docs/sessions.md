@@ -1,17 +1,21 @@
-# Sessions and events
+# Start a session
 
-Sessions are the persisted record of one agent working in one environment.
+> [!NOTE] Status: **Shipped alpha for synchronous, single-agent sessions.**
 
-## Create and prompt
+## Create a session
 
-Start a session with an agent and environment, then send the initial task as an event. The console can create sessions, send prompts, interrupt execution, and resolve manual tool confirmations when the live API permits those actions.
+Create a session with an agent and environment. A bare agent ID selects the latest version; an agent reference with a version pins that immutable revision. The stored session keeps the resolved version for runtime execution.
 
-## Inspect events
+At creation, supply any supported vault and file resources. Resources are validated and prepared before execution; OMA does not support adding or removing them later.
 
-Follow the SSE event stream to inspect complete agent messages, tool calls and results, errors, and raw payloads. Persisted history is available for a session after reconnecting.
+## Start work
 
-> [!NOTE] OMA currently exposes buffered complete agent messages, not streaming token previews. It does not advertise unsupported event types as live features.
+Send a `user.message` event to begin a turn. The console supports prompts, interrupts, and confirmation responses when its live API capability allows them. API clients should use the documented idempotency contract for retry-safe writes.
 
-## Lifecycle
+## Follow progress
 
-Archive a session to retain it without continuing work, or delete it when it is no longer needed. Archived sessions are read-only.
+Use the session detail and [event stream](#docs=events) to inspect complete agent messages, tool calls and results, confirmations, errors, and raw payloads. Persisted history survives an SSE reconnect.
+
+## Current limitations
+
+OMA does not support agent overrides at session creation, live session updates, token previews, multi-agent threads, or hosted-style asynchronous session scheduling.
