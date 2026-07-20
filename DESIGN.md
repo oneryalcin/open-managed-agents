@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-07-14
+- Last refreshed: 2026-07-20
 - Primary product surfaces: bundled operator console at `/console/`, API docs at
   `/docs/`, and the local `oma` CLI.
 - Evidence reviewed:
@@ -69,7 +69,7 @@
   - Files;
   - Vaults;
   - Administration when an admin key is active;
-  - API documentation.
+  - Documentation, available before authentication, plus API documentation.
 - Core routes/screens:
   - login and workspace selection;
   - readiness/start screen;
@@ -78,6 +78,8 @@
   - session list, create, and live detail;
   - files and vault/credential health;
   - admin workspace/key management.
+  - public in-console documentation overview, quickstart, configuration,
+    session, and reference pages.
 - Content hierarchy: current state and blocking action first, primary task
   second, configuration detail third, raw/debug evidence always available but
   visually secondary.
@@ -116,6 +118,8 @@
   fields/selects, modal/confirmation dialog, skeleton/empty/error states,
   session transcript/debug inspector, files panel, and mode/warning banners.
 - New/changed components:
+  - an in-console documentation reader with section navigation, current-page
+    outline, and links into real console actions;
   - readiness/start checklist based only on public, observable state;
   - API-backed agent and environment forms;
   - API-backed session form with explicit two-step initial-message state;
@@ -176,6 +180,11 @@
   single CSS file; no build step or CDN.
 - Design-token constraints: extend existing CSS custom properties and component
   patterns.
+- Documentation constraints: borrow CMA's task-oriented information
+  architecture, not its branded chrome or prose; documentation must state OMA's
+  shipped alpha behavior and limitations directly. Markdown files under the
+  console's local documentation tree are the single content source for both
+  rendered pages and the user-visible copy/open actions.
 - Performance constraints: bound automatic pagination; incrementally consume
   SSE; do not repeatedly reload full event history while a session runs.
 - Compatibility constraints: credentials remain in page memory only; admin and

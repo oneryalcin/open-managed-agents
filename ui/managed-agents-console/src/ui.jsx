@@ -100,7 +100,9 @@ function Sidebar({ route, go, showAdmin = false }) {
       </>}
       <div className="sidebar-spacer" />
       <div className="sidebar-foot">
-        <div className="nav-item dim"><Icon name="fileText" size={16} />Documentation</div>
+        <button type="button" className={'nav-item' + (top === 'documentation' ? ' active' : '')} onClick={() => go('documentation')}>
+          <Icon name="fileText" size={16} />Documentation
+        </button>
         <div className="nav-item dim"><Icon name="terminal" size={16} />proxy /v1</div>
       </div>
     </aside>
