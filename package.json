@@ -7,6 +7,12 @@
   "bin": {
     "oma": "bin/oma.mjs"
   },
+  "files": [
+    "bin/oma.mjs",
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
@@ -14,6 +20,9 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "build:package": "node scripts/package-build.mjs",
+    "package:verify": "node scripts/package-verify.mjs",
+    "prepack": "npm run build:package",
     "alpha:smoke": "node scripts/alpha-smoke.mjs",
     "alpha:smoke:providers": "node scripts/alpha-provider-smoke-matrix.mjs",
     "alpha:console-browser": "node scripts/alpha-console-browser-smoke.mjs",
