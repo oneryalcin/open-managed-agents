@@ -1,5 +1,6 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,12 @@ import {
   registerConsoleRoutes,
   type ConsoleStaticConfig,
 } from "./console/static.ts";
+import {
+  CONSOLE_ADMIN_COOKIE,
+  CONSOLE_WORKSPACE_COOKIE,
+  createConsoleSessionAuth,
+  type ConsoleSessionAuth,
+} from "./console/auth.ts";
 import {
   registerOpenApiRoutes,
   type OpenApiRoutesConfig,
@@ -78,7 +85,8 @@ import {
   requestId,
   toApiErrorBody,
 } from "./errors.ts";
-import type { ControlPlaneRouteEnv, WorkspaceId } from "./workspace.ts";
+import { parseJsonBody } from "./http.ts";
+import { DEFAULT_WORKSPACE_ID, type ControlPlaneRouteEnv, type WorkspaceId } from "./workspace.ts";
 import {
   createAdmissionLimits,
   parseAdmissionLimitsFromEnv,
@@ -152,6 +160,11 @@ export interface ControlPlaneServices {
   // Absent = no console shipped alongside this process (in-memory test
   // assemblies); the deployment assembly passes the bundled ui/ dir.
   console?: ConsoleStaticConfig;
+  /** Opaque, server-side sessions used only by the browser console. */
+  consoleSessionAuth?: {
+    service: ConsoleSessionAuth;
+    secureCookies: boolean;
+  };
   /** Absent only in minimal test/library assemblies that do not ship UI assets. */
   openapi?: OpenApiRoutesConfig;
   agents: AgentService;
@@ -307,10 +320,19 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
         return;
       }
       const key = c.req.header("x-api-key");
-      const workspaceId = key === undefined ? undefined : auth.authenticate(key);
+      const workspaceCookie = getCookie(c, CONSOLE_WORKSPACE_COOKIE);
+      const usedConsoleCookie = key === undefined && workspaceCookie !== undefined;
+      const workspaceId = key !== undefined
+        ? auth.authenticate(key)
+        : workspaceCookie === undefined
+          ? undefined
+          : services.consoleSessionAuth?.service.authenticateWorkspace(workspaceCookie);
       if (workspaceId === undefined) {
         const err = authenticationFailed();
         return jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+      }
+      if (usedConsoleCookie && isUnsafeMethod(c.req.method) && !sameOriginForCookieWrite(c)) {
+        return c.text("Forbidden\n", 403);
       }
       c.set("workspaceId", workspaceId);
       await next();
@@ -326,7 +348,14 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
       }
       c.header("cache-control", "no-store");
       const key = c.req.header("x-admin-key");
-      if (key === undefined || !adminAuth.verify(key)) {
+      const adminCookie = getCookie(c, CONSOLE_ADMIN_COOKIE);
+      const usedConsoleCookie = key === undefined && adminCookie !== undefined;
+      const authenticated = key !== undefined
+        ? adminAuth.verify(key)
+        : adminCookie === undefined
+          ? false
+          : services.consoleSessionAuth?.service.authenticateAdmin(adminCookie) === true;
+      if (!authenticated) {
         const err = authenticationFailed();
         const response = jsonError(
           toApiErrorBody(err, c.get("requestId")),
@@ -334,6 +363,9 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
         );
         response.headers.set("cache-control", "no-store");
         return response;
+      }
+      if (usedConsoleCookie && isUnsafeMethod(c.req.method) && !sameOriginForCookieWrite(c)) {
+        return withAdminNoStore(c.req.path, c.text("Forbidden\n", 403));
       }
       await next();
     });
@@ -355,6 +387,10 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
     }
     return defaultBodyLimit(c, next);
   });
+
+  if (services.consoleSessionAuth) {
+    registerConsoleSessionRoutes(app, services);
+  }
 
   if (services.openapi) {
     registerOpenApiRoutes(app, services.openapi);
@@ -447,6 +483,121 @@ export function createControlPlaneApp(services: ControlPlaneServices): Hono<AppE
   });
 
   return app;
+}
+
+function registerConsoleSessionRoutes(
+  app: Hono<AppEnv>,
+  services: ControlPlaneServices,
+): void {
+  const consoleAuth = services.consoleSessionAuth!;
+
+  app.get("/console/auth/status", (c) => {
+    c.header("cache-control", "no-store");
+    const workspaceToken = getCookie(c, CONSOLE_WORKSPACE_COOKIE);
+    const adminToken = getCookie(c, CONSOLE_ADMIN_COOKIE);
+    const workspaceId = workspaceToken === undefined
+      ? undefined
+      : consoleAuth.service.authenticateWorkspace(workspaceToken);
+    return c.json({
+      auth_required: services.auth !== undefined,
+      workspace: workspaceId === undefined && services.auth === undefined
+        ? consoleWorkspace(DEFAULT_WORKSPACE_ID, consoleAuth.service)
+        : workspaceId === undefined
+        ? null
+        : {
+            id: workspaceId,
+            name: consoleAuth.service.workspaceName(workspaceId) ?? workspaceId,
+          },
+      admin: adminToken !== undefined && consoleAuth.service.authenticateAdmin(adminToken),
+    });
+  });
+
+  app.post("/console/auth/workspace", async (c) => {
+    if (!sameOriginForCookieWrite(c) || services.auth === undefined) return c.text("Not found\n", 404);
+    const session = consoleAuth.service.createWorkspaceSession(stringField(await parseJsonBody(c.req), "api_key"));
+    if (session === undefined) return consoleAuthenticationFailed(c);
+    setConsoleCookie(c, CONSOLE_WORKSPACE_COOKIE, session.token, consoleAuth.secureCookies, 30 * 24 * 60 * 60);
+    c.header("cache-control", "no-store");
+    return c.json({ workspace: consoleWorkspace(session.workspaceId, consoleAuth.service) });
+  });
+
+  app.post("/console/auth/admin", async (c) => {
+    if (!sameOriginForCookieWrite(c) || services.admin === undefined) return c.text("Not found\n", 404);
+    const token = consoleAuth.service.createAdminSession(stringField(await parseJsonBody(c.req), "admin_key"));
+    if (token === undefined) return consoleAuthenticationFailed(c);
+    setConsoleCookie(c, CONSOLE_ADMIN_COOKIE, token, consoleAuth.secureCookies, 8 * 60 * 60);
+    c.header("cache-control", "no-store");
+    return c.json({ admin: true });
+  });
+
+  app.post("/console/auth/select-workspace", async (c) => {
+    if (!sameOriginForCookieWrite(c)) return c.text("Forbidden\n", 403);
+    const adminToken = getCookie(c, CONSOLE_ADMIN_COOKIE);
+    if (adminToken === undefined) return consoleAuthenticationFailed(c);
+    const workspaceId = stringField(await parseJsonBody(c.req), "workspace_id");
+    const token = consoleAuth.service.selectWorkspace(adminToken, workspaceId);
+    if (token === undefined) return consoleAuthenticationFailed(c);
+    setConsoleCookie(c, CONSOLE_WORKSPACE_COOKIE, token, consoleAuth.secureCookies, 30 * 24 * 60 * 60);
+    c.header("cache-control", "no-store");
+    return c.json({ workspace: consoleWorkspace(workspaceId, consoleAuth.service) });
+  });
+
+  app.post("/console/auth/logout", (c) => {
+    if (!sameOriginForCookieWrite(c)) return c.text("Forbidden\n", 403);
+    const workspaceToken = getCookie(c, CONSOLE_WORKSPACE_COOKIE);
+    const adminToken = getCookie(c, CONSOLE_ADMIN_COOKIE);
+    if (workspaceToken !== undefined) consoleAuth.service.revokeWorkspaceSession(workspaceToken);
+    if (adminToken !== undefined) consoleAuth.service.revokeAdminSession(adminToken);
+    deleteConsoleCookie(c, CONSOLE_WORKSPACE_COOKIE, consoleAuth.secureCookies);
+    deleteConsoleCookie(c, CONSOLE_ADMIN_COOKIE, consoleAuth.secureCookies);
+    c.header("cache-control", "no-store");
+    return c.body(null, 204);
+  });
+}
+
+function consoleWorkspace(workspaceId: WorkspaceId, auth: ConsoleSessionAuth): { id: WorkspaceId; name: string } {
+  return { id: workspaceId, name: auth.workspaceName(workspaceId) ?? workspaceId };
+}
+
+function stringField(body: unknown, name: string): string {
+  if (
+    typeof body !== "object" || body === null ||
+    typeof (body as Record<string, unknown>)[name] !== "string" ||
+    (body as Record<string, string>)[name].trim().length === 0
+  ) {
+    throw new ApiError(400, "invalid_request_error", `\`${name}\` must be a non-empty string`);
+  }
+  return (body as Record<string, string>)[name].trim();
+}
+
+function consoleAuthenticationFailed(c: Context<AppEnv>): Response {
+  c.header("cache-control", "no-store");
+  const err = authenticationFailed();
+  const response = jsonError(toApiErrorBody(err, c.get("requestId")), err.status);
+  response.headers.set("cache-control", "no-store");
+  return response;
+}
+
+function setConsoleCookie(c: Context<AppEnv>, name: string, token: string, secure: boolean, maxAge: number): void {
+  setCookie(c, name, token, { httpOnly: true, maxAge, path: "/", sameSite: "Strict", secure });
+}
+
+function deleteConsoleCookie(c: Context<AppEnv>, name: string, secure: boolean): void {
+  deleteCookie(c, name, { httpOnly: true, path: "/", sameSite: "Strict", secure });
+}
+
+function isUnsafeMethod(method: string): boolean {
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function sameOriginForCookieWrite(c: Context<AppEnv>): boolean {
+  const origin = c.req.header("origin");
+  if (origin === undefined) return false;
+  try {
+    return new URL(origin).origin === new URL(c.req.url).origin;
+  } catch {
+    return false;
+  }
 }
 
 export interface DeploymentControlPlane {
@@ -796,22 +947,35 @@ export function createDeploymentControlPlane(
   sessionEvents.recoverAllAbandonedRuntimeTurns();
   const consoleRoot = bundledConsoleRoot();
   const openapiRoot = bundledOpenApiDocsRoot();
+  const adminAuth = adminKey === undefined ? undefined : createAdminAuth(adminKey);
+  const consoleSessionAuth = createConsoleSessionAuth({
+    workspaces: stores.workspaces,
+    ...(adminAuth === undefined ? {} : { admin: adminAuth }),
+  });
   const app = createControlPlaneApp({
     ...(adminKey === undefined
       ? {}
       : {
           admin: {
             service: new DefaultAdminService(stores.workspaces, stores.vaults),
-            auth: createAdminAuth(adminKey),
+            auth: adminAuth!,
           },
         }),
     // Secret-free static content, so it serves whenever the dir shipped —
     // deliberately not coupled to admin being enabled (0120 §3.1): a
     // read-only /v1 browser is useful without an admin key.
     ...(consoleRoot === undefined ? {} : { console: { root: consoleRoot } }),
+    consoleSessionAuth: {
+      service: consoleSessionAuth,
+      secureCookies: tlsTerminated,
+    },
     ...(openapiRoot === undefined ? {} : { openapi: { root: openapiRoot } }),
     ...(authMode === "api-key"
-      ? { auth: { authenticate: (key: string) => stores.workspaces.authenticate(key) } }
+      ? {
+          auth: {
+            authenticate: (key: string) => stores.workspaces.authenticate(key),
+          },
+        }
       : {}),
     agents: new DefaultAgentService(
       stores.agents,

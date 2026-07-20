@@ -7,6 +7,11 @@ const ADMIN_KEY_BYTES = 32;
 
 export interface AdminAuth {
   verify(presented: string): boolean;
+  /**
+   * Stable, non-secret identifier for the configured admin key. Console
+   * sessions keep this digest so rotating OMA_ADMIN_KEY invalidates them.
+   */
+  fingerprint(): string;
 }
 
 export interface AdminKeyEnv {
@@ -54,6 +59,9 @@ export function createAdminAuth(adminKey: string): AdminAuth {
   return {
     verify(presented: string): boolean {
       return timingSafeEqual(sha256(presented), expectedDigest);
+    },
+    fingerprint(): string {
+      return expectedDigest.toString("hex");
     },
   };
 }

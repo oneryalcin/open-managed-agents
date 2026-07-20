@@ -146,10 +146,10 @@ function App() {
   const [apiState, setApiState] = useState({ state:'loading', mode: demoMode ? 'demo' : 'api', error:null, warnings:[] });
   const [modal, setModal] = useState(null);   // { kind:'session', presetAgent } | { kind:'agent' } | { kind:'environment' }
   const [createdEnvironmentId, setCreatedEnvironmentId] = useState(null);
-  // Auth phase (plan 0120 §3.4): 'boot' tries /v1 once without a key (an
-  // auth-disabled server just works); a 401 lands on 'login' instead of the
-  // old silent demo-data fallback. Keys themselves live in api.js memory.
-  const [auth, setAuth] = useState({ phase: demoMode ? 'ready' : 'boot', admin:false, error:null, busy:false });
+  // Raw credentials are used only for the login exchange. After that the
+  // server holds a revocable, opaque HttpOnly console session and page reloads
+  // restore it without exposing any key to browser storage or JavaScript.
+  const [auth, setAuth] = useState({ phase: demoMode ? 'ready' : 'boot', admin:false, workspace:null, error:null, busy:false });
 
   useEffect(() => {
     const r = document.documentElement;
@@ -184,7 +184,16 @@ function App() {
       if (target) setRoute(target);
       return () => { alive = false; };
     }
-    loadLiveData()
+    OmaConsoleApi.getConsoleAuthStatus()
+      .then((status) => {
+        if (!alive) return undefined;
+        setAuth({ phase: status.workspace || !status.auth_required || status.admin ? 'ready' : 'login', admin:status.admin, workspace:status.workspace, error:null, busy:false });
+        if (!status.workspace && status.auth_required) {
+          setApiState({ state:'loaded', mode:'api', error:null, warnings:[] });
+          return undefined;
+        }
+        return loadLiveData();
+      })
       .then(() => { if (alive) setAuth((a) => ({ ...a, phase:'ready' })); })
       .catch((error) => {
         if (!alive) return;
@@ -213,10 +222,9 @@ function App() {
 
   const adminLogin = (key) => {
     setAuth((a) => ({ ...a, busy:true, error:null }));
-    OmaConsoleApi.setAdminKey(key);
-    OmaConsoleApi.listWorkspaces()
+    OmaConsoleApi.loginConsoleAdmin(key)
       .then(() => {
-        setAuth({ phase:'ready', admin:true, error:null, busy:false });
+        setAuth((a) => ({ ...a, phase:'ready', admin:true, error:null, busy:false }));
         setApiState({ state:'loaded', mode:'api', error:null, warnings:[] });
         setRoute({ name:'admin' });
       })
@@ -228,10 +236,10 @@ function App() {
   };
   const workspaceLogin = (key) => {
     setAuth((a) => ({ ...a, busy:true, error:null }));
-    OmaConsoleApi.setWorkspaceKey(key);
-    loadLiveData()
-      .then(() => {
-        setAuth((a) => ({ ...a, phase:'ready', busy:false, error:null }));
+    OmaConsoleApi.loginConsoleWorkspace(key)
+      .then((result) => loadLiveData().then(() => result))
+      .then((result) => {
+        setAuth((a) => ({ ...a, phase:'ready', workspace:result.workspace, busy:false, error:null }));
       })
       .catch((error) => {
         setAuth((a) => ({ ...a, busy:false, error: error.status === 401
@@ -240,9 +248,10 @@ function App() {
       });
   };
   const browseAsWorkspace = (plaintextKey) => {
-    OmaConsoleApi.setWorkspaceKey(plaintextKey);
-    loadLiveData()
-      .then(() => {
+    OmaConsoleApi.loginConsoleWorkspace(plaintextKey)
+      .then((result) => loadLiveData().then(() => result))
+      .then((result) => {
+        setAuth((a) => ({ ...a, workspace:result.workspace, phase:'ready', error:null }));
         setRoute({ name:'sessions' });
         writeRouteHash({ name:'sessions' });
       })
@@ -253,9 +262,27 @@ function App() {
           `Browsing with the minted key failed (${error.status ?? error.message}). Enter a key to continue.` }));
       });
   };
-  const reauth = () => setAuth((a) => ({ ...a, phase:'login', admin:false, error:'Session expired — the admin key was rejected. Enter it again.' }));
+  const reauth = () => setAuth((a) => ({ ...a, phase:'login', admin:false, workspace:null, error:'Your console session expired. Enter a key to continue.' }));
   const workspaceReauth = () => {
-    setAuth((a) => ({ ...a, phase:'login', admin:false, error:'Session expired — the workspace key was rejected. Enter it again.' }));
+    setAuth((a) => ({ ...a, phase:'login', admin:false, workspace:null, error:'Your workspace session expired. Enter a key to continue.' }));
+  };
+  const selectWorkspace = (workspaceId) => {
+    OmaConsoleApi.selectConsoleWorkspace(workspaceId)
+      .then((result) => loadLiveData().then(() => result))
+      .then((result) => {
+        setAuth((a) => ({ ...a, workspace:result.workspace, phase:'ready', error:null }));
+        go('start');
+      })
+      .catch((error) => {
+        if (error.status === 401) reauth();
+      });
+  };
+  const signOut = () => {
+    OmaConsoleApi.logoutConsole().catch(() => undefined).finally(() => {
+      setWorkspaceLoaded(false);
+      setAuth({ phase:'login', admin:false, workspace:null, error:null, busy:false });
+      setRoute({ name:'start' });
+    });
   };
 
   const go = (name) => {
@@ -413,7 +440,8 @@ function App() {
   if (auth.phase === 'login' && route.name !== 'documentation') {
     return (
       <div className="app">
-        <Sidebar route={route.name} go={go} />
+        <Sidebar route={route.name} go={go} workspace={auth.workspace} admin={auth.admin}
+          onSelectWorkspace={selectWorkspace} onSwitchWorkspace={workspaceReauth} onSignOut={signOut} />
         <main className="main">
           <LoginView onAdminLogin={adminLogin} onWorkspaceLogin={workspaceLogin}
             error={auth.error} busy={auth.busy} />
@@ -467,7 +495,8 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar route={route.name} go={go} showAdmin={auth.admin} />
+      <Sidebar route={route.name} go={go} showAdmin={auth.admin} workspace={auth.workspace} admin={auth.admin}
+        onSelectWorkspace={selectWorkspace} onSwitchWorkspace={workspaceReauth} onSignOut={signOut} />
       <main className="main">
         {route.name !== 'documentation' && apiState.state !== 'loading' && <ModeBar mode={apiState.mode} warnings={apiState.warnings} />}
         {view}

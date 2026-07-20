@@ -30,10 +30,9 @@ const CMA_BUILTIN_TOOL_NAMES = [
   "write",
 ];
 
-// Session-scoped credentials, in module memory only (plan 0120 §3.2):
-// never localStorage, sessionStorage, or a cookie — a reload means
-// re-entering the key, and nothing touches disk. The admin key goes to
-// /admin routes only, the workspace key to /v1 only; neither crosses tiers.
+// Legacy direct-header credentials remain available for interactive API tests,
+// but the console UI never sets them. Browser logins exchange a pasted key for
+// an opaque HttpOnly session cookie, which JavaScript cannot read or persist.
 const credentials = {
   adminKey: null,
   workspaceKey: null,
@@ -110,7 +109,7 @@ async function request(path, { method = "GET", body, capability, headers: extraH
   }
   const headers = buildRequestHeaders(path, credentials);
   if (extraHeaders) Object.assign(headers, extraHeaders);
-  const init = { method: normalizedMethod, headers };
+  const init = { method: normalizedMethod, headers, credentials: "same-origin" };
   if (body !== undefined) {
     headers["content-type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -235,6 +234,26 @@ export function listWorkspaceCredentialHealth(workspaceId, page) {
   url.searchParams.set("limit", String(PAGE_LIMIT));
   if (page) url.searchParams.set("page", page);
   return request(url.pathname + url.search);
+}
+
+export function getConsoleAuthStatus() {
+  return request("/console/auth/status");
+}
+
+export function loginConsoleWorkspace(apiKey) {
+  return request("/console/auth/workspace", { method: "POST", body: { api_key: apiKey } });
+}
+
+export function loginConsoleAdmin(adminKey) {
+  return request("/console/auth/admin", { method: "POST", body: { admin_key: adminKey } });
+}
+
+export function selectConsoleWorkspace(workspaceId) {
+  return request("/console/auth/select-workspace", { method: "POST", body: { workspace_id: workspaceId } });
+}
+
+export function logoutConsole() {
+  return request("/console/auth/logout", { method: "POST" });
 }
 
 export function validateMcpOauthCredential(vaultId, credentialId, mode) {
@@ -914,6 +933,11 @@ if (typeof window !== "undefined") {
     mintKey,
     listKeys,
     revokeKey,
+    getConsoleAuthStatus,
+    loginConsoleWorkspace,
+    loginConsoleAdmin,
+    selectConsoleWorkspace,
+    logoutConsole,
     listVaults,
     listVaultCredentials,
     listWorkspaceCredentialHealth,

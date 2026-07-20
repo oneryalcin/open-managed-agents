@@ -80,15 +80,23 @@ body {
 .brand-name { font-weight:600; font-size:15px; letter-spacing:-.2px; }
 .brand-name small { display:block; font-size:11px; color:var(--faint); font-weight:400; letter-spacing:0; }
 
+.workspace-switcher { position:relative; }
 .ws {
   margin:10px 2px 12px; padding:8px 10px; border:1px solid var(--border);
   border-radius:var(--r-md); background:var(--bg); display:flex; align-items:center; gap:9px;
-  cursor:pointer; transition:border-color .15s, background .15s;
+  cursor:pointer; transition:border-color .15s, background .15s; width:calc(100% - 4px); color:var(--ink); font:inherit; text-align:left;
 }
 .ws:hover { border-color:var(--border-2); }
 .ws-dot { width:16px; height:16px; border-radius:5px; background:var(--surface-2); border:1px solid var(--border-2); flex:0 0 auto; }
 .ws-name { font-size:13px; font-weight:500; flex:1; }
 .ws-chev { color:var(--faint); }
+.workspace-menu { position:absolute; z-index:20; top:48px; left:2px; right:2px; padding:5px; border:1px solid var(--border-2); border-radius:var(--r-md); background:var(--surface); box-shadow:0 12px 28px rgba(0,0,0,.32); }
+.workspace-menu-label { padding:6px 8px 4px; color:var(--faint); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
+.workspace-menu-note { padding:8px; color:var(--soft); font-size:12px; }
+.workspace-menu-item { display:block; width:100%; border:0; border-radius:var(--r-sm); padding:8px; background:transparent; color:var(--ink); cursor:pointer; font:inherit; font-size:13px; text-align:left; }
+.workspace-menu-item:hover { background:var(--hover); }
+.workspace-menu-item small { display:block; margin-top:2px; color:var(--faint); font-size:10px; }
+.workspace-signout { margin-top:4px; border-top:1px solid var(--border); color:var(--soft); }
 
 .nav-label { font-size:10.5px; font-weight:600; letter-spacing:.09em; color:var(--dim); padding:10px 9px 5px; text-transform:uppercase; }
 .nav-item {

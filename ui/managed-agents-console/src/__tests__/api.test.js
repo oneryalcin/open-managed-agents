@@ -14,6 +14,9 @@ import {
   deleteSession,
   followSessionEvents,
   hasWorkspaceKey,
+  getConsoleAuthStatus,
+  loginConsoleAdmin,
+  loginConsoleWorkspace,
   listEnvironmentNetworkingPresets,
   listVaultCredentials,
   listVaults,
@@ -22,11 +25,13 @@ import {
   modelInputForSelection,
   mintKey,
   sendSessionEvents,
+  selectConsoleWorkspace,
   setWorkspaceKey,
   toUiSessionEvent,
   updateAgentToolPermission,
   validateEnvironmentNetworkingHosts,
   validateMcpOauthCredential,
+  logoutConsole,
 } from "../api.js";
 
 describe("tool confirmation lifecycle gate", () => {
@@ -137,6 +142,27 @@ describe("clearKeyForPath", () => {
     clearKeyForPath("/v1/agents", creds);
     expect(creds.workspaceKey).toBeNull();
     expect(creds.adminKey).toBe(BOTH.adminKey);
+  });
+});
+
+describe("opaque console-session transport", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("exchanges credentials through console-only endpoints without adding raw-key headers", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok:true, status:200, text:() => Promise.resolve(JSON.stringify({ workspace:{ id:"wrk_a", name:"A" } })) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await loginConsoleWorkspace("oma_workspace");
+    await loginConsoleAdmin("admin-secret");
+    await selectConsoleWorkspace("wrk_a");
+    await logoutConsole();
+    await getConsoleAuthStatus();
+    expect(fetchMock.mock.calls).toEqual(expect.arrayContaining([
+      ["/console/auth/workspace", expect.objectContaining({ method:"POST", body:JSON.stringify({ api_key:"oma_workspace" }), credentials:"same-origin", headers:expect.not.objectContaining({ "x-api-key":expect.anything(), "x-admin-key":expect.anything() }) })],
+      ["/console/auth/admin", expect.objectContaining({ method:"POST", body:JSON.stringify({ admin_key:"admin-secret" }), credentials:"same-origin", headers:expect.not.objectContaining({ "x-api-key":expect.anything(), "x-admin-key":expect.anything() }) })],
+      ["/console/auth/select-workspace", expect.objectContaining({ method:"POST", body:JSON.stringify({ workspace_id:"wrk_a" }) })],
+      ["/console/auth/logout", expect.objectContaining({ method:"POST" })],
+      ["/console/auth/status", expect.objectContaining({ method:"GET" })],
+    ]));
   });
 });
 

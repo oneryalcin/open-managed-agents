@@ -35,6 +35,10 @@ try {
   await page.locator("#console-credential-key").fill(started.apiKey);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.getByRole("heading", { name: "Start" }).waitFor();
+  // A console login is an opaque HttpOnly session, not an in-memory raw key:
+  // browser reload must restore the selected workspace without showing Connect.
+  await page.reload();
+  await page.getByRole("heading", { name: "Start" }).waitFor();
   await page.getByText(/selectable model\(s\) report configured credentials/).waitFor();
   await page.getByText(/Sandbox execution remains unverified until a session runs a tool/).waitFor();
 

@@ -37,7 +37,7 @@ Startup prints the API URL, console URL, and first workspace key once. Keep the 
 
 ## Create your first session
 
-1. **Sign in with a workspace key.** The browser keeps it only in page memory and asks again after reload.
+1. **Sign in with a workspace key.** The key is exchanged for an opaque, revocable console session, so a reload restores the workspace without storing the key in the browser.
 2. **Create an agent.** Select a credential-ready model and choose its tools and confirmation policy.
 3. **Create an environment.** Start Offline unless the work requires an approved HTTPS allowlist.
 4. **Create a session and send a prompt.** Inspect the event stream, tool calls, results, confirmations, output files, and errors.
