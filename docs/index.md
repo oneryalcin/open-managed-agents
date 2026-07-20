@@ -93,6 +93,11 @@ Agents product parity remains tracked in [PARITY.md](../PARITY.md).
   Arc A slice 1: the appliance launcher (now exposed as `oma up`) plus
   `startAppliance` defaults, first-boot key minting, Dockerfile/compose, and
   the no-build-step decision.
+- [Three-minute public onboarding](plans/0143-three-minute-public-onboarding.md) —
+  #196's public-install contract: a warm Docker/image path from one explicit
+  `npx` command to an authenticated first-session screen in three minutes,
+  with a guided terminal flow, no secret leakage, and separate cold-image
+  accounting.
 - [Alpha OpenAPI documentation](plans/0135-alpha-openapi-docs.md) —
   schema-backed `/openapi.json`, vendored `/docs/`, route/spec completeness,
   and credential-safe interactive documentation.
