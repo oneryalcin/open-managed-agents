@@ -41,6 +41,7 @@ function makeConsoleFixture() {
   writeFileSync(join(root, "src", "api.js"), "// js");
   writeFileSync(join(root, "src", "app.jsx"), "// jsx");
   writeFileSync(join(root, "console.css"), "/* css */");
+  writeFileSync(join(root, "overview.md"), "# Console overview\n");
   writeFileSync(join(root, "notes.txt"), "unlisted extension");
   // Escape targets use *servable* extensions (.html/.js): with an unlisted
   // extension the content-type 404 would mask a broken containment check and
@@ -82,6 +83,7 @@ describe("console static serving", () => {
     ["/console/src/api.js", "text/javascript; charset=utf-8"],
     ["/console/src/app.jsx", "text/babel; charset=utf-8"],
     ["/console/console.css", "text/css; charset=utf-8"],
+    ["/console/overview.md", "text/markdown; charset=utf-8"],
   ])("serves %s as %s", async (path, contentType) => {
     const res = await get(makeConsoleFixture(), path);
     expect(res.status).toBe(200);

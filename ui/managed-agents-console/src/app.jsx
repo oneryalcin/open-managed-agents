@@ -84,6 +84,7 @@ function routeHash(route) {
   if (route.name === 'vaults') return route.vaultId ? `#vault=${encodeURIComponent(route.vaultId)}` : '#vaults';
   if (route.name === 'credentialHealth') return `#credential-health=${encodeURIComponent(route.workspaceId)}`;
   if (route.name === 'admin') return '#admin';
+  if (route.name === 'documentation') return `#docs=${encodeURIComponent(route.page || 'overview')}`;
   return '#sessions';
 }
 
@@ -118,13 +119,16 @@ function readRouteTarget(sessions, agents) {
   if (rawHash === 'vaults') return { name:'vaults' };
   if (hashParams.get('vault')) return { name:'vaults', vaultId:hashParams.get('vault') };
   if (hashParams.get('credential-health')) return { name:'credentialHealth', workspaceId:hashParams.get('credential-health') };
+  if (rawHash === 'docs' || rawHash === 'documentation') return { name:'documentation', page:'overview' };
+  if (hashParams.get('docs')) return { name:'documentation', page:hashParams.get('docs') };
+  if (hashParams.get('documentation')) return { name:'documentation', page:'overview' };
   return null;
 }
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const demoMode = new URLSearchParams(window.location.search).get('mode') === 'demo';
-  const [route, setRoute] = useState({ name:'start' });
+  const [route, setRoute] = useState(() => readRouteTarget([], []) || { name:'start' });
   const [sessions, setSessions] = useState(SESSIONS);
   const [agents, setAgents] = useState(AGENTS);
   const [environments, setEnvironments] = useState(ENVIRONMENTS);
@@ -255,7 +259,12 @@ function App() {
   };
 
   const go = (name) => {
-    const next = { name };
+    const next = name === 'documentation' ? { name, page:'overview' } : { name };
+    setRoute(next);
+    writeRouteHash(next);
+  };
+  const openDocumentation = (page) => {
+    const next = { name:'documentation', page };
     setRoute(next);
     writeRouteHash(next);
   };
@@ -401,10 +410,10 @@ function App() {
     writeRouteHash(next);
   };
 
-  if (auth.phase === 'login') {
+  if (auth.phase === 'login' && route.name !== 'documentation') {
     return (
       <div className="app">
-        <Sidebar route="login" go={() => {}} />
+        <Sidebar route={route.name} go={go} />
         <main className="main">
           <LoginView onAdminLogin={adminLogin} onWorkspaceLogin={workspaceLogin}
             error={auth.error} busy={auth.busy} />
@@ -418,8 +427,9 @@ function App() {
   // Admin-only sessions never loaded /v1: the state still holds the bundled
   // demo rows, which must not render as if they were live tenant data.
   const needsWorkspaceKey = apiState.state !== 'loading' && apiState.mode === 'api'
-    && !demoMode && !workspaceLoaded && route.name !== 'admin' && route.name !== 'credentialHealth';
-  if (apiState.state === 'error') view = (
+    && !demoMode && !workspaceLoaded && route.name !== 'admin' && route.name !== 'credentialHealth' && route.name !== 'documentation';
+  if (route.name === 'documentation') view = <DocsView page={route.page} onNavigate={openDocumentation} goConsole={go} />;
+  else if (apiState.state === 'error') view = (
     <div className="main-scroll scroll fade-in">
       <PageHead title="Live API unavailable" sub="The console will not substitute demo data for a failed live server." />
       <ErrorState resource="workspace data" onRetry={() => {
@@ -453,11 +463,13 @@ function App() {
   else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} readOnly={true} />;
   else if (route.name === 'vaults') view = <VaultsView mode={apiState.mode} initialVaultId={route.vaultId} onOpenVault={(vaultId) => { const next = { name:'vaults', vaultId }; setRoute(next); writeRouteHash(next); }} onBackToVaults={() => go('vaults')} />;
 
+  if (route.name === 'documentation') return <div className="docs-app">{view}</div>;
+
   return (
     <div className="app">
       <Sidebar route={route.name} go={go} showAdmin={auth.admin} />
       <main className="main">
-        {apiState.state !== 'loading' && <ModeBar mode={apiState.mode} warnings={apiState.warnings} />}
+        {route.name !== 'documentation' && apiState.state !== 'loading' && <ModeBar mode={apiState.mode} warnings={apiState.warnings} />}
         {view}
       </main>
 
