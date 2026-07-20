@@ -81,6 +81,7 @@ function routeHash(route) {
   if (route.name === 'agents') return '#agents';
   if (route.name === 'environments') return '#environments';
   if (route.name === 'files') return '#files';
+  if (route.name === 'skills') return '#skills';
   if (route.name === 'vaults') return route.vaultId ? `#vault=${encodeURIComponent(route.vaultId)}` : '#vaults';
   if (route.name === 'credentialHealth') return `#credential-health=${encodeURIComponent(route.workspaceId)}`;
   if (route.name === 'admin') return '#admin';
@@ -116,6 +117,7 @@ function readRouteTarget(sessions, agents) {
   if (rawHash === 'agents') return { name:'agents' };
   if (rawHash === 'environments') return { name:'environments' };
   if (rawHash === 'files') return { name:'files' };
+  if (rawHash === 'skills') return { name:'skills' };
   if (rawHash === 'vaults') return { name:'vaults' };
   if (hashParams.get('vault')) return { name:'vaults', vaultId:hashParams.get('vault') };
   if (hashParams.get('credential-health')) return { name:'credentialHealth', workspaceId:hashParams.get('credential-health') };
@@ -133,6 +135,9 @@ function App() {
   const [agents, setAgents] = useState(AGENTS);
   const [environments, setEnvironments] = useState(ENVIRONMENTS);
   const [files, setFiles] = useState(FILES);
+  const [vaults, setVaults] = useState([]);
+  const [vaultRefresh, setVaultRefresh] = useState(0);
+  const [skills, setSkills] = useState([]);
   const [networkingCatalog, setNetworkingCatalog] = useState({
     deployment:{ provider:null, egress_supported:false, reason:"Networking capability has not been loaded." },
     presets:[],
@@ -167,6 +172,8 @@ function App() {
       setSessions(data.sessions);
       setEnvironments(data.environments);
       setFiles(data.files);
+      setVaults(data.vaults);
+      setSkills(data.skills);
       setNetworkingCatalog(data.networkingCatalog);
       setModels(data.models);
       setApiState({ state:'loaded', mode:'api', error:null, warnings:data.warnings || [] });
@@ -207,6 +214,8 @@ function App() {
         setSessions([]);
         setEnvironments([]);
         setFiles([]);
+        setVaults([]);
+        setSkills([]);
         setNetworkingCatalog({
           deployment: { provider:null, egress_supported:false, reason:"Networking capability failed to load." },
           presets:[],
@@ -335,6 +344,18 @@ function App() {
     if (apiState.mode !== 'api') return;
     setModal({ kind:'environment' });
   };
+  const createVault = () => {
+    if (mutationReadOnly) return;
+    setModal({ kind:'vault' });
+  };
+  const createCredential = (vault) => {
+    if (mutationReadOnly) return;
+    setModal({ kind:'credential', vault });
+  };
+  const createSkill = () => {
+    if (mutationReadOnly) return;
+    setModal({ kind:'skill' });
+  };
 
   const onSessionCreated = (s) => {
     if (mutationReadOnly) return;
@@ -355,6 +376,25 @@ function App() {
     const next = { name:'environments' };
     setRoute(next);
     writeRouteHash(next);
+  };
+  const onVaultCreated = (vault) => {
+    setVaults((prev) => [vault, ...prev.filter((item) => item.id !== vault.id)]);
+    setVaultRefresh((current) => current + 1);
+    setModal(null);
+    const next = { name:'vaults', vaultId:vault.id };
+    setRoute(next);
+    writeRouteHash(next);
+  };
+  const onCredentialCreated = (credential) => {
+    setVaultRefresh((current) => current + 1);
+    setModal(null);
+    const next = { name:'vaults', vaultId:credential.vault_id };
+    setRoute(next);
+    writeRouteHash(next);
+  };
+  const onSkillCreated = (skill) => {
+    setSkills((prev) => [skill, ...prev]);
+    setModal(null);
   };
   const onSessionStateChange = (sessionId, patch) => {
     setSessions((current) => current.map((session) => session.id === sessionId
@@ -489,7 +529,8 @@ function App() {
   else if (route.name === 'agent') view = <AgentDetail agent={route.agent} go={go} onCreateSession={() => createSession(route.agent)} onArchive={() => archiveAgent(route.agent)} onUpdateToolPermission={(policy) => updateAgentToolPermission(route.agent, policy)} createSessionReadOnly={mutationReadOnly} archiveReadOnly={lifecycleReadOnly} />;
   else if (route.name === 'environments') view = <EnvironmentsView environments={environments} mode={apiState.mode} dataState={dataState} onCreate={createEnvironment} createdEnvironmentId={createdEnvironmentId} />;
   else if (route.name === 'files') view = <FilesView files={files} dataState={dataState} readOnly={true} />;
-  else if (route.name === 'vaults') view = <VaultsView mode={apiState.mode} initialVaultId={route.vaultId} onOpenVault={(vaultId) => { const next = { name:'vaults', vaultId }; setRoute(next); writeRouteHash(next); }} onBackToVaults={() => go('vaults')} />;
+  else if (route.name === 'vaults') view = <VaultsView key={`${route.vaultId || 'vaults'}:${vaultRefresh}`} mode={apiState.mode} initialVaultId={route.vaultId} onCreate={createVault} onCreateCredential={createCredential} readOnly={mutationReadOnly} onOpenVault={(vaultId) => { const next = { name:'vaults', vaultId }; setRoute(next); writeRouteHash(next); }} onBackToVaults={() => go('vaults')} />;
+  else if (route.name === 'skills') view = <SkillsView skills={skills} mode={apiState.mode} onCreate={createSkill} readOnly={mutationReadOnly} />;
 
   if (route.name === 'documentation') return <div className="docs-app">{view}</div>;
 
@@ -503,14 +544,20 @@ function App() {
       </main>
 
       {modal && modal.kind === 'session' &&
-        <CreateSession agents={agents} environments={environments} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
+        <CreateSession agents={agents} environments={environments} vaults={vaults} presetAgent={modal.presetAgent} onClose={() => setModal(null)} onCreate={onSessionCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
       {modal && modal.kind === 'agent' &&
-        <CreateAgent models={models} onClose={() => setModal(null)} onCreate={onAgentCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
+        <CreateAgent models={models} skills={skills} onClose={() => setModal(null)} onCreate={onAgentCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
       {modal && modal.kind === 'environment' &&
         <CreateEnvironmentModal mode={apiState.mode}
           networkingCatalog={networkingCatalog}
           onClose={() => setModal(null)} onCreated={onEnvironmentCreated}
           onAuthExpired={workspaceReauth} />}
+      {modal && modal.kind === 'vault' &&
+        <CreateVaultModal onClose={() => setModal(null)} onCreated={onVaultCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
+      {modal && modal.kind === 'credential' &&
+        <CreateVaultCredentialModal vault={modal.vault} onClose={() => setModal(null)} onCreated={onCredentialCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
+      {modal && modal.kind === 'skill' &&
+        <CreateSkillModal onClose={() => setModal(null)} onCreated={onSkillCreated} onAuthExpired={workspaceReauth} apiMode={apiState.mode} />}
 
       <TweaksPanel>
         <TweakSection label="Theme" />

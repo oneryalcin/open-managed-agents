@@ -7,7 +7,7 @@ function ToneBadge({ tone, children }) {
   return <span className={'badge ' + VaultsData.toneBadgeClass(tone)}><i className="dot" />{children}</span>;
 }
 
-function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
+function VaultsView({ mode, initialVaultId, onCreate, onCreateCredential, readOnly = false, onOpenVault, onBackToVaults }) {
   const [vaults, setVaults] = useVaultState(null);
   const [error, setError] = useVaultState(null);
   const [selected, setSelected] = useVaultState(null);
@@ -70,13 +70,15 @@ function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
   const body = selected
     ? <VaultDetail vault={selected} credentials={credentials} error={detailError} warning={warning}
         onBack={back} onRetry={() => open(selected)}
-        mode={mode} validating={validating} validation={validation} onValidate={(credential) => setConfirm(credential)} />
+        mode={mode} readOnly={readOnly} onCreateCredential={() => onCreateCredential(selected)} validating={validating} validation={validation} onValidate={(credential) => setConfirm(credential)} />
     : <div className="main-scroll scroll fade-in">
-        <PageHead title="Vaults" sub="Browse workspace vaults and validate MCP OAuth credentials." />
+        <PageHead title="Vaults" sub="Manage workspace vaults and validate MCP OAuth credentials."
+          action="Create vault" onAction={onCreate} readOnly={readOnly} endpoint="POST /v1/vaults" />
         {warning && <div className="inline-warn"><Icon name="alert" size={14} /><span>{warning}</span></div>}
         {vaults === null && !error ? <SkeletonTable rows={4} cols={[180, 'grow', 120, 100]} />
           : error ? <ErrorState resource="vaults" onRetry={refresh} />
-          : vaults.length === 0 ? <EmptyState icon="database" title="No vaults" message="This workspace has no vaults." />
+          : vaults.length === 0 ? <EmptyState icon="database" title="No vaults" message="This workspace has no vaults. Create one before adding MCP credentials."
+            actionLabel={!readOnly ? 'Create vault' : null} onAction={onCreate} />
           : <div className="panel">{vaults.map((vault) => <div className="trow" key={vault.id} style={{ opacity: vault.archivedAt ? 0.55 : 1 }} onClick={() => { onOpenVault(vault.id); open(vault); }}>
             <span className="td mono" style={{ width:180, fontSize:12 }}>{vault.id}</span>
             <span className="td grow cell-strong">{vault.displayName}</span>
@@ -97,13 +99,14 @@ function VaultsView({ mode, initialVaultId, onOpenVault, onBackToVaults }) {
   </>;
 }
 
-function VaultDetail({ vault, credentials, error, warning, onBack, onRetry, mode, validating, validation, onValidate }) {
+function VaultDetail({ vault, credentials, error, warning, onBack, onRetry, mode, readOnly, onCreateCredential, validating, validation, onValidate }) {
   return <div className="main-scroll scroll fade-in"><PageHead title={vault.displayName} sub={vault.id} />
-    <div className="toolbar"><button className="btn" onClick={onBack}>Back to vaults</button></div>
+    <div className="toolbar"><button className="btn" onClick={onBack}>Back to vaults</button>{!readOnly && <button className="btn btn-primary" onClick={onCreateCredential}><Icon name="plus" size={15} />Add credential</button>}</div>
     {warning && <div className="inline-warn"><Icon name="alert" size={14} /><span>{warning}</span></div>}
     {credentials === null && !error ? <SkeletonTable rows={3} cols={[180, 'grow', 120]} />
       : error ? <ErrorState resource="credentials" onRetry={onRetry} />
-      : credentials.length === 0 ? <EmptyState icon="database" title="No credentials" message="This vault has no credentials." />
+      : credentials.length === 0 ? <EmptyState icon="database" title="No credentials" message="This vault has no credentials. Add one to authorize a matching MCP server."
+        actionLabel={!readOnly ? 'Add credential' : null} onAction={onCreateCredential} />
       : <div className="panel">{credentials.map((c) => <div className="trow" key={c.id} style={{ display:'block', cursor:'default', padding:'14px', opacity: c.archivedAt ? 0.55 : 1 }}>
         <div style={{ display:'flex', gap:12, alignItems:'center' }}><span className="mono" style={{ color:'var(--soft)' }}>{c.id}</span><b>{c.displayName}</b><span className="pill">{c.authType}</span>{c.archivedAt && <St k="archived" />}</div>
         <div className="field-hint" style={{ marginTop:6 }}>{c.serverUrl || 'No server URL'} · expires {VaultsData.relativeTime(c.expiresAt)}</div>

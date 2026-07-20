@@ -39,6 +39,7 @@ describe("alpha console workflow", () => {
     expect(app).toContain("setApiState({ state:'error', mode:'error', error, warnings:[] })");
     expect(app).not.toContain("setApiState({ state:'loaded', mode:'mock'");
     expect(app).toContain("<CreateAgent models={models}");
+    expect(app).toContain("skills={skills}");
     expect(forms).toContain("const providers = [...new Set(models.map((item) => item.provider))]");
     expect(forms).toContain("model: api.modelInputForSelection(selectedModel)");
     expect(forms).toContain("Credentials are not configured for");
@@ -90,8 +91,24 @@ describe("alpha console workflow", () => {
       readFileSync(join(consoleRoot, "..", "vendor", "babel.min.js"), "utf8"),
       context,
     );
-    for (const file of ["forms.jsx", "environments.jsx", "agents-files.jsx", "detail.jsx", "docs.jsx", "app.jsx"]) {
+    for (const file of ["forms.jsx", "environments.jsx", "agents-files.jsx", "detail.jsx", "docs.jsx", "skills.jsx", "app.jsx"]) {
       expect(() => context.Babel.transform(source(file), { presets:["react"] }), file).not.toThrow();
     }
+  });
+
+  it("keeps supported authoring resources in the console rather than a deferred façade", () => {
+    const app = source("app.jsx");
+    const forms = source("forms.jsx");
+    const vaults = source("vaults.jsx");
+    const skills = source("skills.jsx");
+    expect(forms).toContain("vault_ids:vaultIds");
+    expect(forms).toContain("mcp_servers:mcpServers");
+    expect(forms).toContain("type:'mcp_toolset'");
+    expect(forms).toContain("CreateVaultCredentialModal");
+    expect(vaults).toContain("Create vault");
+    expect(vaults).toContain("Add credential");
+    expect(skills).toContain("POST /v1/skills");
+    expect(app).toContain("setVaults((prev) => [vault");
+    expect(app).toContain("vaultRefresh");
   });
 });
