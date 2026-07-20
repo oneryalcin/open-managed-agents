@@ -56,6 +56,10 @@ export function hasWorkspaceKey() {
   return credentials.workspaceKey !== null;
 }
 
+export function canSubmitToolConfirmation({ status, readOnly, actionBusy }) {
+  return status !== "archived" && !readOnly && !actionBusy;
+}
+
 // Pure: (path, creds) -> headers. Exported for unit tests — this routing is
 // the guarantee that the admin key never rides a /v1 request and the
 // workspace key never rides an /admin one.
@@ -904,6 +908,7 @@ if (typeof window !== "undefined") {
     setWorkspaceKey,
     clearCredentials,
     hasWorkspaceKey,
+    canSubmitToolConfirmation,
     createWorkspace,
     listWorkspaces,
     mintKey,

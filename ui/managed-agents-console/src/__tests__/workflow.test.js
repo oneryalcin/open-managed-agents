@@ -77,6 +77,7 @@ describe("alpha console workflow", () => {
     expect(detail).toContain("result:decision");
     expect(detail).toContain("event.type === 'agent.mcp_tool_use'");
     expect(detail).toContain("if (apiMode === 'api')");
+    expect(detail).toContain("canSubmitToolConfirmation({ status, readOnly, actionBusy })");
     expect(detail).toContain("Archived sessions are read-only.");
     expect(detail).not.toContain("it can be restored");
   });

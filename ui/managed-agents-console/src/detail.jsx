@@ -326,7 +326,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   // resolve a pending tool confirmation → emit user.tool_confirmation + follow-up
   const resolveConfirm = async (decision) => {
     if (apiMode === 'api') {
-      if (!pendingTool || actionBusy) return;
+      if (!pendingTool || !OmaConsoleApi.canSubmitToolConfirmation({ status, readOnly, actionBusy })) return;
       setActionBusy(true);
       setActionError(null);
       setConfirmState('submitting');
@@ -398,6 +398,10 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   const renderConfirmCard = () => {
     if ((confirmState !== 'pending' && confirmState !== 'submitting') || !pendingTool) return null;
     const endpoint = 'POST /v1/sessions/:id/events';
+    const confirmationDisabled = !OmaConsoleApi.canSubmitToolConfirmation({ status, readOnly, actionBusy });
+    const confirmationTitle = archived
+      ? 'Archived sessions are read-only.'
+      : readOnly ? `Read-only API mode · ${endpoint}` : undefined;
     return (
       <div className="confirm-card">
         <div className="cc-head">
@@ -411,19 +415,19 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
           <div className="cc-tool"><span className="tn">{pendingTool.tool || 'tool'}</span><span style={{ color:'var(--faint)' }}>$</span>{pendingTool.cmd || JSON.stringify(pendingTool.source?.input || {})}</div>
         </div>
         <div className="cc-actions">
-          <button className="btn btn-accent" disabled={readOnly || actionBusy}
-            title={readOnly ? `Read-only API mode · ${endpoint}` : undefined}
-            onClick={() => !readOnly && resolveConfirm('allow')}>
+          <button className="btn btn-accent" disabled={confirmationDisabled}
+            title={confirmationTitle}
+            onClick={() => !confirmationDisabled && resolveConfirm('allow')}>
             <Icon name="checkCircle" size={14} />{actionBusy ? 'Submitting…' : 'Allow'}
           </button>
-          <button className="btn btn-danger" disabled={readOnly || actionBusy}
-            title={readOnly ? `Read-only API mode · ${endpoint}` : undefined}
-            onClick={() => !readOnly && resolveConfirm('deny')}>
+          <button className="btn btn-danger" disabled={confirmationDisabled}
+            title={confirmationTitle}
+            onClick={() => !confirmationDisabled && resolveConfirm('deny')}>
             <Icon name="x" size={14} />Deny
           </button>
           <span style={{ flex:1 }} />
           <span className="field-hint" style={{ alignSelf:'center' }}>
-            {readOnly ? <>Disabled · <span className="mono">{endpoint}</span></> : <>Emits <span className="mono">user.tool_confirmation</span></>}
+            {archived ? <>Disabled · archived sessions are read-only</> : readOnly ? <>Disabled · <span className="mono">{endpoint}</span></> : <>Emits <span className="mono">user.tool_confirmation</span></>}
           </span>
         </div>
       </div>

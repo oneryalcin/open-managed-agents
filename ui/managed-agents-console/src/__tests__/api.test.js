@@ -4,6 +4,7 @@ import {
   archiveAgent,
   archiveSession,
   buildRequestHeaders,
+  canSubmitToolConfirmation,
   clearCredentials,
   clearKeyForPath,
   createAgent,
@@ -27,6 +28,15 @@ import {
   validateEnvironmentNetworkingHosts,
   validateMcpOauthCredential,
 } from "../api.js";
+
+describe("tool confirmation lifecycle gate", () => {
+  it("allows active writable sessions and rejects archived, read-only, or busy sessions", () => {
+    expect(canSubmitToolConfirmation({ status:"idle", readOnly:false, actionBusy:false })).toBe(true);
+    expect(canSubmitToolConfirmation({ status:"archived", readOnly:false, actionBusy:false })).toBe(false);
+    expect(canSubmitToolConfirmation({ status:"idle", readOnly:true, actionBusy:false })).toBe(false);
+    expect(canSubmitToolConfirmation({ status:"idle", readOnly:false, actionBusy:true })).toBe(false);
+  });
+});
 
 // The console's credential-routing contract (plan 0120 §3.3): the admin key
 // rides /admin requests only, the workspace key /v1 only. A bug that crossed
