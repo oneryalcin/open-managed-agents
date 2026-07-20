@@ -342,6 +342,13 @@ describe("workspace write capability", () => {
         }),
       }),
     );
+
+    await expect(updateAgentToolPermission({
+      id:"agent_without_tools",
+      apiVersion:1,
+      rawTools:[],
+    }, "always_allow")).rejects.toThrow("no enabled built-in tools");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves CMA string input only for the exact deployment default", () => {

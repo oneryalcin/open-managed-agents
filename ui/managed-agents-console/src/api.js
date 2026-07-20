@@ -255,9 +255,14 @@ export function updateAgentToolPermission(agent, policy) {
   if (!Number.isSafeInteger(agent?.apiVersion) || !Array.isArray(agent?.rawTools)) {
     return Promise.reject(new Error("Agent configuration is incomplete; refresh before updating"));
   }
+  let hasEnabledBuiltinTool = false;
   const tools = agent.rawTools.map((toolset) => {
     if (toolset?.type !== "agent_toolset_20260401") return toolset;
     const defaultEnabled = toolset.default_config?.enabled !== false;
+    const configs = Array.isArray(toolset.configs) ? toolset.configs : [];
+    hasEnabledBuiltinTool ||= configs.length === 0
+      ? defaultEnabled
+      : configs.some((config) => (config.enabled ?? defaultEnabled) !== false);
     return {
       ...toolset,
       default_config: {
@@ -265,13 +270,16 @@ export function updateAgentToolPermission(agent, policy) {
         permission_policy: { type:policy },
       },
       ...(Array.isArray(toolset.configs) ? {
-        configs: toolset.configs.map((config) =>
+        configs: configs.map((config) =>
           (config.enabled ?? defaultEnabled) === false
             ? config
             : { ...config, permission_policy:{ type:policy } }),
       } : {}),
     };
   });
+  if (!hasEnabledBuiltinTool) {
+    return Promise.reject(new Error("This agent has no enabled built-in tools to update"));
+  }
   return request(`/v1/agents/${encodeURIComponent(agent.id)}`, {
     method: "POST",
     body: { version:agent.apiVersion, tools },
@@ -723,6 +731,7 @@ function summarizeToolPermission(tools) {
     const defaultEnabled = toolset.default_config?.enabled !== false;
     const defaultPolicy = toolset.default_config?.permission_policy?.type ?? "always_allow";
     const configs = Array.isArray(toolset.configs) ? toolset.configs : [];
+    if (configs.length === 0 && defaultEnabled) policies.add(defaultPolicy);
     for (const config of configs) {
       if ((config.enabled ?? defaultEnabled) === false) continue;
       policies.add(config.permission_policy?.type ?? defaultPolicy);

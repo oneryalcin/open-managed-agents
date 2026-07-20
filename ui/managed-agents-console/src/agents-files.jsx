@@ -58,6 +58,7 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermis
   const [lifecycleBusy, setLifecycleBusy] = useStateA(false);
   const [lifecycleError, setLifecycleError] = useStateA(null);
   const currentToolPolicy = a.toolPermission === 'Ask before use' ? 'always_ask' : 'always_allow';
+  const hasEnabledTools = a.toolPermission !== 'No enabled tools';
   const [toolPolicy, setToolPolicy] = useStateA(currentToolPolicy);
   const [toolPolicyBusy, setToolPolicyBusy] = useStateA(false);
   const [toolPolicyError, setToolPolicyError] = useStateA(null);
@@ -158,13 +159,13 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermis
                 <div className="form-row two" style={{ alignItems:'end' }}>
                   <Labeled label="Approval policy" htmlFor="agent-tool-approval" hint="Saving creates a new immutable agent version. Existing sessions keep their current policy.">
                     <select id="agent-tool-approval" className="selectbox" value={toolPolicy}
-                      disabled={archived || archiveReadOnly || toolPolicyBusy}
+                      disabled={!hasEnabledTools || archived || archiveReadOnly || toolPolicyBusy}
                       onChange={(event) => { setToolPolicy(event.target.value); setToolPolicyError(null); }}>
                       <option value="always_ask">Ask before use</option>
                       <option value="always_allow">Allow automatically</option>
                     </select>
                   </Labeled>
-                  <button className="btn btn-primary" disabled={archived || archiveReadOnly || toolPolicyBusy || toolPolicy === currentToolPolicy}
+                  <button className="btn btn-primary" disabled={!hasEnabledTools || archived || archiveReadOnly || toolPolicyBusy || toolPolicy === currentToolPolicy}
                     onClick={saveToolPolicy}>{toolPolicyBusy ? 'Saving…' : 'Save new version'}</button>
                 </div>
                 {toolPolicy === 'always_allow' && <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>Enabled tools can run without confirmation; sandbox and network restrictions still apply.</span></div>}
