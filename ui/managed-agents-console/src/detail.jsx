@@ -162,6 +162,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
   const interruptIntentRef = useRefD(null);
   const confirmationIntentRef = useRefD(null);
   const running = status === 'running';
+  const archived = status === 'archived';
 
   useEffectD(() => {
     setStatus(displayStatus);
@@ -431,7 +432,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
 
   const sendMessage = async () => {
     const text = message.trim();
-    if (!text || running || readOnly || actionBusy) return;
+    if (!text || running || archived || readOnly || actionBusy) return;
     setActionBusy(true);
     setActionError(null);
     const event = { type:'user.message', content:[{ type:'text', text }] };
@@ -619,8 +620,8 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
           {running
             ? <button className="btn btn-danger" disabled={readOnly || actionBusy} title={readOnly ? 'Connect a live workspace to send session events.' : undefined}
                 onClick={() => !readOnly && interrupt()}><Icon name="stop" size={14} />Interrupt</button>
-            : <button className="btn btn-accent" disabled={readOnly} title={readOnly ? 'Connect a live workspace to send session events.' : undefined}
-                onClick={() => !readOnly && setView('transcript')}>
+            : <button className="btn btn-accent" disabled={archived || readOnly} title={archived ? 'Archived sessions are read-only.' : readOnly ? 'Connect a live workspace to send session events.' : undefined}
+                onClick={() => !archived && !readOnly && setView('transcript')}>
                 <Icon name="sparkles" size={15} />Ask Claude</button>}
         </div>
       </div>
@@ -664,7 +665,7 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
 
       {dialog === 'archive' &&
         <ConfirmDialog icon="archive" title="Archive this session?"
-          message={<>Archiving <b>{s.title}</b> hides it from the default list. Its events stay intact and it can be restored. </>}
+          message={<>Archiving <b>{s.title}</b> makes it read-only and hides it from the default list. Its events stay intact and remain available when archived sessions are included.</>}
           confirmLabel="Archive session" endpoint="POST /v1/sessions/:id/archive"
           onClose={() => setDialog(null)}
           onConfirm={() => runLifecycle('archive')} busy={lifecycleBusy} error={lifecycleError} />}
@@ -684,16 +685,16 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
       </div>
 
       {view !== 'files' && (
-        <div className={'composer' + (readOnly ? ' ro' : '')}>
+        <div className={'composer' + (readOnly || archived ? ' ro' : '')}>
           <Icon name="terminal" size={16} style={{ color:'var(--faint)' }} />
           <input id="session-message-composer" name="message" aria-label="Session message"
-            placeholder={readOnly ? 'Connect a live workspace to send session events.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'}
+            placeholder={archived ? 'Archived sessions are read-only.' : readOnly ? 'Connect a live workspace to send session events.' : running ? 'Streaming live — interrupt to send a message…' : 'Send a message to this session…'}
             value={message} onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }}
-            disabled={running || readOnly || actionBusy} />
+            disabled={running || archived || readOnly || actionBusy} />
           {running
             ? <button className="btn btn-sm btn-danger" disabled={readOnly || actionBusy} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={() => !readOnly && interrupt()}><Icon name="stop" size={13} />{actionBusy ? 'Stopping…' : 'Interrupt'}</button>
-            : <button className="btn btn-sm btn-primary" disabled={readOnly || actionBusy || !message.trim()} title={readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={sendMessage}><Icon name="send" size={13} />{actionBusy ? 'Sending…' : 'Send'}</button>}
+            : <button className="btn btn-sm btn-primary" disabled={archived || readOnly || actionBusy || !message.trim()} title={archived ? 'Archived sessions are read-only.' : readOnly ? 'POST /v1/sessions/:id/events' : undefined} onClick={sendMessage}><Icon name="send" size={13} />{actionBusy ? 'Sending…' : 'Send'}</button>}
         </div>
       )}
     </div>

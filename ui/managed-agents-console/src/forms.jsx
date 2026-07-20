@@ -33,9 +33,9 @@ function Labeled({ label, opt, hint, htmlFor, children }) {
 
 // ─────────── Create session ───────────
 function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, presetAgent, onClose, onCreate, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
-  // active agents, plus the preset agent even if archived/just-created
-  const choices = agents.filter((a) => a.status === 'active' || (presetAgent && a.id === presetAgent.id));
-  const [agentId, setAgentId] = useStateF((presetAgent && presetAgent.id) || (choices[0] && choices[0].id));
+  const choices = agents.filter((a) => a.status === 'active');
+  const activePreset = presetAgent?.status === 'active' ? presetAgent : null;
+  const [agentId, setAgentId] = useStateF((activePreset && activePreset.id) || (choices[0] && choices[0].id));
   const [env, setEnv] = useStateF(() => apiMode === 'api'
     ? (environments[0]?.id || '')
     : (environments[0]?.id || ENVIRONMENTS[0].id));

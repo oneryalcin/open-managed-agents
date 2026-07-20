@@ -19,6 +19,16 @@ const ARCHIVE_AGENT_CAPABILITY = Symbol("archive-agent");
 const UPDATE_AGENT_CAPABILITY = Symbol("update-agent");
 const ARCHIVE_SESSION_CAPABILITY = Symbol("archive-session");
 const DELETE_SESSION_CAPABILITY = Symbol("delete-session");
+const CMA_BUILTIN_TOOL_NAMES = [
+  "bash",
+  "edit",
+  "glob",
+  "grep",
+  "read",
+  "web_fetch",
+  "web_search",
+  "write",
+];
 
 // Session-scoped credentials, in module memory only (plan 0120 §3.2):
 // never localStorage, sessionStorage, or a cookie — a reload means
@@ -260,9 +270,7 @@ export function updateAgentToolPermission(agent, policy) {
     if (toolset?.type !== "agent_toolset_20260401") return toolset;
     const defaultEnabled = toolset.default_config?.enabled !== false;
     const configs = Array.isArray(toolset.configs) ? toolset.configs : [];
-    hasEnabledBuiltinTool ||= configs.length === 0
-      ? defaultEnabled
-      : configs.some((config) => (config.enabled ?? defaultEnabled) !== false);
+    hasEnabledBuiltinTool ||= effectiveBuiltinTools(toolset).some((tool) => tool.enabled);
     return {
       ...toolset,
       default_config: {
@@ -728,13 +736,9 @@ function summarizeToolPermission(tools) {
   const policies = new Set();
   for (const toolset of Array.isArray(tools) ? tools : []) {
     if (toolset?.type !== "agent_toolset_20260401") continue;
-    const defaultEnabled = toolset.default_config?.enabled !== false;
-    const defaultPolicy = toolset.default_config?.permission_policy?.type ?? "always_allow";
-    const configs = Array.isArray(toolset.configs) ? toolset.configs : [];
-    if (configs.length === 0 && defaultEnabled) policies.add(defaultPolicy);
-    for (const config of configs) {
-      if ((config.enabled ?? defaultEnabled) === false) continue;
-      policies.add(config.permission_policy?.type ?? defaultPolicy);
+    for (const tool of effectiveBuiltinTools(toolset)) {
+      if (!tool.enabled) continue;
+      policies.add(tool.policy);
     }
   }
   if (policies.size === 0) return "No enabled tools";
@@ -743,6 +747,23 @@ function summarizeToolPermission(tools) {
   if (policy === "always_ask") return "Ask before use";
   if (policy === "deny") return "Denied";
   return "Always allow";
+}
+
+function effectiveBuiltinTools(toolset) {
+  const defaultEnabled = toolset?.default_config?.enabled !== false;
+  const defaultPolicy = toolset?.default_config?.permission_policy?.type ?? "always_allow";
+  const configs = new Map(
+    (Array.isArray(toolset?.configs) ? toolset.configs : [])
+      .map((config) => [config.name, config]),
+  );
+  return CMA_BUILTIN_TOOL_NAMES.map((name) => {
+    const config = configs.get(name);
+    return {
+      name,
+      enabled: config?.enabled ?? defaultEnabled,
+      policy: config?.permission_policy?.type ?? defaultPolicy,
+    };
+  });
 }
 
 function eventRole(type) {

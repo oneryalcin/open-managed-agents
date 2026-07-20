@@ -230,7 +230,7 @@ describe("workspace write capability", () => {
       tools:[{ type:"agent_toolset_20260401" }],
     });
 
-    expect(created.toolPermission).toBe("Ask before use");
+    expect(created.toolPermission).toBe("Mixed permissions");
     expect(created.model).toBe("anthropic/claude-sonnet-4-6");
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -349,6 +349,61 @@ describe("workspace write capability", () => {
       rawTools:[],
     }, "always_allow")).rejects.toThrow("no enabled built-in tools");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves enabled tools inherited from the canonical materialized default", async () => {
+    setWorkspaceKey("oma_workspace");
+    const canonicalTools = [{
+      type:"agent_toolset_20260401",
+      default_config:{ enabled:true, permission_policy:{ type:"always_allow" } },
+      configs:[
+        { name:"web_fetch", enabled:false },
+        { name:"web_search", enabled:false },
+      ],
+    }];
+    const fetchMock = vi.fn((path, init) => {
+      const body = init.body ? JSON.parse(init.body) : null;
+      const isUpdate = path !== "/v1/agents";
+      return Promise.resolve({
+        ok:true,
+        status:200,
+        text:() => Promise.resolve(JSON.stringify({
+          id:"agent_implicit_defaults",
+          type:"agent",
+          name:"Implicit defaults",
+          model:{ provider:"anthropic", id:"claude-sonnet-5" },
+          tools:isUpdate ? body.tools : canonicalTools,
+          version:isUpdate ? 2 : 1,
+          created_at:"2026-07-14T10:00:00Z",
+          updated_at:"2026-07-14T11:00:00Z",
+          archived_at:null,
+        })),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const agent = await createAgent({
+      name:"Implicit defaults",
+      model:"claude-sonnet-5",
+      tools:[{ type:"agent_toolset_20260401" }],
+    });
+    expect(agent.toolPermission).toBe("Always allow");
+
+    await expect(updateAgentToolPermission(agent, "always_ask")).resolves.toMatchObject({
+      version:"v2",
+      toolPermission:"Ask before use",
+    });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      version:1,
+      tools:[{
+        type:"agent_toolset_20260401",
+        default_config:{ enabled:true, permission_policy:{ type:"always_ask" } },
+        configs:[
+          { name:"web_fetch", enabled:false },
+          { name:"web_search", enabled:false },
+        ],
+      }],
+    });
   });
 
   it("preserves CMA string input only for the exact deployment default", () => {

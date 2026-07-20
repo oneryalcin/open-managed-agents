@@ -57,7 +57,13 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermis
   const [dialog, setDialog] = useStateA(false);
   const [lifecycleBusy, setLifecycleBusy] = useStateA(false);
   const [lifecycleError, setLifecycleError] = useStateA(null);
-  const currentToolPolicy = a.toolPermission === 'Ask before use' ? 'always_ask' : 'always_allow';
+  const currentToolPolicy = a.toolPermission === 'Ask before use'
+    ? 'always_ask'
+    : a.toolPermission === 'Always allow'
+      ? 'always_allow'
+      : a.toolPermission === 'Mixed permissions'
+        ? 'mixed'
+        : 'none';
   const hasEnabledTools = a.toolPermission !== 'No enabled tools';
   const [toolPolicy, setToolPolicy] = useStateA(currentToolPolicy);
   const [toolPolicyBusy, setToolPolicyBusy] = useStateA(false);
@@ -101,8 +107,8 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermis
             style={{ opacity: archived || archiveReadOnly ? .5 : 1 }} onClick={() => { if (!archiveReadOnly) { setLifecycleError(null); setDialog(true); } }}>
             <Icon name="archive" size={14} />{archived ? 'Archived' : 'Archive'}
           </button>
-          <button className="btn btn-primary" disabled={createSessionReadOnly} title={createSessionReadOnly ? 'Connect a live workspace to create a session.' : undefined}
-            onClick={() => !createSessionReadOnly && onCreateSession()}>
+          <button className="btn btn-primary" disabled={archived || createSessionReadOnly} title={archived ? 'Archived agents cannot create new sessions.' : createSessionReadOnly ? 'Connect a live workspace to create a session.' : undefined}
+            onClick={() => !archived && !createSessionReadOnly && onCreateSession()}>
             <Icon name="plus" size={15} />Create session
           </button>
         </div>
@@ -161,6 +167,8 @@ function AgentDetail({ agent, go, onCreateSession, onArchive, onUpdateToolPermis
                     <select id="agent-tool-approval" className="selectbox" value={toolPolicy}
                       disabled={!hasEnabledTools || archived || archiveReadOnly || toolPolicyBusy}
                       onChange={(event) => { setToolPolicy(event.target.value); setToolPolicyError(null); }}>
+                      {currentToolPolicy === 'mixed' && <option value="mixed" disabled>Mixed permissions</option>}
+                      {currentToolPolicy === 'none' && <option value="none" disabled>No enabled tools</option>}
                       <option value="always_ask">Ask before use</option>
                       <option value="always_allow">Allow automatically</option>
                     </select>

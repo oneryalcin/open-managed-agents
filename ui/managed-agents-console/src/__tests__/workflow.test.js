@@ -58,6 +58,8 @@ describe("alpha console workflow", () => {
     const agents = source("agents-files.jsx");
     expect(agents).toContain("Save new version");
     expect(agents).toContain("Existing sessions keep their current policy.");
+    expect(agents).toContain("Archived agents cannot create new sessions.");
+    expect(agents).toContain("a.toolPermission === 'Mixed permissions'");
     expect(forms).toContain("createError.status === 401 && onAuthExpired");
     expect(forms).toContain("messageError.status === 401 && onAuthExpired");
     expect(forms).toContain("apiMode === 'api'");
@@ -75,6 +77,8 @@ describe("alpha console workflow", () => {
     expect(detail).toContain("result:decision");
     expect(detail).toContain("event.type === 'agent.mcp_tool_use'");
     expect(detail).toContain("if (apiMode === 'api')");
+    expect(detail).toContain("Archived sessions are read-only.");
+    expect(detail).not.toContain("it can be restored");
   });
 
   it("keeps every browser-loaded JSX source parseable by the vendored Babel runtime", () => {
