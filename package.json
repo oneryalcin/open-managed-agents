@@ -29,11 +29,13 @@
     "ui:dev": "node ui/managed-agents-console/serve.mjs"
   },
   "dependencies": {
+    "@clack/prompts": "1.7.0",
     "@earendil-works/pi-coding-agent": "0.80.6",
     "@hono/node-server": "2.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "hono": "4.12.29",
     "node-forge": "1.4.0",
+    "picocolors": "1.1.1",
     "proper-lockfile": "4.1.2",
     "typebox": "1.1.29",
     "undici": "7.28.0",

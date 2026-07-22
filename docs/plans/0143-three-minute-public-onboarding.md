@@ -4,6 +4,13 @@
 
 Proposed implementation contract for [#196](https://github.com/oneryalcin/open-managed-agents/issues/196). It does not supersede the source-checkout alpha protocol or its historical timing targets. It defines the public-install, warm-runtime path that #196 must ship before public documentation advertises `npx`.
 
+Implementation has begun with `oma onboard`'s read-only prerequisite check and
+provider-credential path. That foundation deliberately does **not** start the
+appliance, create starter resources, or authenticate a browser yet. It is not
+the public one-command experience described below, so public onboarding
+documentation must continue to use the source-checkout alpha flow until M2 and
+M3 are complete.
+
 ## Product outcome
 
 A new operator who already has a supported Node runtime, a running Docker-compatible daemon, and the OMA sandbox image cached can reach a credential-backed first-session screen in **three minutes or less** by running one command:

@@ -13,7 +13,8 @@
     "src/**/*.ts",
     "scripts/oma-doctor.ts",
     "scripts/oma-models.ts",
-    "scripts/oma-workspaces.ts"
+    "scripts/oma-workspaces.ts",
+    "scripts/oma-onboard.ts"
   ],
   "exclude": [
     "src/**/__tests__/**",

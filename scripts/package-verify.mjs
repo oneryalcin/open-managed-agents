@@ -29,6 +29,11 @@ try {
     throw new Error(`Packed CLI reported ${JSON.stringify(version.stdout.trim())}, not oma ${packageJson.version}`);
   }
 
+  const onboardHelp = run(oma, ["help", "onboard"], { cwd: temporary });
+  if (!onboardHelp.stdout.includes("Usage: oma onboard")) {
+    throw new Error("Packed oma CLI did not include onboarding help.");
+  }
+
   const doctor = run(oma, ["doctor", "--sandbox", "microsandbox", "--json"], {
     cwd: temporary,
     env: { OMA_HOME: packageHome, OMA_MICROSANDBOX_COMMAND: "oma-command-that-does-not-exist" },
@@ -51,6 +56,7 @@ function assertCuratedFiles(files) {
     "bin/oma.mjs",
     "dist/src/main.js",
     "dist/scripts/oma-doctor.js",
+    "dist/scripts/oma-onboard.js",
     "dist/ui/managed-agents-console/index.html",
     "dist/ui/openapi-docs/index.html",
   ];
