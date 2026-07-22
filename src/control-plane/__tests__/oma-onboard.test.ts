@@ -39,6 +39,10 @@ function runtime(overrides: Partial<OnboardRuntime> = {}): OnboardRuntime {
     providerStatus: vi.fn(async (provider?: string) => ({ providers: ["anthropic", "openai"], stored: provider === undefined ? undefined : false })),
     storeCredential: vi.fn(async () => {}),
     readStdin: vi.fn(async () => "secret-from-stdin"),
+    launch: vi.fn(async (_provider, _sandbox, options) => {
+      options.onReady("sess_starter");
+      return { sessionId: "sess_starter" };
+    }),
     ...overrides,
   };
 }

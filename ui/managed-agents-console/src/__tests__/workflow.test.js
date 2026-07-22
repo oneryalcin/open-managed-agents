@@ -17,6 +17,13 @@ describe("alpha console workflow", () => {
     expect(auth).not.toContain("useStateA('admin')");
   });
 
+  it("clears a one-time bootstrap fragment before exchanging it", () => {
+    const app = source("app.jsx");
+    expect(app).toContain("params.delete('bootstrap')");
+    expect(app).toContain("window.history.replaceState");
+    expect(app).toContain("OmaConsoleApi.consumeConsoleBootstrap(bootstrapNonce)");
+  });
+
   it("enables only API-backed lifecycle mutations in live mode", () => {
     const app = source("app.jsx");
     expect(app).toContain("const mutationReadOnly = apiState.state !== 'loaded'");

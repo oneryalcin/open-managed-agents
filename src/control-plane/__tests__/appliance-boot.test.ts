@@ -10,6 +10,8 @@ import {
   type RunningAppliance,
 } from "../../main.ts";
 import { MANAGED_AGENTS_BETA } from "../app.ts";
+import { ConsoleBootstrapService } from "../console/bootstrap.ts";
+import { SqliteWorkspaceStore } from "../workspaces/store.ts";
 
 const KEY_LINE = /x-api-key: (oma_[A-Za-z0-9_-]+)/;
 
@@ -129,6 +131,24 @@ describe("appliance boot (plan 0115)", () => {
     expect(logs.some((l) => KEY_LINE.test(l))).toBe(false);
     const res = await listAgents(appliance.port);
     expect(res.status).toBe(200);
+  });
+
+  it("keeps onboarding authority secret-free and revokes its temporary key on shutdown", async () => {
+    const home = makeHome();
+    const logs: string[] = [];
+    const bootstrap = new ConsoleBootstrapService();
+    const appliance = await startAppliance(
+      { OMA_HOME: home, OMA_PORT: "0" },
+      { log: (line) => logs.push(line), onboarding: { bootstrap } },
+    );
+    expect(logs.some((line) => KEY_LINE.test(line))).toBe(false);
+    expect(appliance.onboarding?.workspaceKey).toMatch(/^oma_/);
+    expect(appliance.onboarding?.bootstrapNonce).toMatch(/^ocb_/);
+    await appliance.close();
+
+    const workspaces = SqliteWorkspaceStore.open(join(home, "oma.sqlite"));
+    expect(workspaces.listKeys("wrk_default").filter((key) => key.label === "onboarding-console" && key.revoked_at === null)).toEqual([]);
+    workspaces.close();
   });
 
   it("derives storage paths from OMA_HOME only when neither is explicit", () => {

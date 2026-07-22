@@ -46,6 +46,24 @@ describe("environment service/store", () => {
     });
   });
 
+  it("persists string metadata for marker-based resource ownership", () => {
+    const store = SqliteEnvironmentStore.open(":memory:");
+    const service = new DefaultEnvironmentService(store);
+    const created = service.create(DEFAULT_WORKSPACE_ID, {
+      name: "Starter",
+      config: { networking: { type: "limited", allowed_hosts: [] } },
+      metadata: { "oma.onboarding": "starter-v1" },
+    });
+
+    expect(created.metadata).toEqual({ "oma.onboarding": "starter-v1" });
+    expect(service.retrieve(DEFAULT_WORKSPACE_ID, created.id).metadata).toEqual(created.metadata);
+    expect(() => service.create(DEFAULT_WORKSPACE_ID, {
+      name: "Invalid",
+      config: {},
+      metadata: { invalid: 1 },
+    })).toThrow("`metadata` values must be strings");
+  });
+
   it("keeps archive and physical deletion workspace scoped", () => {
     const store = SqliteEnvironmentStore.open(":memory:");
     const sessions = SqliteSessionStore.open(":memory:");

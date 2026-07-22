@@ -30,6 +30,7 @@ import {
   createConsoleSessionAuth,
   type ConsoleSessionAuth,
 } from "./console/auth.ts";
+import type { ConsoleBootstrapService } from "./console/bootstrap.ts";
 import {
   registerOpenApiRoutes,
   type OpenApiRoutesConfig,
@@ -164,6 +165,8 @@ export interface ControlPlaneServices {
   consoleSessionAuth?: {
     service: ConsoleSessionAuth;
     secureCookies: boolean;
+    /** Present only for the loopback onboarding process. */
+    bootstrap?: ConsoleBootstrapService;
   };
   /** Absent only in minimal test/library assemblies that do not ship UI assets. */
   openapi?: OpenApiRoutesConfig;
@@ -211,6 +214,8 @@ export interface DeploymentControlPlaneAppOptions {
     fetch?: McpOauthValidationDependencies["fetch"];
     allowInsecureTokenEndpoint?: (url: URL) => boolean;
   };
+  /** Process-local one-shot browser handoff; never enabled by normal `oma up`. */
+  consoleBootstrap?: ConsoleBootstrapService;
 }
 
 export type DeploymentAuthMode = "api-key" | "disabled";
@@ -521,6 +526,20 @@ function registerConsoleSessionRoutes(
     return c.json({ workspace: consoleWorkspace(session.workspaceId, consoleAuth.service) });
   });
 
+  if (consoleAuth.bootstrap !== undefined) {
+    app.post("/console/auth/bootstrap", async (c) => {
+      if (!sameOriginForCookieWrite(c)) return c.text("Forbidden\n", 403);
+      const nonce = stringField(await parseJsonBody(c.req), "nonce");
+      const workspaceKey = consoleAuth.bootstrap!.consume(nonce);
+      if (workspaceKey === undefined) return consoleAuthenticationFailed(c);
+      const session = consoleAuth.service.createWorkspaceSession(workspaceKey);
+      if (session === undefined) return consoleAuthenticationFailed(c);
+      setConsoleCookie(c, CONSOLE_WORKSPACE_COOKIE, session.token, consoleAuth.secureCookies, 30 * 24 * 60 * 60);
+      c.header("cache-control", "no-store");
+      return c.json({ workspace: consoleWorkspace(session.workspaceId, consoleAuth.service) });
+    });
+  }
+
   app.post("/console/auth/admin", async (c) => {
     if (!sameOriginForCookieWrite(c) || services.admin === undefined) return c.text("Not found\n", 404);
     const token = consoleAuth.service.createAdminSession(stringField(await parseJsonBody(c.req), "admin_key"));
@@ -624,6 +643,12 @@ export function createDeploymentControlPlane(
   opts: DeploymentControlPlaneAppOptions = {},
   internal: { backgroundWorkers?: boolean } = {},
 ): DeploymentControlPlane {
+  if (opts.consoleBootstrap !== undefined && !isLoopbackHost(env.OMA_HOST)) {
+    throw new Error("Console bootstrap is available only on a loopback appliance bind");
+  }
+  if (opts.consoleBootstrap !== undefined && env.OMA_TLS_TERMINATED === "1") {
+    throw new Error("Console bootstrap is not available behind TLS termination");
+  }
   const runtimeConfig = parseDeploymentRuntimeConfigFromEnv(env);
   const modelConfig = parseModelDeploymentConfigFromEnv(env);
   const authMode = parseDeploymentAuthMode(env);
@@ -968,6 +993,7 @@ export function createDeploymentControlPlane(
     consoleSessionAuth: {
       service: consoleSessionAuth,
       secureCookies: tlsTerminated,
+      ...(opts.consoleBootstrap === undefined ? {} : { bootstrap: opts.consoleBootstrap }),
     },
     ...(openapiRoot === undefined ? {} : { openapi: { root: openapiRoot } }),
     ...(authMode === "api-key"

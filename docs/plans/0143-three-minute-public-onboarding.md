@@ -4,12 +4,19 @@
 
 Proposed implementation contract for [#196](https://github.com/oneryalcin/open-managed-agents/issues/196). It does not supersede the source-checkout alpha protocol or its historical timing targets. It defines the public-install, warm-runtime path that #196 must ship before public documentation advertises `npx`.
 
-Implementation has begun with `oma onboard`'s read-only prerequisite check and
-provider-credential path. That foundation deliberately does **not** start the
-appliance, create starter resources, or authenticate a browser yet. It is not
-the public one-command experience described below, so public onboarding
-documentation must continue to use the source-checkout alpha flow until M2 and
-M3 are complete.
+Implementation now includes `oma onboard`'s read-only prerequisite and
+provider-credential path, attached loopback appliance lifecycle, process-local
+single-use console bootstrap, browser fragment exchange, and marker-based
+starter agent/environment/session creation. The bootstrap's temporary
+workspace key is never printed and is revoked at normal shutdown; the browser
+receives only the ordinary opaque HttpOnly console session. Environment
+metadata was added to the public resource contract so onboarding ownership is
+not hidden in a display name or an inert config field.
+
+This is still not the verified public one-command experience: reuse of an
+already-running compatible appliance plus M3's packaged browser/performance
+gate and human timing study remain. Public onboarding documentation must
+continue to use the source-checkout alpha flow until those gates are complete.
 
 ## Product outcome
 

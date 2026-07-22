@@ -1,12 +1,17 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { stdin as input } from "node:process";
+import { spawnSync } from "node:child_process";
 import {
   inspectOma,
   type DoctorReport,
 } from "./oma-doctor.ts";
 import { runModelsCli } from "./oma-models.ts";
 import { DEFAULT_OMA_SANDBOX_IMAGE } from "../src/control-plane/sessions/pi/sandbox/image.ts";
+import { resolveOmaUpEgressEnvironment } from "../src/control-plane/egress/image.ts";
+import { ConsoleBootstrapService } from "../src/control-plane/console/bootstrap.ts";
+import { startAppliance } from "../src/main.ts";
+import { ensureStarterResources } from "./oma-onboarding-resources.ts";
 
 export const ONBOARD_CANCELLED = Symbol("oma-onboard-cancelled");
 
@@ -33,6 +38,11 @@ export interface OnboardRuntime {
   providerStatus(provider?: string): Promise<{ providers: string[]; stored: boolean | undefined }>;
   storeCredential(provider: string, key: string): Promise<void>;
   readStdin(): Promise<string>;
+  launch(
+    provider: string,
+    sandbox: Sandbox,
+    options: { json: boolean; onReady(sessionId: string): void },
+  ): Promise<{ sessionId: string }>;
 }
 
 export interface OnboardResult {
@@ -40,6 +50,7 @@ export interface OnboardResult {
   provider?: string;
   credential: "stored" | "reused" | "not_reached";
   report?: DoctorReport;
+  sessionId?: string;
 }
 
 interface OnboardOptions {
@@ -132,8 +143,7 @@ export async function runOnboard(
 
   if (providerState.stored) {
     if (!runtime.interactive || options.json) {
-      emitSuccess(runtime, options.json, provider, "reused");
-      return { code: 0, provider, credential: "reused", report };
+      return finishOnboarding(runtime, options, provider, "reused", report);
     }
     const reuse = await runtime.terminal.confirm({
       message: `Use the saved ${PROVIDER_LABELS[provider] ?? provider} credential?`,
@@ -141,8 +151,7 @@ export async function runOnboard(
     });
     if (reuse === ONBOARD_CANCELLED) return cancelled(runtime, options.json, report);
     if (reuse) {
-      emitSuccess(runtime, options.json, provider, "reused");
-      return { code: 0, provider, credential: "reused", report };
+      return finishOnboarding(runtime, options, provider, "reused", report);
     }
   }
 
@@ -178,8 +187,31 @@ export async function runOnboard(
     emitFailure(runtime, options.json, safeMessage(error));
     return { code: 1, credential: "not_reached", report };
   }
-  emitSuccess(runtime, options.json, provider, "stored");
-  return { code: 0, provider, credential: "stored", report };
+  return finishOnboarding(runtime, options, provider, "stored", report);
+}
+
+async function finishOnboarding(
+  runtime: OnboardRuntime,
+  options: OnboardOptions,
+  provider: string,
+  credential: "stored" | "reused",
+  report: DoctorReport,
+): Promise<OnboardResult> {
+  try {
+    let readyEmitted = false;
+    const launched = await runtime.launch(provider, options.sandbox, {
+      json: options.json,
+      onReady(sessionId) {
+        readyEmitted = true;
+        emitSuccess(runtime, options.json, provider, credential, sessionId);
+      },
+    });
+    if (!readyEmitted) emitSuccess(runtime, options.json, provider, credential, launched.sessionId);
+    return { code: 0, provider, credential, report, sessionId: launched.sessionId };
+  } catch (error) {
+    emitFailure(runtime, options.json, safeMessage(error));
+    return { code: 1, provider, credential, report };
+  }
 }
 
 export function createProcessOnboardRuntime(): OnboardRuntime {
@@ -205,7 +237,72 @@ export function createProcessOnboardRuntime(): OnboardRuntime {
       if (result.code !== 0) throw new Error(result.stderr.trim());
     },
     readStdin: readOneSecretFromStdin,
+    launch: (provider, sandbox, options) => launchLocalOnboarding(provider, sandbox, process.env, createClackTerminal(), options),
   };
+}
+
+export async function launchLocalOnboarding(
+  provider: string,
+  sandbox: Sandbox,
+  env: NodeJS.ProcessEnv,
+  terminal: OnboardTerminal,
+  options: { json: boolean; onReady(sessionId: string): void },
+): Promise<{ sessionId: string }> {
+  const bootstrap = new ConsoleBootstrapService();
+  const runtimeEnv = resolveOmaUpEgressEnvironment(env, sandbox);
+  const applianceEnv = {
+    ...runtimeEnv,
+    OMA_AUTH_MODE: "api-key",
+    OMA_HOST: "127.0.0.1",
+    OMA_PORT: runtimeEnv.OMA_PORT ?? "0",
+    OMA_TLS_TERMINATED: "0",
+    OMA_SANDBOX_PROVIDER: sandbox,
+    ...(sandbox === "docker-local"
+      ? { OMA_ALLOW_DOCKER_LOCAL: "true" }
+      : { OMA_ALLOW_MICROSANDBOX_LOCAL: "true" }),
+  };
+  if (!options.json) terminal.step("Starting local OMA");
+  const appliance = await startAppliance(applianceEnv, {
+    log: () => undefined,
+    onboarding: { bootstrap },
+  });
+  try {
+    if (appliance.onboarding === undefined) throw new Error("Local onboarding requires workspace authentication");
+    if (!options.json) terminal.step("Preparing your first session");
+    const starter = await ensureStarterResources({
+      baseUrl: appliance.baseUrl,
+      workspaceKey: appliance.onboarding.workspaceKey,
+      provider,
+    });
+    if (!options.json) for (const warning of starter.warnings) terminal.warn(warning);
+    const url = `${appliance.baseUrl}/console/#bootstrap=${encodeURIComponent(appliance.onboarding.bootstrapNonce)}&session=${encodeURIComponent(starter.sessionId)}`;
+    const opened = openBrowser(url);
+    if (!opened && !options.json) terminal.warn(`Browser launch failed. Open this local URL manually: ${url}`);
+    options.onReady(starter.sessionId);
+    if (!options.json) terminal.outro(`Ready — ${opened ? "console opened" : "console available"} at ${appliance.baseUrl}/console/\nPress Ctrl-C to stop OMA.`);
+    await waitForShutdownSignal();
+    return { sessionId: starter.sessionId };
+  } finally {
+    await appliance.close();
+  }
+}
+
+function openBrowser(url: string): boolean {
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  return spawnSync(command, args, { stdio: "ignore" }).status === 0;
+}
+
+function waitForShutdownSignal(): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      process.off("SIGINT", done);
+      process.off("SIGTERM", done);
+      resolve();
+    };
+    process.once("SIGINT", done);
+    process.once("SIGTERM", done);
+  });
 }
 
 function createClackTerminal(): OnboardTerminal {
@@ -304,15 +401,13 @@ function emitFailure(runtime: OnboardRuntime, json: boolean, message: string): v
   else runtime.terminal.error(message);
 }
 
-function emitSuccess(runtime: OnboardRuntime, json: boolean, provider: string, credential: "stored" | "reused"): void {
+function emitSuccess(runtime: OnboardRuntime, json: boolean, provider: string, credential: "stored" | "reused", sessionId: string): void {
   if (json) {
-    console.log(JSON.stringify({ schema_version: 1, status: "prepared", provider, credential }));
+    console.log(JSON.stringify({ schema_version: 1, status: "ready", provider, credential, session_id: sessionId }));
     return;
   }
   const verb = credential === "stored" ? "stored securely" : "already stored";
-  runtime.terminal.outro(
-    `Credential ${verb}. Guided appliance startup and console handoff are the next onboarding stage; for now run ${pc.cyan("oma up")}.`,
-  );
+  runtime.terminal.step(`Credential ${verb}.`);
 }
 
 function safeMessage(error: unknown): string {

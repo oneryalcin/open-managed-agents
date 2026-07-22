@@ -24,6 +24,7 @@ import {
   type DeploymentControlPlaneEnv,
 } from "./control-plane/app.ts";
 import { DEFAULT_WORKSPACE_ID } from "./control-plane/workspace.ts";
+import type { ConsoleBootstrapService } from "./control-plane/console/bootstrap.ts";
 
 export const DEFAULT_APPLIANCE_PORT = 4180;
 
@@ -35,10 +36,16 @@ export interface ApplianceEnv extends DeploymentControlPlaneEnv {
 
 export interface StartApplianceOptions {
   log?: (line: string) => void;
+  onboarding?: { bootstrap: ConsoleBootstrapService };
 }
 
 export interface RunningAppliance {
   port: number;
+  baseUrl: string;
+  onboarding?: {
+    workspaceKey: string;
+    bootstrapNonce: string;
+  };
   close(): Promise<void>;
 }
 
@@ -77,7 +84,9 @@ export async function startAppliance(
   const port = parseAppliancePort(resolved.OMA_PORT);
   const host = resolved.OMA_HOST ?? "127.0.0.1";
 
-  const plane = createDeploymentControlPlane(resolved);
+  const plane = createDeploymentControlPlane(resolved, {
+    ...(opts.onboarding === undefined ? {} : { consoleBootstrap: opts.onboarding.bootstrap }),
+  });
   const { app, stores, authMode } = plane;
 
   let server: ReturnType<typeof serve> | undefined;
@@ -102,8 +111,11 @@ export async function startAppliance(
     // skip minting — an unprinted key locking the operator out. A key that
     // prints but never serves only costs a retry; the reverse costs the
     // quickstart.
+    const onboardingKey = authMode === "api-key" && opts.onboarding !== undefined
+      ? mintOnboardingKey(stores.workspaces)
+      : undefined;
     const minted =
-      authMode === "api-key" && stores.workspaces.countApiKeys() === 0
+      onboardingKey === undefined && authMode === "api-key" && stores.workspaces.countApiKeys() === 0
         ? stores.workspaces.mintKey(DEFAULT_WORKSPACE_ID, "first-boot")
         : undefined;
 
@@ -128,12 +140,24 @@ export async function startAppliance(
 
     return {
       port: boundPort,
+      baseUrl,
+      ...(onboardingKey === undefined
+        ? {}
+        : {
+            onboarding: {
+              workspaceKey: onboardingKey.plaintextKey,
+              bootstrapNonce: opts.onboarding!.bootstrap.issue(onboardingKey.plaintextKey),
+            },
+          }),
       close: async () => {
+        opts.onboarding?.bootstrap.clear();
+        if (onboardingKey !== undefined) stores.workspaces.revokeKey(onboardingKey.keySha256);
         await closeServer(bound.server);
         await plane.close();
       },
     };
   } catch (error) {
+    opts.onboarding?.bootstrap.clear();
     // Failed startups must release everything (notably .oma.lock) so the
     // operator's retry is a clean boot, not a lock error.
     if (server !== undefined) {
@@ -142,6 +166,15 @@ export async function startAppliance(
     await plane.close();
     throw error;
   }
+}
+
+function mintOnboardingKey(workspaces: ReturnType<typeof createDeploymentControlPlane>["stores"]["workspaces"]) {
+  for (const key of workspaces.listKeys(DEFAULT_WORKSPACE_ID)) {
+    if (key.label === "onboarding-console" && key.revoked_at === null) {
+      workspaces.revokeKey(key.key_sha256);
+    }
+  }
+  return workspaces.mintKey(DEFAULT_WORKSPACE_ID, "onboarding-console");
 }
 
 function closeServer(server: ReturnType<typeof serve>): Promise<void> {

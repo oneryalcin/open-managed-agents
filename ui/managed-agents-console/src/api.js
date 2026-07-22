@@ -299,6 +299,10 @@ export function loginConsoleWorkspace(apiKey) {
   return request("/console/auth/workspace", { method: "POST", body: { api_key: apiKey } });
 }
 
+export function consumeConsoleBootstrap(nonce) {
+  return request("/console/auth/bootstrap", { method: "POST", body: { nonce } });
+}
+
 export function loginConsoleAdmin(adminKey) {
   return request("/console/auth/admin", { method: "POST", body: { admin_key: adminKey } });
 }
@@ -707,6 +711,9 @@ function toUiEnvironment(environment) {
     allowedHosts,
     created: shortDate(environment.created_at),
     config: environment.config ?? {},
+    metadata: environment.metadata && typeof environment.metadata === "object"
+      ? environment.metadata
+      : {},
     archived: Boolean(environment.archived_at),
   };
 }
@@ -1010,6 +1017,7 @@ if (typeof window !== "undefined") {
     revokeKey,
     getConsoleAuthStatus,
     loginConsoleWorkspace,
+    consumeConsoleBootstrap,
     loginConsoleAdmin,
     selectConsoleWorkspace,
     logoutConsole,

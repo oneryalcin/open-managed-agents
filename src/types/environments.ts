@@ -3,6 +3,7 @@ import type { JsonObject } from "./json.ts";
 export interface CreateManagedEnvironmentRequest {
   name: string;
   config: JsonObject;
+  metadata?: Record<string, string>;
 }
 
 export interface ManagedAgentsEnvironment {
@@ -10,6 +11,7 @@ export interface ManagedAgentsEnvironment {
   type: "environment";
   name: string;
   config: JsonObject;
+  metadata: Record<string, string>;
   created_at: string;
   updated_at: string;
   archived_at: string | null;

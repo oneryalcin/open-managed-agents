@@ -127,6 +127,19 @@ function readRouteTarget(sessions, agents) {
   return null;
 }
 
+function takeBootstrapHandoff() {
+  const rawHash = window.location.hash.replace(/^#/, '');
+  const params = new URLSearchParams(rawHash);
+  const nonce = params.get('bootstrap');
+  if (!nonce) return null;
+  params.delete('bootstrap');
+  const nextHash = params.toString();
+  // Clear the bearer value before the network exchange so reload, copy/paste,
+  // browser history, and later application code cannot recover it.
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : '#start'}`);
+  return nonce;
+}
+
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const demoMode = new URLSearchParams(window.location.search).get('mode') === 'demo';
@@ -191,7 +204,12 @@ function App() {
       if (target) setRoute(target);
       return () => { alive = false; };
     }
-    OmaConsoleApi.getConsoleAuthStatus()
+    const bootstrapNonce = takeBootstrapHandoff();
+    const bootstrap = bootstrapNonce
+      ? OmaConsoleApi.consumeConsoleBootstrap(bootstrapNonce)
+      : Promise.resolve(undefined);
+    bootstrap
+      .then(() => OmaConsoleApi.getConsoleAuthStatus())
       .then((status) => {
         if (!alive) return undefined;
         setAuth({ phase: status.workspace || !status.auth_required || status.admin ? 'ready' : 'login', admin:status.admin, workspace:status.workspace, error:null, busy:false });

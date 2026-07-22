@@ -191,6 +191,36 @@ The former open bullets split across two channels with different answers:
 - Still open: RBAC within a workspace (create vs. read roles). All keys in a
   workspace currently have full access to that workspace.
 
+#### Local onboarding console bootstrap
+
+The guided local onboarding command has a deliberately narrower authentication
+path than ordinary workspace or admin keys:
+
+- It is constructed only for an appliance bound to `127.0.0.1`, `::1`, or
+  `localhost`; non-loopback construction refuses to start. Normal `oma up`
+  never registers the route, and TLS-terminated/remote deployments do not get
+  this capability.
+- The CLI mints a temporary workspace key only after the loopback server binds,
+  stores the key through the existing SHA-256 workspace-key store, and keeps
+  its plaintext value only in the owning process. It is revoked when the
+  attached onboarding process exits.
+- The browser receives a separate 256-bit `ocb_` bearer nonce in the URL
+  fragment, not the workspace key. The server stores only the nonce hash in
+  process memory, expires it after two minutes, deletes it before validating a
+  consume attempt, and exchanges it only through a same-origin POST for the
+  ordinary opaque HttpOnly/SameSite=Strict console cookie. The UI removes the
+  fragment with `history.replaceState` before making that POST.
+- The nonce is not accepted by `/v1`, is never persisted, and replay/expiry,
+  cross-origin exchange, and shutdown invalidation are covered by tests.
+
+Residual local risk: any process that can observe the fragment or race requests
+from the same local user may consume the bearer nonce first and obtain a
+workspace console session. High nonce entropy prevents guessing but cannot
+distinguish two processes acting as that same local user. The short lifetime,
+single-use deletion, loopback-only route, browser-fragment transport, and
+attached-process revocation bound this risk; the feature is not suitable as a
+general passwordless login mechanism.
+
 ### 8. Denial of service
 
 **Question to answer:** What stops a single session from monopolizing resources?

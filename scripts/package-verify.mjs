@@ -57,6 +57,7 @@ function assertCuratedFiles(files) {
     "dist/src/main.js",
     "dist/scripts/oma-doctor.js",
     "dist/scripts/oma-onboard.js",
+    "dist/scripts/oma-onboarding-resources.js",
     "dist/ui/managed-agents-console/index.html",
     "dist/ui/openapi-docs/index.html",
   ];

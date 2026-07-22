@@ -20,7 +20,9 @@ const { resolveOmaUpEgressEnvironment } = await import(
 
 checkNode();
 
-const command = args[0];
+// `npx open-managed-agents` is the public one-command path. Keep an installed
+// bare `oma` invocation as help so existing CLI discovery remains stable.
+const command = args[0] ?? (process.env.npm_command === "exec" ? "onboard" : undefined);
 if (command === undefined || command === "help" || command === "--help" || command === "-h") {
   if (command === "help" && args.length > 1) {
     printCommandHelp(args.slice(1));
@@ -33,7 +35,7 @@ if ((command === "version" && args.length === 1) || command === "--version" || c
   console.log(`oma ${packageJson.version}`);
   process.exit(0);
 }
-const commandArgs = args.slice(1);
+const commandArgs = command === "onboard" && args.length === 0 ? [] : args.slice(1);
 const helpIndex = commandArgs.findIndex((arg) => arg === "--help" || arg === "-h");
 if (helpIndex !== -1) {
   if (helpIndex !== commandArgs.length - 1) fail(`Help must be the last argument. Run \`oma help ${[command, ...commandArgs.slice(0, helpIndex)].join(" ")}\`.`);
@@ -58,7 +60,7 @@ if (command === "up") {
 } else if (command === "auth") {
   await runAuth(args.slice(1));
 } else if (command === "onboard") {
-  await runOnboard(args.slice(1));
+  await runOnboard(commandArgs);
 } else if (command === "doctor") {
   await runDoctor(args.slice(1));
 } else if (command === "down" || command === "logs" || command === "status") {
@@ -80,6 +82,9 @@ async function runDoctor(commandArgs) {
 }
 
 async function runOnboard(commandArgs) {
+  const childEnv = commandArgs.includes("--json")
+    ? { ...process.env, OMA_LOG_LEVEL: "error" }
+    : process.env;
   await runChild(
     process.execPath,
     [
@@ -87,7 +92,7 @@ async function runOnboard(commandArgs) {
       runtimeFile("scripts", "oma-onboard"),
       ...commandArgs,
     ],
-    process.env,
+    childEnv,
   );
 }
 

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeploymentControlPlane, MANAGED_AGENTS_BETA } from "../app.ts";
 import { generateAdminKey } from "../admin/auth.ts";
+import { ConsoleBootstrapService } from "../console/bootstrap.ts";
 
 const ADMIN_KEY = generateAdminKey();
 const roots: string[] = [];
@@ -86,9 +87,75 @@ describe("console session authentication", () => {
     expect(secure.headers.get("set-cookie")).toContain("Secure");
     tls.stores.close();
   });
+
+  it("exchanges a single-use bootstrap nonce without exposing workspace authority", async () => {
+    const bootstrap = new ConsoleBootstrapService();
+    const plane = makePlane({ bootstrap });
+    const key = plane.stores.workspaces.mintKey("wrk_default", "onboarding-console");
+    const nonce = bootstrap.issue(key.plaintextKey);
+
+    const unrelated = await request(plane.app, "/v1/agents", {
+      beta: true,
+      apiKey: nonce,
+    });
+    expect(unrelated.status).toBe(401);
+
+    const login = await request(plane.app, "/console/auth/bootstrap", {
+      method: "POST",
+      body: { nonce },
+    });
+    expect(login.status).toBe(200);
+    expect(await login.text()).not.toContain(nonce);
+    const cookie = cookieFrom(login);
+    expect(await request(plane.app, "/v1/agents", { cookie, beta: true }).then((response) => response.status)).toBe(200);
+
+    const replay = await request(plane.app, "/console/auth/bootstrap", {
+      method: "POST",
+      body: { nonce },
+    });
+    expect(replay.status).toBe(401);
+    plane.stores.close();
+  });
+
+  it("expires bootstrap nonces and rejects cross-origin consumption", async () => {
+    let now = 1_000;
+    const bootstrap = new ConsoleBootstrapService(() => now, 10);
+    const plane = makePlane({ bootstrap });
+    const key = plane.stores.workspaces.mintKey("wrk_default", "onboarding-console");
+    const crossOriginNonce = bootstrap.issue(key.plaintextKey);
+    const foreign = await request(plane.app, "/console/auth/bootstrap", {
+      method: "POST",
+      body: { nonce: crossOriginNonce },
+      origin: "https://attacker.example",
+    });
+    expect(foreign.status).toBe(403);
+
+    const expiredNonce = bootstrap.issue(key.plaintextKey);
+    now += 11;
+    const expired = await request(plane.app, "/console/auth/bootstrap", {
+      method: "POST",
+      body: { nonce: expiredNonce },
+    });
+    expect(expired.status).toBe(401);
+    plane.stores.close();
+  });
+
+  it("refuses to register console bootstrap on a non-loopback bind", () => {
+    expect(() => makePlane({
+      bootstrap: new ConsoleBootstrapService(),
+      host: "0.0.0.0",
+    })).toThrow(/only on a loopback appliance bind/);
+  });
+
+  it("refuses to register local console bootstrap behind TLS termination", () => {
+    expect(() => makePlane({
+      bootstrap: new ConsoleBootstrapService(),
+      tls: true,
+    })).toThrow(/not available behind TLS termination/);
+  });
 });
 
-function makePlane(opts: { tls?: boolean } = {}) {
+function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapService; host?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "oma-console-session-"));
   roots.push(root);
   return createDeploymentControlPlane({
@@ -97,8 +164,9 @@ function makePlane(opts: { tls?: boolean } = {}) {
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
     OMA_AUTH_MODE: "api-key",
     OMA_ADMIN_KEY: ADMIN_KEY,
+    ...(opts.host === undefined ? {} : { OMA_HOST: opts.host }),
     ...(opts.tls ? { OMA_TLS_TERMINATED: "1" } : {}),
-  });
+  }, opts.bootstrap === undefined ? {} : { consoleBootstrap: opts.bootstrap });
 }
 
 function request(
@@ -110,12 +178,14 @@ function request(
     cookie?: string;
     beta?: boolean;
     origin?: string;
+    apiKey?: string;
   } = {},
 ): Promise<Response> {
   const headers = new Headers();
   if (opts.body !== undefined) headers.set("content-type", "application/json");
   if (opts.cookie !== undefined) headers.set("cookie", opts.cookie);
   if (opts.beta) headers.set("anthropic-beta", MANAGED_AGENTS_BETA);
+  if (opts.apiKey) headers.set("x-api-key", opts.apiKey);
   if (opts.method && opts.method !== "GET") headers.set("origin", opts.origin ?? "http://console.test");
   return Promise.resolve(app.fetch(new Request(`http://console.test${path}`, {
     method: opts.method ?? "GET",

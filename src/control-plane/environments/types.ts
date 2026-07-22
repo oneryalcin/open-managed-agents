@@ -12,6 +12,7 @@ export interface EnvironmentRow {
   type: "environment";
   name: string;
   config: JsonObject;
+  metadata?: Record<string, string>;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
