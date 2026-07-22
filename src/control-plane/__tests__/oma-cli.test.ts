@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const cli = fileURLToPath(new URL("../../../bin/oma.mjs", import.meta.url));
+const { version: packageVersion } = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../../package.json", import.meta.url)), "utf8"),
+) as { version: string };
 
 const tempHomes: string[] = [];
 
@@ -56,7 +59,7 @@ describe("oma CLI", () => {
     const result = run(["--version"]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("oma 0.1.0");
+    expect(result.stdout.trim()).toBe(`oma ${packageVersion}`);
   });
 
   it("makes every documented command and action help discoverable without side effects", () => {
