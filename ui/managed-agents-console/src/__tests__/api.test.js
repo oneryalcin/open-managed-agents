@@ -15,6 +15,7 @@ import {
   createEnvironment,
   createIdempotencyIntent,
   createSession,
+  consumeConsoleBootstrap,
   deleteEnvironment,
   deleteSession,
   followSessionEvents,
@@ -158,12 +159,14 @@ describe("opaque console-session transport", () => {
     const fetchMock = vi.fn(() => Promise.resolve({ ok:true, status:200, text:() => Promise.resolve(JSON.stringify({ workspace:{ id:"wrk_a", name:"A" } })) }));
     vi.stubGlobal("fetch", fetchMock);
     await loginConsoleWorkspace("oma_workspace");
+    await consumeConsoleBootstrap("ocb_once");
     await loginConsoleAdmin("admin-secret");
     await selectConsoleWorkspace("wrk_a");
     await logoutConsole();
     await getConsoleAuthStatus();
     expect(fetchMock.mock.calls).toEqual(expect.arrayContaining([
       ["/console/auth/workspace", expect.objectContaining({ method:"POST", body:JSON.stringify({ api_key:"oma_workspace" }), credentials:"same-origin", headers:expect.not.objectContaining({ "x-api-key":expect.anything(), "x-admin-key":expect.anything() }) })],
+      ["/console/auth/bootstrap", expect.objectContaining({ method:"POST", body:JSON.stringify({ nonce:"ocb_once" }), credentials:"same-origin", headers:expect.not.objectContaining({ "x-api-key":expect.anything(), "x-admin-key":expect.anything() }) })],
       ["/console/auth/admin", expect.objectContaining({ method:"POST", body:JSON.stringify({ admin_key:"admin-secret" }), credentials:"same-origin", headers:expect.not.objectContaining({ "x-api-key":expect.anything(), "x-admin-key":expect.anything() }) })],
       ["/console/auth/select-workspace", expect.objectContaining({ method:"POST", body:JSON.stringify({ workspace_id:"wrk_a" }) })],
       ["/console/auth/logout", expect.objectContaining({ method:"POST" })],
@@ -483,6 +486,7 @@ describe("workspace write capability", () => {
         type:"environment",
         name:"Console env",
         config:{ type:"cloud" },
+        metadata:{ owner:"onboarding" },
         created_at:"2026-07-14T10:00:00Z",
         updated_at:"2026-07-14T10:00:00Z",
         archived_at:null,
@@ -490,8 +494,9 @@ describe("workspace write capability", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await createEnvironment({ name:"Console env", config:{ type:"cloud" } });
+    const environment = await createEnvironment({ name:"Console env", config:{ type:"cloud" } });
 
+    expect(environment.metadata).toEqual({ owner:"onboarding" });
     expect(fetchMock.mock.calls[0][0]).toBe("/v1/environments");
     expect(fetchMock.mock.calls[0][1].method).toBe("POST");
     expect(fetchMock.mock.calls[0][1].headers["idempotency-key"]).toBeUndefined();

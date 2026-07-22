@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS environments (
   type          TEXT NOT NULL,
   name          TEXT NOT NULL,
   config        TEXT NOT NULL,
+  metadata      TEXT NOT NULL DEFAULT '{}',
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
   archived_at   TEXT
@@ -27,6 +28,7 @@ interface EnvironmentDbRow {
   type: "environment";
   name: string;
   config: string;
+  metadata: string;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -47,10 +49,11 @@ export class SqliteEnvironmentStore implements EnvironmentStore {
   constructor(db: DatabaseSync) {
     this.db = db;
     this.db.exec(SCHEMA);
+    migrateMetadata(this.db);
     this.insertStmt = this.db.prepare(
       `INSERT INTO environments (
-        id, workspace_id, type, name, config, created_at, updated_at, archived_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, workspace_id, type, name, config, metadata, created_at, updated_at, archived_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.retrieveActiveStmt = this.db.prepare(
       `SELECT * FROM environments
@@ -106,6 +109,7 @@ export class SqliteEnvironmentStore implements EnvironmentStore {
       e.type,
       e.name,
       JSON.stringify(e.config),
+      JSON.stringify(e.metadata ?? {}),
       e.created_at,
       e.updated_at,
       e.archived_at,
@@ -210,8 +214,16 @@ function deserialize(row: EnvironmentDbRow): EnvironmentRow {
     type: "environment",
     name: row.name,
     config: JSON.parse(row.config) as EnvironmentRow["config"],
+    metadata: JSON.parse(row.metadata) as EnvironmentRow["metadata"],
     created_at: row.created_at,
     updated_at: row.updated_at,
     archived_at: row.archived_at,
   };
+}
+
+function migrateMetadata(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(environments)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "metadata")) {
+    db.exec("ALTER TABLE environments ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'");
+  }
 }

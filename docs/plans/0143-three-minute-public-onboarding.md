@@ -4,12 +4,25 @@
 
 Proposed implementation contract for [#196](https://github.com/oneryalcin/open-managed-agents/issues/196). It does not supersede the source-checkout alpha protocol or its historical timing targets. It defines the public-install, warm-runtime path that #196 must ship before public documentation advertises `npx`.
 
-Implementation has begun with `oma onboard`'s read-only prerequisite check and
-provider-credential path. That foundation deliberately does **not** start the
-appliance, create starter resources, or authenticate a browser yet. It is not
-the public one-command experience described below, so public onboarding
-documentation must continue to use the source-checkout alpha flow until M2 and
-M3 are complete.
+Implementation now includes `oma onboard`'s read-only prerequisite and
+provider-credential path, attached loopback appliance lifecycle, process-local
+single-use console bootstrap, browser fragment exchange, and marker-based
+starter agent/environment/session creation. The bootstrap's temporary
+workspace key is never printed and is revoked at normal shutdown; the browser
+receives only the ordinary opaque HttpOnly console session. Environment
+metadata was added to the public resource contract so onboarding ownership is
+not hidden in a display name or an inert config field.
+
+An onboarding-owned compatible appliance can now be reopened by rerunning the
+command: a private local lifecycle record authorizes issuance of a fresh
+single-use browser nonce without exposing workspace authority. A missing
+Docker sandbox image is also a disclosed recovery path, confirmed
+interactively or authorized explicitly with `--pull`.
+
+This is still not the verified public one-command experience: M3's packaged
+browser/performance gate and human timing study remain. Public onboarding
+documentation must continue to use the source-checkout alpha flow until those
+gates are complete.
 
 ## Product outcome
 
@@ -192,12 +205,17 @@ The public `next` onboarding gate passes only when:
 
 Until M3, `README.md` and `docs/getting-started.md` continue to describe the source-checkout alpha path and must not advertise this command as shipped. Once `next` is verified, public documentation gets a short warm-prerequisites section, the one-command flow, the explicit cold-image branch, recovery guidance, and an advanced source-checkout path. The older 10-minute / 15-minute source-checkout observation protocol remains a historical alpha gate; public-install measurements belong in a separate results record so the two service levels are never conflated.
 
-## Decisions required before implementation
+## Resolved implementation decisions
 
-1. Confirm the npm package name and whether its first public channel is `next` under the existing Elastic-2.0 license.
-2. Choose the terminal prompt dependency after a small license/size/TTY-accessibility review, or keep a zero-dependency renderer. The public interaction contract above, not a dependency, is the requirement.
-3. Review the console-bootstrap design against the local threat model before any route is added.
-4. Decide whether the explicit `npx` command may offer `--pull` after displaying the missing image cost, or must always require a separately run pull command.
+1. The public package is `open-managed-agents`, under the existing Elastic-2.0
+   license.
+2. The guided terminal uses `@clack/prompts`; the interaction contract remains
+   the product boundary rather than the dependency.
+3. The console-bootstrap route is loopback-only and its current boundaries are
+   recorded in `docs/threat-model.md`.
+4. The explicit `npx` command offers an interactive pull after disclosing that
+   the image download is outside the warm-path target. Non-interactive callers
+   must authorize it with `--pull`.
 
 ## Implementation order
 

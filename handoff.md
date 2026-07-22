@@ -389,12 +389,16 @@ they are intentionally no longer repeated here.
 
 ## Immediate Next Work
 
-1. **Review and merge the environment lifecycle slice**
-   ([#206](https://github.com/oneryalcin/open-managed-agents/issues/206)). The
-   current branch captures the CMA contract, adds workspace-scoped archive and
-   reference-safe deletion, rejects new sessions on archived environments, and
-   proves the real console flow with Docker. On merge, update the issue and
-   remove this item from the queue.
+1. **Finish and gate the three-minute public onboarding path**
+   ([#196](https://github.com/oneryalcin/open-managed-agents/issues/196), plan
+   0143). The terminal/credential foundation and the attached loopback
+   appliance, one-shot console bootstrap, browser handoff, and marker-owned
+   starter graph are implemented. Onboarding-owned appliances can be reopened
+   with a private local lifecycle record and fresh one-shot browser nonce, and
+   a missing sandbox image has an explicit interactive/`--pull` recovery. The
+   remaining release gates are the packed-browser timing lane and human
+   warm-path study; the local bootstrap threat model is updated with this
+   lifecycle boundary.
 2. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
    owned by [Getting Started](docs/getting-started.md):
    `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,
@@ -411,9 +415,9 @@ they are intentionally no longer repeated here.
    [docs/references/alpha-onboarding-observation.md](docs/references/alpha-onboarding-observation.md):
    local-compatible median <=10 minutes, credential-supplied console median
    <=15 minutes, and zero undocumented intervention.
-6. Track public npm, `npx`, curl, and Homebrew distribution separately in issue
-   #196. It is a release/supply-chain project, not part of source-checkout
-   onboarding cleanup.
+6. The npm package is public as `open-managed-agents@0.1.0`; keep `next`
+   promotion, provenance/trusted publishing, curl, and Homebrew work inside
+   #196. Do not advertise the one-command path as verified until M3 passes.
 7. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
 8. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains

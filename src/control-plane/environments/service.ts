@@ -35,6 +35,7 @@ export class DefaultEnvironmentService implements EnvironmentService {
       type: "environment",
       name: req.name,
       config: req.config,
+      metadata: req.metadata ?? {},
       created_at: now,
       updated_at: now,
       archived_at: null,
@@ -120,7 +121,7 @@ function parseCreateEnvironment(input: unknown): CreateManagedEnvironmentRequest
     }
     throw error;
   }
-  return { name, config: canonicalConfig };
+  return { name, config: canonicalConfig, metadata: metadataField(obj) };
 }
 
 function toManagedEnvironment(row: EnvironmentRow): ManagedAgentsEnvironment {
@@ -129,10 +130,23 @@ function toManagedEnvironment(row: EnvironmentRow): ManagedAgentsEnvironment {
     type: row.type,
     name: row.name,
     config: row.config,
+    metadata: row.metadata ?? {},
     created_at: row.created_at,
     updated_at: row.updated_at,
     archived_at: row.archived_at,
   };
+}
+
+function metadataField(obj: Record<string, unknown>): Record<string, string> | undefined {
+  const value = obj.metadata;
+  if (value === undefined) return undefined;
+  if (!isJsonObject(value)) throw invalidRequest("`metadata` must be an object");
+  const metadata: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== "string") throw invalidRequest("`metadata` values must be strings");
+    metadata[key] = item;
+  }
+  return metadata;
 }
 
 function objectInput(input: unknown): Record<string, unknown> {
