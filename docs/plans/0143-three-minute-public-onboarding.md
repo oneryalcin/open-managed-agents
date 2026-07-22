@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed implementation contract for [#196](https://github.com/oneryalcin/open-managed-agents/issues/196). It does not supersede the source-checkout alpha protocol or its historical timing targets. It defines the public-install, warm-runtime path that #196 must ship before public documentation advertises `npx`.
+Shipped implementation contract for [#196](https://github.com/oneryalcin/open-managed-agents/issues/196). It does not supersede the source-checkout alpha protocol or its historical timing targets. The npm entrypoint and public-install warm-runtime path are available; the measured three-minute service-level objective remains a release gate for removing the preview label.
 
 Implementation now includes `oma onboard`'s read-only prerequisite and
 provider-credential path, attached loopback appliance lifecycle, process-local
@@ -19,22 +19,24 @@ single-use browser nonce without exposing workspace authority. A missing
 Docker sandbox image is also a disclosed recovery path, confirmed
 interactively or authorized explicitly with `--pull`.
 
-This is still not the verified public one-command experience: M3's packaged
-browser/performance gate and human timing study remain. Public onboarding
-documentation must continue to use the source-checkout alpha flow until those
-gates are complete.
+The public one-command experience is shipped but has not yet earned the
+three-minute performance claim: M3's packaged browser/performance gate and
+human timing study remain. Public documentation may describe the command as a
+preview and must keep the cold-image exclusion explicit; it must not claim the
+timing target is measured until those gates pass.
 
 ## Product outcome
 
 A new operator who already has a supported Node runtime, a running Docker-compatible daemon, and the OMA sandbox image cached can reach a credential-backed first-session screen in **three minutes or less** by running one command:
 
 ```bash
-npx open-managed-agents@next
+npx --yes open-managed-agents@latest
 ```
 
 The command is intentionally interactive. It presents a modern terminal flow with concise progress, a provider choice, and a masked API-key prompt; it does not require a repository checkout, `npm link`, an exported environment variable, a workspace API key, agent YAML, or prior knowledge of OMA resources.
 
-The public package name in the example is a release decision, not a claim that the npm name is available. The release owner must reserve/confirm it before publishing. The installed executable remains `oma`.
+The public package is `open-managed-agents`; its installed executable remains
+`oma`.
 
 ## Scope and clock
 
@@ -194,7 +196,7 @@ curl and Homebrew work begins only after M1's package contract is proven; neithe
 
 Run at least three non-maintainer participants on supported local machines with the stated warm prerequisites. Each run records only elapsed timings and blockers—never secrets, keys, screenshots containing keys, or durable IDs.
 
-The public `next` onboarding gate passes only when:
+The public onboarding performance gate passes only when:
 
 - every successful run completes with zero undocumented intervention;
 - median warm-path time is ≤3 minutes;
@@ -203,7 +205,14 @@ The public `next` onboarding gate passes only when:
 
 ## Documentation changes at implementation time
 
-Until M3, `README.md` and `docs/getting-started.md` continue to describe the source-checkout alpha path and must not advertise this command as shipped. Once `next` is verified, public documentation gets a short warm-prerequisites section, the one-command flow, the explicit cold-image branch, recovery guidance, and an advanced source-checkout path. The older 10-minute / 15-minute source-checkout observation protocol remains a historical alpha gate; public-install measurements belong in a separate results record so the two service levels are never conflated.
+`README.md` now presents the shipped npm flow as a preview with a short
+warm-prerequisites section, the explicit cold-image branch, and the
+source-checkout guide as an advanced path. `docs/getting-started.md` remains
+the canonical source-checkout alpha protocol. After M3 passes, remove the
+preview label and publish the measured result. The older 10-minute / 15-minute
+source-checkout observation protocol remains a historical alpha gate;
+public-install measurements belong in a separate results record so the two
+service levels are never conflated.
 
 ## Resolved implementation decisions
 

@@ -415,9 +415,11 @@ they are intentionally no longer repeated here.
    [docs/references/alpha-onboarding-observation.md](docs/references/alpha-onboarding-observation.md):
    local-compatible median <=10 minutes, credential-supplied console median
    <=15 minutes, and zero undocumented intervention.
-6. The npm package is public as `open-managed-agents@0.1.0`; keep `next`
-   promotion, provenance/trusted publishing, curl, and Homebrew work inside
-   #196. Do not advertise the one-command path as verified until M3 passes.
+6. The npm package is public as `open-managed-agents`; its README presents
+   `npx --yes open-managed-agents@latest` as a preview and keeps source checkout
+   as the advanced diagnostic path. Keep provenance/trusted publishing, curl,
+   and Homebrew work inside #196. Do not advertise the three-minute target as
+   verified until M3 passes.
 7. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
 8. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains

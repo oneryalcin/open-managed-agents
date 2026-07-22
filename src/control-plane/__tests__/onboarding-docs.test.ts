@@ -10,7 +10,7 @@ function read(path: string): string {
 }
 
 describe("alpha onboarding documentation contract", () => {
-  it("keeps one canonical source-checkout flow and links it from the first README screen", () => {
+  it("keeps one canonical source-checkout flow as the linked advanced guide", () => {
     const guide = read("docs/getting-started.md");
     const readme = read("README.md");
     const index = read("docs/index.md");
@@ -25,7 +25,7 @@ describe("alpha onboarding documentation contract", () => {
       "Create an environment",
       "Create a session",
     ]) expect(guide, anchor).toContain(anchor);
-    expect(readme.slice(0, 3000)).toContain("docs/getting-started.md");
+    expect(readme.slice(0, 5000)).toContain("https://github.com/oneryalcin/open-managed-agents/blob/main/docs/getting-started.md");
     expect(index.slice(0, 2200)).toContain("getting-started.md");
   });
 
@@ -49,12 +49,14 @@ describe("alpha onboarding documentation contract", () => {
     expect(publicDocs).not.toMatch(/unrestricted networking (?:is|becomes) available/i);
   });
 
-  it("does not advertise unshipped public installers or obsolete scratch scripts as onboarding", () => {
+  it("advertises the shipped npm entrypoint without inventing other installers", () => {
     const guide = read("docs/getting-started.md");
     const readme = read("README.md");
     const dockerTutorial = read("docs/tutorials/docker-local-first-run.md");
     expect(`${guide}\n${readme}`).not.toMatch(/curl[^\n]+\|\s*(?:sh|bash)/);
-    expect(`${guide}\n${readme}`).not.toMatch(/brew install|npx open-managed-agents/);
+    expect(`${guide}\n${readme}`).not.toMatch(/brew install/);
+    expect(guide).not.toMatch(/npx .*open-managed-agents/);
+    expect(readme.slice(0, 5000)).toContain("npx --yes open-managed-agents@latest");
     expect(dockerTutorial).not.toMatch(/primary|recommended/i);
     expect(dockerTutorial).toContain("getting-started.md");
   });
