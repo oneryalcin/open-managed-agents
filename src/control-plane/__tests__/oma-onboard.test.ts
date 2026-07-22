@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ONBOARD_CANCELLED,
   runOnboard,
+  tryResumeLocalOnboarding,
   type OnboardRuntime,
   type OnboardTerminal,
 } from "../../../scripts/oma-onboard.ts";
@@ -39,6 +43,8 @@ function runtime(overrides: Partial<OnboardRuntime> = {}): OnboardRuntime {
     providerStatus: vi.fn(async (provider?: string) => ({ providers: ["anthropic", "openai"], stored: provider === undefined ? undefined : false })),
     storeCredential: vi.fn(async () => {}),
     readStdin: vi.fn(async () => "secret-from-stdin"),
+    pullImage: vi.fn(async () => {}),
+    resume: vi.fn(async () => undefined),
     launch: vi.fn(async (_provider, _sandbox, options) => {
       options.onReady("sess_starter");
       return { sessionId: "sess_starter" };
@@ -109,6 +115,103 @@ describe("oma onboard foundation", () => {
     expect(storeCredential).not.toHaveBeenCalled();
   });
 
+  it("reopens an onboarding-owned appliance before preflight or credential prompts", async () => {
+    const inspect = vi.fn(async () => readyReport());
+    const providerStatus = vi.fn(async () => ({ providers: ["anthropic"], stored: true }));
+    const result = await runOnboard([], runtime({
+      resume: vi.fn(async () => ({ sessionId: "sess_existing" })),
+      inspect,
+      providerStatus,
+    }));
+
+    expect(result).toMatchObject({ code: 0, credential: "reused", sessionId: "sess_existing" });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(providerStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not ignore explicit provider setup when a resumable appliance exists", async () => {
+    const resume = vi.fn(async () => ({ sessionId: "sess_existing" }));
+    const storeCredential = vi.fn(async () => {});
+    const result = await runOnboard(["--provider", "openai"], runtime({
+      resume,
+      storeCredential,
+    }));
+
+    expect(result).toMatchObject({ code: 0, provider: "openai", credential: "stored" });
+    expect(resume).not.toHaveBeenCalled();
+    expect(storeCredential).toHaveBeenCalledWith("openai", "secret-value");
+  });
+
+  it("offers a disclosed image pull and re-runs read-only preflight before storing credentials", async () => {
+    const missing = {
+      ...readyReport(),
+      checks: readyReport().checks.map((check) => check.id === "sandbox.image"
+        ? { ...check, status: "warn" as const, summary: "Image missing" }
+        : check),
+    };
+    const inspect = vi.fn()
+      .mockResolvedValueOnce(missing)
+      .mockResolvedValueOnce(readyReport());
+    const pullImage = vi.fn(async () => {});
+    const storeCredential = vi.fn(async () => {});
+
+    const result = await runOnboard(["--provider", "anthropic"], runtime({
+      inspect,
+      pullImage,
+      storeCredential,
+    }));
+
+    expect(result.code).toBe(0);
+    expect(pullImage).toHaveBeenCalledWith(expect.stringContaining("open-managed-agents-sandbox"));
+    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(storeCredential).toHaveBeenCalledOnce();
+  });
+
+  it("does not pull an image without interactive approval or --pull", async () => {
+    const missing = {
+      ...readyReport(),
+      checks: readyReport().checks.map((check) => check.id === "sandbox.image"
+        ? { ...check, status: "warn" as const, summary: "Image missing" }
+        : check),
+    };
+    const pullImage = vi.fn(async () => {});
+    const result = await runOnboard(["--provider", "anthropic"], runtime({
+      interactive: false,
+      inspect: vi.fn(async () => missing),
+      providerStatus: vi.fn(async () => ({ providers: ["anthropic"], stored: true })),
+      pullImage,
+    }));
+
+    expect(result.code).toBe(1);
+    expect(pullImage).not.toHaveBeenCalled();
+  });
+
+  it("honors explicit --pull in non-interactive onboarding", async () => {
+    const missing = {
+      ...readyReport(),
+      checks: readyReport().checks.map((check) => check.id === "sandbox.image"
+        ? { ...check, status: "warn" as const, summary: "Image missing" }
+        : check),
+    };
+    const inspect = vi.fn()
+      .mockResolvedValueOnce(missing)
+      .mockResolvedValueOnce(readyReport());
+    const pullImage = vi.fn(async () => {});
+    const result = await runOnboard(
+      ["--provider", "anthropic", "--pull"],
+      runtime({
+        interactive: false,
+        inspect,
+        providerStatus: vi.fn(async () => ({ providers: ["anthropic"], stored: true })),
+        pullImage,
+      }),
+    );
+
+    expect(result.code).toBe(0);
+    expect(pullImage).toHaveBeenCalledOnce();
+    expect(inspect).toHaveBeenCalledTimes(2);
+  });
+
   it("fails fast on a non-interactive invocation without explicit credential input", async () => {
     const inspect = vi.fn(async () => readyReport());
     const result = await runOnboard([], runtime({ interactive: false, inspect }));
@@ -137,5 +240,40 @@ describe("oma onboard foundation", () => {
 
     expect(result.code).toBe(130);
     expect(storeCredential).not.toHaveBeenCalled();
+  });
+
+  it("renews a bootstrap nonce and opens the existing starter session from private resume state", async () => {
+    const home = mkdtempSync(join(tmpdir(), "oma-onboard-resume-"));
+    mkdirSync(home, { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, "onboarding-resume.json"), JSON.stringify({
+      schema_version: 1,
+      pid: 123,
+      base_url: "http://127.0.0.1:43123",
+      session_id: "sess_existing",
+      control_token: "oct_control",
+    }), { mode: 0o600 });
+    const opened: string[] = [];
+    const fetchImpl = async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url.endsWith("/health")) return new Response("ok");
+      return Response.json({ nonce: "ocb_fresh" });
+    };
+    const fetchMock = vi.fn(fetchImpl);
+    try {
+      const resumed = await tryResumeLocalOnboarding(
+        { OMA_HOME: home },
+        terminal(),
+        false,
+        { fetch: fetchMock as typeof fetch, openBrowser: (url) => { opened.push(url); return true; } },
+      );
+      expect(resumed).toEqual({ sessionId: "sess_existing" });
+      expect(opened).toEqual(["http://127.0.0.1:43123/console/#bootstrap=ocb_fresh&session=sess_existing"]);
+      expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+        method: "POST",
+        headers: { "x-oma-onboarding-token": "oct_control" },
+      }));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

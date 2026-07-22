@@ -117,6 +117,37 @@ describe("console session authentication", () => {
     plane.stores.close();
   });
 
+  it("issues a fresh bootstrap nonce only to the onboarding lifecycle token", async () => {
+    const bootstrap = new ConsoleBootstrapService();
+    const plane = makePlane({ bootstrap });
+    const key = plane.stores.workspaces.mintKey("wrk_default", "onboarding-console");
+    bootstrap.bindResumeAuthority(key.plaintextKey, "oct_control");
+
+    expect(await request(plane.app, "/v1/agents", {
+      beta: true,
+      apiKey: "oct_control",
+    }).then((response) => response.status)).toBe(401);
+
+    const denied = await request(plane.app, "/console/auth/bootstrap/renew", {
+      method: "POST",
+      onboardingToken: "oct_wrong",
+    });
+    expect(denied.status).toBe(401);
+
+    const renewed = await request(plane.app, "/console/auth/bootstrap/renew", {
+      method: "POST",
+      onboardingToken: "oct_control",
+    });
+    expect(renewed.status).toBe(200);
+    const { nonce } = await renewed.json() as { nonce: string };
+    expect(nonce).toMatch(/^ocb_/);
+    expect(await request(plane.app, "/console/auth/bootstrap", {
+      method: "POST",
+      body: { nonce },
+    }).then((response) => response.status)).toBe(200);
+    plane.stores.close();
+  });
+
   it("expires bootstrap nonces and rejects cross-origin consumption", async () => {
     let now = 1_000;
     const bootstrap = new ConsoleBootstrapService(() => now, 10);
@@ -138,6 +169,18 @@ describe("console session authentication", () => {
     });
     expect(expired.status).toBe(401);
     plane.stores.close();
+  });
+
+  it("keeps the default bootstrap nonce valid for ten minutes only", () => {
+    let now = 1_000;
+    const bootstrap = new ConsoleBootstrapService(() => now);
+    const beforeBoundary = bootstrap.issue("oma_workspace_key");
+    now += 10 * 60 * 1_000 - 1;
+    expect(bootstrap.consume(beforeBoundary)).toBe("oma_workspace_key");
+
+    const atBoundary = bootstrap.issue("oma_workspace_key");
+    now += 10 * 60 * 1_000;
+    expect(bootstrap.consume(atBoundary)).toBeUndefined();
   });
 
   it("refuses to register console bootstrap on a non-loopback bind", () => {
@@ -179,6 +222,7 @@ function request(
     beta?: boolean;
     origin?: string;
     apiKey?: string;
+    onboardingToken?: string;
   } = {},
 ): Promise<Response> {
   const headers = new Headers();
@@ -186,6 +230,7 @@ function request(
   if (opts.cookie !== undefined) headers.set("cookie", opts.cookie);
   if (opts.beta) headers.set("anthropic-beta", MANAGED_AGENTS_BETA);
   if (opts.apiKey) headers.set("x-api-key", opts.apiKey);
+  if (opts.onboardingToken) headers.set("x-oma-onboarding-token", opts.onboardingToken);
   if (opts.method && opts.method !== "GET") headers.set("origin", opts.origin ?? "http://console.test");
   return Promise.resolve(app.fetch(new Request(`http://console.test${path}`, {
     method: opts.method ?? "GET",

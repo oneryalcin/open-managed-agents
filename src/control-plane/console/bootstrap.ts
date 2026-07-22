@@ -1,6 +1,6 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
-const DEFAULT_TTL_MS = 2 * 60 * 1000;
+const DEFAULT_TTL_MS = 10 * 60 * 1000;
 
 interface BootstrapGrant {
   workspaceKey: string;
@@ -14,6 +14,7 @@ interface BootstrapGrant {
  */
 export class ConsoleBootstrapService {
   private readonly grants = new Map<string, BootstrapGrant>();
+  private authority?: { workspaceKey: string; controlTokenHash: Buffer };
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -29,6 +30,20 @@ export class ConsoleBootstrapService {
     return nonce;
   }
 
+  bindResumeAuthority(workspaceKey: string, controlToken: string): void {
+    this.authority = {
+      workspaceKey,
+      controlTokenHash: digest(controlToken),
+    };
+  }
+
+  issueForControlToken(controlToken: string): string | undefined {
+    if (this.authority === undefined) return undefined;
+    const candidate = digest(controlToken);
+    if (!timingSafeEqual(candidate, this.authority.controlTokenHash)) return undefined;
+    return this.issue(this.authority.workspaceKey);
+  }
+
   consume(nonce: string): string | undefined {
     const key = hash(nonce);
     const grant = this.grants.get(key);
@@ -41,9 +56,14 @@ export class ConsoleBootstrapService {
 
   clear(): void {
     this.grants.clear();
+    this.authority = undefined;
   }
 }
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function digest(value: string): Buffer {
+  return createHash("sha256").update(value).digest();
 }

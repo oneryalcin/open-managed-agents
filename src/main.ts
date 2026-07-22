@@ -36,7 +36,7 @@ export interface ApplianceEnv extends DeploymentControlPlaneEnv {
 
 export interface StartApplianceOptions {
   log?: (line: string) => void;
-  onboarding?: { bootstrap: ConsoleBootstrapService };
+  onboarding?: { bootstrap: ConsoleBootstrapService; controlToken: string };
 }
 
 export interface RunningAppliance {
@@ -114,6 +114,12 @@ export async function startAppliance(
     const onboardingKey = authMode === "api-key" && opts.onboarding !== undefined
       ? mintOnboardingKey(stores.workspaces)
       : undefined;
+    if (onboardingKey !== undefined) {
+      opts.onboarding!.bootstrap.bindResumeAuthority(
+        onboardingKey.plaintextKey,
+        opts.onboarding!.controlToken,
+      );
+    }
     const minted =
       onboardingKey === undefined && authMode === "api-key" && stores.workspaces.countApiKeys() === 0
         ? stores.workspaces.mintKey(DEFAULT_WORKSPACE_ID, "first-boot")

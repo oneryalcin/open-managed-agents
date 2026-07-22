@@ -393,9 +393,12 @@ they are intentionally no longer repeated here.
    ([#196](https://github.com/oneryalcin/open-managed-agents/issues/196), plan
    0143). The terminal/credential foundation and the attached loopback
    appliance, one-shot console bootstrap, browser handoff, and marker-owned
-   starter graph are implemented. The remaining product gap is reuse of an
-   already-running compatible appliance; the remaining release gates are the
-   packed-browser timing lane, threat-model review, and human warm-path study.
+   starter graph are implemented. Onboarding-owned appliances can be reopened
+   with a private local lifecycle record and fresh one-shot browser nonce, and
+   a missing sandbox image has an explicit interactive/`--pull` recovery. The
+   remaining release gates are the packed-browser timing lane and human
+   warm-path study; the local bootstrap threat model is updated with this
+   lifecycle boundary.
 2. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
    owned by [Getting Started](docs/getting-started.md):
    `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,

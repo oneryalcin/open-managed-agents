@@ -434,7 +434,7 @@ Usage:
   oma auth set <provider> [--stdin]
   oma auth status [provider]
   oma auth remove <provider>
-  oma onboard [--provider name] [--stdin] [--sandbox docker|microsandbox] [--json]
+  oma onboard [--provider name] [--stdin] [--sandbox docker|microsandbox] [--pull] [--json]
   oma doctor [--sandbox docker|microsandbox] [--json]
   oma admin init
   oma admin status
@@ -449,7 +449,7 @@ Commands:
   providers   Inspect enabled Pi model providers and credential readiness.
   models      List or validate enabled Pi models.
   auth        Store, remove, or inspect model provider API-key credentials.
-  onboard     Guided prerequisite and provider-credential setup. It does not yet start OMA or open the console.
+  onboard     Prepare credentials, start or resume local OMA, and open a starter console session.
   doctor      Run secret-safe, read-only local readiness diagnostics.
   admin       Initialize or inspect local appliance admin mode.
   version     Print the installed OMA version.
@@ -499,7 +499,7 @@ function commandHelpFor(key) {
   "auth set": ["Usage: oma auth set <provider> [--stdin]", "Store a provider key without accepting it as a command-line argument.", "Example: printf '%s\\n' \"$OPENAI_API_KEY\" | oma auth set openai --stdin"],
   "auth status": ["Usage: oma auth status [provider]", "Show credential readiness without secret values.", "Example: oma auth status openai"],
   "auth remove": ["Usage: oma auth remove <provider>", "Remove a stored provider credential idempotently.", "Example: oma auth remove openai"],
-  onboard: ["Usage: oma onboard [--provider name] [--stdin] [--sandbox docker|microsandbox] [--json]", "Verify warm-path prerequisites without mutation, then select or store a provider credential. This foundation command does not yet start OMA or open the console.", "Examples: oma onboard; printf '%s\\n' \"$ANTHROPIC_API_KEY\" | oma onboard --provider anthropic --stdin"],
+  onboard: ["Usage: oma onboard [--provider name] [--stdin] [--sandbox docker|microsandbox] [--pull] [--json]", "Verify warm-path prerequisites, select or store a provider credential, start or resume the attached local appliance, and open its starter console session. --pull explicitly permits a missing Docker sandbox image to be downloaded.", "Examples: oma onboard; oma onboard --pull; printf '%s\\n' \"$ANTHROPIC_API_KEY\" | oma onboard --provider anthropic --stdin"],
   admin: ["Usage: oma admin <init|status>", "Initialize or inspect appliance-wide admin mode.", "Examples: oma admin init; oma admin status"],
   "admin init": ["Usage: oma admin init [--file path]", "Create a new owner-only admin key file; existing files are never overwritten.", "Example: oma admin init"],
   "admin status": ["Usage: oma admin status", "Inspect admin configuration without printing the key.", "Example: oma admin status"],

@@ -206,17 +206,23 @@ path than ordinary workspace or admin keys:
   attached onboarding process exits.
 - The browser receives a separate 256-bit `ocb_` bearer nonce in the URL
   fragment, not the workspace key. The server stores only the nonce hash in
-  process memory, expires it after two minutes, deletes it before validating a
+  process memory, expires it after ten minutes, deletes it before validating a
   consume attempt, and exchanges it only through a same-origin POST for the
   ordinary opaque HttpOnly/SameSite=Strict console cookie. The UI removes the
   fragment with `history.replaceState` before making that POST.
 - The nonce is not accepted by `/v1`, is never persisted, and replay/expiry,
   cross-origin exchange, and shutdown invalidation are covered by tests.
+- While the attached onboarding appliance is alive, the CLI stores a separate
+  256-bit `oct_` lifecycle token, loopback URL, and starter-session ID in an
+  owner-only `0600` local resume record. A later `oma onboard` invocation can
+  present that lifecycle token to mint a fresh single-use browser nonce. The
+  lifecycle token cannot authenticate `/v1`, is never sent to the browser, and
+  the record is removed when the owning appliance exits normally.
 
 Residual local risk: any process that can observe the fragment or race requests
 from the same local user may consume the bearer nonce first and obtain a
 workspace console session. High nonce entropy prevents guessing but cannot
-distinguish two processes acting as that same local user. The short lifetime,
+distinguish two processes acting as that same local user. The ten-minute lifetime,
 single-use deletion, loopback-only route, browser-fragment transport, and
 attached-process revocation bound this risk; the feature is not suitable as a
 general passwordless login mechanism.

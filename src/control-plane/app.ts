@@ -527,6 +527,15 @@ function registerConsoleSessionRoutes(
   });
 
   if (consoleAuth.bootstrap !== undefined) {
+    app.post("/console/auth/bootstrap/renew", async (c) => {
+      const controlToken = c.req.header("x-oma-onboarding-token");
+      if (controlToken === undefined) return consoleAuthenticationFailed(c);
+      const nonce = consoleAuth.bootstrap!.issueForControlToken(controlToken);
+      if (nonce === undefined) return consoleAuthenticationFailed(c);
+      c.header("cache-control", "no-store");
+      return c.json({ nonce });
+    });
+
     app.post("/console/auth/bootstrap", async (c) => {
       if (!sameOriginForCookieWrite(c)) return c.text("Forbidden\n", 403);
       const nonce = stringField(await parseJsonBody(c.req), "nonce");

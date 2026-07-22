@@ -2,6 +2,19 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { stdin as input } from "node:process";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   inspectOma,
   type DoctorReport,
@@ -38,6 +51,8 @@ export interface OnboardRuntime {
   providerStatus(provider?: string): Promise<{ providers: string[]; stored: boolean | undefined }>;
   storeCredential(provider: string, key: string): Promise<void>;
   readStdin(): Promise<string>;
+  pullImage(image: string): Promise<void>;
+  resume(options: { json: boolean }): Promise<{ sessionId: string } | undefined>;
   launch(
     provider: string,
     sandbox: Sandbox,
@@ -57,6 +72,7 @@ interface OnboardOptions {
   provider?: string;
   stdin: boolean;
   json: boolean;
+  pull: boolean;
   sandbox: Sandbox;
 }
 
@@ -79,6 +95,21 @@ export async function runOnboard(
     return { code: 2, credential: "not_reached" };
   }
 
+  if (!options.json) runtime.terminal.intro(pc.bgCyan(pc.black(" Open Managed Agents ")));
+
+  if (options.provider === undefined && !options.stdin) {
+    try {
+      const resumed = await runtime.resume({ json: options.json });
+      if (resumed !== undefined) {
+        emitResumed(runtime, options.json, resumed.sessionId);
+        return { code: 0, credential: "reused", sessionId: resumed.sessionId };
+      }
+    } catch (error) {
+      emitFailure(runtime, options.json, safeMessage(error));
+      return { code: 1, credential: "not_reached" };
+    }
+  }
+
   if (!runtime.interactive && !options.stdin && options.provider === undefined) {
     emitFailure(runtime, options.json, "Non-interactive onboarding requires --provider and either --stdin or an existing stored credential.");
     return { code: 2, credential: "not_reached" };
@@ -89,14 +120,42 @@ export async function runOnboard(
     return { code: 2, credential: "not_reached" };
   }
 
-  if (!options.json) runtime.terminal.intro(pc.bgCyan(pc.black(" Open Managed Agents ")));
-
-  const report = await runtime.inspect({ sandbox: options.sandbox });
-  const failures = onboardingPreflightFailures(report, options.sandbox);
+  let report = await runtime.inspect({ sandbox: options.sandbox });
+  const imageMissing = options.sandbox === "docker-local"
+    && report.checks.find((check) => check.id === "sandbox.image")?.status !== "pass";
+  const failures = onboardingPreflightFailures(report, options.sandbox, { allowMissingImage: imageMissing });
   if (failures.length > 0) {
     const detail = failures.join("\n");
     emitFailure(runtime, options.json, detail);
     return { code: 1, credential: "not_reached", report };
+  }
+  if (imageMissing) {
+    let approved = options.pull;
+    if (!approved && runtime.interactive && !options.json) {
+      const answer = await runtime.terminal.confirm({
+        message: `The cached OMA image is missing. Pull it now? This download is outside the three-minute warm-path target.`,
+        initialValue: true,
+      });
+      if (answer === ONBOARD_CANCELLED) return cancelled(runtime, options.json, report);
+      approved = answer;
+    }
+    if (!approved) {
+      emitFailure(runtime, options.json, `Pull the cached prerequisite image, then retry: docker pull ${DEFAULT_OMA_SANDBOX_IMAGE}`);
+      return { code: 1, credential: "not_reached", report };
+    }
+    if (!options.json) runtime.terminal.step(`Pulling ${DEFAULT_OMA_SANDBOX_IMAGE}`);
+    try {
+      await runtime.pullImage(DEFAULT_OMA_SANDBOX_IMAGE);
+      report = await runtime.inspect({ sandbox: options.sandbox });
+    } catch (error) {
+      emitFailure(runtime, options.json, safeMessage(error));
+      return { code: 1, credential: "not_reached", report };
+    }
+    const afterPull = onboardingPreflightFailures(report, options.sandbox);
+    if (afterPull.length > 0) {
+      emitFailure(runtime, options.json, afterPull.join("\n"));
+      return { code: 1, credential: "not_reached", report };
+    }
   }
   if (!options.json) runtime.terminal.step("Docker and the cached OMA sandbox image are ready.");
 
@@ -237,6 +296,11 @@ export function createProcessOnboardRuntime(): OnboardRuntime {
       if (result.code !== 0) throw new Error(result.stderr.trim());
     },
     readStdin: readOneSecretFromStdin,
+    async pullImage(image) {
+      const result = spawnSync("docker", ["pull", image], { stdio: "inherit" });
+      if (result.status !== 0) throw new Error(`docker pull failed for ${image}`);
+    },
+    resume: (options) => tryResumeLocalOnboarding(process.env, createClackTerminal(), options.json),
     launch: (provider, sandbox, options) => launchLocalOnboarding(provider, sandbox, process.env, createClackTerminal(), options),
   };
 }
@@ -249,6 +313,7 @@ export async function launchLocalOnboarding(
   options: { json: boolean; onReady(sessionId: string): void },
 ): Promise<{ sessionId: string }> {
   const bootstrap = new ConsoleBootstrapService();
+  const controlToken = `oct_${randomBytes(32).toString("base64url")}`;
   const runtimeEnv = resolveOmaUpEgressEnvironment(env, sandbox);
   const applianceEnv = {
     ...runtimeEnv,
@@ -264,8 +329,9 @@ export async function launchLocalOnboarding(
   if (!options.json) terminal.step("Starting local OMA");
   const appliance = await startAppliance(applianceEnv, {
     log: () => undefined,
-    onboarding: { bootstrap },
+    onboarding: { bootstrap, controlToken },
   });
+  let resumeStateWritten = false;
   try {
     if (appliance.onboarding === undefined) throw new Error("Local onboarding requires workspace authentication");
     if (!options.json) terminal.step("Preparing your first session");
@@ -275,6 +341,14 @@ export async function launchLocalOnboarding(
       provider,
     });
     if (!options.json) for (const warning of starter.warnings) terminal.warn(warning);
+    writeResumeState(env, {
+      schema_version: 1,
+      pid: process.pid,
+      base_url: appliance.baseUrl,
+      session_id: starter.sessionId,
+      control_token: controlToken,
+    });
+    resumeStateWritten = true;
     const url = `${appliance.baseUrl}/console/#bootstrap=${encodeURIComponent(appliance.onboarding.bootstrapNonce)}&session=${encodeURIComponent(starter.sessionId)}`;
     const opened = openBrowser(url);
     if (!opened && !options.json) terminal.warn(`Browser launch failed. Open this local URL manually: ${url}`);
@@ -283,8 +357,123 @@ export async function launchLocalOnboarding(
     await waitForShutdownSignal();
     return { sessionId: starter.sessionId };
   } finally {
+    if (resumeStateWritten) removeResumeState(env, controlToken);
     await appliance.close();
   }
+}
+
+interface OnboardingResumeState {
+  schema_version: 1;
+  pid: number;
+  base_url: string;
+  session_id: string;
+  control_token: string;
+}
+
+export async function tryResumeLocalOnboarding(
+  env: NodeJS.ProcessEnv,
+  terminal: OnboardTerminal,
+  json: boolean,
+  dependencies: {
+    fetch?: typeof fetch;
+    openBrowser?: (url: string) => boolean;
+  } = {},
+): Promise<{ sessionId: string } | undefined> {
+  const fetchImpl = dependencies.fetch ?? fetch;
+  const openBrowserImpl = dependencies.openBrowser ?? openBrowser;
+  const state = readResumeState(env);
+  if (state === undefined) return undefined;
+  const health = await fetchImpl(new URL("/health", state.base_url), {
+    signal: AbortSignal.timeout(1_000),
+  }).catch(() => undefined);
+  if (health?.ok !== true) {
+    removeResumeState(env, state.control_token);
+    return undefined;
+  }
+  const renewed = await fetchImpl(new URL("/console/auth/bootstrap/renew", state.base_url), {
+    method: "POST",
+    headers: { "x-oma-onboarding-token": state.control_token },
+    signal: AbortSignal.timeout(1_000),
+  }).catch(() => undefined);
+  if (renewed?.ok !== true) {
+    removeResumeState(env, state.control_token);
+    return undefined;
+  }
+  const body = await renewed.json() as { nonce?: unknown };
+  if (typeof body.nonce !== "string" || !body.nonce.startsWith("ocb_")) {
+    throw new Error("The running OMA appliance returned an invalid onboarding resume response");
+  }
+  const url = `${state.base_url}/console/#bootstrap=${encodeURIComponent(body.nonce)}&session=${encodeURIComponent(state.session_id)}`;
+  const opened = openBrowserImpl(url);
+  if (!opened && !json) terminal.warn(`Browser launch failed. Open this local URL manually: ${url}`);
+  return { sessionId: state.session_id };
+}
+
+function writeResumeState(env: NodeJS.ProcessEnv, state: OnboardingResumeState): void {
+  const path = resumeStatePath(env);
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const directoryStat = lstatSync(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new Error(`OMA onboarding state directory is unsafe: ${directory}`);
+  }
+  const temporary = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(state)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    renameSync(temporary, path);
+    chmodSync(path, 0o600);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+function readResumeState(env: NodeJS.ProcessEnv): OnboardingResumeState | undefined {
+  const path = resumeStatePath(env);
+  if (!existsSync(path)) return undefined;
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+    throw new Error(`OMA onboarding resume state is unsafe: ${path} must be a private regular file`);
+  }
+  let value: Partial<OnboardingResumeState>;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8")) as Partial<OnboardingResumeState>;
+  } catch {
+    throw new Error(`OMA onboarding resume state is invalid: ${path}`);
+  }
+  if (
+    value.schema_version !== 1
+    || typeof value.pid !== "number"
+    || typeof value.base_url !== "string"
+    || typeof value.session_id !== "string"
+    || typeof value.control_token !== "string"
+  ) {
+    throw new Error(`OMA onboarding resume state is invalid: ${path}`);
+  }
+  const url = new URL(value.base_url);
+  if (url.protocol !== "http:" || !isLoopbackHostname(url.hostname) || url.username || url.password) {
+    throw new Error(`OMA onboarding resume state has an unsafe appliance URL: ${value.base_url}`);
+  }
+  return value as OnboardingResumeState;
+}
+
+function removeResumeState(env: NodeJS.ProcessEnv, expectedControlToken: string): void {
+  const path = resumeStatePath(env);
+  if (!existsSync(path)) return;
+  try {
+    const current = readResumeState(env);
+    if (current?.control_token === expectedControlToken) rmSync(path, { force: true });
+  } catch {
+    // Never delete a state file that failed validation or may belong to a
+    // newer onboarding process.
+  }
+}
+
+function resumeStatePath(env: NodeJS.ProcessEnv): string {
+  return join(env.OMA_HOME?.trim() || join(homedir(), ".oma"), "onboarding-resume.json");
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]" || hostname === "::1";
 }
 
 function openBrowser(url: string): boolean {
@@ -332,7 +521,7 @@ function createClackTerminal(): OnboardTerminal {
 }
 
 function parseOnboardArgs(argv: readonly string[]): OnboardOptions {
-  const options: OnboardOptions = { stdin: false, json: false, sandbox: "docker-local" };
+  const options: OnboardOptions = { stdin: false, json: false, pull: false, sandbox: "docker-local" };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--provider") {
@@ -343,6 +532,8 @@ function parseOnboardArgs(argv: readonly string[]): OnboardOptions {
       options.stdin = true;
     } else if (arg === "--json") {
       options.json = true;
+    } else if (arg === "--pull") {
+      options.pull = true;
     } else if (arg === "--sandbox") {
       const sandbox = argv[++index];
       if (sandbox === "docker" || sandbox === "docker-local") options.sandbox = "docker-local";
@@ -352,19 +543,20 @@ function parseOnboardArgs(argv: readonly string[]): OnboardOptions {
       throw new Error(`Unknown option for oma onboard: ${arg}`);
     }
   }
-  if (options.json && !options.stdin && options.provider === undefined) {
-    throw new Error("--json requires --provider and either --stdin or an existing stored credential");
-  }
   return options;
 }
 
-function onboardingPreflightFailures(report: DoctorReport, sandbox: Sandbox): string[] {
+function onboardingPreflightFailures(
+  report: DoctorReport,
+  sandbox: Sandbox,
+  options: { allowMissingImage?: boolean } = {},
+): string[] {
   const required = ["node.version", "models.catalog", "sandbox.runtime", "server.port"];
-  if (sandbox === "docker-local") required.push("sandbox.image");
+  if (sandbox === "docker-local" && !options.allowMissingImage) required.push("sandbox.image");
   const failures = report.checks
     .filter((check) => required.includes(check.id) && check.status !== "pass")
     .map((check) => check.summary);
-  if (sandbox === "docker-local" && report.checks.find((check) => check.id === "sandbox.image")?.status !== "pass") {
+  if (sandbox === "docker-local" && !options.allowMissingImage && report.checks.find((check) => check.id === "sandbox.image")?.status !== "pass") {
     failures.push(`Pull the cached prerequisite image, then retry: docker pull ${DEFAULT_OMA_SANDBOX_IMAGE}`);
   }
   return [...new Set(failures)];
@@ -408,6 +600,14 @@ function emitSuccess(runtime: OnboardRuntime, json: boolean, provider: string, c
   }
   const verb = credential === "stored" ? "stored securely" : "already stored";
   runtime.terminal.step(`Credential ${verb}.`);
+}
+
+function emitResumed(runtime: OnboardRuntime, json: boolean, sessionId: string): void {
+  if (json) {
+    console.log(JSON.stringify({ schema_version: 1, status: "ready", resumed: true, session_id: sessionId }));
+  } else {
+    runtime.terminal.outro("Existing local OMA session reopened.");
+  }
 }
 
 function safeMessage(error: unknown): string {

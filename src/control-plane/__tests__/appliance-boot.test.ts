@@ -139,7 +139,7 @@ describe("appliance boot (plan 0115)", () => {
     const bootstrap = new ConsoleBootstrapService();
     const appliance = await startAppliance(
       { OMA_HOME: home, OMA_PORT: "0" },
-      { log: (line) => logs.push(line), onboarding: { bootstrap } },
+      { log: (line) => logs.push(line), onboarding: { bootstrap, controlToken: "oct_test" } },
     );
     expect(logs.some((line) => KEY_LINE.test(line))).toBe(false);
     expect(appliance.onboarding?.workspaceKey).toMatch(/^oma_/);
