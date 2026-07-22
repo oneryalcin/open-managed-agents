@@ -68,6 +68,7 @@ import {
   sessionNotDeletable,
   sessionScopeKey,
 } from "./session-guards.ts";
+import { PendingActionStore } from "./pending-actions.ts";
 import {
   eventPayload,
   hasToolResultForToolUseId,
@@ -170,26 +171,16 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly runtimeEventCoordinator:
     | DeploymentRuntimeEventCoordinator
     | undefined;
-  private readonly pendingCustomToolActions = new Map<
-    string,
-    {
-      workspaceId: WorkspaceId;
-      ids: string[];
-      timer: ReturnType<typeof setTimeout> | undefined;
-    }
-  >();
+  private readonly pendingCustomToolActions = new PendingActionStore(
+    (workspaceId, sessionId) => this.flushPendingActions(workspaceId, sessionId),
+  );
   private readonly closedSessions = new Set<string>();
   private readonly deletedSessions = new Set<string>();
   private readonly activeRuntimeTasks = new Map<string, number>();
   private readonly interruptedCustomToolActions = new Map<string, Set<string>>();
-  private readonly pendingToolConfirmations = new Map<
-    string,
-    {
-      workspaceId: WorkspaceId;
-      ids: string[];
-      timer: ReturnType<typeof setTimeout> | undefined;
-    }
-  >();
+  private readonly pendingToolConfirmations = new PendingActionStore(
+    (workspaceId, sessionId) => this.flushPendingActions(workspaceId, sessionId),
+  );
   private readonly interruptedToolConfirmations = new Map<string, Set<string>>();
   private readonly completedToolConfirmations = new Map<
     string,
@@ -455,10 +446,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
       committedToolConfirmations.length > 0;
     if (hasCommittedRuntimeInputs) {
       for (const { customToolUseId } of liveCustomToolResultClaims) {
-        this.removePendingCustomToolAction(workspaceId, sessionId, customToolUseId);
+        this.pendingCustomToolActions.remove(workspaceId, sessionId, customToolUseId);
       }
       for (const { toolUseId } of committedToolConfirmations) {
-        this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+        this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
       }
       this.persistRuntimeDrafts(workspaceId, sessionId, [
         { type: "session.status_running", payload: {} },
@@ -521,7 +512,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         workspaceId,
         sessionId,
         unique([
-          ...this.clearPendingCustomToolActions(workspaceId, sessionId),
+          ...this.pendingCustomToolActions.clear(workspaceId, sessionId),
           ...this.pendingRuntimeActionIds(workspaceId, sessionId, "custom_tool"),
         ]),
       ),
@@ -533,7 +524,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         workspaceId,
         sessionId,
         unique([
-          ...this.clearPendingToolConfirmations(workspaceId, sessionId),
+          ...this.pendingToolConfirmations.clear(workspaceId, sessionId),
           ...this.pendingRuntimeActionIds(
             workspaceId,
             sessionId,
@@ -832,8 +823,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): Promise<void> {
     requireExistingSession(this.sessions, workspaceId, sessionId);
     this.closedSessions.add(sessionScopeKey(workspaceId, sessionId));
-    this.clearPendingCustomToolActions(workspaceId, sessionId);
-    this.clearPendingToolConfirmations(workspaceId, sessionId);
+    this.pendingCustomToolActions.clear(workspaceId, sessionId);
+    this.pendingToolConfirmations.clear(workspaceId, sessionId);
     this.clearCompletedToolConfirmations(workspaceId, sessionId);
     this.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
     this.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
@@ -850,8 +841,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
   ): Promise<void> {
     this.closedSessions.add(sessionScopeKey(workspaceId, sessionId));
-    this.clearPendingCustomToolActions(workspaceId, sessionId);
-    this.clearPendingToolConfirmations(workspaceId, sessionId);
+    this.pendingCustomToolActions.clear(workspaceId, sessionId);
+    this.pendingToolConfirmations.clear(workspaceId, sessionId);
     this.clearCompletedToolConfirmations(workspaceId, sessionId);
     this.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
     this.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
@@ -1926,7 +1917,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             reason,
           );
         }
-        this.removePendingCustomToolAction(workspaceId, sessionId, useRows[0].id);
+        this.pendingCustomToolActions.remove(workspaceId, sessionId, useRows[0].id);
       });
       persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
         openedActions: [
@@ -1951,7 +1942,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           },
         ],
       });
-      this.addPendingCustomToolAction(workspaceId, sessionId, useRows[0].id);
+      this.pendingCustomToolActions.add(workspaceId, sessionId, useRows[0].id);
     } catch (error) {
       event.rejectCustomToolUse(toError(error));
       throw error;
@@ -1979,7 +1970,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           if (reason !== undefined) {
             this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
           }
-          this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+          this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
         },
       });
       persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
@@ -1995,7 +1986,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         }),
       });
       if (event.evaluatedPermission === "ask") {
-        this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+        this.pendingToolConfirmations.add(workspaceId, sessionId, useRows[0].id);
       }
     } catch (error) {
       event.rejectToolUse(toError(error));
@@ -2030,7 +2021,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           if (reason !== undefined) {
             this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
           }
-          this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+          this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
         },
       });
       const suppressedPiToolCallIds = new Set([
@@ -2099,7 +2090,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         },
       );
       if (permission.evaluatedPermission === "ask") {
-        this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+        this.pendingToolConfirmations.add(workspaceId, sessionId, useRows[0].id);
       }
       return spanEndDrafts.length > 0 ? closingModelRequestStartId : undefined;
     } catch (error) {
@@ -2133,7 +2124,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           if (reason !== undefined) {
             this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
           }
-          this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+          this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
         },
       });
       persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
@@ -2149,7 +2140,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         }),
       });
       if (event.evaluatedPermission === "ask") {
-        this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+        this.pendingToolConfirmations.add(workspaceId, sessionId, useRows[0].id);
       }
     } catch (error) {
       event.rejectToolUse(toError(error));
@@ -2184,7 +2175,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           if (reason !== undefined) {
             this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
           }
-          this.removePendingToolConfirmation(workspaceId, sessionId, toolUseId);
+          this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
         },
       });
       const suppressedPiToolCallIds = new Set([
@@ -2253,7 +2244,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         },
       );
       if (mcpToolUse.evaluatedPermission === "ask") {
-        this.addPendingToolConfirmation(workspaceId, sessionId, useRows[0].id);
+        this.pendingToolConfirmations.add(workspaceId, sessionId, useRows[0].id);
       }
       return spanEndDrafts.length > 0 ? closingModelRequestStartId : undefined;
     } catch (error) {
@@ -2778,118 +2769,6 @@ export class DefaultSessionEventsService implements SessionEventsService {
     return rows;
   }
 
-  private addPendingCustomToolAction(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    customToolUseId: string,
-  ): void {
-    const key = sessionScopeKey(workspaceId, sessionId);
-    let pending = this.pendingCustomToolActions.get(key);
-    if (!pending) {
-      pending = { workspaceId, ids: [], timer: undefined };
-      this.pendingCustomToolActions.set(key, pending);
-    }
-    pending.ids.push(customToolUseId);
-    if (pending.timer) return;
-    // Pi may emit parallel custom-tool calls back-to-back in one runtime burst.
-    // Defer the idle by one macrotask so those calls coalesce into one
-    // requires_action event. If another tool arrives later, we re-emit
-    // requires_action with the full remaining pending set.
-    pending.timer = setTimeout(() => {
-      this.flushPendingActions(pending.workspaceId, sessionId);
-    }, 0);
-  }
-
-  private removePendingCustomToolAction(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    customToolUseId: string,
-  ): void {
-    const key = sessionScopeKey(workspaceId, sessionId);
-    const pending = this.pendingCustomToolActions.get(key);
-    if (!pending) return;
-    pending.ids = pending.ids.filter((id) => id !== customToolUseId);
-    if (pending.ids.length === 0 && pending.timer === undefined) {
-      this.pendingCustomToolActions.delete(key);
-    }
-  }
-
-  private clearPendingCustomToolActions(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): string[] {
-    const key = sessionScopeKey(workspaceId, sessionId);
-    const pending = this.pendingCustomToolActions.get(key);
-    if (!pending) return [];
-    if (pending.timer) clearTimeout(pending.timer);
-    this.pendingCustomToolActions.delete(key);
-    return [...pending.ids];
-  }
-
-  private hasPendingCustomToolActions(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): boolean {
-    return (
-      this.pendingCustomToolActions.get(sessionScopeKey(workspaceId, sessionId))
-        ?.ids.length ?? 0
-    ) > 0;
-  }
-
-  private addPendingToolConfirmation(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    toolUseId: string,
-  ): void {
-    const key = sessionScopeKey(workspaceId, sessionId);
-    let pending = this.pendingToolConfirmations.get(key);
-    if (!pending) {
-      pending = { workspaceId, ids: [], timer: undefined };
-      this.pendingToolConfirmations.set(key, pending);
-    }
-    pending.ids.push(toolUseId);
-    if (pending.timer) return;
-    pending.timer = setTimeout(() => {
-      this.flushPendingActions(pending.workspaceId, sessionId);
-    }, 0);
-  }
-
-  private removePendingToolConfirmation(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    toolUseId: string,
-  ): void {
-    const key = sessionScopeKey(workspaceId, sessionId);
-    const pending = this.pendingToolConfirmations.get(key);
-    if (!pending) return;
-    pending.ids = pending.ids.filter((id) => id !== toolUseId);
-    if (pending.ids.length === 0 && pending.timer === undefined) {
-      this.pendingToolConfirmations.delete(key);
-    }
-  }
-
-  private clearPendingToolConfirmations(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): string[] {
-    const key = sessionScopeKey(workspaceId, sessionId);
-    const pending = this.pendingToolConfirmations.get(key);
-    if (!pending) return [];
-    if (pending.timer) clearTimeout(pending.timer);
-    this.pendingToolConfirmations.delete(key);
-    return [...pending.ids];
-  }
-
-  private hasPendingToolConfirmations(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): boolean {
-    return (
-      this.pendingToolConfirmations.get(sessionScopeKey(workspaceId, sessionId))
-        ?.ids.length ?? 0
-    ) > 0;
-  }
-
   private clearCompletedToolConfirmations(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -2909,8 +2788,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
   ): boolean {
     return (
-      this.hasPendingCustomToolActions(workspaceId, sessionId) ||
-      this.hasPendingToolConfirmations(workspaceId, sessionId)
+      this.pendingCustomToolActions.has(workspaceId, sessionId) ||
+      this.pendingToolConfirmations.has(workspaceId, sessionId)
     );
   }
 
@@ -2945,28 +2824,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
   }
 
   private flushPendingActions(workspaceId: WorkspaceId, sessionId: string): void {
-    const key = sessionScopeKey(workspaceId, sessionId);
-    const custom = this.pendingCustomToolActions.get(key);
-    const confirmations = this.pendingToolConfirmations.get(key);
-    if (!custom && !confirmations) return;
-    if (custom?.timer) {
-      clearTimeout(custom.timer);
-      custom.timer = undefined;
-    }
-    if (confirmations?.timer) {
-      clearTimeout(confirmations.timer);
-      confirmations.timer = undefined;
-    }
+    // Coalesce both stores into ONE requires_action event (custom then
+    // confirmations, preserving id order). snapshotForFlush clears each timer
+    // and drops the entry when empty (ids persist until resolved); a re-entrant
+    // flush is a safe no-op.
     const ids = [
-      ...(custom?.ids ?? []),
-      ...(confirmations?.ids ?? []),
+      ...this.pendingCustomToolActions.snapshotForFlush(workspaceId, sessionId),
+      ...this.pendingToolConfirmations.snapshotForFlush(workspaceId, sessionId),
     ];
-    if (custom && custom.ids.length === 0) {
-      this.pendingCustomToolActions.delete(key);
-    }
-    if (confirmations && confirmations.ids.length === 0) {
-      this.pendingToolConfirmations.delete(key);
-    }
     if (ids.length === 0) return;
     this.persistRuntimeDrafts(workspaceId, sessionId, [
       {
@@ -2979,12 +2844,5 @@ export class DefaultSessionEventsService implements SessionEventsService {
         },
       },
     ]);
-  }
-
-  private flushPendingCustomToolActions(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): void {
-    this.flushPendingActions(workspaceId, sessionId);
   }
 }
