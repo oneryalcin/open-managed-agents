@@ -1,7 +1,6 @@
 {
   "name": "open-managed-agents",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "Self-hostable implementation of Anthropic's Managed Agents API surface.",
   "type": "module",
   "bin": {

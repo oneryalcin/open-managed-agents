@@ -56,7 +56,7 @@ describe("oma CLI", () => {
     const result = run(["--version"]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("oma 0.0.1");
+    expect(result.stdout.trim()).toBe("oma 0.1.0");
   });
 
   it("makes every documented command and action help discoverable without side effects", () => {
