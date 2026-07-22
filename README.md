@@ -12,17 +12,35 @@ files, and sandboxes live on your machines, under your policies.
 > self-hosted baseline. The orchestration/persistence layer (multi-agent
 > runtime, memory stores,
 > scheduled deployments, webhooks, outcomes) is deliberately deferred. See
-> **[PARITY.md](PARITY.md)** for the full domain-by-domain scorecard and the
-> active parity worklist, and **[ALPHA.md](ALPHA.md)** for the first-user
+> **[PARITY.md](https://github.com/oneryalcin/open-managed-agents/blob/main/PARITY.md)** for the full domain-by-domain scorecard and the
+> active parity worklist, and **[ALPHA.md](https://github.com/oneryalcin/open-managed-agents/blob/main/ALPHA.md)** for the first-user
 > alpha readiness plan.
 
 ## Quickstart
 
-Start with the canonical source-checkout guide:
+> **Public onboarding preview:** the one-command path is shipped, but its
+> three-minute warm-path target has not yet completed the real-user timing
+> study. Docker image downloads are explicitly outside that warm-path target.
 
-**[Getting Started](docs/getting-started.md)**
+Prerequisites: Node.js 22.19 or newer and a running Docker-compatible daemon.
+Then run:
 
-The alpha path is:
+```bash
+npx --yes open-managed-agents@latest
+```
+
+The guided terminal checks local prerequisites, asks which model provider to
+use, reads the API key through a masked prompt, starts an authenticated
+loopback appliance, creates or reuses a starter agent/environment/session, and
+opens that session in the console. The appliance stays attached to the command;
+press Ctrl-C to stop it. State and provider credentials persist under `~/.oma`.
+
+If the pinned sandbox image is not cached, OMA names the image and asks before
+pulling it. Rerunning the same command while its onboarding-owned appliance is
+alive reopens the existing starter session rather than creating duplicates.
+
+For the full source-checkout diagnostics and deterministic smoke tests, use
+the **[Getting Started guide](https://github.com/oneryalcin/open-managed-agents/blob/main/docs/getting-started.md)**:
 
 ```bash
 git clone https://github.com/oneryalcin/open-managed-agents.git
@@ -45,7 +63,8 @@ events, and cleanup.
 Docker-local egress boundary: npm, uv/PyPI, and GitHub must work under the
 reviewed preset while an unrelated HTTPS destination remains denied.
 
-`oma up` starts the durable local appliance in the foreground, stores data
+In the advanced source-checkout flow, `oma up` starts the durable local appliance
+in the foreground, stores data
 under `~/.oma`, and prints the console URL plus the first workspace API key
 once. Docker deployments have the pinned approved-HTTPS sidecar capability,
 but every environment remains offline unless its immutable allowlist selects a
@@ -55,6 +74,12 @@ mint another while the server is running:
 
 ```bash
 oma keys mint
+```
+
+When using the public package without a global install, the equivalent is:
+
+```bash
+npx --yes open-managed-agents@latest keys mint
 ```
 
 Interactive, air-gap-safe OpenAPI documentation is served at `/docs/`, with
@@ -69,7 +94,7 @@ import anthropic
 
 client = anthropic.Anthropic(
     base_url="http://127.0.0.1:4180",
-    api_key="oma_...",  # printed on first boot
+    api_key="oma_...",  # returned by `oma keys mint`
     default_headers={"anthropic-beta": "managed-agents-2026-04-01"},
 )
 
