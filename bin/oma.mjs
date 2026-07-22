@@ -4,12 +4,19 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolveOmaUpEgressEnvironment } from "../src/control-plane/egress/image.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const compiledRoot = join(root, "dist");
+const usesCompiledRuntime = existsSync(join(compiledRoot, "src", "main.js"));
+const runtimeRoot = usesCompiledRuntime ? compiledRoot : root;
+const runtimeExtension = usesCompiledRuntime ? ".js" : ".ts";
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const args = process.argv.slice(2);
+
+const { resolveOmaUpEgressEnvironment } = await import(
+  pathToFileURL(runtimeFile("src", "control-plane", "egress", "image")).href,
+);
 
 checkNode();
 
@@ -62,9 +69,8 @@ async function runDoctor(commandArgs) {
   await runChild(
     process.execPath,
     [
-      "--experimental-transform-types",
-      "--disable-warning=ExperimentalWarning",
-      join(root, "scripts", "oma-doctor.ts"),
+      ...runtimeNodeFlags(),
+      runtimeFile("scripts", "oma-doctor"),
       ...commandArgs,
     ],
     process.env,
@@ -115,9 +121,8 @@ async function runUp(commandArgs) {
   await runChild(
     process.execPath,
     [
-      "--experimental-transform-types",
-      "--disable-warning=ExperimentalWarning",
-      join(root, "src", "main.ts"),
+      ...runtimeNodeFlags(),
+      runtimeFile("src", "main"),
     ],
     { ...runtimeEnv, ...sandboxEnv, ...adminEnv },
   );
@@ -257,9 +262,8 @@ async function runProvisioning(provisioningArgs) {
   await runChild(
     process.execPath,
     [
-      "--experimental-transform-types",
-      "--disable-warning=ExperimentalWarning",
-      join(root, "scripts", "oma-workspaces.ts"),
+      ...runtimeNodeFlags(),
+      runtimeFile("scripts", "oma-workspaces"),
       ...provisioningArgs,
     ],
     process.env,
@@ -270,9 +274,8 @@ async function runModelProvisioning(provisioningArgs) {
   await runChild(
     process.execPath,
     [
-      "--experimental-transform-types",
-      "--disable-warning=ExperimentalWarning",
-      join(root, "scripts", "oma-models.ts"),
+      ...runtimeNodeFlags(),
+      runtimeFile("scripts", "oma-models"),
       ...provisioningArgs,
     ],
     process.env,
@@ -305,7 +308,7 @@ async function runSmoke(commandArgs) {
   }
   await runChild(
     process.execPath,
-    [join(root, "scripts", "alpha-smoke.mjs")],
+    [join(runtimeRoot, "scripts", "alpha-smoke.mjs")],
     {
       ...process.env,
       ...(sandbox === undefined ? {} : { OMA_ALPHA_SANDBOX_PROVIDER: sandbox }),
@@ -313,6 +316,15 @@ async function runSmoke(commandArgs) {
       ...(egress ? { OMA_ALPHA_EGRESS_SMOKE: "1" } : {}),
     },
   );
+}
+
+function runtimeFile(...segments) {
+  const stem = join(runtimeRoot, ...segments);
+  return `${stem}${runtimeExtension}`;
+}
+
+function runtimeNodeFlags() {
+  return usesCompiledRuntime ? [] : ["--experimental-transform-types", "--disable-warning=ExperimentalWarning"];
 }
 
 function requiredOption(args, index, option) {
