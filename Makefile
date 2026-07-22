@@ -6,7 +6,7 @@ OMA_PROBE_PORT ?= 40178
 OMA_CONSOLE_API_BASE ?= http://127.0.0.1:$(OMA_PROBE_PORT)
 OMA_PARALLEL_SMOKE_SESSIONS ?= 3
 
-.PHONY: help install test typecheck check ui server docker-smoke parallel-docker-smoke console-image-smoke sandbox-image-smoke cwc-smoke gated-smoke
+.PHONY: help install test typecheck check ui server docker-smoke parallel-docker-smoke console-image-smoke sandbox-image-smoke cwc-smoke gated-smoke npm-release-help npm-release-check npm-release-publish npm-release-verify
 
 help:
 	@printf '%s\n' 'Open Managed Agents dev targets'
@@ -23,6 +23,10 @@ help:
 	@printf '%s\n' '  make sandbox-image-smoke     build and verify the OMA coding sandbox image'
 	@printf '%s\n' '  make cwc-smoke               run the Python SDK CWC happy-path smoke'
 	@printf '%s\n' '  make gated-smoke             run the Python SDK ask-gated smoke'
+	@printf '%s\n' '  make npm-release-help        show safe npm release-token setup'
+	@printf '%s\n' '  make npm-release-check       verify the curated npm tarball'
+	@printf '%s\n' '  make npm-release-publish     verify, prompt, and publish the package'
+	@printf '%s\n' '  make npm-release-verify      check the public package and npx CLI'
 	@printf '%s\n' ''
 	@printf '%s\n' 'Variables: OMA_PROBE_PORT=40178 OMA_PARALLEL_SMOKE_SESSIONS=3'
 
@@ -65,3 +69,15 @@ cwc-smoke:
 
 gated-smoke:
 	cd examples/ship-your-first-managed-agent && uv run --with-requirements requirements.txt python smoke_tool_confirmation.py
+
+npm-release-help:
+	$(NPM) run npm:publish -- --help
+
+npm-release-check:
+	$(NPM) run package:verify
+
+npm-release-publish: npm-release-check
+	OMA_NPM_BIN="$(NPM)" $(NPM) run npm:publish
+
+npm-release-verify:
+	OMA_NPM_BIN="$(NPM)" OMA_NPX_BIN="$(NPX)" $(NPM) run npm:publish -- --verify
