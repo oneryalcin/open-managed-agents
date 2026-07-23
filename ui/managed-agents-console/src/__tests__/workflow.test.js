@@ -99,7 +99,7 @@ describe("alpha console workflow", () => {
       readFileSync(join(consoleRoot, "..", "vendor", "babel.min.js"), "utf8"),
       context,
     );
-    for (const file of ["forms.jsx", "environments.jsx", "agents-files.jsx", "detail.jsx", "docs.jsx", "skills.jsx", "app.jsx"]) {
+    for (const file of ["forms.jsx", "environments.jsx", "agents-files.jsx", "detail.jsx", "docs.jsx", "skills.jsx", "vaults.jsx", "app.jsx"]) {
       expect(() => context.Babel.transform(source(file), { presets:["react"] }), file).not.toThrow();
     }
   });

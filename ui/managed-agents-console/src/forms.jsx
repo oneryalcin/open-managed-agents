@@ -213,35 +213,45 @@ function CreateVaultModal({ onClose, onCreated, onAuthExpired, apiMode = 'demo',
 
 function CreateVaultCredentialModal({ vault, onClose, onCreated, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
   const [displayName, setDisplayName] = useStateF('');
-  const [type, setType] = useStateF('static_bearer');
+  const [type, setType] = useStateF('mcp_oauth');
   const [serverUrl, setServerUrl] = useStateF('');
   const [token, setToken] = useStateF('');
-  const [expiresAt, setExpiresAt] = useStateF('');
   const [busy, setBusy] = useStateF(false);
   const [error, setError] = useStateF('');
-  const valid = /^https?:\/\//.test(serverUrl.trim()) && token.trim().length >= 8 && !busy;
+  const validUrl = /^https?:\/\//.test(serverUrl.trim());
+  const valid = validUrl && (type === 'mcp_oauth' || token.trim().length >= 8) && !busy;
   const submit = async () => {
     if (!valid) return;
     setBusy(true); setError('');
-    const auth = type === 'static_bearer'
-      ? { type, mcp_server_url:serverUrl.trim(), token:token.trim() }
-      : { type, mcp_server_url:serverUrl.trim(), access_token:token.trim(), ...(expiresAt.trim() ? { expires_at:expiresAt.trim() } : {}) };
     try {
+      if (type === 'mcp_oauth') {
+        if (apiMode !== 'api') {
+          onCreated({ id:`vcrd_demo_${Date.now()}`, vault_id:vault.id, display_name:displayName.trim() || null, auth:{ type, mcp_server_url:serverUrl.trim() } });
+          return;
+        }
+        const status = await runMcpOauthPopup(
+          () => api.startMcpOauthFlow(vault.id, displayName.trim(), serverUrl.trim()),
+          api,
+        );
+        onCreated({ id:status.credential_id, vault_id:vault.id });
+        return;
+      }
+      const auth = { type, mcp_server_url:serverUrl.trim(), token:token.trim() };
       if (apiMode !== 'api') { onCreated({ id:`vcrd_demo_${Date.now()}`, vault_id:vault.id, display_name:displayName.trim() || null, auth }); return; }
       onCreated(await api.createVaultCredential(vault.id, { ...(displayName.trim() ? { display_name:displayName.trim() } : {}), auth }));
     } catch (createError) {
-      setError(createError.message || 'Credential creation failed.');
+      setError(createError.message || 'Credential connection failed.');
       if (createError.status === 401 && onAuthExpired) onAuthExpired();
     } finally { setBusy(false); }
   };
-  return <Modal icon="database" title="Add credential" sub={`Write-only credential for ${vault.display_name || vault.displayName}.`} onClose={onClose}
-    footer={<><span className="left">Sends to <span className="mono">POST /v1/vaults/:id/credentials</span></span><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!valid} onClick={submit}>{busy ? 'Saving…' : 'Save credential'}</button></>}>
+  const endpoint = type === 'mcp_oauth' ? 'POST /console/mcp-oauth/flows' : 'POST /v1/vaults/:id/credentials';
+  return <Modal icon="database" title="Add credential" sub={`Authorize an MCP server for ${vault.display_name || vault.displayName}.`} onClose={onClose}
+    footer={<><span className="left">Sends to <span className="mono">{endpoint}</span></span><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!valid} onClick={submit}>{busy ? (type === 'mcp_oauth' ? 'Connecting…' : 'Saving…') : (type === 'mcp_oauth' ? 'Connect' : 'Save credential')}</button></>}>
     <Labeled label="Credential name" htmlFor="credential-name" opt><input id="credential-name" className="input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Labeled>
-    <Labeled label="Credential type" htmlFor="credential-type"><select id="credential-type" className="selectbox" value={type} onChange={(event) => setType(event.target.value)}><option value="static_bearer">Static bearer token</option><option value="mcp_oauth">MCP OAuth access token</option></select></Labeled>
-    <Labeled label="MCP server URL" htmlFor="credential-server-url" hint="This must exactly match the URL configured on the agent."><input id="credential-server-url" className="input mono" placeholder="https://mcp.example.com/mcp" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} /></Labeled>
-    <Labeled label={type === 'static_bearer' ? 'Bearer token' : 'OAuth access token'} htmlFor="credential-token" hint="Write-only. OMA never returns or renders this value after it is submitted."><input id="credential-token" type="password" className="input mono" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></Labeled>
-    {type === 'mcp_oauth' && <Labeled label="Expires at" htmlFor="credential-expires" opt hint="ISO-8601 timestamp. Leave blank only for a non-expiring access token."><input id="credential-expires" className="input mono" placeholder="2027-01-01T00:00:00Z" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></Labeled>}
-    {type === 'mcp_oauth' && <div className="field-hint">Use the API for OAuth refresh-token and client-secret configuration; this initial console path safely supports access-token credentials and validation.</div>}
+    <Labeled label="Credential type" htmlFor="credential-type"><select id="credential-type" className="selectbox" value={type} onChange={(event) => setType(event.target.value)}><option value="mcp_oauth">Connect with OAuth</option><option value="static_bearer">Static bearer token</option></select></Labeled>
+    <Labeled label="MCP server URL" htmlFor="credential-server-url" hint="Use the URL configured on the agent, for example https://mcp.notion.com/mcp."><input id="credential-server-url" className="input mono" placeholder="https://mcp.example.com/mcp" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} /></Labeled>
+    {type === 'static_bearer' && <Labeled label="Bearer token" htmlFor="credential-token" hint="Write-only. OMA never returns or renders this value after it is submitted."><input id="credential-token" type="password" className="input mono" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></Labeled>}
+    {type === 'mcp_oauth' && <div className="field-hint">Connect opens the provider in a new window. OMA stores the resulting credential and refreshes it automatically; the browser never receives an access or refresh token.</div>}
     {error && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{error}</span></div>}
   </Modal>;
 }

@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -102,6 +103,7 @@ import { SqliteSessionStore } from "./sessions/store.ts";
 import type { SessionService } from "./sessions/types.ts";
 import { vaultsRoutes } from "./vaults/routes.ts";
 import type { McpOauthValidationDependencies } from "./vaults/mcp-oauth-validate.ts";
+import { ConsoleMcpOauthService } from "./vaults/console-mcp-oauth.ts";
 import { DefaultVaultService } from "./vaults/service.ts";
 import { SqliteVaultStore } from "./vaults/store.ts";
 import type { VaultService } from "./vaults/types.ts";
@@ -168,6 +170,8 @@ export interface ControlPlaneServices {
     /** Present only for the loopback onboarding process. */
     bootstrap?: ConsoleBootstrapService;
   };
+  /** OMA-only browser authorization flow; absent when MCP egress is disabled. */
+  consoleMcpOauth?: ConsoleMcpOauthService;
   /** Absent only in minimal test/library assemblies that do not ship UI assets. */
   openapi?: OpenApiRoutesConfig;
   agents: AgentService;
@@ -581,6 +585,80 @@ function registerConsoleSessionRoutes(
     c.header("cache-control", "no-store");
     return c.body(null, 204);
   });
+
+  const mcpOauth = services.consoleMcpOauth;
+  if (mcpOauth !== undefined) {
+    app.post("/console/mcp-oauth/flows", async (c) => {
+      if (!sameOriginForCookieWrite(c)) return c.text("Forbidden\n", 403);
+      const workspaceId = consoleWorkspaceId(c, services);
+      c.header("cache-control", "no-store");
+      return c.json(
+        await mcpOauth.startConnect(
+          workspaceId,
+          await parseJsonBody(c.req),
+          new URL("/console/mcp-oauth/callback", c.req.url).toString(),
+        ),
+        200,
+      );
+    });
+
+    app.post("/console/mcp-oauth/reauthorize", async (c) => {
+      if (!sameOriginForCookieWrite(c)) return c.text("Forbidden\n", 403);
+      const workspaceId = consoleWorkspaceId(c, services);
+      c.header("cache-control", "no-store");
+      return c.json(
+        await mcpOauth.startReauthorize(
+          workspaceId,
+          await parseJsonBody(c.req),
+          new URL("/console/mcp-oauth/callback", c.req.url).toString(),
+        ),
+        200,
+      );
+    });
+
+    app.get("/console/mcp-oauth/flows/:flowId", (c) => {
+      const workspaceId = consoleWorkspaceId(c, services);
+      c.header("cache-control", "no-store");
+      return c.json(mcpOauth.status(workspaceId, c.req.param("flowId")), 200);
+    });
+
+    app.get("/console/mcp-oauth/callback", async (c) => {
+      c.header("cache-control", "no-store");
+      const scriptNonce = randomBytes(18).toString("base64url");
+      c.header("content-security-policy", `default-src 'none'; script-src 'nonce-${scriptNonce}'; style-src 'unsafe-inline'`);
+      let flowId: string | undefined;
+      let ok = false;
+      try {
+        const result = c.req.query("error") !== undefined
+          ? mcpOauth.deny(c.req.query("state"))
+          : await mcpOauth.complete(c.req.query("state"), c.req.query("code"));
+        flowId = result.flowId;
+        ok = result.ok;
+      } catch {
+        ok = false;
+      }
+      return c.html(consoleMcpOauthCallbackHtml(ok, flowId, scriptNonce), ok ? 200 : 400);
+    });
+  }
+}
+
+function consoleWorkspaceId(c: Context<AppEnv>, services: ControlPlaneServices): WorkspaceId {
+  if (services.auth === undefined) return DEFAULT_WORKSPACE_ID;
+  const token = getCookie(c, CONSOLE_WORKSPACE_COOKIE);
+  const workspaceId = token === undefined
+    ? undefined
+    : services.consoleSessionAuth?.service.authenticateWorkspace(token);
+  if (workspaceId === undefined) throw authenticationFailed();
+  return workspaceId;
+}
+
+function consoleMcpOauthCallbackHtml(ok: boolean, flowId: string | undefined, scriptNonce: string): string {
+  const payload = JSON.stringify({ type: "oma:mcp-oauth", ok, flowId: flowId ?? null });
+  const title = ok ? "MCP connected" : "MCP connection failed";
+  const detail = ok
+    ? "Authorization completed. You can close this window."
+    : "Return to OMA and start Connect again.";
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><style>body{background:#181a1f;color:#eee;font:16px system-ui;margin:0;display:grid;min-height:100vh;place-items:center}.card{max-width:34rem;padding:2rem;border:1px solid #343840;border-radius:12px}p{color:#aaa}</style></head><body><main class="card"><h1>${title}</h1><p>${detail}</p></main><script nonce="${scriptNonce}">if(window.opener){window.opener.postMessage(${payload},window.location.origin)}setTimeout(()=>window.close(),600)</script></body></html>`;
 }
 
 function consoleWorkspace(workspaceId: WorkspaceId, auth: ConsoleSessionAuth): { id: WorkspaceId; name: string } {
@@ -1004,6 +1082,19 @@ export function createDeploymentControlPlane(
       secureCookies: tlsTerminated,
       ...(opts.consoleBootstrap === undefined ? {} : { bootstrap: opts.consoleBootstrap }),
     },
+    ...(runtimeConfig.mcp === undefined
+      ? {}
+      : {
+          consoleMcpOauth: new ConsoleMcpOauthService(
+            vaultService,
+            mcpRuntime!.fetch,
+            {
+              operationTimeoutMs:
+                runtimeConfig.mcp.operationTimeoutMs ??
+                DEFAULT_MCP_OPERATION_TIMEOUT_MS,
+            },
+          ),
+        }),
     ...(openapiRoot === undefined ? {} : { openapi: { root: openapiRoot } }),
     ...(authMode === "api-key"
       ? {
