@@ -14,24 +14,31 @@ hosts.
 
 ## Logging in
 
-The console asks for a key on load (unless the server runs with
-`OMA_AUTH_MODE=disabled`, in which case it browses `wrk_default` directly):
+The normal `oma onboard` path opens the loopback console through a short-lived,
+single-use bootstrap nonce and establishes an opaque HttpOnly browser session;
+no raw workspace key enters the URL or browser storage. A user can also enter a
+workspace key manually when no console session exists. If the server runs with
+`OMA_AUTH_MODE=disabled`, it browses `wrk_default` directly.
 
-- **Workspace key** (`oma_…`, e.g. the one printed on first boot) — read-only
-  browsing of that workspace's agents, sessions, events, spans, and files,
-  including authenticated file downloads.
+- **Workspace key** (`oma_…`) — workspace-scoped browsing and the console's
+  narrowly allowlisted agent, environment, session, vault, credential, and
+  skill workflows, including authenticated event streams and file downloads.
 - **Admin key** (`OMA_ADMIN_KEY`) — everything above plus the Admin panel:
   create workspaces, mint/list/revoke API keys. Minted plaintext is shown
   once, with copy and a "browse as this workspace" shortcut. Setup:
   [dev-deployment.md](../../docs/dev-deployment.md#the-admin-api-and-console-admin-mode).
 
-Keys live in page memory only — never `localStorage`, `sessionStorage`, or a
-cookie (enforced by `src/control-plane/__tests__/console-security.test.ts`).
-A reload asks again.
+Raw keys are used only for the same-origin login exchange and are never stored
+in `localStorage` or `sessionStorage`. The server returns an opaque HttpOnly
+cookie whose authority is revalidated against key revocation. Reloading keeps
+the console session until it expires, is revoked, or the user signs out.
 
-Admin mutations (workspace/key CRUD) are live. `/v1` mutations — create
-agent/session, send message, interrupt, archive — remain deliberately
-disabled in this slice.
+Admin workspace/key CRUD is live. The workspace console also supports the
+reviewed mutation set required for the single-agent flow: agent creation and
+versioning/archive, environment creation/archive/delete, session creation,
+prompt/interrupt/confirmation and idle archive/delete, vault/credential
+creation, MCP validation, and custom-skill upload. Arbitrary `/v1` writes remain
+blocked by narrow client-side capability wrappers and server authorization.
 
 ## Dev server (optional)
 
@@ -47,6 +54,6 @@ expose it as a shared gateway; it forwards browser request headers to the
 configured API. Admin mode needs same-origin `/admin` routes, so use the
 appliance-served `/console` for that.
 
-Demo review mode with bundled fake data: append `?mode=demo` to either URL.
-If the API is unreachable, the console falls back to the same demo data with
-a warning banner.
+Demo review mode with bundled fake data is explicit: append `?mode=demo` to
+either URL. A failed live API request never falls back to demo data; the console
+clears live rows and renders a retryable error state.

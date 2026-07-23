@@ -396,11 +396,16 @@ they are intentionally no longer repeated here.
    starter graph are implemented. Onboarding-owned appliances can be reopened
    with a private local lifecycle record and fresh one-shot browser nonce, and
    a missing sandbox image has an explicit interactive/`--pull` recovery. The
-   remaining release gates are the packed-browser timing lane and human
-   warm-path study; the local bootstrap threat model is updated with this
-   lifecycle boundary.
-2. Alpha onboarding hardening shipped in PR #197. The source-checkout path is
-   owned by [Getting Started](docs/getting-started.md):
+   public npm package is shipped as `open-managed-agents@0.1.2` and the
+   registry's `latest` tag resolves to it. The remaining alpha evidence gates
+   are the packed/public-package browser lane and at least three non-maintainer
+   warm-path runs at or below three minutes with zero undocumented
+   intervention. Cold image acquisition is measured separately; the local
+   bootstrap threat model is updated with this lifecycle boundary.
+2. The primary user path is now
+   `npx --yes open-managed-agents@latest`. Alpha source-checkout hardening
+   shipped in PR #197 and remains the advanced diagnostic path owned by
+   [Getting Started](docs/getting-started.md):
    `npm ci`, `npm link`, `oma doctor`, `oma smoke --local-compatible`,
    `oma up`, workspace-key console login, create agent/environment/session, and
    send a prompt. Automated CLI, doctor, docs, browser, and Docker gates are
@@ -411,15 +416,17 @@ they are intentionally no longer repeated here.
 4. The default provider allowlist is `anthropic,openai,openrouter`; credentials
    still gate session admission, Anthropic remains the default model provider,
    and `OMA_MODEL_PROVIDERS` replaces this allowlist when explicitly set.
-5. Run the human onboarding gate in
+5. Run the public warm-path human gate in
    [docs/references/alpha-onboarding-observation.md](docs/references/alpha-onboarding-observation.md):
-   local-compatible median <=10 minutes, credential-supplied console median
-   <=15 minutes, and zero undocumented intervention.
+   at least three non-maintainers, each successful run <=3 minutes, and zero
+   undocumented intervention. Keep source-checkout and cold-image timings as
+   separate diagnostic lanes.
 6. The npm package is public as `open-managed-agents`; its README presents
    `npx --yes open-managed-agents@latest` as a preview and keeps source checkout
    as the advanced diagnostic path. Keep provenance/trusted publishing, curl,
-   and Homebrew work inside #196. Do not advertise the three-minute target as
-   verified until M3 passes.
+   and Homebrew work inside #196. npm/npx are shipped; trusted publishing and
+   provenance remain open, while curl and Homebrew are not alpha blockers. Do
+   not advertise the three-minute target as verified until the human gate passes.
 7. Track publication-pipeline promotion hardening separately in issue #194; it
    does not block the verified digest-pinned alpha image.
 8. Standing queue: `#103`, `#118`, and `#119`. Postgres/async-store work remains

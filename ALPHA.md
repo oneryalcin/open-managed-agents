@@ -6,16 +6,15 @@ Managed Agents on their own machine.
 
 Alpha success means a new user can:
 
-1. clone the repository;
-2. install and start OMA;
-3. authenticate a workspace;
-4. create an agent;
-5. create an environment;
-6. create a session;
-7. send a prompt;
-8. watch tool/session events;
-9. inspect tool inputs, results, files, and failures;
-10. understand which CMA features are unsupported or intentionally deferred.
+1. run `npx --yes open-managed-agents@latest`;
+2. complete the guided provider credential flow;
+3. start or reopen the local appliance;
+4. enter an authenticated console without copying a workspace key;
+5. reach an idempotently created starter agent, environment, and session;
+6. send a prompt;
+7. watch tool/session events;
+8. inspect tool inputs, results, files, and failures;
+9. understand which CMA features are unsupported or intentionally deferred.
 
 ## Current status
 
@@ -30,27 +29,45 @@ This path includes Docker and microsandbox execution, file/search tools
 permission confirmations, skills, MCP, vault credentials, session pagination,
 and agent update/versioning.
 
-The remaining alpha work is about first-run reliability, console task flow, and
-honest unsupported-feature boundaries.
+The public npm package is `open-managed-agents`; `0.1.2` was the first release
+whose published README leads with the one-command onboarding path. The
+remaining alpha release gate is evidence: the packed-browser lane and at least
+three non-maintainer warm-path observations must prove the documented
+three-minute target without undocumented intervention. Source checkout remains
+the advanced diagnostic and contributor path.
 
 ## Alpha worklist
 
-### 1. Clean-checkout onboarding and smoke test
+### 1. Public onboarding and source-checkout diagnostics
 
-Goal: prove the documented setup works from a fresh checkout.
+Goal: prove the public npm path reaches a credential-backed console session in
+three minutes or less under the documented warm prerequisites, while retaining
+a deterministic source-checkout diagnostic path.
 
 Deliverables:
 
-- Maintain one canonical source-checkout guide:
-  [Getting Started](docs/getting-started.md).
-- Keep the README as a short launchpad, and make docs/index, deployment docs,
-  Docker tutorial, ALPHA, and handoff link back to the canonical guide instead
-  of duplicating the full flow.
-- Verify the canonical guide from a clean checkout.
-- Add one canonical "hello managed agent" flow:
-  `clone -> npm ci -> npm link -> oma doctor -> oma smoke --local-compatible
-  -> oma up -> workspace-key console login -> create agent/environment/session
-  -> send prompt`.
+- Keep the README's primary path to one command:
+  `npx --yes open-managed-agents@latest`.
+- Preflight Node, Docker-compatible daemon, port, and cached-image readiness
+  before prompting for or storing credentials.
+- Guide provider selection and masked credential entry, start or reuse an
+  attached loopback appliance, idempotently create the OMA-owned starter graph,
+  exchange a fresh single-use bootstrap nonce, and open the selected session.
+- Keep missing-image pulls explicit: interactive approval or `--pull`; never
+  pull implicitly for non-interactive callers.
+- Persist only the private owner-readable lifecycle/resume record. Raw provider,
+  workspace, and admin credentials must not enter URLs, browser storage, logs,
+  process arguments, or the resume record.
+- Add a packed/public-package browser gate that exercises the same onboarding
+  entrypoint users run.
+- Run the public warm-path human gate in
+  [Alpha Onboarding Observation Protocol](docs/references/alpha-onboarding-observation.md):
+  at least three non-maintainers, each successful run at or below three minutes,
+  and zero undocumented intervention. Measure cold image acquisition separately.
+- Maintain [Getting Started](docs/getting-started.md) as the advanced
+  source-checkout diagnostic and contributor guide.
+- Keep one deterministic source-checkout proof:
+  `clone -> npm ci -> npm link -> oma doctor -> oma smoke --local-compatible`.
 - Add the repo-local `oma` CLI (`npm link` after install):
   - `oma up` starts the durable foreground appliance with Docker-local by default;
   - `oma up --sandbox microsandbox` selects the opt-in provider;
@@ -98,14 +115,17 @@ Deliverables:
   - docs command contract;
   - browser console happy path;
   - Docker-backed local-compatible smoke.
-- Run the human onboarding gate before broad alpha invitation:
-  - local-compatible proof median at or below 10 minutes;
-  - credential-supplied console flow median at or below 15 minutes;
-  - zero undocumented intervention.
-- Track npm, `npx`, curl, and Homebrew distribution separately in GitHub issue
-  #196. Do not hide release/supply-chain work inside onboarding cleanup.
+- Track trusted npm publication/provenance and any future curl or Homebrew
+  acquisition work in GitHub issue #196. npm/npx are shipped; curl and Homebrew
+  are not alpha blockers.
 
-Current commands:
+Primary public command:
+
+```bash
+npx --yes open-managed-agents@latest
+```
+
+Advanced source-checkout diagnostics:
 
 ```bash
 npm ci
