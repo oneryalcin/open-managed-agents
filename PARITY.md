@@ -5,7 +5,11 @@ Claude Managed Agents (CMA) product surface. Source of truth for the ongoing
 parity work. It separates immediate wire-honesty fixes, planned pre-v1 arcs,
 post-v1 deferrals, and deliberate architecture-specific divergences.
 
-- **Baseline:** OMA `main` @ `26f754d` · CMA docs snapshot 2026-07-11 (25 pages under `managed-agents/`)
+- **Baseline:** OMA `main` @ `bd9134a` · CMA docs snapshot 2026-07-11 (26 pages under `managed-agents/`)
+- **Release state:** `open-managed-agents@0.1.2` is published on npm and tagged
+  `latest`; its public README leads with `npx --yes open-managed-agents@latest`.
+  The three-minute warm-path claim remains explicitly unverified until the
+  packed-browser and non-maintainer observation gates pass.
 - **Method:** 10-domain audit (one reviewer per doc cluster) cross-checked against the codebase; Tier-1 items independently re-verified.
 - **Scope note:** OMA is a self-hostable, wire-compatible clone. "Parity" = a client written against the CMA docs/SDK behaves the same against OMA. Deliberate self-hosted reinterpretations (egress, sandbox security) are noted, not counted as gaps.
 - **Score note:** percentages below are directional audit estimates, not measured

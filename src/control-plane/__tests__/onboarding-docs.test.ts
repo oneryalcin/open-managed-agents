@@ -61,14 +61,18 @@ describe("alpha onboarding documentation contract", () => {
     expect(dockerTutorial).toContain("getting-started.md");
   });
 
-  it("keeps the human timing gate honest and distribution separately tracked", () => {
+  it("keeps the public warm-path gate honest and source checkout diagnostic", () => {
     const observation = read("docs/references/alpha-onboarding-observation.md");
     const alpha = read("ALPHA.md");
     const handoff = read("handoff.md");
     expect(observation).toContain("Status: not run yet");
-    expect(observation).toContain("10 minutes");
-    expect(observation).toContain("15 minutes");
+    expect(observation).toContain("npx --yes open-managed-agents@latest");
+    expect(observation).toContain("180 seconds");
+    expect(observation).toContain("at least three non-maintainer");
+    expect(observation).toContain("Cold Image");
+    expect(observation).toContain("Source Checkout");
     expect(observation).toContain("undocumented intervention");
     expect(`${alpha}\n${handoff}`).toContain("#196");
+    expect(`${alpha}\n${handoff}`).toContain("0.1.2");
   });
 });

@@ -1,109 +1,137 @@
-# Alpha Onboarding Observation Protocol
+# Public Alpha Onboarding Observation Protocol
 
-This file records the human onboarding gate for the source-checkout alpha. It
-is a protocol and results template until real observations are run. Do not fill
-the results table with simulated data.
+This file records the human evidence gate for OMA's public npm onboarding path.
+It is a protocol and results template until real observations are run. Do not
+fill the results table with simulated data.
+
+The source-checkout flow remains an advanced diagnostic path in
+[Getting Started](../getting-started.md); it is not the public three-minute SLO.
 
 ## Goal
 
-Validate that a new user can get OMA running from the documented
-[Getting Started](../getting-started.md) flow without undocumented
-intervention.
+Validate that a new user can run one public command and reach an authenticated,
+credential-backed starter session in the OMA console within three minutes,
+without copying workspace keys or needing undocumented intervention.
 
 ## Participants
 
-Use a small group before broad alpha invitation:
+Use at least three participants before removing the public-preview caveat:
 
-- at least 3 local-compatible participants;
-- at least 3 credential-supplied console participants;
-- participants should not be core maintainers of OMA.
+- participants must not be core OMA maintainers;
+- include macOS and Linux when practical;
+- record Node version, operating system/architecture, Docker-compatible runtime,
+  browser, package version, and whether prior OMA state existed;
+- never record credentials, raw keys, bootstrap nonces, or durable workspace IDs.
 
-## Scenario A -- Local-Compatible Proof
+## Gated Scenario -- Public Warm Path
 
-Target: median time at or below 10 minutes.
+Target: every successful gated run completes in 180 seconds or less.
 
 Starting state:
 
-- fresh clone or fresh checkout;
-- Node.js 22.19 or newer available;
-- Docker or OrbStack available;
-- no model provider credential required.
+- Node.js 22.19 or newer is available;
+- Docker or another supported Docker-compatible daemon is running;
+- the pinned OMA sandbox image is already cached;
+- the participant has one valid supported model-provider credential;
+- `open-managed-agents` need not be installed globally;
+- use a fresh `OMA_HOME` for the clean-state lane and record separate reuse runs.
 
 Task:
 
 ```bash
+npx --yes open-managed-agents@latest
+```
+
+The participant may follow the visible terminal prompts, including provider
+selection and masked credential entry. They must not need `git clone`, `npm
+link`, exported credential environment variables, a manually pasted workspace
+key, agent YAML, or a second undocumented command.
+
+Success:
+
+- readiness checks pass before OMA stores a newly entered credential;
+- the appliance starts or a healthy onboarding-owned appliance is reused;
+- exactly one OMA-owned starter agent, environment, and session are selected;
+- the browser opens through the single-use loopback bootstrap flow;
+- the console is authenticated and displays the selected starter session ready
+  for the first prompt;
+- no raw provider, workspace, or admin credential appears in terminal output,
+  URLs, browser storage, process arguments, logs, or the resume record;
+- elapsed time from command submission to the ready session is at most 180
+  seconds;
+- no undocumented command or maintainer intervention is required.
+
+## Diagnostic Scenario -- Cold Image
+
+Run the same command without the pinned sandbox image cached. This lane is
+required for product feedback but is not included in the three-minute gate.
+
+Record separately:
+
+- time to detect the missing image;
+- whether the prompt explains the cold-start cost before state mutation;
+- whether interactive approval or explicit `--pull` behaves as documented;
+- image acquisition time and total onboarding time;
+- recovery behavior after interruption or pull failure.
+
+Non-interactive execution must not pull implicitly.
+
+## Diagnostic Scenario -- Source Checkout
+
+Use this lane to verify contributor and recovery documentation, not to measure
+the public SLO:
+
+```bash
+git clone https://github.com/oneryalcin/open-managed-agents.git
+cd open-managed-agents
 npm ci
 npm link
 oma doctor
 oma smoke --local-compatible
 ```
 
-Success:
-
-- `oma doctor` explains any local readiness issue without mutating durable OMA
-  state;
-- `oma smoke --local-compatible` passes;
-- the participant did not need undocumented commands or maintainer help.
-
-## Scenario B -- Credential-Supplied Console Flow
-
-Target: median time at or below 15 minutes.
-
-Starting state:
-
-- Scenario A prerequisites;
-- one valid model credential supplied by the participant or test coordinator.
-
-Task:
-
-```bash
-export ANTHROPIC_API_KEY="..."
-oma up
-```
-
-Then in the browser:
-
-1. log in with the workspace API key printed by `oma up`;
-2. open Start;
-3. confirm model credential readiness;
-4. create an agent;
-5. create an environment;
-6. create a session;
-7. send a prompt;
-8. inspect the transcript/tool events;
-9. interrupt if the session keeps running unexpectedly.
-
-Success:
-
-- the participant reaches a completed or understandable session state;
-- the console shows real readiness/error state, not demo fallback data;
-- no undocumented commands or maintainer intervention are needed.
+`oma doctor` must explain readiness issues without creating durable OMA state,
+credential files, databases, locks, or Docker resources.
 
 ## Observation Rules
 
-- Time starts when the participant begins at the checkout.
-- Time stops when the scenario success condition is met.
-- Count a run as failed if the participant needs an undocumented command,
-  hidden environment variable, maintainer intervention, or repo-local knowledge
-  not present in [Getting Started](../getting-started.md).
-- Record blockers exactly. Do not translate them into implementation tasks in
-  this file; link follow-up issues instead.
-- Do not record API keys, screenshots containing keys, hosted account IDs, or
-  durable workspace IDs.
+- Warm-path time starts when the participant submits the `npx` command.
+- Warm-path time stops when the selected starter session is visible and ready.
+- Use the actual public npm package and record the resolved immutable version.
+- Count a gated run as failed if it exceeds 180 seconds, needs an undocumented
+  command, exposes a secret, duplicates starter resources, or needs maintainer
+  intervention.
+- Record blockers exactly and link implementation follow-ups instead of
+  rewriting failures as successful observations.
+- Record browser-launch failure as a product failure unless the printed fallback
+  URL is safe, clear, and sufficient for the participant to continue.
+- Record provider rejection on the first real prompt separately from time-to-ready;
+  the console must make the failure understandable without leaking credentials.
 
 ## Results
 
 Status: not run yet.
 
-| Date | Scenario | Participant | Time | Result | Follow-up |
-| --- | --- | --- | --- | --- | --- |
-| _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
+### Public warm path
+
+| Date | Participant | OS / arch | Node | Docker runtime | Package | State | Time | Result | Follow-up |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _fresh/reuse_ | _pending_ | _pending_ | _pending_ |
+
+### Diagnostic lanes
+
+| Date | Scenario | OS / arch | Package | Detection / pull / total | Result | Follow-up |
+| --- | --- | --- | --- | --- | --- | --- |
+| _pending_ | _cold image/source checkout_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
 
 ## Exit Gate
 
-The human onboarding gate passes when:
+The public onboarding gate passes when:
 
-- Scenario A median time is at or below 10 minutes;
-- Scenario B median time is at or below 15 minutes;
-- every completed successful run has zero undocumented intervention;
-- every failed run has a linked follow-up or a documented out-of-scope reason.
+- at least three non-maintainer public warm-path runs succeed;
+- every successful gated run completes in 180 seconds or less;
+- every successful gated run has zero undocumented intervention;
+- the packed/public-package browser automation is green;
+- every failed run has a linked follow-up or documented out-of-scope reason;
+- cold-image behavior is measured and reported separately;
+- the README's preview caveat is removed only after these results are recorded.
