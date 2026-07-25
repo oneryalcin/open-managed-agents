@@ -24,6 +24,7 @@ const ARCHIVE_SESSION_CAPABILITY = Symbol("archive-session");
 const DELETE_SESSION_CAPABILITY = Symbol("delete-session");
 const CREATE_VAULT_CAPABILITY = Symbol("create-vault");
 const CREATE_VAULT_CREDENTIAL_CAPABILITY = Symbol("create-vault-credential");
+const ARCHIVE_VAULT_CREDENTIAL_CAPABILITY = Symbol("archive-vault-credential");
 const CREATE_SKILL_CAPABILITY = Symbol("create-skill");
 const CMA_BUILTIN_TOOL_NAMES = [
   "bash",
@@ -167,6 +168,11 @@ function isAllowedWorkspaceWrite(path, method, capability) {
       method === "POST" &&
       /^\/v1\/vaults\/[^/]+\/credentials$/.test(new URL(path, "http://oma.local").pathname)
     ) ||
+    (
+      capability === ARCHIVE_VAULT_CREDENTIAL_CAPABILITY &&
+      method === "POST" &&
+      /^\/v1\/vaults\/[^/]+\/credentials\/[^/]+\/archive$/.test(new URL(path, "http://oma.local").pathname)
+    ) ||
     (capability === CREATE_SKILL_CAPABILITY && method === "POST" && path === "/v1/skills") ||
     (
       capability === ARCHIVE_AGENT_CAPABILITY &&
@@ -264,6 +270,36 @@ export function createVaultCredential(vaultId, body) {
     body,
     capability: CREATE_VAULT_CREDENTIAL_CAPABILITY,
   });
+}
+
+export function archiveVaultCredential(vaultId, credentialId) {
+  const path = `/v1/vaults/${encodeURIComponent(vaultId)}/credentials/${encodeURIComponent(credentialId)}/archive`;
+  return request(path, {
+    method: "POST",
+    capability: ARCHIVE_VAULT_CREDENTIAL_CAPABILITY,
+  });
+}
+
+export function startMcpOauthFlow(vaultId, displayName, mcpServerUrl) {
+  return request("/console/mcp-oauth/flows", {
+    method: "POST",
+    body: {
+      vault_id: vaultId,
+      ...(displayName ? { display_name: displayName } : {}),
+      mcp_server_url: mcpServerUrl,
+    },
+  });
+}
+
+export function reauthorizeMcpOauthCredential(vaultId, credentialId) {
+  return request("/console/mcp-oauth/reauthorize", {
+    method: "POST",
+    body: { vault_id: vaultId, credential_id: credentialId },
+  });
+}
+
+export function getMcpOauthFlow(flowId) {
+  return request(`/console/mcp-oauth/flows/${encodeURIComponent(flowId)}`);
 }
 
 export function listSkills() {
@@ -1025,6 +1061,10 @@ if (typeof window !== "undefined") {
     listVaultCredentials,
     createVault,
     createVaultCredential,
+    archiveVaultCredential,
+    startMcpOauthFlow,
+    reauthorizeMcpOauthCredential,
+    getMcpOauthFlow,
     listSkills,
     createSkill,
     listWorkspaceCredentialHealth,

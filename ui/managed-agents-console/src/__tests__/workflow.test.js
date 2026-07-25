@@ -99,7 +99,7 @@ describe("alpha console workflow", () => {
       readFileSync(join(consoleRoot, "..", "vendor", "babel.min.js"), "utf8"),
       context,
     );
-    for (const file of ["forms.jsx", "environments.jsx", "agents-files.jsx", "detail.jsx", "docs.jsx", "skills.jsx", "app.jsx"]) {
+    for (const file of ["forms.jsx", "environments.jsx", "agents-files.jsx", "detail.jsx", "docs.jsx", "skills.jsx", "vaults.jsx", "app.jsx"]) {
       expect(() => context.Babel.transform(source(file), { presets:["react"] }), file).not.toThrow();
     }
   });
@@ -118,5 +118,24 @@ describe("alpha console workflow", () => {
     expect(skills).toContain("POST /v1/skills");
     expect(app).toContain("setVaults((prev) => [vault");
     expect(app).toContain("vaultRefresh");
+  });
+
+  it("blocks MCP vaults that cannot provide tools to the selected agent", () => {
+    const forms = source("forms.jsx");
+    const index = source("../index.html");
+    expect(index).toContain("session-vaults-data.js");
+    expect(forms).toContain("SessionVaultsData.vaultCompatibility");
+    expect(forms).toContain("api.listVaultCredentials(vault.id)");
+    expect(forms).toContain("const vaultsReady = !live || selectedVaultCompatibility.every");
+    expect(forms).toContain("The selected agent declares no MCP servers.");
+    expect(forms).toContain("has no active credential whose server URL exactly matches this agent");
+  });
+
+  it("keeps long confirmation endpoints inside small modal footers", () => {
+    const css = source("console.css");
+    expect(css).toContain(".modal-foot .left { min-width:0;");
+    expect(css).toContain("overflow-wrap:anywhere;");
+    expect(css).toContain(".modal.sm .modal-foot { flex-wrap:wrap; }");
+    expect(css).toContain(".modal.sm .modal-foot .left { flex:1 0 100%; margin-right:0; }");
   });
 });

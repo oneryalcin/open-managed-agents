@@ -4,6 +4,7 @@ import {
   archiveAgent,
   archiveEnvironment,
   archiveSession,
+  archiveVaultCredential,
   buildRequestHeaders,
   canSubmitToolConfirmation,
   clearCredentials,
@@ -23,6 +24,7 @@ import {
   getConsoleAuthStatus,
   loginConsoleAdmin,
   loginConsoleWorkspace,
+  getMcpOauthFlow,
   listEnvironmentNetworkingPresets,
   listVaultCredentials,
   listVaults,
@@ -32,6 +34,8 @@ import {
   mintKey,
   sendSessionEvents,
   selectConsoleWorkspace,
+  startMcpOauthFlow,
+  reauthorizeMcpOauthCredential,
   setWorkspaceKey,
   toUiSessionEvent,
   updateAgentToolPermission,
@@ -226,12 +230,50 @@ describe("workspace write capability", () => {
     vi.stubGlobal("fetch", fetchMock);
     await createVault({ display_name:"Notion" });
     await createVaultCredential("vlt_a", { auth:{ type:"static_bearer", mcp_server_url:"https://mcp.example.test/mcp", token:"token-long-enough" } });
+    await archiveVaultCredential("vault/a", "credential/b");
     await createSkill("Support", [new Blob(["---\nname: support\n---"], { type:"text/markdown" })]);
     expect(fetchMock).toHaveBeenCalledWith("/v1/vaults", expect.objectContaining({ method:"POST", body:JSON.stringify({ display_name:"Notion" }) }));
     expect(fetchMock).toHaveBeenCalledWith("/v1/vaults/vlt_a/credentials", expect.objectContaining({ method:"POST" }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/vaults/vault%2Fa/credentials/credential%2Fb/archive",
+      expect.objectContaining({ method:"POST" }),
+    );
     const skillCall = fetchMock.mock.calls.find(([path]) => path === "/v1/skills");
     expect(skillCall?.[1]).toEqual(expect.objectContaining({ method:"POST", body:expect.any(FormData) }));
     expect(skillCall?.[1].headers["content-type"]).toBeUndefined();
+  });
+
+  it("uses cookie-authenticated console routes for guided OAuth without tokens", async () => {
+    const replies = [
+      { flow_id:"oauth_flow_1", authorization_url:"https://auth.example/authorize", expires_at:"2026-07-23T12:10:00Z" },
+      { flow_id:"oauth_flow_2", authorization_url:"https://auth.example/authorize", expires_at:"2026-07-23T12:10:00Z" },
+      { flow_id:"oauth_flow_1", status:"connected", credential_id:"vcrd_1", expires_at:"2026-07-23T12:10:00Z" },
+    ];
+    const fetchMock = vi.fn(() => {
+      const value = replies.shift();
+      return Promise.resolve({ ok:true, status:200, text:() => Promise.resolve(JSON.stringify(value)) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await startMcpOauthFlow("vlt_1", "Notion", "https://mcp.notion.com/mcp");
+    await reauthorizeMcpOauthCredential("vlt_1", "vcrd_1");
+    await getMcpOauthFlow("oauth_flow_1");
+
+    expect(fetchMock.mock.calls).toEqual([
+      ["/console/mcp-oauth/flows", expect.objectContaining({
+        method:"POST",
+        credentials:"same-origin",
+        body:JSON.stringify({ vault_id:"vlt_1", display_name:"Notion", mcp_server_url:"https://mcp.notion.com/mcp" }),
+        headers:expect.not.objectContaining({ "x-api-key":expect.anything(), "x-admin-key":expect.anything() }),
+      })],
+      ["/console/mcp-oauth/reauthorize", expect.objectContaining({
+        method:"POST",
+        body:JSON.stringify({ vault_id:"vlt_1", credential_id:"vcrd_1" }),
+      })],
+      ["/console/mcp-oauth/flows/oauth_flow_1", expect.objectContaining({ method:"GET" })],
+    ]);
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("access_token");
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("refresh_token");
   });
 
   it("allows only the exact environment networking validation wrapper", async () => {

@@ -24,7 +24,11 @@ export const DEFAULT_MCP_OPERATION_TIMEOUT_MS = 60_000;
 // structured mcp_connection_failed_error), never a silent partial register.
 const MAX_DISCOVERED_TOOLS = 256;
 const MAX_TOOL_NAME_LENGTH = 256;
-const MAX_TOOL_DESCRIPTION_LENGTH = 4_096;
+// Notion's official server currently publishes several detailed tool
+// descriptions above 4 KiB (the largest observed in the OAuth acceptance
+// flow is 7,602 characters). Keep a per-tool bound, but leave enough room for
+// standards-compliant first-party servers to describe complex operations.
+const MAX_TOOL_DESCRIPTION_LENGTH = 16_384;
 const MAX_TOOL_SCHEMA_BYTES = 64 * 1024;
 const MAX_TOOL_LIST_PAGES = 16;
 

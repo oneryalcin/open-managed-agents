@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-07-20
+- Last refreshed: 2026-07-25
 - Primary product surfaces: bundled operator console at `/console/`, API docs at
   `/docs/`, and the local `oma` CLI.
 - Evidence reviewed:
@@ -132,6 +132,9 @@
   - API-backed session form with explicit two-step initial-message state;
   - authenticated SSE stream state and reconnect notice;
   - mutation error/success feedback and retry affordances.
+  - a session-vault compatibility gate that checks active credential URLs
+    against the selected agent's byte-exact MCP server declarations before
+    session creation.
 - Variants and states: idle, running, needs action, archived, unavailable,
   loading, partial, empty, error, reconnecting, and mutation-in-flight.
 - Token/component ownership: extend `console.css` variables and current plain
@@ -167,7 +170,9 @@
 - Error: show the server message, affected action, and a safe retry path; retain
   partially created resources when retrying a later step.
 - Success: navigate to the created resource and show a short confirmation.
-- Disabled: explain the unmet prerequisite or unsupported capability inline.
+- Disabled: explain the unmet prerequisite or unsupported capability inline;
+  incompatible credential vaults remain visible but cannot be attached to the
+  selected agent.
 - Offline/slow network: distinguish API unreachable, SSE reconnecting, model
   working, and sandbox/runtime failure.
 
@@ -218,6 +223,3 @@
 - [ ] Decide whether environment creation exposes only the safe Docker-local
   alpha preset or the complete API schema; owner: console implementation slice;
   impact: form scope and validation.
-- [ ] Decide whether vault/credential creation joins the first alpha mutation
-  slice or follows the core no-MCP happy path; owner: product; impact: MCP setup
-  completeness.

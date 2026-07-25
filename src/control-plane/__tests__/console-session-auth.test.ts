@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeploymentControlPlane, MANAGED_AGENTS_BETA } from "../app.ts";
+import type { McpFetch } from "../sessions/pi/mcp/fetch.ts";
 import { generateAdminKey } from "../admin/auth.ts";
 import { ConsoleBootstrapService } from "../console/bootstrap.ts";
 
@@ -34,7 +35,7 @@ describe("console session authentication", () => {
     plane.stores.workspaces.revokeKey(key.keySha256);
     const revoked = await request(plane.app, "/v1/agents", { cookie, beta: true });
     expect(revoked.status).toBe(401);
-    plane.stores.close();
+    await plane.close();
   });
 
   it("keeps admin and workspace authority separate while allowing admin selection", async () => {
@@ -196,9 +197,63 @@ describe("console session authentication", () => {
       tls: true,
     })).toThrow(/not available behind TLS termination/);
   });
+
+  it("completes guided MCP OAuth without putting tokens in the browser or requiring the console cookie on callback", async () => {
+    const plane = makePlane({ mcpFetch: oauthConsoleFetch() });
+    const key = plane.stores.workspaces.mintKey("wrk_default", "console");
+    const login = await request(plane.app, "/console/auth/workspace", {
+      method: "POST",
+      body: { api_key: key.plaintextKey },
+    });
+    const cookie = cookieFrom(login);
+    const vaultResponse = await request(plane.app, "/v1/vaults", {
+      method: "POST",
+      cookie,
+      beta: true,
+      body: { display_name: "Notion" },
+    });
+    const vault = await vaultResponse.json() as { id: string };
+
+    const foreign = await request(plane.app, "/console/mcp-oauth/flows", {
+      method: "POST",
+      cookie,
+      origin: "https://attacker.example",
+      body: { vault_id: vault.id, mcp_server_url: "https://mcp.example.test/mcp" },
+    });
+    expect(foreign.status).toBe(403);
+
+    const startedResponse = await request(plane.app, "/console/mcp-oauth/flows", {
+      method: "POST",
+      cookie,
+      body: { vault_id: vault.id, display_name: "Notion", mcp_server_url: "https://mcp.example.test/mcp" },
+    });
+    expect(startedResponse.status, await startedResponse.clone().text()).toBe(200);
+    const started = await startedResponse.json() as {
+      flow_id: string;
+      authorization_url: string;
+    };
+    const state = new URL(started.authorization_url).searchParams.get("state")!;
+
+    const callback = await request(
+      plane.app,
+      `/console/mcp-oauth/callback?state=${encodeURIComponent(state)}&code=browser-authorization-code`,
+    );
+    expect(callback.status).toBe(200);
+    expect(callback.headers.get("content-security-policy")).toMatch(/script-src 'nonce-[A-Za-z0-9_-]+'/);
+    expect(callback.headers.get("content-security-policy")).not.toContain("script-src 'unsafe-inline'");
+    const callbackHtml = await callback.text();
+    expect(callbackHtml).toContain("MCP connected");
+    expect(callbackHtml).toMatch(/<script nonce="[A-Za-z0-9_-]+">/);
+    expect(callbackHtml).not.toContain("access-secret");
+    expect(callbackHtml).not.toContain("refresh-secret");
+
+    const status = await request(plane.app, `/console/mcp-oauth/flows/${started.flow_id}`, { cookie });
+    expect(await status.json()).toMatchObject({ status: "connected", refreshable: true });
+    await plane.close();
+  });
 });
 
-function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapService; host?: string } = {}) {
+function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapService; host?: string; mcpFetch?: McpFetch } = {}) {
   const root = mkdtempSync(join(tmpdir(), "oma-console-session-"));
   roots.push(root);
   return createDeploymentControlPlane({
@@ -207,9 +262,58 @@ function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapService; h
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
     OMA_AUTH_MODE: "api-key",
     OMA_ADMIN_KEY: ADMIN_KEY,
+    ...(opts.mcpFetch === undefined
+      ? {}
+      : {
+          OMA_ENABLE_MCP: "true",
+          OMA_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
+        }),
     ...(opts.host === undefined ? {} : { OMA_HOST: opts.host }),
     ...(opts.tls ? { OMA_TLS_TERMINATED: "1" } : {}),
-  }, opts.bootstrap === undefined ? {} : { consoleBootstrap: opts.bootstrap });
+  }, {
+    ...(opts.bootstrap === undefined ? {} : { consoleBootstrap: opts.bootstrap }),
+    ...(opts.mcpFetch === undefined ? {} : { testMcp: { fetch: opts.mcpFetch } }),
+  });
+}
+
+function oauthConsoleFetch(): McpFetch {
+  return async (input, init) => {
+    const url = new URL(input);
+    if (url.hostname === "mcp.example.test" && url.pathname.includes(".well-known/oauth-protected-resource")) {
+      return json({ resource:"https://mcp.example.test/mcp", authorization_servers:["https://auth.example.test"] });
+    }
+    if (url.href === "https://auth.example.test/.well-known/oauth-authorization-server") {
+      return json({
+        issuer:"https://auth.example.test",
+        authorization_endpoint:"https://auth.example.test/authorize",
+        token_endpoint:"https://auth.example.test/token",
+        registration_endpoint:"https://auth.example.test/register",
+        response_types_supported:["code"],
+        grant_types_supported:["authorization_code", "refresh_token"],
+        token_endpoint_auth_methods_supported:["client_secret_basic", "none"],
+        code_challenge_methods_supported:["S256"],
+      });
+    }
+    if (url.href === "https://auth.example.test/register") {
+      return json({
+        client_id:"oma-console",
+        client_secret:"client-secret",
+        redirect_uris:["http://console.test/console/mcp-oauth/callback"],
+        client_name:"Open Managed Agents",
+        grant_types:["authorization_code", "refresh_token"],
+        response_types:["code"],
+        token_endpoint_auth_method:"client_secret_basic",
+      });
+    }
+    if (url.href === "https://auth.example.test/token" && init?.method === "POST") {
+      return json({ access_token:"access-secret", refresh_token:"refresh-secret", token_type:"Bearer", expires_in:3600 });
+    }
+    return new Response("not found", { status:404 });
+  };
+}
+
+function json(value: unknown): Response {
+  return new Response(JSON.stringify(value), { status:200, headers:{ "content-type":"application/json" } });
 }
 
 function request(

@@ -44,6 +44,7 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
   const [title, setTitle] = useStateF('');
   const [msg, setMsg] = useStateF('');
   const [vaultIds, setVaultIds] = useStateF([]);
+  const [vaultCredentialStates, setVaultCredentialStates] = useStateF({});
   const [busy, setBusy] = useStateF(false);
   const [error, setError] = useStateF('');
   const [partial, setPartial] = useStateF(null);
@@ -53,8 +54,17 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
   const agent = agents.find((a) => a.id === agentId);
   const usingCustom = env === '__custom';
   const finalEnv = usingCustom ? customEnv.trim() : env;
-  const valid = !!agentId && !!finalEnv && !busy;
   const live = apiMode === 'api';
+  const selectedVaultCompatibility = vaultIds.map((vaultId) => ({
+    vault: vaults.find((item) => item.id === vaultId),
+    result: window.SessionVaultsData.vaultCompatibility(agent, vaultCredentialStates[vaultId]),
+  }));
+  const incompatibleVaults = selectedVaultCompatibility.filter(({ result }) => result.status === 'incompatible');
+  const unavailableVaults = selectedVaultCompatibility.filter(({ result }) => result.status === 'error');
+  const loadingVaults = selectedVaultCompatibility.filter(({ result }) => result.status === 'loading');
+  const agentHasMcp = window.SessionVaultsData.agentMcpServerUrls(agent).length > 0;
+  const vaultsReady = !live || selectedVaultCompatibility.every(({ result }) => result.compatible);
+  const valid = !!agentId && !!finalEnv && !busy && vaultsReady;
   const initialMessageEvent = () => ({
     type: 'user.message',
     content: [{ type: 'text', text: msg.trim() }],
@@ -68,6 +78,34 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
     agent: agent.name, env: finalEnv,
     created:'Just now', updated:'Just now', dur:'—', tokens:'0 / 0', resources:0,
   });
+
+  const toggleVault = async (vault) => {
+    const selected = vaultIds.includes(vault.id);
+    if (selected) {
+      setVaultIds((current) => current.filter((id) => id !== vault.id));
+      return;
+    }
+    if (live && !agentHasMcp) return;
+    setVaultIds((current) => [...current, vault.id]);
+    if (!live || vaultCredentialStates[vault.id]) return;
+    setVaultCredentialStates((current) => ({
+      ...current,
+      [vault.id]: { status:'loading', credentials:[] },
+    }));
+    try {
+      const page = await api.listVaultCredentials(vault.id);
+      setVaultCredentialStates((current) => ({
+        ...current,
+        [vault.id]: { status:'loaded', credentials:page.data },
+      }));
+    } catch (credentialError) {
+      setVaultCredentialStates((current) => ({
+        ...current,
+        [vault.id]: { status:'error', credentials:[], error:credentialError.message || 'Request failed' },
+      }));
+      if (credentialError.status === 401 && onAuthExpired) onAuthExpired();
+    }
+  };
 
   const submit = async () => {
     if (!valid) return;
@@ -169,12 +207,27 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
         {vaults.length === 0 ? <div className="field-hint">No active vaults in this workspace.</div>
           : <div className="seg-tools">{vaults.filter((vault) => !vault.archived_at).map((vault) => {
             const selected = vaultIds.includes(vault.id);
+            const compatibility = live && vaultCredentialStates[vault.id]
+              ? window.SessionVaultsData.vaultCompatibility(agent, vaultCredentialStates[vault.id])
+              : null;
+            const disabled = live && (!agentHasMcp || (!selected && compatibility && !compatibility.compatible));
+            const title = !agentHasMcp
+              ? 'The selected agent declares no MCP servers.'
+              : compatibility?.status === 'incompatible'
+                ? 'No active credential exactly matches this agent’s MCP server URLs.'
+                : compatibility?.status === 'error'
+                  ? 'Credential compatibility could not be verified.'
+                  : undefined;
             return <button type="button" key={vault.id} className={'tool-toggle' + (selected ? ' on' : '')} aria-pressed={selected}
-              onClick={() => setVaultIds((current) => selected ? current.filter((id) => id !== vault.id) : [...current, vault.id])}>
+              disabled={disabled} title={title} onClick={() => toggleVault(vault)}>
               <span className="chk">{selected && <Icon name="checkCircle" size={9} />}</span><span>{vault.display_name}</span>
             </button>;
           })}</div>}
       </Labeled>
+      {live && vaults.length > 0 && !agentHasMcp && <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>The selected agent declares no MCP servers. Choose an MCP-enabled agent before attaching a credential vault.</span></div>}
+      {live && loadingVaults.length > 0 && <div className="inline-note" role="status"><Icon name="info" size={14} /><span>Checking whether the selected vault contains a credential matching this agent’s MCP server URLs…</span></div>}
+      {live && incompatibleVaults.length > 0 && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{incompatibleVaults.map(({ vault }) => vault?.display_name || vault?.id).join(', ')} has no active credential whose server URL exactly matches this agent. Choose a compatible vault or update the agent’s MCP server URL.</span></div>}
+      {live && unavailableVaults.length > 0 && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>Could not verify credentials in {unavailableVaults.map(({ vault }) => vault?.display_name || vault?.id).join(', ')}. Remove the vault or retry after reconnecting the workspace.</span></div>}
 
       <Labeled label="Title" htmlFor="create-session-title" opt hint="Defaults to the first message if left blank.">
         <input id="create-session-title" name="title" className="input" placeholder="e.g. Ship your first Managed Agent" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -213,35 +266,45 @@ function CreateVaultModal({ onClose, onCreated, onAuthExpired, apiMode = 'demo',
 
 function CreateVaultCredentialModal({ vault, onClose, onCreated, onAuthExpired, apiMode = 'demo', api = window.OmaConsoleApi }) {
   const [displayName, setDisplayName] = useStateF('');
-  const [type, setType] = useStateF('static_bearer');
+  const [type, setType] = useStateF('mcp_oauth');
   const [serverUrl, setServerUrl] = useStateF('');
   const [token, setToken] = useStateF('');
-  const [expiresAt, setExpiresAt] = useStateF('');
   const [busy, setBusy] = useStateF(false);
   const [error, setError] = useStateF('');
-  const valid = /^https?:\/\//.test(serverUrl.trim()) && token.trim().length >= 8 && !busy;
+  const validUrl = /^https?:\/\//.test(serverUrl.trim());
+  const valid = validUrl && (type === 'mcp_oauth' || token.trim().length >= 8) && !busy;
   const submit = async () => {
     if (!valid) return;
     setBusy(true); setError('');
-    const auth = type === 'static_bearer'
-      ? { type, mcp_server_url:serverUrl.trim(), token:token.trim() }
-      : { type, mcp_server_url:serverUrl.trim(), access_token:token.trim(), ...(expiresAt.trim() ? { expires_at:expiresAt.trim() } : {}) };
     try {
+      if (type === 'mcp_oauth') {
+        if (apiMode !== 'api') {
+          onCreated({ id:`vcrd_demo_${Date.now()}`, vault_id:vault.id, display_name:displayName.trim() || null, auth:{ type, mcp_server_url:serverUrl.trim() } });
+          return;
+        }
+        const status = await runMcpOauthPopup(
+          () => api.startMcpOauthFlow(vault.id, displayName.trim(), serverUrl.trim()),
+          api,
+        );
+        onCreated({ id:status.credential_id, vault_id:vault.id });
+        return;
+      }
+      const auth = { type, mcp_server_url:serverUrl.trim(), token:token.trim() };
       if (apiMode !== 'api') { onCreated({ id:`vcrd_demo_${Date.now()}`, vault_id:vault.id, display_name:displayName.trim() || null, auth }); return; }
       onCreated(await api.createVaultCredential(vault.id, { ...(displayName.trim() ? { display_name:displayName.trim() } : {}), auth }));
     } catch (createError) {
-      setError(createError.message || 'Credential creation failed.');
+      setError(createError.message || 'Credential connection failed.');
       if (createError.status === 401 && onAuthExpired) onAuthExpired();
     } finally { setBusy(false); }
   };
-  return <Modal icon="database" title="Add credential" sub={`Write-only credential for ${vault.display_name || vault.displayName}.`} onClose={onClose}
-    footer={<><span className="left">Sends to <span className="mono">POST /v1/vaults/:id/credentials</span></span><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!valid} onClick={submit}>{busy ? 'Saving…' : 'Save credential'}</button></>}>
+  const endpoint = type === 'mcp_oauth' ? 'POST /console/mcp-oauth/flows' : 'POST /v1/vaults/:id/credentials';
+  return <Modal icon="database" title="Add credential" sub={`Authorize an MCP server for ${vault.display_name || vault.displayName}.`} onClose={onClose}
+    footer={<><span className="left">Sends to <span className="mono">{endpoint}</span></span><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={!valid} onClick={submit}>{busy ? (type === 'mcp_oauth' ? 'Connecting…' : 'Saving…') : (type === 'mcp_oauth' ? 'Connect' : 'Save credential')}</button></>}>
     <Labeled label="Credential name" htmlFor="credential-name" opt><input id="credential-name" className="input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Labeled>
-    <Labeled label="Credential type" htmlFor="credential-type"><select id="credential-type" className="selectbox" value={type} onChange={(event) => setType(event.target.value)}><option value="static_bearer">Static bearer token</option><option value="mcp_oauth">MCP OAuth access token</option></select></Labeled>
-    <Labeled label="MCP server URL" htmlFor="credential-server-url" hint="This must exactly match the URL configured on the agent."><input id="credential-server-url" className="input mono" placeholder="https://mcp.example.com/mcp" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} /></Labeled>
-    <Labeled label={type === 'static_bearer' ? 'Bearer token' : 'OAuth access token'} htmlFor="credential-token" hint="Write-only. OMA never returns or renders this value after it is submitted."><input id="credential-token" type="password" className="input mono" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></Labeled>
-    {type === 'mcp_oauth' && <Labeled label="Expires at" htmlFor="credential-expires" opt hint="ISO-8601 timestamp. Leave blank only for a non-expiring access token."><input id="credential-expires" className="input mono" placeholder="2027-01-01T00:00:00Z" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></Labeled>}
-    {type === 'mcp_oauth' && <div className="field-hint">Use the API for OAuth refresh-token and client-secret configuration; this initial console path safely supports access-token credentials and validation.</div>}
+    <Labeled label="Credential type" htmlFor="credential-type"><select id="credential-type" className="selectbox" value={type} onChange={(event) => setType(event.target.value)}><option value="mcp_oauth">Connect with OAuth</option><option value="static_bearer">Static bearer token</option></select></Labeled>
+    <Labeled label="MCP server URL" htmlFor="credential-server-url" hint="Use the URL configured on the agent, for example https://mcp.notion.com/mcp."><input id="credential-server-url" className="input mono" placeholder="https://mcp.example.com/mcp" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} /></Labeled>
+    {type === 'static_bearer' && <Labeled label="Bearer token" htmlFor="credential-token" hint="Write-only. OMA never returns or renders this value after it is submitted."><input id="credential-token" type="password" className="input mono" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></Labeled>}
+    {type === 'mcp_oauth' && <div className="field-hint">Connect opens the provider in a new window. OMA stores the resulting credential and refreshes it automatically; the browser never receives an access or refresh token.</div>}
     {error && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{error}</span></div>}
   </Modal>;
 }

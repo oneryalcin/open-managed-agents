@@ -636,7 +636,7 @@ a.dl { text-decoration:none; }
 .modal-head .x { margin-left:auto; }
 .modal-body { padding:18px 20px; display:flex; flex-direction:column; gap:16px; max-height:60vh; overflow:auto; }
 .modal-foot { display:flex; align-items:center; gap:10px; justify-content:flex-end; padding:14px 20px; border-top:1px solid var(--border); }
-.modal-foot .left { margin-right:auto; color:var(--faint); font-size:12px; }
+.modal-foot .left { min-width:0; margin-right:auto; color:var(--faint); font-size:12px; overflow-wrap:anywhere; }
 
 .form-row { display:flex; flex-direction:column; gap:7px; }
 .form-row.two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
@@ -657,6 +657,7 @@ a.dl { text-decoration:none; }
 .tool-toggle { appearance:none; font-family:inherit; display:inline-flex; align-items:center; gap:7px; padding:6px 11px; border-radius:999px; border:1px solid var(--border); background:var(--surface-2); color:var(--soft); font-size:12.5px; font-weight:500; cursor:pointer; transition:.12s; }
 .tool-toggle:hover { border-color:var(--border-2); color:var(--ink); }
 .tool-toggle.on { background:var(--accent-wash); border-color:var(--accent-line); color:var(--accent); }
+.tool-toggle:disabled { cursor:not-allowed; opacity:.45; border-color:var(--border); color:var(--faint); }
 .tool-toggle .chk { width:13px; height:13px; border-radius:4px; border:1.5px solid currentColor; opacity:.55; display:flex; align-items:center; justify-content:center; }
 .tool-toggle.on .chk { background:var(--accent); border-color:var(--accent); opacity:1; }
 .radio-set { display:flex; flex-direction:column; gap:8px; }
@@ -697,6 +698,8 @@ a.dl { text-decoration:none; }
 /* small confirm dialog */
 .modal.sm { max-width:420px; }
 .modal.sm .modal-body { gap:0; }
+.modal.sm .modal-foot { flex-wrap:wrap; }
+.modal.sm .modal-foot .left { flex:1 0 100%; margin-right:0; }
 .confirm-msg { font-size:13.5px; color:var(--soft); line-height:1.6; }
 .confirm-msg b { color:var(--ink); font-weight:600; }
 .modal-head .ic.danger { background:var(--red-wash); color:var(--red); }
