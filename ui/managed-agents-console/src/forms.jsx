@@ -44,6 +44,7 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
   const [title, setTitle] = useStateF('');
   const [msg, setMsg] = useStateF('');
   const [vaultIds, setVaultIds] = useStateF([]);
+  const [vaultCredentialStates, setVaultCredentialStates] = useStateF({});
   const [busy, setBusy] = useStateF(false);
   const [error, setError] = useStateF('');
   const [partial, setPartial] = useStateF(null);
@@ -53,8 +54,17 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
   const agent = agents.find((a) => a.id === agentId);
   const usingCustom = env === '__custom';
   const finalEnv = usingCustom ? customEnv.trim() : env;
-  const valid = !!agentId && !!finalEnv && !busy;
   const live = apiMode === 'api';
+  const selectedVaultCompatibility = vaultIds.map((vaultId) => ({
+    vault: vaults.find((item) => item.id === vaultId),
+    result: window.SessionVaultsData.vaultCompatibility(agent, vaultCredentialStates[vaultId]),
+  }));
+  const incompatibleVaults = selectedVaultCompatibility.filter(({ result }) => result.status === 'incompatible');
+  const unavailableVaults = selectedVaultCompatibility.filter(({ result }) => result.status === 'error');
+  const loadingVaults = selectedVaultCompatibility.filter(({ result }) => result.status === 'loading');
+  const agentHasMcp = window.SessionVaultsData.agentMcpServerUrls(agent).length > 0;
+  const vaultsReady = !live || selectedVaultCompatibility.every(({ result }) => result.compatible);
+  const valid = !!agentId && !!finalEnv && !busy && vaultsReady;
   const initialMessageEvent = () => ({
     type: 'user.message',
     content: [{ type: 'text', text: msg.trim() }],
@@ -68,6 +78,34 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
     agent: agent.name, env: finalEnv,
     created:'Just now', updated:'Just now', dur:'—', tokens:'0 / 0', resources:0,
   });
+
+  const toggleVault = async (vault) => {
+    const selected = vaultIds.includes(vault.id);
+    if (selected) {
+      setVaultIds((current) => current.filter((id) => id !== vault.id));
+      return;
+    }
+    if (live && !agentHasMcp) return;
+    setVaultIds((current) => [...current, vault.id]);
+    if (!live || vaultCredentialStates[vault.id]) return;
+    setVaultCredentialStates((current) => ({
+      ...current,
+      [vault.id]: { status:'loading', credentials:[] },
+    }));
+    try {
+      const page = await api.listVaultCredentials(vault.id);
+      setVaultCredentialStates((current) => ({
+        ...current,
+        [vault.id]: { status:'loaded', credentials:page.data },
+      }));
+    } catch (credentialError) {
+      setVaultCredentialStates((current) => ({
+        ...current,
+        [vault.id]: { status:'error', credentials:[], error:credentialError.message || 'Request failed' },
+      }));
+      if (credentialError.status === 401 && onAuthExpired) onAuthExpired();
+    }
+  };
 
   const submit = async () => {
     if (!valid) return;
@@ -169,12 +207,27 @@ function CreateSession({ agents = AGENTS, environments = ENVIRONMENTS, vaults = 
         {vaults.length === 0 ? <div className="field-hint">No active vaults in this workspace.</div>
           : <div className="seg-tools">{vaults.filter((vault) => !vault.archived_at).map((vault) => {
             const selected = vaultIds.includes(vault.id);
+            const compatibility = live && vaultCredentialStates[vault.id]
+              ? window.SessionVaultsData.vaultCompatibility(agent, vaultCredentialStates[vault.id])
+              : null;
+            const disabled = live && (!agentHasMcp || (!selected && compatibility && !compatibility.compatible));
+            const title = !agentHasMcp
+              ? 'The selected agent declares no MCP servers.'
+              : compatibility?.status === 'incompatible'
+                ? 'No active credential exactly matches this agent’s MCP server URLs.'
+                : compatibility?.status === 'error'
+                  ? 'Credential compatibility could not be verified.'
+                  : undefined;
             return <button type="button" key={vault.id} className={'tool-toggle' + (selected ? ' on' : '')} aria-pressed={selected}
-              onClick={() => setVaultIds((current) => selected ? current.filter((id) => id !== vault.id) : [...current, vault.id])}>
+              disabled={disabled} title={title} onClick={() => toggleVault(vault)}>
               <span className="chk">{selected && <Icon name="checkCircle" size={9} />}</span><span>{vault.display_name}</span>
             </button>;
           })}</div>}
       </Labeled>
+      {live && vaults.length > 0 && !agentHasMcp && <div className="inline-warn" role="status"><Icon name="alert" size={14} /><span>The selected agent declares no MCP servers. Choose an MCP-enabled agent before attaching a credential vault.</span></div>}
+      {live && loadingVaults.length > 0 && <div className="inline-note" role="status"><Icon name="info" size={14} /><span>Checking whether the selected vault contains a credential matching this agent’s MCP server URLs…</span></div>}
+      {live && incompatibleVaults.length > 0 && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>{incompatibleVaults.map(({ vault }) => vault?.display_name || vault?.id).join(', ')} has no active credential whose server URL exactly matches this agent. Choose a compatible vault or update the agent’s MCP server URL.</span></div>}
+      {live && unavailableVaults.length > 0 && <div className="inline-warn" role="alert"><Icon name="alert" size={14} /><span>Could not verify credentials in {unavailableVaults.map(({ vault }) => vault?.display_name || vault?.id).join(', ')}. Remove the vault or retry after reconnecting the workspace.</span></div>}
 
       <Labeled label="Title" htmlFor="create-session-title" opt hint="Defaults to the first message if left blank.">
         <input id="create-session-title" name="title" className="input" placeholder="e.g. Ship your first Managed Agent" value={title} onChange={(e) => setTitle(e.target.value)} />

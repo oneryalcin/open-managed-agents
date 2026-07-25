@@ -314,18 +314,35 @@ describe("discovery bounds + pagination (review 0122-M1)", () => {
     ).rejects.toThrow("exceeded discovery bounds: more than 256 tools");
   });
 
+  it("accepts a detailed tool description within the discovery bound", async () => {
+    fixture = await startMcpFixture([
+      {
+        name: "detailed",
+        description: "d".repeat(8_000),
+        inputSchema: {},
+        handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+      },
+    ]);
+    const connection = await McpConnection.connect(
+      { name: "srv", url: fixture.url },
+      { fetch: seamFetch },
+    );
+    expect(connection.tools[0]?.description).toHaveLength(8_000);
+    await connection.close();
+  });
+
   it("rejects a tool with an oversized description", async () => {
     fixture = await startMcpFixture([
       {
         name: "verbose",
-        description: "d".repeat(5_000),
+        description: "d".repeat(17_000),
         inputSchema: {},
         handler: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
       },
     ]);
     await expect(
       McpConnection.connect({ name: "srv", url: fixture.url }, { fetch: seamFetch }),
-    ).rejects.toThrow("description over 4096 chars");
+    ).rejects.toThrow("description over 16384 chars");
   });
 
   it("rejects a tool with an oversized input schema", async () => {
