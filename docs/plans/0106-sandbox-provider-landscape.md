@@ -350,6 +350,47 @@ References:
 - [gVisor Kubernetes quick start](https://gvisor.dev/docs/user_guide/quick_start/kubernetes/)
 - [Kata Containers](https://katacontainers.io/)
 
+### Agent Substrate (`agent-substrate/substrate`)
+
+Repository: [agent-substrate/substrate](https://github.com/agent-substrate/substrate)
+
+Verified on 2026-08-07 (clone pinned to `97489938`). Full read-through in
+[firecracker-substrate-prior-art.md](../references/firecracker-substrate-prior-art.md).
+
+- Apache-2.0, Go, ~1k stars; "not an officially supported Google product";
+- a Kubernetes-native control plane that multiplexes many stateful "actors"
+  onto a small pool of pre-warmed worker pods by snapshotting RAM + filesystem
+  to object storage and restoring on demand — targets 100ms p95 activation;
+- sandbox classes are gVisor (`runsc` checkpoint/restore, default) and micro-VM
+  (**Kata + Cloud Hypervisor**, not Firecracker), selected per `WorkerPool`;
+- actor/worker records live in Valkey, deliberately not in the Kubernetes API
+  server; only `WorkerPool`, `ActorTemplate`, and `SandboxConfig` are CRDs;
+- ingress is DNS + Envoy `ext_proc`: an inbound request resumes the actor.
+
+OMA fit:
+
+- Not a `SandboxProvider`. The control-plane API is actor lifecycle plus
+  snapshot management; the node API is `RunWorkload`/`CheckpointWorkload`/
+  `RestoreWorkload`. **There is no exec or file API** — the only path into an
+  actor is HTTP through the router, so Pi built-in tool delegation would need
+  an OMA-authored in-guest server first.
+- Requires Kubernetes + Valkey + object storage (GCS today, S3 still on the
+  roadmap), which is in tension with requirement 6 above and with the appliance
+  direction in [0114](0114-appliance-product-roadmap.md).
+- Early development, "not ready for production use", "little to no security
+  hardening"; snapshot GC unimplemented; gVisor backend needs a patched `runsc`.
+
+Recommendation:
+
+Track as a design target for a future OMA Kubernetes tier **alongside**
+`kubernetes-sigs/agent-sandbox`, not instead of it — `agent-sandbox` models a
+session as a Kubernetes object, Substrate parks a thousand of them cheaply.
+Near-term action is not a probe: fold its snapshot-correctness constraints
+(identity must not be baked into checkpointed memory; runtime version pinned
+per snapshot; class as a hard resume gate; readiness gate on create *and*
+restore) into [0107](0107-sandbox-provider-contract-audit.md) before any
+park/resume work starts.
+
 ### Apple `container`
 
 Repository: [apple/container](https://github.com/apple/container)
@@ -468,7 +509,13 @@ evidence for exact pricing, cold-start, or isolation claims.
   production.
 - Direct Firecracker / Cloud Hypervisor: too much substrate for OMA to own
   first. Consume through Kata, microsandbox, E2B infra, or hosted providers
-  unless sandbox infrastructure becomes the product.
+  unless sandbox infrastructure becomes the product. Confirmed by a full
+  read-through on 2026-08-07 — see
+  [firecracker-substrate-prior-art.md](../references/firecracker-substrate-prior-art.md):
+  Firecracker has no shared filesystem (virtio-block/net/vsock only, no
+  virtio-fs), no exec API, requires KVM (EC2 exposes it only on `.metal`), does
+  not run on macOS, pushes a long host-hardening list onto the operator, and
+  documents snapshot reuse as insecure without extra machinery.
 - Raw `bubblewrap` / `nsjail`: useful primitives, but `sandbox-runtime`
   packages this tier better for our purposes.
 

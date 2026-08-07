@@ -20,6 +20,7 @@
 - Competing OMA implementations (open-ma / openma.dev) prior-art: [oma-implementations-prior-art.md](references/oma-implementations-prior-art.md)
 - just-bash (simulated-bash sandbox) prior-art: [just-bash-prior-art.md](references/just-bash-prior-art.md)
 - agentOS (Pi-native in-process runtime) + Osaurus (Apple-Containerization sandbox) prior-art: [agentos-osaurus-prior-art.md](references/agentos-osaurus-prior-art.md)
+- Firecracker (VMM) + Agent Substrate (K8s actor multiplexer) prior-art: [firecracker-substrate-prior-art.md](references/firecracker-substrate-prior-art.md)
 - Egress proxy + secrets storage buy-vs-build survey: [egress-secrets-buy-vs-build.md](references/egress-secrets-buy-vs-build.md)
 
 ## Anthropic SDK source (for endpoint shapes and types)
