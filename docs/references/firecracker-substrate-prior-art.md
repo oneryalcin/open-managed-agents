@@ -319,6 +319,7 @@ complementary designs, not competing ones.
 The near-term action is not a provider probe. It is to fold items 1–4 above
 into 0107 as contract requirements before any park/resume or snapshot work
 starts, since all four are cheap to specify now and expensive to retrofit.
+Tracked in [issue #229](https://github.com/oneryalcin/open-managed-agents/issues/229).
 
 ---
 
@@ -428,7 +429,8 @@ alpha label comes off.
 The near-term action is again not a probe. It is to notice that our storage
 design and our parking design are the same design, and that plan 0103 phase 2
 should be written knowing a session's durable state and its live client
-connection have a shared lifecycle.
+connection have a shared lifecycle. Tracked in
+[issue #230](https://github.com/oneryalcin/open-managed-agents/issues/230).
 
 ---
 
