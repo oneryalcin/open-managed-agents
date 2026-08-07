@@ -1,17 +1,19 @@
-# Prior art: Firecracker and Agent Substrate
+# Prior art: Firecracker, Agent Substrate, and celld
 
 Date: 2026-08-07
 
-Purpose: evaluate [firecracker-microvm/firecracker](https://github.com/firecracker-microvm/firecracker)
-and [agent-substrate/substrate](https://github.com/agent-substrate/substrate) as
-alternatives to OMA's current sandbox tiers — `docker-local` (default) and
-`microsandbox-local` (limited support, plan
-[0110](../plans/0110-microsandbox-local-provider.md)).
+Purpose: evaluate three projects proposed as alternatives to OMA's current
+sandbox tiers — `docker-local` (default) and `microsandbox-local` (limited
+support, plan [0110](../plans/0110-microsandbox-local-provider.md)):
 
-Both were read from primary source (local clones), not from marketing. This
-extends the survey in plan [0106](../plans/0106-sandbox-provider-landscape.md),
-which currently disposes of Firecracker in one line and does not mention
-Substrate at all.
+- [firecracker-microvm/firecracker](https://github.com/firecracker-microvm/firecracker)
+- [agent-substrate/substrate](https://github.com/agent-substrate/substrate)
+- [denoland/celld](https://github.com/denoland/celld)
+
+All three were read from primary source (local clones), not from marketing.
+This extends the survey in plan
+[0106](../plans/0106-sandbox-provider-landscape.md), which currently disposes of
+Firecracker in one line and mentions neither of the others.
 
 This is not an ADR. It records what each project actually is, whether it can
 replace or sit under our provider contract
@@ -20,9 +22,19 @@ regardless of adoption.
 
 ## Verdict up front
 
-- **Neither is a drop-in alternative to `docker-local`, and neither should
-  change the default.** They are not the same kind of thing as each other,
-  and neither is the same kind of thing as our provider.
+**The load-bearing finding is that none of the three is at the layer it is
+proposed for.** Each was suggested as a replacement for our sandbox; each turns
+out to be a different subsystem entirely.
+
+| Project | Where it actually sits | Analogy |
+| --- | --- | --- |
+| Firecracker | *below* the sandbox — a VMM, peer of `runc` | the walls |
+| Agent Substrate | *above* the sandbox — a K8s actor multiplexer | the dispatcher |
+| celld | *beside* the sandbox — durable per-session state | the session's memory |
+
+- **None is a drop-in alternative to `docker-local`, and none should change the
+  default.** They are not the same kind of thing as each other, and none is the
+  same kind of thing as our provider.
 - **Firecracker is a VMM.** It is a peer of `runc`/`crun`, one layer *below*
   `docker.ts`. "Switch to Firecracker" means OMA takes ownership of guest
   kernels, block-device rootfs building, TAP networking, a guest agent for
@@ -40,10 +52,20 @@ regardless of adoption.
   full RAM+filesystem snapshot to object storage, warm worker pool, resume on
   any node, request-triggered wake at the router — is the design we should
   measure our own eventual answer against.
+- **celld runs JavaScript in V8 isolates and cannot execute a subprocess at
+  all** (`node:child_process` is an unimplemented inert stub). It is not a
+  sandbox in the sense we need. It *is* a credible candidate for a layer we had
+  not evaluated: durable per-session state, i.e. the storage layer in plan
+  [0103 phase 2](../plans/0103-phase-2-storage-design.md).
 - **Notable data point:** Substrate's micro-VM sandbox class is **Kata
   Containers + Cloud Hypervisor**, not Firecracker. A well-resourced team
   building exactly this, in 2026, consumed microVMs through Kata rather than
   owning a VMM. That is independent support for our position.
+- **Parking has two halves, and we had only been looking at one.** Substrate
+  answers "stop paying for idle compute"; celld answers "keep the session's
+  state and its open client connection alive while nothing runs". OMA
+  eventually needs both, and they are different subsystems. See
+  [Parking has two halves](#parking-has-two-halves) below.
 
 ## Sources checked
 
@@ -300,6 +322,116 @@ starts, since all four are cheap to specify now and expensive to retrofit.
 
 ---
 
+## celld
+
+### What it actually is
+
+Self-hosted Cloudflare Durable Objects. Each "cell" is a V8 isolate plus its
+own SQLite database, addressed by name, continuously replicated to an
+S3-compatible bucket you own using LTX (Litestream's replica format). Workers
+and Durable Objects code deployed with a Wrangler config subset runs unchanged.
+
+The genuinely elegant part is coordination: **there is no control plane and no
+consensus.** Ownership of a cell is a compare-and-swap lease in the bucket;
+nodes discover owners and peers from the bucket alone, with no membership
+protocol or failure detector (`README.md`). The bucket is the durable source of
+truth and nodes are replaceable. Stated numbers: ~4 MB RAM per resident cell,
+~1000 cells per 8 GB node, RPO=0 on acknowledged writes, ~20 s failover after
+node loss.
+
+### Why it is not a sandbox
+
+The pitch that reached us framed Durable Objects as the thing that finally
+replaces "Docker, Kubernetes, VPSs, and a slew of other unholy tooling" for
+agent isolation. That argument turns on one word meaning two things:
+
+- **State isolation** — every agent gets its own memory, database, and handler,
+  with no shared table locks. Cells are excellent at this, and the throughput
+  argument for per-agent SQLite is correct.
+- **Execution isolation** — running code you do not trust, that shells out.
+  **A cell cannot do this at all.**
+
+From `docs/cloudflare-compat.md`: `node:child_process` is **not implemented**
+(an inert stub, flagged as a known silent gap), along with `node:net`,
+`node:tls`, `node:dns`, `node:os`, `node:process`, `node:vm`, and
+`node:worker_threads`. `node:fs` reads fail with `ENOENT`. `cloudflare:sockets`
+`connect()` returns an inert stub. A cell cannot run `bash`, `npm install`, or
+`git clone` — which is the entire job of our sandbox tier. Pi itself could not
+run in a cell either.
+
+Nor is a V8 isolate a stronger boundary than a container; it is a weaker one.
+`docs/security.md` is explicit: **"celld is an alpha. It is not safe for
+hostile multi-tenant use."** The same layering shows up at Cloudflare, where
+Sandboxes are a separate container-based product *alongside* Durable Objects
+rather than built on them.
+
+The closest thing to code execution is **Worker Loader ("Code Mode")**, an
+experimental port behind `CELLD_WORKER_LOADER` that starts a fresh isolate per
+loaded worker and supports `globalOutbound: null` for no egress. That is a JS
+plugin sandbox, capped at 64 MiB of code, not a workspace.
+
+### Where it is genuinely relevant
+
+celld is not competing with `docker.ts`. It is competing with our **storage
+layer** — the single-node `better-sqlite3` store in plan
+[0103 phase 2](../plans/0103-phase-2-storage-design.md).
+
+One OMA session is an event log, an SSE replay cursor, a state machine, and a
+client holding a connection open. One cell is a SQLite database, an HTTP
+handler, durable alarms, and an **inbound hibernatable WebSocket**. The mapping
+is close to one-to-one, and hibernation — holding a live client connection
+while the cell's compute is shut down — is the piece with no analogue in our
+current stack.
+
+### Parking has two halves
+
+The Substrate evaluation above treats `requires_action` parking as one problem.
+Reading celld makes clear it is two, in different subsystems:
+
+| Half | Question | Prior art |
+| --- | --- | --- |
+| Compute | how do I stop paying for an idle sandbox? | Substrate — snapshot RAM+FS, warm worker pool |
+| Session | how do I keep the session's state *and its open client connection* alive while nothing runs? | celld — cell hibernation + WebSocket hibernation |
+
+OMA eventually needs both. They do not have to be solved by the same system,
+and the architecture both point at is two-tier: **session state in cells,
+execution in containers.**
+
+### What blocks adoption today
+
+- **v0.1.0, tagged 2026-08-05** — two days before this evaluation.
+  Self-described alpha; security fixes go to the latest release only.
+- **"A fleet runs one application deployment."** No multi-tenant scheduler, no
+  account service, no managed ingress, no global placement layer
+  (`docs/limitations.md`). OMA is a multi-workspace control plane
+  ([0113](../plans/0113-workspace-authentication-admission.md)); this is a
+  direct collision, not a gap to work around.
+- Peer HTTP **does not terminate TLS** — private network or an encrypted
+  overlay (WireGuard/Tailscale) is required, and a public advertise address is
+  rejected without an explicit unsafe flag.
+- Bucket credentials are **fleet administrator access**, by design.
+- Pressure shedding is off by default pending release measurements.
+- Adoption is not a swap. It is a rewrite of the control plane into the Workers
+  programming model, against a storage layer we have already built.
+- Governance worth knowing before taking a dependency: **pull requests are
+  disabled** (patches by email), and the CLA assigns rights to Deno Land Inc.
+  Apache-2.0, but a single-vendor project with no normal contribution path.
+
+### Recommendation
+
+Do not adopt. Track deliberately rather than casually: it is the first credible
+answer we have seen to the session half of the parking problem, and the
+"coordinate through object storage, no consensus" design is worth understanding
+even if we never depend on it. Revisit when multi-tenancy exists and the
+alpha label comes off.
+
+The near-term action is again not a probe. It is to notice that our storage
+design and our parking design are the same design, and that plan 0103 phase 2
+should be written knowing a session's durable state and its live client
+connection have a shared lifecycle.
+
+---
+
 ## Net takeaways
 
 - No change to the default. `docker-local` stays; `microsandbox-local` remains
@@ -319,6 +451,17 @@ starts, since all four are cheap to specify now and expensive to retrofit.
   mount, never an env var); Firecracker names it at the VMM layer (duplicated
   seeds, entropy pools, and cryptographic tokens across restores). Any OMA
   park/resume design has to answer both, and 0107 currently answers neither.
+- celld is not a sandbox and cannot become one — a cell has no subprocess, no
+  filesystem, and no sockets, and its own docs say it is "not safe for hostile
+  multi-tenant use". It is a candidate for the storage layer instead, blocked
+  today by the one-application-per-fleet limit.
+- Parking is two problems, not one: idle **compute** (Substrate's answer) and
+  live **session state plus held client connection** (celld's answer). Plan
+  0103 phase 2 and any future parking design are the same design.
 - Secondary finding worth recording: the project best positioned to use
   Firecracker chose Kata + Cloud Hypervisor instead. Consume microVMs through a
   layer that owns kernel, rootfs, networking, and agent — do not own a VMM.
+- Recurring shape across all three: **the useful unit is one durable thing per
+  session** — Substrate's actor, celld's cell, our session. Each project's
+  hardest-won lessons are about what may and may not be baked into that unit's
+  frozen state.
