@@ -357,8 +357,35 @@ From `docs/cloudflare-compat.md`: `node:child_process` is **not implemented**
 `node:tls`, `node:dns`, `node:os`, `node:process`, `node:vm`, and
 `node:worker_threads`. `node:fs` reads fail with `ENOENT`. `cloudflare:sockets`
 `connect()` returns an inert stub. A cell cannot run `bash`, `npm install`, or
-`git clone` — which is the entire job of our sandbox tier. Pi itself could not
-run in a cell either.
+`git clone` — which is the entire job of our sandbox tier.
+
+#### Could Pi run in a cell?
+
+Worth answering precisely, because the two Pi packages give different answers
+and the difference is the whole point. Both inspected from the published npm
+tarballs at `0.80.6`, the version pinned in `package.json`.
+
+- **`@earendil-works/pi-coding-agent`** — what OMA actually depends on. No.
+  Its dependencies include `cross-spawn`, `undici`, `jiti`, `proper-lockfile`,
+  `glob`, and `photon-node`; its `dist` imports `node:fs` 22 times, `node:os`
+  10, `node:child_process` 7, and `node:worker_threads` 2. Spawning processes
+  against a real filesystem is the package's purpose, not an incidental
+  dependency, so this is not a porting gap.
+- **`@earendil-works/pi-agent-core`** — the bare loop. Four dependencies, seven
+  `node:` imports total. A text-only agent that never touches disk or spawns
+  anything would plausibly load and run.
+
+The second case is the hazard, not the opportunity. celld's missing `node:`
+modules are **inert stubs that do not fail the import** — its own docs call
+this a known silent gap — and `node:fs` reads return `ENOENT` with
+`existsSync` returning `false`. So a Pi-core agent in a cell would not crash
+when it strayed onto a filesystem path; it would quietly conclude that no files
+exist. Silent wrong behavior is a worse failure mode than a clean throw, and it
+is the mode this combination produces.
+
+The practical read: cells suit agents whose output is text and whose only
+outbound call is to a model. The moment an agent has to touch a repo, the
+architecture stops working, and not for a reason more engineering fixes.
 
 Nor is a V8 isolate a stronger boundary than a container; it is a weaker one.
 `docs/security.md` is explicit: **"celld is an alpha. It is not safe for
@@ -398,6 +425,21 @@ OMA eventually needs both. They do not have to be solved by the same system,
 and the architecture both point at is two-tier: **session state in cells,
 execution in containers.**
 
+### Object storage is not a cloud dependency
+
+celld needs an S3-compatible bucket, which reads at first like a cloud account
+requirement. It is not. [RustFS](https://github.com/rustfs/rustfs) (Apache-2.0,
+Rust, an S3-compatible MinIO alternative) makes celld + RustFS a fully local
+deployment with no cloud dependency.
+
+Worth recording because Agent Substrate reached for the same shim
+independently: its kind-cluster setup installs "ate, valkey, **rustfs**" and
+stages snapshots into a rustfs bucket (`hack/microvm-assets/README.md`,
+`hack/install-ate-kind.sh`). Two unrelated object-storage-centric designs both
+using a local S3 binary to stay installable on one machine. Relevant to the
+appliance path ([0115](../plans/0115-appliance-entrypoint.md)) if OMA ever
+needs object storage: it can ship as a binary rather than a cloud account.
+
 ### What blocks adoption today
 
 - **v0.1.0, tagged 2026-08-05** — two days before this evaluation.
@@ -410,7 +452,8 @@ execution in containers.**
 - Peer HTTP **does not terminate TLS** — private network or an encrypted
   overlay (WireGuard/Tailscale) is required, and a public advertise address is
   rejected without an explicit unsafe flag.
-- Bucket credentials are **fleet administrator access**, by design.
+- Bucket credentials are **fleet administrator access**, by design. (The bucket
+  itself is not a blocker — see [above](#object-storage-is-not-a-cloud-dependency).)
 - Pressure shedding is off by default pending release measurements.
 - Adoption is not a swap. It is a rewrite of the control plane into the Workers
   programming model, against a storage layer we have already built.
@@ -431,6 +474,15 @@ design and our parking design are the same design, and that plan 0103 phase 2
 should be written knowing a session's durable state and its live client
 connection have a shared lifecycle. Tracked in
 [issue #230](https://github.com/oneryalcin/open-managed-agents/issues/230).
+
+A second, separable thread: cells as per-agent state plus WebSocket fan-out for
+realtime observation is concrete prior art for the **coordination** half of
+[issue #214](https://github.com/oneryalcin/open-managed-agents/issues/214)
+(post-v1 multi-agent delegation runtime) — distinct from the sandboxing half,
+and not blocked by anything above. Demos of this shape in the wild pair celld
+with Pi for reviewer/writer agents producing documents; note that such agents
+are exactly the text-only case where the isolate boundary is sufficient, which
+is why they work and why they do not generalize to coding agents.
 
 ---
 
