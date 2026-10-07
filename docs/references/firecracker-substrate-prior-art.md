@@ -321,6 +321,77 @@ into 0107 as contract requirements before any park/resume or snapshot work
 starts, since all four are cheap to specify now and expensive to retrofit.
 Tracked in [issue #229](https://github.com/oneryalcin/open-managed-agents/issues/229).
 
+### Addendum: google/ax, a Substrate consumer (2026-10-07)
+
+[google/ax](https://github.com/google/ax) ("Google's open agentic
+orchestration runtime", Apache-2.0, Go, created 2026-03, ~13k stars) was
+raised as a new sandbox option. Read from a shallow clone at
+`ac2332829f22360ff97b0ba34d94dd0dd782f17e` (2026-09-27). **It is not a new
+option: it is a thin, kubectl-shaped control plane on top of Agent Substrate**,
+so every verdict above carries over, and it adds a few gaps of its own.
+
+What it is:
+
+- Resources `Task`, `Workspace`, `Model` (`ax.io/v1alpha1`), scoped by
+  atespace. `ax-server` exposes a gRPC service
+  (`pkg/apis/v1alpha1/ax.proto:25-50`): Task get/list/create/delete/
+  suspend/resume/watch, plus Workspace and Model CRUD. State and locks live in
+  a single Redis (`internal/store/redis/store.go`, `internal/lock/lock.go`);
+  `deploy/redis.yaml` has no persistent volume.
+- Every Task becomes one Substrate actor. `BuildActorTemplate`
+  (`internal/substrate/client.go:212-276`) hardcodes
+  `SANDBOX_CLASS_GVISOR` / `gvisor-default`, a `DurableDir` volume at
+  `/workspace`, and snapshots to GCS. ax never touches `runsc`, containerd, or
+  pods itself.
+- PID 1 in the guest is `ax-task-runner` (`runner/runner.go`), which clones
+  git workspaces, writes inline files, optionally runs a Gemini-backed "goal"
+  bootstrap, then supervises the user command.
+
+Why it changes nothing for OMA:
+
+1. **Still no exec/file surface.** The ax API has no exec, file, or log RPC.
+   `ax ssh` reaches Substrate guest services through `atenet-router`, and only
+   when the Task sets `spec.debug: true`. Substrate's gap #1 above is
+   unchanged.
+2. **Suspend keeps data, not processes.** ax configures
+   `SnapshotsConfig{OnPause: SNAPSHOT_CONTENT_SCOPE_DATA, OnResume:
+   RESUME_SOURCE_GOLDEN}`, so it opts *out* of Substrate's RAM checkpoint:
+   resume is a fresh container over the restored `/workspace`. Open issues
+   report a large workspace lost on suspend while every command reports
+   success (#453), and suspend reporting success when Substrate fails (#441).
+3. **No egress model at all.** There is no egress code in the repo. Issue #449
+   says Tasks currently get *no* network because ax never creates an egress
+   policy; the roadmap lists "minimally privileged policies" as future work.
+4. **Heavier self-hosting than Substrate alone.** It needs GKE plus Substrate
+   in `ate-system`, plus GCS, plus Redis. The default snapshot bucket is a
+   developer's personal bucket (`gs://dberkov-gke-dev3/ate-env/`,
+   `internal/substrate/client.go:208`). No local or kind mode exists, and
+   there is no auth interceptor on `ax-server`.
+
+Worth taking:
+
+- **Independent confirmation of the 0107 split.** Google's own consumer of
+  Substrate settled on "session workspace = durable volume, sandbox rootfs =
+  disposable", with data-only snapshots, rather than paying for RAM checkpoint.
+  That is the cheap first step of parking that our contract can specify
+  before any memory-snapshot work.
+- **Run-once workspace setup.** The runner writes a per-workspace "maiden
+  run" marker under `/ax` (`internal/workspace/setup.go:33-81`) so
+  clone/bootstrap is skipped on later starts. OMA's file-resource
+  materialization needs the same rule once workspaces outlive containers. Two
+  cautions from their code: the marker key flattens `/` to `-`, so
+  `/workspace/a-b/c` and `/workspace/a/b-c` collide and the second setup is
+  silently skipped while `WorkspaceReady` reports True (#440). And `/ax` is
+  outside the `DurableDir` volume, so the marker should live with the data it
+  describes.
+- **New Tasks start `Suspended`** (`internal/server/server.go:177`), so
+  creation and first activation are separate steps. That maps directly onto
+  OMA's create-session versus first-run split.
+
+Recommendation: do not adopt, and do not track separately from Substrate. Fold
+the takeaways into
+[issue #229](https://github.com/oneryalcin/open-managed-agents/issues/229).
+
 ---
 
 ## celld
@@ -457,6 +528,10 @@ connection have a shared lifecycle. Tracked in
   filesystem, and no sockets, and its own docs say it is "not safe for hostile
   multi-tenant use". It is a candidate for the storage layer instead, blocked
   today by the one-application-per-fleet limit.
+- google/ax (addendum, 2026-10-07) is a control plane *on* Substrate, not a
+  new option: same missing exec/file surface, plus no egress model and a Redis
+  without persistence. Its useful signal is that it chose data-only snapshots
+  (durable `/workspace`, disposable rootfs) over RAM checkpoint.
 - Parking is two problems, not one: idle **compute** (Substrate's answer) and
   live **session state plus held client connection** (celld's answer). Plan
   0103 phase 2 and any future parking design are the same design.
