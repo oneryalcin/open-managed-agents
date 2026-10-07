@@ -49,6 +49,11 @@ import {
   MAX_SESSION_OUTPUT_FILE_BYTES,
   MAX_SESSION_OUTPUT_FILES,
 } from "../../../files/types.ts";
+import {
+  type ContainerEngine,
+  detectContainerEngine,
+  tmpfsOwnerOption,
+} from "./container-engine.ts";
 import { DEFAULT_OMA_SANDBOX_IMAGE } from "./image.ts";
 
 export const DEFAULT_DOCKER_SANDBOX_IMAGE = DEFAULT_OMA_SANDBOX_IMAGE;
@@ -318,6 +323,7 @@ export async function createDockerSandboxProvider(
         tmpfsSize: resolved.tmpfsSize,
         outputsTmpfsSize: resolved.outputsTmpfsSize,
         egress: opts.egress?.wiring,
+        engine: detectContainerEngine(resolved.dockerCommand),
         labels: {
           [SANDBOX_LABEL_KEY]: SANDBOX_LABEL_VALUE,
           [OWNER_LABEL_KEY]: OWNER_LABEL_VALUE,
@@ -894,6 +900,7 @@ export function buildDockerRunArgs(opts: {
   outputsTmpfsSize?: string;
   labels?: Record<string, string>;
   egress?: SandboxEgressWiring;
+  engine?: ContainerEngine;
 }): string[] {
   assertTmpfsMemoryHeadroom(
     opts.memory,
@@ -912,6 +919,8 @@ export function buildDockerRunArgs(opts: {
   // Default deny (ADR 0016 §2): no egress wiring -> --network none, no proxy.
   const network = opts.egress ? opts.egress.networkName : "none";
   const egressArgs = opts.egress ? buildEgressRunArgs(opts.egress) : [];
+  const engine = opts.engine ?? "docker";
+  const sandboxOwner = tmpfsOwnerOption(engine, 65534);
   return [
     "run",
     "-d",
@@ -932,14 +941,18 @@ export function buildDockerRunArgs(opts: {
     "--security-opt",
     "no-new-privileges",
     "--read-only",
+    // PID 1 is `tail -f /dev/null`, which ignores SIGTERM: without this,
+    // Podman's `rm -f` waits the full 10 s stop timeout before SIGKILL.
+    "--stop-timeout",
+    "0",
     "--tmpfs",
-    `${opts.workspacePath}:rw,exec,nosuid,nodev,uid=65534,gid=65534,mode=700,size=${opts.tmpfsSize}`,
+    `${opts.workspacePath}:rw,exec,nosuid,nodev${sandboxOwner},mode=700,size=${opts.tmpfsSize}`,
     "--tmpfs",
     `${uploadsPath}:rw,nosuid,nodev,noexec,mode=755,size=${opts.tmpfsSize}`,
     "--tmpfs",
-    `${outputsPath}:rw,nosuid,nodev,noexec,uid=65534,gid=65534,mode=700,size=${outputsTmpfsSize}`,
+    `${outputsPath}:rw,nosuid,nodev,noexec${sandboxOwner},mode=700,size=${outputsTmpfsSize}`,
     "--tmpfs",
-    `${DEFAULT_SKILLS_PATH}:rw,exec,nosuid,nodev,uid=0,gid=0,mode=755,size=${opts.tmpfsSize}`,
+    `${DEFAULT_SKILLS_PATH}:rw,exec,nosuid,nodev${tmpfsOwnerOption(engine, 0)},mode=755,size=${opts.tmpfsSize}`,
     "--workdir",
     opts.workspacePath,
     "--user",
@@ -1277,7 +1290,9 @@ export function buildDockerCmaGrepSearchCommand(
   return {
     script: [
       "set -eu",
-      "exec setsid env \"OMA_GREP_OWNER=$2\" bash -c '",
+      // -w: when the exec'd shell is already a process-group leader (Podman's
+      // exec), plain setsid forks and exits at once, dropping rg's output.
+      "exec setsid -w env \"OMA_GREP_OWNER=$2\" bash -c '",
       "set -euo pipefail",
       "printf \"%s\\0\" __OMA_GREP_READY__",
       "emit_text_matches() {",

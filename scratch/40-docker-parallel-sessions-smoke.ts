@@ -106,7 +106,8 @@ async function runSession(
       `printf '%s\\n' '${sessionId}' > /mnt/session/outputs/session.txt`,
       `printf '%s\\n' 'index=${index}' > /mnt/session/outputs/index.txt`,
       `printf '%s' 'session=${sessionId} index=${index} docker='`,
-      "if [ -f /.dockerenv ]; then printf yes; else printf no; fi",
+      // Docker marks containers with /.dockerenv, Podman with /run/.containerenv.
+      "if [ -f /.dockerenv ] || [ -f /run/.containerenv ]; then printf yes; else printf no; fi",
       "printf ' pwd='",
       "pwd",
       "sleep 0.2",
@@ -185,7 +186,7 @@ async function outputBytes(file: SandboxOutputFile): Promise<Buffer> {
 
 function dockerAvailable(): boolean {
   return (
-    spawnSync("docker", ["info", "--format", "{{.ServerVersion}}"], {
+    spawnSync("docker", ["version"], {
       encoding: "utf8",
     }).status === 0
   );

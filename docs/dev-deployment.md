@@ -283,6 +283,26 @@ convenience unless a future ADR explicitly accepts the risk.
 - Compose-with-socket must not be documented as production-safe. Docker socket
   access is effectively host-level control.
 
+### Rootless Podman
+
+`docker-local` also runs on rootless Podman when `docker` resolves to Podman
+(the `podman-docker` package or a `docker → podman` symlink). The provider
+detects Podman from `docker version` and adjusts the few flags Podman treats
+differently: tmpfs ownership uses `U` instead of `uid=`/`gid=`, and the egress
+sidecar runs with `--userns=keep-id`. A Docker CLI pointed at a Podman socket
+is treated as Docker.
+
+Host prerequisites (otherwise `--memory`/`--pids-limit` cannot be applied and
+every sandbox fails to start):
+
+- a systemd user session: install `dbus-user-session` and run
+  `loginctl enable-linger <user>`;
+- cgroup v2 with the systemd cgroup manager (`podman info` shows
+  `cgroupManager: systemd`).
+
+Verified with rootless Podman 4.9.3 on Ubuntu 24.04 (full live provider suite,
+including egress). Rootful Podman is untested.
+
 ### Host-passthrough policy
 
 `host-passthrough` is not a sandbox. It executes agent-directed shell and file

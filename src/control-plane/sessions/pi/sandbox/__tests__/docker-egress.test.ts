@@ -44,6 +44,19 @@ describe("egress sidecar arg construction (0117d)", () => {
     expect(args.join(" ")).not.toContain(":/app:ro");
   });
 
+  it("keeps the host uid mapping under Podman so the sidecar can read its 0600 bundle", () => {
+    const opts = {
+      containerName: "oma-egress-proxy-x",
+      image: "oma-appliance:latest",
+      sharedDir: "/host/e/shared",
+      bundlePath: "/host/e/bundle.json",
+      user: "501:20",
+      labels: {},
+    };
+    expect(buildSidecarRunArgs({ ...opts, engine: "podman" })).toContain("--userns=keep-id");
+    expect(buildSidecarRunArgs(opts)).not.toContain("--userns=keep-id");
+  });
+
   it("hardens the sidecar to the sandbox's least-privilege standard", () => {
     // The sidecar holds resolved secrets + the MITM CA and is reachable by the
     // sandbox, so a proxy/vendor RCE must not gain more than the sandbox has.
