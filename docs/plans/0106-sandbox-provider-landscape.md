@@ -454,6 +454,11 @@ Recommendation:
 Keep as the first Linux Docker hardening probe, but no longer make it the
 headline local sandbox strategy.
 
+Probe status (2026-10-08, [scratch/0106-gvisor-podman-probe.md](../../scratch/0106-gvisor-podman-probe.md)):
+the unchanged provider passes on `runsc` for default-deny sessions (+~15 ms
+start). Egress sessions fail: gVisor cannot reach Docker's embedded DNS, so
+the sidecar must be addressed by IP.
+
 ### Rootless Docker and Podman
 
 References:
@@ -476,6 +481,11 @@ Caveats:
 Recommendation:
 
 Treat as compatibility/hardening probes, not as the production isolation target.
+
+Probe status (2026-10-08, same note): rootless Podman 4.9.3 is not a drop-in.
+It rejects tmpfs `uid=`/`gid=`, the egress sidecar needs `--userns=keep-id`,
+`rm -f` waits 10 s, and the host needs a systemd user session. Rootless Docker
+was not probed.
 
 ## Hosted Provider Matrix
 
