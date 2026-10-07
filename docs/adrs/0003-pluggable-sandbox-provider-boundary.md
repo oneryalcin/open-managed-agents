@@ -1,6 +1,20 @@
 # ADR 0003: Pluggable sandbox provider boundary
 
-**Status:** Accepted, 2026-05-21
+**Status:** Accepted, 2026-05-21; amended 2026-10-07 (see below)
+
+> **Amendment (2026-10-07).** Decisions 1, 2, and 5 stand. Decision 3
+> ("first managed remote provider: Modal Sandboxes") was never implemented and
+> is no longer the plan of record: there is no Modal code in `src/`. Decision 4
+> resolved to Docker-local. The shipped providers are guarded
+> `host-passthrough`, `docker-local` (default isolating provider), and
+> `microsandbox-local` (offline-only), selected in
+> `src/control-plane/sessions/pi/sandbox/selection.ts`. The next backend is
+> chosen by the landscape in plan
+> [0106](../plans/0106-sandbox-provider-landscape.md) (Kubernetes
+> `agent-sandbox` is the self-hosted design target; Modal is one entry in the
+> hosted matrix) and must meet the lifecycle contract in plan
+> [0107](../plans/0107-sandbox-provider-contract-audit.md). The Modal
+> reasoning below is kept as the original record.
 
 ## Context
 

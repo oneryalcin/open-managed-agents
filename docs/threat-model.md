@@ -38,7 +38,7 @@ Deployment-mode terminology and sequencing are defined in
   `src/control-plane/__tests__/workspace-auth-api.test.ts`.
 - Still open (post-single-node): sandbox providers beyond Docker-local must
   keep their session→container maps workspace-scoped; revisit when a remote
-  provider (e.g. Modal) is wired in.
+  provider (Kubernetes or hosted) is wired in.
 
 ### 2. Host-escape assumptions
 

@@ -21,10 +21,10 @@ Three execution sites, same decomposition as Anthropic's Managed Agents — but 
         │ spawns + drives
         ▼
   ┌──────────────────────────┐         ┌──────────────────────────┐
-  │  Pi AgentSession         │  ←──→   │  Modal Sandbox           │
-  │  (engine: loop +         │  exec   │  Linux + Python          │
-  │   compaction +           │         │  /workspace, bash,       │
-  │   tool dispatch)         │         │  file ops                │
+  │  Pi AgentSession         │  ←──→   │  Sandbox provider        │
+  │  (engine: loop +         │  exec   │  docker-local (default)  │
+  │   compaction +           │         │  or microsandbox-local;  │
+  │   tool dispatch)         │         │  bash + file ops         │
   └──────────────────────────┘         └──────────────────────────┘
 ```
 
@@ -34,10 +34,10 @@ The control plane, the Pi loop, and the sandbox are three separate concerns — 
 
 1. Client posts `{ agent, environment_id }` — `agent` is the wire field (NOT `agent_id`), accepting either a bare string `"agent_abc"` or an object `{type: "agent", id, version?}`
 2. Control plane loads agent config from SQLite (model, system, tools list)
-3. Spins up a Modal sandbox via the `Sandbox` interface
+3. Creates a sandbox through the selected provider (`docker-local` by default; see [ADR 0003](adrs/0003-pluggable-sandbox-provider-boundary.md))
 4. Creates a Pi `AgentSession` configured with:
    - The agent's model + system prompt
-   - Tools wired through our `Sandbox` interface (so Pi's `bash`/`read`/`write` execute in the Modal sandbox, not on the host)
+   - Tools wired through our `Sandbox` interface (so Pi's `bash`/`read`/`write` execute in the sandbox, not on the host)
    - Custom tools from the agent's `tools` list as async functions (see [ADR 0005](adrs/0005-custom-tools-as-blocking-async-functions.md))
 5. Wires Pi's `subscribe()` into a per-session event buffer + SSE broadcaster
 6. Returns the full session object (with field `id`, `status`, `created_at`, etc.) to the client — not a shorthand `{session_id}`
