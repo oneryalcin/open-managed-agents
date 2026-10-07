@@ -2,19 +2,21 @@
 
 **Status:** Accepted, 2026-05-21; amended 2026-10-07 (see below)
 
-> **Amendment (2026-10-07).** Decisions 1, 2, and 5 stand. Decision 3
-> ("first managed remote provider: Modal Sandboxes") was never implemented and
-> is no longer the plan of record: there is no Modal code in `src/`. Decision 4
-> resolved to Docker-local. The shipped providers are guarded
-> `host-passthrough`, `docker-local` (default isolating provider), and
-> `microsandbox-local` (offline-only), selected in
-> `src/control-plane/sessions/pi/sandbox/selection.ts`. The next backend is
-> chosen by the landscape in plan
-> [0106](../plans/0106-sandbox-provider-landscape.md) (Kubernetes
-> `agent-sandbox` is the self-hosted design target; Modal is one entry in the
-> hosted matrix) and must meet the lifecycle contract in plan
-> [0107](../plans/0107-sandbox-provider-contract-audit.md). The Modal
-> reasoning below is kept as the original record.
+> **Amendment (2026-10-07).** Decisions 1, 2, and 5 stand. Decision 4
+> resolved to Docker-local. Decision 3 ("first managed remote provider: Modal
+> Sandboxes") has not been implemented: there is no Modal code in `src/`. The
+> shipped providers are guarded `host-passthrough`, `docker-local` (default
+> isolating provider), and `microsandbox-local` (offline-only), selected in
+> `src/control-plane/sessions/pi/sandbox/selection.ts`.
+>
+> **Open question:** whether Modal remains the first managed remote provider
+> is undecided. Plan [0106](../plans/0106-sandbox-provider-landscape.md) now
+> names Kubernetes `agent-sandbox` as the self-hosted design target and lists
+> Modal in the hosted matrix alongside E2B, Daytona, and others. Whichever
+> backend comes next must meet the lifecycle contract in plan
+> [0107](../plans/0107-sandbox-provider-contract-audit.md). Resolve decision 3
+> explicitly before starting any managed remote provider. The Modal reasoning
+> below is kept as the original record.
 
 ## Context
 
