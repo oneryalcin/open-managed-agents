@@ -62,14 +62,22 @@ import {
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000;
 const ALREADY_PROCESSING_MESSAGE = "Agent is already processing";
 
+export interface PiUserMessage {
+  role: "user";
+  content: Array<{ type: "text"; text: string }>;
+  timestamp: number;
+}
+
 export interface PiRuntimeSession {
   prompt(
     text: string,
-    opts?: { streamingBehavior?: "steer" | "followUp" },
+    opts?: { expandPromptTemplates?: boolean; streamingBehavior?: "steer" | "followUp" },
   ): Promise<void>;
   // Hosted Managed Agents delivers a mid-turn user.message at the next
-  // model-request boundary (probe 70); Pi's steer() has the same semantics.
-  steer(text: string): Promise<void>;
+  // model-request boundary (probe 70); Pi's steering queue has the same
+  // semantics. AgentSession.steer() would expand "/skill:<name>" first, so
+  // queue on the agent directly: verbatim, and it never starts a turn.
+  readonly agent: { steer(message: PiUserMessage): void };
   abort(): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
   dispose(): void;
@@ -498,7 +506,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     if (handle.running && !handle.needsFreshPromptAfterInterrupt) {
       try {
-        await handle.session.steer(text);
+        steerVerbatim(handle.session, text);
         this.touch(sessionId, handle);
       } catch (error) {
         this.evict(sessionId, handle);
@@ -583,10 +591,12 @@ export class PiSessionRunner implements RuntimeEventRunner {
     signal?.addEventListener("abort", onAbort, { once: true });
 
     const run = handle.session
-      .prompt(text)
+      // Verbatim, as hosted: Pi's default expands "/skill:<name>" by reading
+      // the skill file from the control-plane host, not the sandbox (#255).
+      .prompt(text, { expandPromptTemplates: false })
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
-          await handle.session.steer(text);
+          steerVerbatim(handle.session, text);
           // Best effort for the losing prompt race: once Pi confirms this
           // message is queued on the running turn, discard overlap events
           // captured by this temporary subscriber. A pre-rejection event can
@@ -1357,6 +1367,10 @@ function updateRunning(handle: RuntimeHandle, event: unknown): void {
   const type = (event as { type?: unknown }).type;
   if (type === "agent_start") handle.running = true;
   if (type === "agent_end") handle.running = false;
+}
+
+function steerVerbatim(session: PiRuntimeSession, text: string): void {
+  session.agent.steer({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
 }
 
 function isAlreadyProcessing(error: unknown): boolean {

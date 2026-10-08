@@ -158,9 +158,11 @@ class FakeQueuedSession {
     this.emit({ type: "agent_end", messages: [], willRetry: false });
   }
 
-  async steer(text: string): Promise<void> {
-    this.steered.push(text);
-  }
+  readonly agent = {
+    steer: (message: { content: Array<{ text: string }> }): void => {
+      this.steered.push(message.content[0]!.text);
+    },
+  };
 
   async abort(): Promise<void> {}
 

@@ -40,7 +40,7 @@ const sdk = vi.hoisted(() => {
       });
     }
 
-    async steer(): Promise<void> {}
+    readonly agent = { steer(): void {} };
 
     async abort(): Promise<void> {}
 

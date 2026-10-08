@@ -4,6 +4,7 @@ import {
   PiSessionRunner,
   type PiSessionFileMount,
   type PiRuntimeSession,
+  type PiUserMessage,
 } from "../runner.ts";
 import type { SandboxProvider } from "../sandbox/provider.ts";
 
@@ -71,6 +72,33 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(events).toEqual([]);
     expect(factory.sessions[0]?.prompts).toEqual(["two"]);
     expect(factory.sessions[0]?.steered).toEqual(["two"]);
+  });
+
+  // Pi expands "/skill:<name>" by reading the skill file from the control-plane
+  // host unless told not to (#255); hosted passes user text through verbatim.
+  it("starts a turn without Pi command expansion", async () => {
+    const factory = new FakeSessionFactory();
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "/skill:demo go"));
+
+    expect(factory.sessions[0]?.promptOptions).toEqual([{ expandPromptTemplates: false }]);
+  });
+
+  it("queues a mid-turn message on Pi's agent verbatim", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "/skill:demo go"));
+    gate.resolve();
+    await first;
+
+    expect(factory.sessions[0]?.steeredMessages.map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: "user", content: [{ type: "text", text: "/skill:demo go" }] },
+    ]);
   });
 
   it("does not emit duplicate events when two idle sends race into prompt/steer", async () => {
@@ -713,7 +741,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
         const session = await factory.create();
         return {
           prompt: session.prompt.bind(session),
-          steer: session.steer.bind(session),
+          agent: session.agent,
           abort: session.abort.bind(session),
           dispose: session.dispose.bind(session),
           subscribe: session.subscribe.bind(session),
@@ -1090,9 +1118,14 @@ interface FakeSessionOptions {
 }
 
 class FakeSession implements PiRuntimeSession {
-  readonly agent: { state: { tools: Array<{ name: string }> } };
+  readonly agent: {
+    state: { tools: Array<{ name: string }> };
+    steer(message: PiUserMessage): void;
+  };
   readonly prompts: string[] = [];
+  readonly promptOptions: Array<{ expandPromptTemplates?: boolean } | undefined> = [];
   readonly steered: string[] = [];
+  readonly steeredMessages: PiUserMessage[] = [];
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
@@ -1105,13 +1138,18 @@ class FakeSession implements PiRuntimeSession {
       state: {
         tools: (opts.activeToolNames ?? []).map((name) => ({ name })),
       },
+      steer: (message) => {
+        this.steeredMessages.push(message);
+        this.steered.push(message.content[0]!.text);
+      },
     };
   }
 
   async prompt(
     text: string,
-    _opts?: { streamingBehavior?: "steer" | "followUp" },
+    opts?: { expandPromptTemplates?: boolean; streamingBehavior?: "steer" | "followUp" },
   ): Promise<void> {
+    this.promptOptions.push(opts);
     this.prompts.push(text);
     if (
       this.opts.throwAlreadyProcessingAfterFirstPrompt === true &&
@@ -1182,10 +1220,6 @@ class FakeSession implements PiRuntimeSession {
       this.emitMessage(steered);
     }
     this.emit({ type: "agent_end", messages: [], willRetry: false });
-  }
-
-  async steer(text: string): Promise<void> {
-    this.steered.push(text);
   }
 
   async abort(): Promise<void> {
