@@ -152,6 +152,50 @@ describe("ConsoleMcpOauthService", () => {
     }, CALLBACK_URL)).rejects.toThrow(/names a different authorization server/);
   });
 
+  it("never sends the reauthorize redirect to an authorization server that echoes the stored token endpoint", async () => {
+    const fixture = oauthFetch();
+    const service = new ConsoleMcpOauthService(vaults, fixture.fetch);
+    const vaultId = vaults.listVaults(WRK).data[0]!.id;
+    const first = await service.startConnect(WRK, { vault_id: vaultId, mcp_server_url: MCP_URL }, CALLBACK_URL);
+    await service.complete(new URL(first.authorization_url).searchParams.get("state")!, "first-code");
+    const credentialId = service.status(WRK, first.flow_id).credential_id!;
+
+    fixture.authorizationServer = "https://evil.example.test";
+    fixture.evilEchoesTokenEndpoint = true;
+    let redirectHost: string | undefined;
+    try {
+      const second = await service.startReauthorize(WRK, { vault_id: vaultId, credential_id: credentialId }, CALLBACK_URL);
+      redirectHost = new URL(second.authorization_url).host;
+    } catch {
+      // Refusing the flow is the expected outcome.
+    }
+
+    expect(redirectHost).not.toBe("evil.example.test");
+  });
+
+  it("still keeps the client secret from a switched authorization server for credentials connected before #257", async () => {
+    const fixture = oauthFetch();
+    const service = new ConsoleMcpOauthService(vaults, fixture.fetch);
+    const vaultId = vaults.listVaults(WRK).data[0]!.id;
+    const first = await service.startConnect(WRK, { vault_id: vaultId, mcp_server_url: MCP_URL }, CALLBACK_URL);
+    await service.complete(new URL(first.authorization_url).searchParams.get("state")!, "first-code");
+    const credentialId = service.status(WRK, first.flow_id).credential_id!;
+    db.exec("UPDATE vault_credentials SET oauth_authorization_server = NULL");
+
+    fixture.authorizationServer = "https://evil.example.test";
+    try {
+      const second = await service.startReauthorize(WRK, { vault_id: vaultId, credential_id: credentialId }, CALLBACK_URL);
+      await service.complete(new URL(second.authorization_url).searchParams.get("state")!, "evil-code");
+    } catch {
+      // Refusing the flow is the expected outcome; the assertion is about what leaked.
+    }
+
+    const basic = Buffer.from(`oma-dynamic-client:${CLIENT_SECRET}`).toString("base64");
+    expect(fixture.evilRequests.filter((request) =>
+      request.body.includes(CLIENT_SECRET) || request.authorization?.includes(basic),
+    )).toEqual([]);
+  });
+
   it("expires flow state at ten minutes and isolates status by workspace", async () => {
     let now = new Date("2026-07-23T10:00:00.000Z");
     const fixture = oauthFetch();
@@ -247,6 +291,8 @@ function oauthFetch(opts: { registration?: boolean; tokenStatus?: number } = {})
     refreshToken: REFRESH,
     // The MCP server controls which authorization server it advertises.
     authorizationServer: "https://auth.example.test",
+    // When set, the attacker's metadata copies the legitimate token endpoint.
+    evilEchoesTokenEndpoint: false,
     evilRequests,
     get registrationCalls() { return registrationCalls; },
     get tokenCalls() { return tokenCalls; },
@@ -263,7 +309,9 @@ function oauthFetch(opts: { registration?: boolean; tokenStatus?: number } = {})
           return json({
             issuer: "https://evil.example.test",
             authorization_endpoint: "https://evil.example.test/authorize",
-            token_endpoint: "https://evil.example.test/token",
+            token_endpoint: state.evilEchoesTokenEndpoint
+              ? "https://auth.example.test/token"
+              : "https://evil.example.test/token",
             response_types_supported: ["code"],
             token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
             code_challenge_methods_supported: ["S256"],

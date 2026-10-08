@@ -140,6 +140,9 @@ export class ConsoleMcpOauthService {
       callbackUrl,
       operation: "reauthorize",
       boundTokenEndpoint: oauth.refresh.tokenEndpoint,
+      ...(oauth.refresh.authorizationServer === undefined
+        ? {}
+        : { boundAuthorizationServer: oauth.refresh.authorizationServer }),
       clientInformation: {
         client_id: oauth.refresh.clientId,
         ...(oauth.secrets.clientSecret === undefined
@@ -210,6 +213,7 @@ export class ConsoleMcpOauthService {
     callbackUrl: string;
     operation: FlowOperation;
     boundTokenEndpoint?: string;
+    boundAuthorizationServer?: string;
     clientInformation?: OAuthClientInformationMixed;
   }): Promise<ConsoleMcpOauthFlowStart> {
     this.cleanup();
@@ -221,6 +225,7 @@ export class ConsoleMcpOauthService {
       state,
       clientInformation: input.clientInformation,
       boundTokenEndpoint: input.boundTokenEndpoint,
+      boundAuthorizationServer: input.boundAuthorizationServer,
     });
     const flow: OAuthFlow = {
       id: flowId,
@@ -332,7 +337,9 @@ export class ConsoleMcpOauthService {
               }
             : {}),
         },
-      });
+      }, discovery?.authorizationServerUrl === undefined
+        ? {}
+        : { oauthAuthorizationServer: discovery.authorizationServerUrl });
     } catch (error) {
       throw Object.assign(new Error("OAuth completed, but OMA could not save the credential"), {
         cause: error,
@@ -412,6 +419,7 @@ class FlowProvider implements OAuthClientProvider {
     state: string;
     clientInformation?: OAuthClientInformationMixed;
     boundTokenEndpoint?: string;
+    boundAuthorizationServer?: string;
   }) {
     this.savedClientInformation = input.clientInformation;
     this.clientMetadata = {
@@ -464,12 +472,18 @@ class FlowProvider implements OAuthClientProvider {
   // hostile or compromised server could point the stored client secret at
   // its own token endpoint (GHSA-6qxp-vccf-f47h). Stored credentials carry no
   // SDK issuer stamp, so bind to the token endpoint saved at connect time:
-  // the only place the SDK sends the secret. The SDK saves discovery state
-  // before the authorization redirect and before any token request.
+  // the only place the SDK sends the secret. Credentials connected since
+  // #257 also bind the authorization server itself, so a server echoing the
+  // token endpoint cannot take the browser redirect (code injection). The SDK
+  // saves discovery state before the redirect and before any token request.
   saveDiscoveryState(value: OAuthDiscoveryState): void {
     const bound = this.input.boundTokenEndpoint;
     const tokenEndpoint = value.authorizationServerMetadata?.token_endpoint;
-    if (bound !== undefined && (tokenEndpoint === undefined || !sameUrl(tokenEndpoint, bound))) {
+    const boundServer = this.input.boundAuthorizationServer;
+    if (
+      (bound !== undefined && (tokenEndpoint === undefined || !sameUrl(tokenEndpoint, bound))) ||
+      (boundServer !== undefined && !sameUrl(value.authorizationServerUrl, boundServer))
+    ) {
       throw Object.assign(new Error("OAuth authorization server changed since this credential was connected"), {
         oauthAuthorizationServerChanged: true,
       });

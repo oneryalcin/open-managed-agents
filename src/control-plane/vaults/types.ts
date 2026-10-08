@@ -132,6 +132,8 @@ export interface VaultOauthRefreshState {
   expiresAt?: string;
   refresh?: {
     tokenEndpoint: string;
+    // Absent for credentials connected before #257.
+    authorizationServer?: string;
     clientId: string;
     scope?: string;
     tokenEndpointAuth: {
@@ -212,6 +214,13 @@ export interface CreateVaultCredentialRecord {
   row: VaultCredentialRow;
   token: string;
   nextRefreshAt?: string | null;
+  // Internal, never on the wire: the OAuth authorization server URL that
+  // discovery used at connect, which reauthorize is bound to (#257).
+  oauthAuthorizationServer?: string;
+}
+
+export interface VaultCredentialCreateInternal {
+  oauthAuthorizationServer?: string;
 }
 
 export interface VaultStore {
@@ -336,6 +345,7 @@ export interface VaultService {
     workspaceId: WorkspaceId,
     vaultId: string,
     input: unknown,
+    internal?: VaultCredentialCreateInternal,
   ): ManagedVaultCredential;
   retrieveCredential(
     workspaceId: WorkspaceId,

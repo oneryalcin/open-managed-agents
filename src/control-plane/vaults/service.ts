@@ -12,6 +12,7 @@ import type {
   VaultCredentialResolution,
   VaultCredentialRuntimeMetadata,
   VaultCredentialAuth,
+  VaultCredentialCreateInternal,
   VaultCredentialRow,
   VaultRow,
   VaultService,
@@ -118,6 +119,7 @@ export class DefaultVaultService implements VaultService {
     workspaceId: WorkspaceId,
     vaultId: string,
     input: unknown,
+    internal: VaultCredentialCreateInternal = {},
   ): ManagedVaultCredential {
     const vault = this.store.retrieveVault(workspaceId, vaultId);
     if (!vault) throw notFound(`Vault ${vaultId} not found`);
@@ -148,6 +150,9 @@ export class DefaultVaultService implements VaultService {
             archived_at: null,
           },
           token: req.secretValue,
+          ...(req.auth.type === "mcp_oauth" && internal.oauthAuthorizationServer !== undefined
+            ? { oauthAuthorizationServer: internal.oauthAuthorizationServer }
+            : {}),
           nextRefreshAt: oauthSchedule(
             new Date(now),
             req.auth,
