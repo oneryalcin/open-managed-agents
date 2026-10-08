@@ -7,6 +7,7 @@ import {
   RuntimeTurnOwnershipLostError,
   type EventStoreRuntimeChanges,
   type PersistedSessionEvent,
+  type RuntimeEventRunner,
 } from "../events/types.ts";
 import { PiSessionRunner } from "../sessions/pi/runner.ts";
 import { translatePiEvent } from "../sessions/pi/translator.ts";
@@ -19,12 +20,14 @@ const WS = "wrk_default";
 
 async function harness(opts: {
   wrapStore?: (store: EventStore) => EventStore;
+  runner?: RuntimeEventRunner;
 } = {}) {
   const pi = await createRealPi();
   const realStore = EventStore.open(":memory:");
   const eventStore = opts.wrapStore ? opts.wrapStore(realStore) : realStore;
   const sessionStore = SqliteSessionStore.open(":memory:");
-  const runner = new PiSessionRunner({ sessionFactory: pi.sessionFactory, idleTtlMs: 0 });
+  const runner =
+    opts.runner ?? new PiSessionRunner({ sessionFactory: pi.sessionFactory, idleTtlMs: 0 });
   const service = new DefaultSessionEventsService(
     eventStore,
     sessionStore,
@@ -163,6 +166,57 @@ describe("conversation checkpoint per settled turn", () => {
       afterRefusal: [],
       final: ["user:first", "assistant:one", "user:second", "assistant:two"],
     });
+  });
+
+  it("keeps draining after this owner's interrupt closed the turn, then saves the settled conversation", async () => {
+    // An interrupt with a pending tool action closes the turn before Pi
+    // finishes aborting; later event writes fail the pending-only fence.
+    const resume = deferred<void>();
+    const released: boolean[] = [];
+    const runner: RuntimeEventRunner = {
+      async *runUserMessage() {
+        yield { type: "agent_start" };
+        await resume.promise;
+        yield {
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "aborted" },
+        };
+        yield { type: "agent_end", messages: [] };
+        yield {
+          type: "oma.conversation_settled",
+          entries: [{ entryId: "hdr", json: "{}" }, { entryId: "e1", json: "{}" }],
+          piVersion: "0.85.1",
+          // Idempotent, first call wins, as the runner's is.
+          release: (committed: boolean) => {
+            if (released.length === 0) released.push(committed);
+          },
+        };
+      },
+    };
+    const h = await harness({ runner });
+
+    h.send("work");
+    await waitFor(() => h.realStore.listPendingRuntimeTurns(WS).some((turn) => turn.state === "running"));
+    const turn = h.realStore.listPendingRuntimeTurns(WS)[0]!;
+    h.realStore.appendBatchWithRuntimeChanges([], {
+      closedTurns: [{
+        workspaceId: WS,
+        sessionId: h.sessionId,
+        turnId: turn.turn_id,
+        ownerId: turn.owner_id,
+        ownerGeneration: turn.owner_generation,
+        reason: "interrupted",
+        state: "terminalized",
+        now: new Date().toISOString(),
+      }],
+    });
+    resume.resolve();
+    await delay(100);
+
+    expect({
+      stored: h.realStore.listConversationEntries(WS, h.sessionId).map((row) => row.entryId),
+      released,
+    }).toEqual({ stored: ["hdr", "e1"], released: [true] });
   });
 
   it("saves nothing for a session archived before the turn settles", async () => {

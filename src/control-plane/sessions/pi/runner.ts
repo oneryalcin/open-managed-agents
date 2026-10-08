@@ -544,6 +544,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     const hold = Symbol("turn");
     handle.holds.add(hold);
     let settledEmitted = false;
+    // Taken the moment this prompt resolves: the service may resume this
+    // generator only later (e.g. after output indexing), by which time a newer
+    // turn can have appended to the same Pi session log.
+    let settledLog: Array<{ id: string }> | undefined;
 
     const queue: unknown[] = [];
     const gatedEvents: unknown[] = [];
@@ -623,6 +627,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
       // Verbatim, as hosted: Pi's default expands "/skill:<name>" by reading
       // the skill file from the control-plane host, not the sandbox (#255).
       .prompt(text, { expandPromptTemplates: false })
+      .then(() => {
+        settledLog = conversationLog(handle.session);
+      })
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
           steerVerbatim(handle.session, text);
@@ -744,7 +751,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
       // settled. Only the run that actually owned it checkpoints; the loser
       // of the prompt race steered its message into the winner's run.
       if (!queuedOnRunningTurn) {
-        const settled = this.conversationSettledEvent(sessionId, handle, hold);
+        const settled = settledLog === undefined
+          ? undefined
+          : this.conversationSettledEvent(sessionId, handle, hold, settledLog);
         if (settled) {
           settledEmitted = true;
           yield settled;
@@ -770,12 +779,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
     handle: RuntimeHandle,
     hold: symbol,
-  ): RuntimeConversationSettledEvent | undefined {
-    const manager = handle.session.sessionManager;
-    if (manager === undefined) return undefined;
-    const header = manager.getHeader();
-    const all = [...(header === null ? [] : [header]), ...manager.getEntries()];
-    // Captured now: a newer run may append before this checkpoint commits.
+    all: ReadonlyArray<{ id: string }>,
+  ): RuntimeConversationSettledEvent {
+    // A newer run may append before this checkpoint commits; the cursor only
+    // ever advances to this settlement's endpoint.
     const endpoint = all.length;
     let released = false;
     return {
@@ -1457,6 +1464,16 @@ function updateRunning(handle: RuntimeHandle, event: unknown): void {
 
 function steerVerbatim(session: PiRuntimeSession, text: string): void {
   session.agent.steer({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+}
+
+/** Header plus entries, or undefined when the session keeps no log. */
+function conversationLog(
+  session: PiRuntimeSession,
+): Array<{ id: string }> | undefined {
+  const manager = session.sessionManager;
+  if (manager === undefined) return undefined;
+  const header = manager.getHeader();
+  return [...(header === null ? [] : [header]), ...manager.getEntries()];
 }
 
 function isAlreadyProcessing(error: unknown): boolean {

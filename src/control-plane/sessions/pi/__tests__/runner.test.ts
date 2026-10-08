@@ -42,6 +42,25 @@ describe("PiSessionRunner conversation checkpoints (plan 0147)", () => {
     expect(second!.entries.map((entry) => entry.entryId)).toEqual(["e2", "e3"]);
   });
 
+  it("snapshots the conversation when the prompt resolves, not when the generator resumes", async () => {
+    // The service can pause on an event (e.g. output indexing) while a newer
+    // turn starts and appends; the older checkpoint must not include it.
+    const log = [{ id: "e1" }];
+    const factory = new FakeSessionFactory({ sessionLog: log });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const iterator = runner.runUserMessage("wrk", "sesn_1", "one")[Symbol.asyncIterator]();
+    await iterator.next(); // first event; the fake's prompt resolves right after
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    log.push({ id: "newer_turn_user" });
+
+    const rest: unknown[] = [];
+    for (let step = await iterator.next(); !step.done; step = await iterator.next()) {
+      rest.push(step.value);
+    }
+
+    expect(settledOf(rest)[0]!.entries.map((entry) => entry.entryId)).toEqual(["hdr", "e1"]);
+  });
+
   it("offers the same entries again after a release that did not commit", async () => {
     const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
     const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
