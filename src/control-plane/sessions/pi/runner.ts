@@ -80,6 +80,8 @@ export interface PiRuntimeSession {
   // prompt with streamingBehavior only while this is true, rejects one
   // without it, and otherwise starts a fresh turn.
   readonly isStreaming: boolean;
+  /** Resolves once the run has settled (isStreaming false, no compaction). */
+  waitForIdle(): Promise<void>;
   abort(): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
   dispose(): void;
@@ -515,7 +517,20 @@ export class PiSessionRunner implements RuntimeEventRunner {
     // Pi reports isStreaming only once a fresh prompt's preflight is done, so
     // wait for a starting turn before deciding; a failed start may evict the
     // handle, in which case start over on a fresh one.
-    while (handle.turnStarting) await handle.turnStarting;
+    for (;;) {
+      if (handle.turnStarting) {
+        await handle.turnStarting;
+        continue;
+      }
+      // After agent_end Pi is still settling (post-run hooks, compaction)
+      // and may already have made its last queued-message check, so a steer
+      // could be left unconsumed. Let the run settle, then start a turn.
+      if (handle.session.isStreaming && !handle.running) {
+        await handle.session.waitForIdle();
+        continue;
+      }
+      break;
+    }
     if (this.sessions.get(sessionId) !== handle) {
       yield* this.runOnSession(workspaceId, sessionId, text, signal);
       return;

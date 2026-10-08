@@ -150,6 +150,8 @@ class FakeQueuedSession {
     return this.running;
   }
 
+  async waitForIdle(): Promise<void> {}
+
   constructor(private readonly gate: Promise<void>) {}
 
   async prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void> {

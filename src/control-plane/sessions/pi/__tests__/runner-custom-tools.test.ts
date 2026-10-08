@@ -20,6 +20,7 @@ const sdk = vi.hoisted(() => {
 
   class MockSession implements PiRuntimeSession {
     readonly isStreaming = false;
+    async waitForIdle(): Promise<void> {}
     readonly results: unknown[] = [];
     private readonly listeners = new Set<(event: unknown) => void>();
 

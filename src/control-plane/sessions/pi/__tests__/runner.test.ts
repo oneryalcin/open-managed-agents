@@ -60,20 +60,24 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(messageTexts(firstEvents)).toEqual(["reply: one", "reply: two"]);
   });
 
-  it("steers a message that arrives after agent_end while Pi's run is still settling", async () => {
-    // handle.running is false from agent_end, but Pi still reports the run as
-    // active and would reject a plain prompt; the message must queue instead.
-    const factory = new FakeSessionFactory({ reportsStreaming: true });
+  it("runs a message that arrives after agent_end as a new turn once Pi's run settles", async () => {
+    // Pi may already have made its last queued-message check after agent_end,
+    // so a steer there could sit unconsumed; the message must run as a turn.
+    const settle = deferred<void>();
+    const factory = new FakeSessionFactory({ settleGate: settle.promise });
     const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
 
-    await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    const sent = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    settle.resolve();
 
-    expect(factory.sessions[0]?.steered).toEqual(["two"]);
+    expect(messageTexts(await sent)).toEqual(["reply: two"]);
   });
 
   it("steers a second message that arrives while the first prompt is still in Pi preflight", async () => {
     const preflight = deferred<void>();
-    const factory = new FakeSessionFactory({ preflightGate: preflight.promise });
+    const turn = deferred<void>();
+    const factory = new FakeSessionFactory({ preflightGate: preflight.promise, promptGate: turn.promise });
     const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
 
     const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
@@ -82,7 +86,9 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     // Let the second message reach routing while the first is in preflight.
     await new Promise((resolve) => setTimeout(resolve, 20));
     preflight.resolve();
-    await Promise.all([first, second]);
+    await second;
+    turn.resolve();
+    await first;
 
     expect({
       prompts: factory.sessions[0]?.prompts,
@@ -753,6 +759,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
           get isStreaming() {
             return session.isStreaming;
           },
+          waitForIdle: session.waitForIdle.bind(session),
           abort: session.abort.bind(session),
           dispose: session.dispose.bind(session),
           subscribe: session.subscribe.bind(session),
@@ -1113,8 +1120,9 @@ class FakeSessionFactory {
 interface FakeSessionOptions {
   promptGate?: Promise<void>;
   abortGate?: Promise<void>;
-  // Report a run as active even when this fake has not started one.
-  reportsStreaming?: boolean;
+  // Hold the run active past agent_end until this settles, as Pi does while
+  // it runs post-run hooks; a fresh session starts in that state.
+  settleGate?: Promise<void>;
   // Pi awaits auth, compaction and hooks before marking its run active.
   preflightGate?: Promise<void>;
   throwHardErrorOnce?: boolean;
@@ -1138,9 +1146,20 @@ class FakeSession implements PiRuntimeSession {
 
   // Like Pi, a run stays active from prompt() until it settles, past agent_end.
   get isStreaming(): boolean {
-    return this.runActive || this.opts.reportsStreaming === true;
+    return this.runActive || this.settling;
   }
   private runActive = false;
+  private settling: boolean;
+
+  private readonly idleWaiters: Array<() => void> = [];
+
+  async waitForIdle(): Promise<void> {
+    if (this.settling) await this.opts.settleGate;
+    this.settling = false;
+    while (this.runActive) {
+      await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+    }
+  }
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
@@ -1148,6 +1167,7 @@ class FakeSession implements PiRuntimeSession {
   clearQueues = 0;
 
   constructor(private readonly opts: FakeSessionOptions = {}) {
+    this.settling = opts.settleGate !== undefined;
     this.agent = {
       state: {
         tools: (opts.activeToolNames ?? []).map((name) => ({ name })),
@@ -1181,6 +1201,7 @@ class FakeSession implements PiRuntimeSession {
       await this.runPrompt(text);
     } finally {
       this.runActive = false;
+      for (const resolve of this.idleWaiters.splice(0)) resolve();
     }
   }
 
