@@ -169,7 +169,13 @@ async function createPrivatePiModelCatalog(
   // No stored credentials: provider auth comes from the environment. This
   // seam never reads the operator's personal Pi auth.json.
   const credentials = new OmaCredentialStore(new InMemoryAuthStorageBackend());
-  const modelRuntime = await ModelRuntime.create({ credentials, modelsStore: new InMemoryModelsStore() });
+  // modelsPath null: no models.json either (Pi would otherwise read the
+  // operator's ~/.pi/agent/models.json, which no OMA policy scan covers).
+  const modelRuntime = await ModelRuntime.create({
+    credentials,
+    modelsPath: null,
+    modelsStore: new InMemoryModelsStore(),
+  });
   const modelRegistry = new ModelRegistry(modelRuntime);
   const allowedProviders = new Set([provider]);
   return {
@@ -179,6 +185,7 @@ async function createPrivatePiModelCatalog(
     modelRuntime,
     modelRegistry,
     securityReport: { warnings: [] },
+    assertConfigSecurity: () => {},
     // Standalone runners are an internal/test seam without deployment
     // admission policy. Production always receives the shared allowlisted
     // catalog from the composition root.
@@ -1086,6 +1093,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     if (!model) {
       throw new Error(`Pi model not available: ${provider}/${modelId}`);
     }
+    modelCatalog.assertConfigSecurity();
     const customToolNames = (
       this.opts.customTools?.(workspaceId, sessionId, context) ?? []
     ).map((tool) => tool.name);
@@ -1142,7 +1150,13 @@ export class PiSessionRunner implements RuntimeEventRunner {
   // Pi's ModelRuntime can only be built asynchronously, so the standalone
   // default catalog is created on first use rather than in the constructor.
   private modelCatalog(): Promise<PiModelCatalog> {
-    this.modelCatalogPromise ??= createPrivatePiModelCatalog(this.opts.provider, this.opts.model);
+    // Reset on failure so one bad attempt is not cached for the runner's life.
+    this.modelCatalogPromise ??= createPrivatePiModelCatalog(this.opts.provider, this.opts.model).catch(
+      (error: unknown) => {
+        this.modelCatalogPromise = undefined;
+        throw error;
+      },
+    );
     return this.modelCatalogPromise;
   }
 

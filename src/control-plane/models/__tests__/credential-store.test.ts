@@ -53,3 +53,17 @@ describe("OmaCredentialStore command policy", () => {
     expect(existsSync(marker)).toBe(true);
   });
 });
+
+describe("InMemoryAuthStorageBackend", () => {
+  it("serializes concurrent modifies so neither write is lost", async () => {
+    const store = new OmaCredentialStore(new InMemoryAuthStorageBackend());
+    const slow = store.modify("a", async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { type: "api_key", key: "ka" };
+    });
+    const fast = store.modify("b", async () => ({ type: "api_key", key: "kb" }));
+    await Promise.all([slow, fast]);
+
+    expect((await store.list()).map((entry) => entry.providerId).sort()).toEqual(["a", "b"]);
+  });
+});

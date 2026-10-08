@@ -25,6 +25,12 @@ export interface PiModelCatalog {
   modelRuntime: ModelRuntime;
   modelRegistry: ModelRegistry;
   securityReport: ModelConfigSecurityReport;
+  /**
+   * Re-run the startup config scan. Pi re-reads models.json on every session
+   * start, so the command-auth policy must be re-checked there, not only at
+   * boot. Throws on a violation.
+   */
+  assertConfigSecurity(): void;
   resolve(ref: PiModelRef): PiResolvedModel | undefined;
   list(options?: { provider?: string; availableOnly?: boolean }): PiResolvedModel[];
   hasConfiguredAuth(model: PiResolvedModel): boolean;
@@ -77,12 +83,14 @@ async function createCatalog(
     throw new Error(`Default model provider ${config.defaultModel.provider} is not enabled on this deployment`);
   }
 
-  const securityReport = scanModelConfigSecurity({
-    modelsPath: config.modelsPath,
-    authPath: config.authPath,
-    allowedProviders,
-    allowCommands: config.allowModelAuthCommands,
-  });
+  const scan = () =>
+    scanModelConfigSecurity({
+      modelsPath: config.modelsPath,
+      authPath: config.authPath,
+      allowedProviders,
+      allowCommands: config.allowModelAuthCommands,
+    });
+  const securityReport = scan();
 
   // Fail at startup on an unreadable or corrupt auth.json (Pi's own store
   // would keep serving its last in-memory snapshot).
@@ -119,6 +127,9 @@ async function createCatalog(
     modelRuntime,
     modelRegistry,
     securityReport,
+    assertConfigSecurity() {
+      scan();
+    },
     resolve(ref) {
       if (!allowedProviders.has(ref.provider)) return undefined;
       return modelRegistry.find(ref.provider, ref.id);

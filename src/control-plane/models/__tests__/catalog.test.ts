@@ -64,7 +64,7 @@ describe("createPiModelCatalog", () => {
     expect(catalog.list().every((model) => catalog.allowedProviders.has(model.provider))).toBe(true);
   });
 
-  it("uses model-scoped configured-auth readiness", async () => {
+  it("reports a provider with stored credentials as configured", async () => {
     const backend = new InMemoryAuthStorageBackend();
     backend.withLock(() => ({
       result: undefined,
@@ -77,13 +77,24 @@ describe("createPiModelCatalog", () => {
     expect(catalog.hasConfiguredAuth(openaiModel!)).toBe(true);
   });
 
-  it("recognizes environment credentials through model-scoped readiness", async () => {
+  it("reports a provider with environment credentials as configured", async () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-environment-test");
     const catalog = await createTestCatalog({ providers: ["anthropic", "openai"] });
     const openaiModel = catalog.resolve({ provider: "openai", id: "gpt-5" });
 
     expect(openaiModel).toBeDefined();
     expect(catalog.hasConfiguredAuth(openaiModel!)).toBe(true);
+  });
+
+  it("re-checks the command-auth policy after models.json changes post-startup", async () => {
+    // Pi re-reads models.json on every session start, so a startup-only scan
+    // would let a command-backed key added later run without the opt-in.
+    const root = tempRoot();
+    const modelsPath = writeModelsJson(root, `{"providers":{}}`);
+    const catalog = await createTestCatalog({ modelsPath });
+    writeModelsJson(root, `{"providers":{"anthropic":{"apiKey":"!printf injected"}}}`);
+
+    expect(() => catalog.assertConfigSecurity()).toThrow(/OMA_ALLOW_MODEL_AUTH_COMMANDS/);
   });
 
   it("fails startup when auth storage cannot be parsed", async () => {

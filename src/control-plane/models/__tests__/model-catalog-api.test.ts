@@ -160,6 +160,7 @@ function fakeCatalog(): PiModelCatalog {
       },
     } as never,
     securityReport: { warnings: [] },
+    assertConfigSecurity: () => {},
     resolve: () => undefined,
     list(options = {}) {
       return MODELS

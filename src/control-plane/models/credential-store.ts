@@ -25,6 +25,8 @@ export interface AuthStorageBackend {
 
 export class InMemoryAuthStorageBackend implements AuthStorageBackend {
   private content: string | undefined;
+  // Serializes async read-modify-writes, as Pi's in-memory backend does.
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(data?: AuthStorageData) {
     if (data !== undefined) this.content = JSON.stringify(data, null, 2);
@@ -36,12 +38,16 @@ export class InMemoryAuthStorageBackend implements AuthStorageBackend {
     return result;
   }
 
-  async withLockAsync<T>(
+  withLockAsync<T>(
     fn: (current: string | undefined) => Promise<LockResult<T>>,
   ): Promise<T> {
-    const { result, next } = await fn(this.content);
-    if (next !== undefined) this.content = next;
-    return result;
+    const run = this.chain.then(async () => {
+      const { result, next } = await fn(this.content);
+      if (next !== undefined) this.content = next;
+      return result;
+    });
+    this.chain = run.catch(() => {});
+    return run;
   }
 }
 

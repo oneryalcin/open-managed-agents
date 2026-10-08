@@ -401,6 +401,7 @@ describe("PiSessionRunner custom-tool bridge", () => {
         modelRuntime: {} as never,
         modelRegistry: { find: () => resolved } as never,
         securityReport: { warnings: [] },
+        assertConfigSecurity: () => {},
         resolve: () => resolved as never,
         list: () => [],
         hasConfiguredAuth: () => false,
