@@ -64,7 +64,8 @@ see what it cost.
 
 | Item | Notes |
 |---|---|
-| #164 split `events/service.ts` | **First in M2.** The delete race, per-task idle state and parallel turns all lived in this god class. Split the three persist-and-claim state machines before more features land on it |
+| #164 split `events/service.ts` | **Done** (#262, #263; plan 0146). `service.ts` 3080 → 1847 lines |
+| Durable conversation ([ADR 0018](../adrs/0018-session-durability-and-parking.md) stage 1) | Today the model forgets the conversation after the 15-minute idle eviction or a restart. Persist Pi session entries per session and rebuild on any cache miss |
 | Web tools (`web_fetch` / `web_search`) | PARITY pre-v1 arc 3: re-probe CMA shapes; decide which tools are honest to offer through the egress boundary |
 | Usage metering (0114 Arc D) | Sessions still return `usage: null`. Aggregate the span-level model usage already captured; surface it in the console |
 | Environment resource (packages / runtimes) | Environments are ~35% parity; decide the image/package story beyond the single coding image |
@@ -87,7 +88,7 @@ could expose.
 
 | Decision | Inputs | When |
 |---|---|---|
-| Session parking: idle sessions on `requires_action` must not hold a running container | #229 (park/resume contract in 0107), #230 (durability and parking as one design), Substrate/celld prior art | Before M2 ends; it shapes #164's split |
+| ~~Session parking~~ **Decided 2026-10-08: [ADR 0018](../adrs/0018-session-durability-and-parking.md) option B** (durable conversation, disposable compute, staged) | #229, #230, Substrate/celld prior art | Stage 1 in M2; stage 3 is the slice after #164 |
 | Remote / hosted sandbox tier in scope before v1? | ADR 0003 amendment (Modal is an open question), 0106 hosted matrix, K8s `agent-sandbox` target | Before any provider work after M3 |
 | Pi 1.x | #249: Pi 1.0.1 drops its shrinkwrap; ADR 0006/0017 pinning | After 0.2.0; not bundled with other changes |
 

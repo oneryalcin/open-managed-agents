@@ -127,6 +127,26 @@ interface SandboxLifecycle {
 suspend/resume, snapshot/recreate, or no-op, but the implementation must state
 whether workspace state survives and whether running processes survive.
 
+**Snapshot-resume requirements (#229).** [ADR 0018](../adrs/0018-session-durability-and-parking.md)
+parks sessions by persisting the conversation and keeping the workspace
+filesystem, not by freezing process memory. Any provider that ever offers
+snapshot-based `resume` (memory or process state) must answer all four of
+these, including "not supported":
+1. **Identity:** session-scoped identifiers are delivered out of band (a
+   mount, a file, a per-resume call), never baked into snapshotted memory or
+   environment variables.
+2. **Entropy and clock:** whether the guest PRNG is reseeded and the wall
+   clock corrected on resume, and whether resuming one snapshot more than once
+   is allowed. A provider that cannot guarantee uniqueness must reject
+   multi-resume.
+3. **Runtime pinning:** persisted state records the provider and its runtime
+   version, and resume refuses a mismatch at the boundary.
+4. **Readiness:** create *and* restore are gated on readiness with a bounded
+   deadline.
+
+Current providers (`docker-local`, `microsandbox-local`, `host-passthrough`)
+do **not** support snapshot resume.
+
 ### Execution
 
 ```ts

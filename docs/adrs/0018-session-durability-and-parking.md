@@ -1,6 +1,6 @@
 # ADR 0018: Session durability and parking
 
-**Status:** Proposed, 2026-10-08. Decision pending (maintainer). Inputs: #229,
+**Status:** Accepted, 2026-10-08 (maintainer chose option B). Inputs: #229,
 #230, plan [0106](../plans/0106-sandbox-provider-landscape.md) requirement 2,
 plan [0145](../plans/0145-road-to-external-testers.md) decisions table.
 
@@ -109,13 +109,14 @@ on resume.
 
 ## Decision
 
-_Pending._ Recommended: **B**, starting with stage 1 (durable conversation) as
-an M2 item, since it fixes a correctness gap testers will hit (amnesia after 15
-idle minutes or a restart). Stages 2 and 3 follow, with stage 3 shaped together
-with the turn-ownership slice (#260, #254). Option A is not needed if B lands.
-Option C stays deferred to a remote tier.
+**B: durable conversation, disposable compute, staged.**
+- Stage 1 (durable conversation) is an M2 item, because it fixes a correctness
+  gap testers will hit: amnesia after 15 idle minutes or a restart.
+- Stages 2 and 3 follow. Stage 3 is designed together with the turn-ownership
+  slice (#260, #254).
+- Option A is not needed. Option C stays deferred to a future remote tier.
 
-## Consequences (if B is accepted)
+## Consequences
 
 - Plan 0145: B stage 1 joins M2; stage 3 replaces "turn ownership" as the
   slice after #164.
