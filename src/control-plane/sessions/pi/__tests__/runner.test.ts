@@ -71,6 +71,26 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.steered).toEqual(["two"]);
   });
 
+  it("steers a second message that arrives while the first prompt is still in Pi preflight", async () => {
+    const preflight = deferred<void>();
+    const factory = new FakeSessionFactory({ preflightGate: preflight.promise });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.prompts.length === 1);
+    const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    // Let the second message reach routing while the first is in preflight.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    preflight.resolve();
+    await Promise.all([first, second]);
+
+    expect({
+      prompts: factory.sessions[0]?.prompts,
+      steered: factory.sessions[0]?.steered,
+      disposed: factory.sessions[0]?.disposed,
+    }).toEqual({ prompts: ["one"], steered: ["two"], disposed: false });
+  });
+
   // Pi expands "/skill:<name>" by reading the skill file from the control-plane
   // host unless told not to (#255); hosted passes user text through verbatim.
   it("starts a turn without Pi command expansion", async () => {
@@ -1095,6 +1115,8 @@ interface FakeSessionOptions {
   abortGate?: Promise<void>;
   // Report a run as active even when this fake has not started one.
   reportsStreaming?: boolean;
+  // Pi awaits auth, compaction and hooks before marking its run active.
+  preflightGate?: Promise<void>;
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
   emitSandboxedTool?: string;
@@ -1145,6 +1167,15 @@ class FakeSession implements PiRuntimeSession {
       return;
     }
     this.prompts.push(text);
+    if (this.opts.preflightGate) {
+      await this.opts.preflightGate;
+      // Pi's Agent rejects a second run that cleared preflight concurrently.
+      if (this.runActive) {
+        throw new Error(
+          "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+        );
+      }
+    }
     this.runActive = true;
     try {
       await this.runPrompt(text);

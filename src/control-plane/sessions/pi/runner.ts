@@ -134,6 +134,12 @@ interface RuntimeHandle {
   session: PiRuntimeSession;
   sandbox: SandboxProvider | undefined;
   running: boolean;
+  /**
+   * Set while a fresh prompt runs Pi's preflight (auth, compaction, hooks),
+   * before Pi marks its run active; cleared at agent_start or when the
+   * prompt settles. Later messages wait on it so they steer, not race.
+   */
+  turnStarting: Promise<void> | undefined;
   needsFreshPromptAfterInterrupt: boolean;
   closeWhenIdle: boolean;
   lastUsedAt: number;
@@ -506,6 +512,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
     this.touch(sessionId, handle);
 
+    // Pi reports isStreaming only once a fresh prompt's preflight is done, so
+    // wait for a starting turn before deciding; a failed start may evict the
+    // handle, in which case start over on a fresh one.
+    while (handle.turnStarting) await handle.turnStarting;
+    if (this.sessions.get(sessionId) !== handle) {
+      yield* this.runOnSession(workspaceId, sessionId, text, signal);
+      return;
+    }
+
     // Route on Pi's own run state, not handle.running (false from agent_end
     // until the run settles). From here to Pi's isStreaming check inside
     // prompt() there is no await, so Pi decides exactly as checked here.
@@ -521,6 +536,16 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
     handle.needsFreshPromptAfterInterrupt = false;
 
+    let resolveTurnStart: () => void = () => {};
+    const turnStarting = new Promise<void>((resolve) => {
+      resolveTurnStart = resolve;
+    });
+    handle.turnStarting = turnStarting;
+    const releaseTurnStart = () => {
+      if (handle.turnStarting === turnStarting) handle.turnStarting = undefined;
+      resolveTurnStart();
+    };
+
     const queue: unknown[] = [];
     const gatedEvents: unknown[] = [];
     const activeSandboxedToolCalls = new Map<
@@ -533,6 +558,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     const stop = handle.session.subscribe((event) => {
       updateRunning(handle, event);
+      if (handle.running) releaseTurnStart();
       queue.push(event);
       wake?.();
     });
@@ -600,6 +626,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         failure = error;
       })
       .finally(() => {
+        releaseTurnStart();
         done = true;
         wake?.();
       });
@@ -842,6 +869,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           session,
           sandbox,
           running: false,
+          turnStarting: undefined,
           needsFreshPromptAfterInterrupt: false,
           // Retrying MCP failures use fresh-handle mechanics: dispose at
           // idle so the NEXT turn re-runs connect/discovery (plan 0122 §4.6).
