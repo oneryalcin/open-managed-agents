@@ -9,6 +9,10 @@ dishonesty its own header warned against. It now points at the live documents:
   [0114 Appliance Product Roadmap](plans/0114-appliance-product-roadmap.md) —
   packaging, admin dashboard, observability, usage metering, and the
   egress→skills→MCP capability track.
+- **Release sequencing to external testers**:
+  [0145 Road to external testers](plans/0145-road-to-external-testers.md) —
+  M1 0.2.0 trust release, M2 0.3.0 capability release, M3 hardening, and the
+  tester gate.
 - **Runtime rollout gates**:
   [0112 Pi Runtime Rollout Policy](plans/0112-pi-runtime-rollout-policy.md) —
   what each deployment tier requires.

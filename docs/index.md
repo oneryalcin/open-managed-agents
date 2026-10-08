@@ -98,6 +98,10 @@ Agents product parity remains tracked in [PARITY.md](../PARITY.md).
   `npx` command to an authenticated first-session screen in three minutes,
   with a guided terminal flow, no secret leakage, and separate cold-image
   accounting.
+- [Road to external testers](plans/0145-road-to-external-testers.md) —
+  sequences the remaining pre-v1 work into releases (0.2.0 trust, 0.3.0
+  capability, hardening), the decisions that need ADRs, and the gate for
+  recruiting external alpha testers, with the maintainer as tester zero.
 - [Alpha OpenAPI documentation](plans/0135-alpha-openapi-docs.md) —
   schema-backed `/openapi.json`, vendored `/docs/`, route/spec completeness,
   and credential-safe interactive documentation.
