@@ -67,7 +67,8 @@ export interface ConsoleMcpOauthError {
     | "provider_unsupported"
     | "provider_unreachable"
     | "token_exchange_failed"
-    | "credential_persist_failed";
+    | "credential_persist_failed"
+    | "authorization_server_changed";
   message: string;
 }
 
@@ -138,6 +139,7 @@ export class ConsoleMcpOauthService {
       serverUrl: credential.auth.mcp_server_url,
       callbackUrl,
       operation: "reauthorize",
+      boundTokenEndpoint: oauth.refresh.tokenEndpoint,
       clientInformation: {
         client_id: oauth.refresh.clientId,
         ...(oauth.secrets.clientSecret === undefined
@@ -207,6 +209,7 @@ export class ConsoleMcpOauthService {
     serverUrl: string;
     callbackUrl: string;
     operation: FlowOperation;
+    boundTokenEndpoint?: string;
     clientInformation?: OAuthClientInformationMixed;
   }): Promise<ConsoleMcpOauthFlowStart> {
     this.cleanup();
@@ -217,6 +220,7 @@ export class ConsoleMcpOauthService {
       redirectUrl: input.callbackUrl,
       state,
       clientInformation: input.clientInformation,
+      boundTokenEndpoint: input.boundTokenEndpoint,
     });
     const flow: OAuthFlow = {
       id: flowId,
@@ -407,6 +411,7 @@ class FlowProvider implements OAuthClientProvider {
     redirectUrl: string;
     state: string;
     clientInformation?: OAuthClientInformationMixed;
+    boundTokenEndpoint?: string;
   }) {
     this.savedClientInformation = input.clientInformation;
     this.clientMetadata = {
@@ -455,7 +460,20 @@ class FlowProvider implements OAuthClientProvider {
     return this.savedCodeVerifier;
   }
 
+  // The MCP server picks the authorization server, so on reauthorize a
+  // hostile or compromised server could point the stored client secret at
+  // its own token endpoint (GHSA-6qxp-vccf-f47h). Stored credentials carry no
+  // SDK issuer stamp, so bind to the token endpoint saved at connect time:
+  // the only place the SDK sends the secret. The SDK saves discovery state
+  // before the authorization redirect and before any token request.
   saveDiscoveryState(value: OAuthDiscoveryState): void {
+    const bound = this.input.boundTokenEndpoint;
+    const tokenEndpoint = value.authorizationServerMetadata?.token_endpoint;
+    if (bound !== undefined && (tokenEndpoint === undefined || !sameUrl(tokenEndpoint, bound))) {
+      throw Object.assign(new Error("OAuth authorization server changed since this credential was connected"), {
+        oauthAuthorizationServerChanged: true,
+      });
+    }
     this.savedDiscoveryState = value;
   }
 
@@ -489,6 +507,12 @@ function classifyOauthError(
   error: unknown,
   fallback: ConsoleMcpOauthError["code"],
 ): ConsoleMcpOauthError {
+  if (isObject(error) && error.oauthAuthorizationServerChanged === true) {
+    return {
+      code: "authorization_server_changed",
+      message: "The MCP server now names a different authorization server than when this credential was connected. Delete the credential and connect again if the change is expected.",
+    };
+  }
   if (isObject(error) && error.oauthPersistenceFailure === true) {
     return {
       code: "credential_persist_failed",
@@ -648,4 +672,12 @@ function optionalStringField(
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sameUrl(a: string, b: string): boolean {
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return false;
+  }
 }
