@@ -1,0 +1,248 @@
+{
+  "during_tool": {
+    "events": [
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 24, 35, 346794, tzinfo=TzInfo(0))",
+        "type": "session.status_running"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 24, 35, 346795, tzinfo=TzInfo(0))",
+        "type": "session.thread_status_running"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 24, 35, 418882, tzinfo=TzInfo(0))",
+        "text": "Use bash exactly once and run: sleep 25; printf 'OMA_MID_TURN_A_1791476673-84534\\n'. Then reply with the printed line only.",
+        "type": "user.message"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 24, 35, 418883, tzinfo=TzInfo(0))",
+        "type": "span.model_request_start"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 24, 36, 607590, tzinfo=TzInfo(0))",
+        "type": "agent.thinking"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 24, 36, 740451, tzinfo=TzInfo(0))",
+        "text": "{\"command\": \"sleep 25; printf 'OMA_MID_TURN_A_1791476673-84534\\\\n'\"}",
+        "type": "agent.tool_use"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 24, 36, 740452, tzinfo=TzInfo(0))",
+        "type": "span.model_request_end"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 3, 591762, tzinfo=TzInfo(0))",
+        "text": "OMA_MID_TURN_A_1791476673-84534\n",
+        "type": "agent.tool_result"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 3, 646411, tzinfo=TzInfo(0))",
+        "text": "Reply with exactly: OMA_MID_TURN_B_1791476673-84534",
+        "type": "user.message"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 3, 699659, tzinfo=TzInfo(0))",
+        "type": "span.model_request_start"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 4, 476754, tzinfo=TzInfo(0))",
+        "text": "OMA_MID_TURN_B_1791476673-84534",
+        "type": "agent.message"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 4, 476755, tzinfo=TzInfo(0))",
+        "type": "span.model_request_end"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 4, 609272, tzinfo=TzInfo(0))",
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.thread_status_idle"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 4, 609273, tzinfo=TzInfo(0))",
+        "type": "session.usage"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 4, 609274, tzinfo=TzInfo(0))",
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.status_idle"
+      }
+    ],
+    "idle_count": 1,
+    "running_count": 1,
+    "send_a": {
+      "at": 1791476675.08161,
+      "ok": true,
+      "response": {
+        "data": [
+          {
+            "content": [
+              {
+                "text": "Use bash exactly once and run: sleep 25; printf 'OMA_MID_TURN_A_1791476673-84534\\n'. Then reply with the printed line only.",
+                "type": "text"
+              }
+            ],
+            "id": "sevt_017brVrqbaQ5kbQ46qBfsyrv",
+            "processed_at": null,
+            "type": "user.message"
+          }
+        ]
+      }
+    },
+    "send_b": {
+      "at": 1791476677.451961,
+      "ok": true,
+      "response": {
+        "data": [
+          {
+            "content": [
+              {
+                "text": "Reply with exactly: OMA_MID_TURN_B_1791476673-84534",
+                "type": "text"
+              }
+            ],
+            "id": "sevt_01Nht7fVV3nAQQrR6HwiuHrm",
+            "processed_at": null,
+            "type": "user.message"
+          }
+        ]
+      }
+    },
+    "session_id": "sesn_01X9CSPGg92CjpkFy2MaEpkC",
+    "status_after_b": "running",
+    "status_before_b": "running",
+    "statuses": [
+      "running",
+      "idle"
+    ],
+    "system_types": [],
+    "user_message_count": 2
+  },
+  "immediate": {
+    "events": [
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 24, 470676, tzinfo=TzInfo(0))",
+        "type": "session.status_running"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 24, 470677, tzinfo=TzInfo(0))",
+        "type": "session.thread_status_running"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 24, 536806, tzinfo=TzInfo(0))",
+        "text": "Use bash exactly once and run: sleep 25; printf 'OMA_MID_TURN_A_1791476673-84534\\n'. Then reply with the printed line only.",
+        "type": "user.message"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 24, 536807, tzinfo=TzInfo(0))",
+        "type": "span.model_request_start"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 25, 675546, tzinfo=TzInfo(0))",
+        "text": "{\"command\": \"sleep 25; printf 'OMA_MID_TURN_A_1791476673-84534\\\\n'\"}",
+        "type": "agent.tool_use"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 25, 675547, tzinfo=TzInfo(0))",
+        "type": "span.model_request_end"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 52, 469082, tzinfo=TzInfo(0))",
+        "text": "OMA_MID_TURN_A_1791476673-84534\n",
+        "type": "agent.tool_result"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 52, 497735, tzinfo=TzInfo(0))",
+        "text": "Reply with exactly: OMA_MID_TURN_B_1791476673-84534",
+        "type": "user.message"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 52, 602806, tzinfo=TzInfo(0))",
+        "type": "span.model_request_start"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 53, 381131, tzinfo=TzInfo(0))",
+        "text": "OMA_MID_TURN_B_1791476673-84534",
+        "type": "agent.message"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 53, 381132, tzinfo=TzInfo(0))",
+        "type": "span.model_request_end"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 53, 532048, tzinfo=TzInfo(0))",
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.thread_status_idle"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 53, 532049, tzinfo=TzInfo(0))",
+        "type": "session.usage"
+      },
+      {
+        "processed_at": "datetime.datetime(2026, 10, 8, 16, 25, 53, 532050, tzinfo=TzInfo(0))",
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.status_idle"
+      }
+    ],
+    "idle_count": 1,
+    "running_count": 1,
+    "send_a": {
+      "at": 1791476724.214216,
+      "ok": true,
+      "response": {
+        "data": [
+          {
+            "content": [
+              {
+                "text": "Use bash exactly once and run: sleep 25; printf 'OMA_MID_TURN_A_1791476673-84534\\n'. Then reply with the printed line only.",
+                "type": "text"
+              }
+            ],
+            "id": "sevt_01MTmR2dPJ15asY9QPiXB5HY",
+            "processed_at": null,
+            "type": "user.message"
+          }
+        ]
+      }
+    },
+    "send_b": {
+      "at": 1791476724.647533,
+      "ok": true,
+      "response": {
+        "data": [
+          {
+            "content": [
+              {
+                "text": "Reply with exactly: OMA_MID_TURN_B_1791476673-84534",
+                "type": "text"
+              }
+            ],
+            "id": "sevt_01L5H5kgEJh4ZEgLCaxHdBKW",
+            "processed_at": null,
+            "type": "user.message"
+          }
+        ]
+      }
+    },
+    "session_id": "sesn_01NrRUSR9RCrrPC5SfEV8puW",
+    "status_after_b": "running",
+    "status_before_b": "idle",
+    "statuses": [
+      "running",
+      "idle"
+    ],
+    "system_types": [],
+    "user_message_count": 2
+  },
+  "model": "claude-sonnet-5",
+  "run_id": "1791476673-84534"
+}

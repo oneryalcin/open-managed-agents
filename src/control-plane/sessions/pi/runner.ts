@@ -67,7 +67,9 @@ export interface PiRuntimeSession {
     text: string,
     opts?: { streamingBehavior?: "steer" | "followUp" },
   ): Promise<void>;
-  followUp(text: string): Promise<void>;
+  // Hosted Managed Agents delivers a mid-turn user.message at the next
+  // model-request boundary (probe 70); Pi's steer() has the same semantics.
+  steer(text: string): Promise<void>;
   abort(): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
   dispose(): void;
@@ -496,7 +498,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     if (handle.running && !handle.needsFreshPromptAfterInterrupt) {
       try {
-        await handle.session.followUp(text);
+        await handle.session.steer(text);
         this.touch(sessionId, handle);
       } catch (error) {
         this.evict(sessionId, handle);
@@ -514,7 +516,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     >();
     let done = false;
     let failure: unknown;
-    let becameFollowUp = false;
+    let queuedOnRunningTurn = false;
     let wake: (() => void) | undefined;
 
     const stop = handle.session.subscribe((event) => {
@@ -584,13 +586,13 @@ export class PiSessionRunner implements RuntimeEventRunner {
       .prompt(text)
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
-          await handle.session.followUp(text);
+          await handle.session.steer(text);
           // Best effort for the losing prompt race: once Pi confirms this turn
-          // is a follow-up, discard overlap events captured by this temporary
+          // is queued on the running one, discard overlap events captured by this temporary
           // subscriber. A pre-rejection event can still escape; in practice that
           // should be limited to early status frames, while the winning prompt
           // subscriber owns the full turn and follow-up output.
-          becameFollowUp = true;
+          queuedOnRunningTurn = true;
           queue.length = 0;
           return;
         }
@@ -603,11 +605,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     try {
       while (!done || queue.length > 0) {
-        if (becameFollowUp) break;
+        if (queuedOnRunningTurn) break;
         if (queue.length === 0) {
           await new Promise<void>((resolve) => {
             wake = resolve;
-            if (done || becameFollowUp || queue.length > 0) {
+            if (done || queuedOnRunningTurn || queue.length > 0) {
               wake = undefined;
               resolve();
             }

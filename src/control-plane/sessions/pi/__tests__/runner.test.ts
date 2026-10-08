@@ -39,7 +39,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[1]?.prompts).toEqual(["two"]);
   });
 
-  it("queues a user message with followUp while the session is running", async () => {
+  it("steers a user message into the running turn", async () => {
     const gate = deferred<void>();
     const factory = new FakeSessionFactory({ promptGate: gate.promise });
     const runner = new PiSessionRunner({
@@ -52,14 +52,14 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
     const second = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
     expect(second).toEqual([]);
-    expect(factory.sessions[0]?.followUps).toEqual(["two"]);
+    expect(factory.sessions[0]?.steered).toEqual(["two"]);
 
     gate.resolve();
     const firstEvents = await first;
     expect(messageTexts(firstEvents)).toEqual(["reply: one", "reply: two"]);
   });
 
-  it("falls back to followUp when Pi rejects prompt because the session is already running", async () => {
+  it("falls back to steer when Pi rejects prompt because the session is already running", async () => {
     const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
@@ -70,10 +70,10 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
     expect(events).toEqual([]);
     expect(factory.sessions[0]?.prompts).toEqual(["two"]);
-    expect(factory.sessions[0]?.followUps).toEqual(["two"]);
+    expect(factory.sessions[0]?.steered).toEqual(["two"]);
   });
 
-  it("does not emit duplicate events when two idle sends race into prompt/followUp", async () => {
+  it("does not emit duplicate events when two idle sends race into prompt/steer", async () => {
     const gate = deferred<void>();
     const factory = new FakeSessionFactory({
       promptGate: gate.promise,
@@ -86,7 +86,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
     const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
     const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
-    await until(() => factory.sessions[0]?.followUps.length === 1);
+    await until(() => factory.sessions[0]?.steered.length === 1);
     factory.sessions[0]?.emitMessage("overlap");
     gate.resolve();
 
@@ -225,12 +225,12 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
     const second = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
     expect(second).toEqual([]);
-    expect(factory.sessions[0]?.followUps).toEqual(["two"]);
+    expect(factory.sessions[0]?.steered).toEqual(["two"]);
 
     await runner.interruptSession("wrk", "sesn_1");
 
     expect(factory.sessions[0]?.aborts).toBe(1);
-    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.steered).toEqual([]);
     expect(factory.sessions[0]?.disposed).toBe(false);
 
     gate.resolve();
@@ -255,7 +255,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
     const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
     const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
-    await until(() => factory.sessions[0]?.followUps.length === 1);
+    await until(() => factory.sessions[0]?.steered.length === 1);
 
     await runner.interruptSession("wrk", "sesn_1");
     gate.resolve();
@@ -264,7 +264,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const secondEvents = await second;
     expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
     expect(secondEvents).toEqual([]);
-    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.steered).toEqual([]);
   });
 
   it("waits for an in-flight interrupt before running the next message as a fresh turn", async () => {
@@ -288,7 +288,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
     await delay(10);
     expect(factory.sessions[0]?.prompts).toEqual(["one"]);
-    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.steered).toEqual([]);
 
     promptGate.resolve();
     const firstEvents = await first;
@@ -300,7 +300,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
     expect(messageTexts(secondEvents)).toEqual(["reply: two"]);
     expect(factory.sessions[0]?.prompts).toEqual(["one", "two"]);
-    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.steered).toEqual([]);
   });
 
   it("coalesces overlapping interrupts before a waiting message starts fresh", async () => {
@@ -328,7 +328,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
     await delay(10);
     expect(factory.sessions[0]?.prompts).toEqual(["one"]);
-    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.steered).toEqual([]);
 
     promptGate.resolve();
     const firstEvents = await first;
@@ -340,7 +340,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(messageTexts(secondEvents)).toEqual(["reply: two"]);
     expect(factory.sessions[0]?.aborts).toBe(1);
     expect(factory.sessions[0]?.prompts).toEqual(["one", "two"]);
-    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.steered).toEqual([]);
     expect(factory.sessions[0]?.running).toBe(false);
   });
 
@@ -365,7 +365,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
     await delay(10);
     expect(factory.sessions[0]?.prompts).toEqual(["one"]);
-    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.steered).toEqual([]);
 
     promptGate.resolve();
     const firstEvents = await first;
@@ -377,7 +377,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(messageTexts(firstEvents)).toEqual(["reply: one"]);
     expect(messageTexts(secondEvents)).toEqual(["reply: two"]);
     expect(factory.sessions[0]?.prompts).toEqual(["one", "two"]);
-    expect(factory.sessions[0]?.followUps).toEqual([]);
+    expect(factory.sessions[0]?.steered).toEqual([]);
     expect(factory.sessions[0]?.running).toBe(false);
   });
 
@@ -713,7 +713,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
         const session = await factory.create();
         return {
           prompt: session.prompt.bind(session),
-          followUp: session.followUp.bind(session),
+          steer: session.steer.bind(session),
           abort: session.abort.bind(session),
           dispose: session.dispose.bind(session),
           subscribe: session.subscribe.bind(session),
@@ -1092,7 +1092,7 @@ interface FakeSessionOptions {
 class FakeSession implements PiRuntimeSession {
   readonly agent: { state: { tools: Array<{ name: string }> } };
   readonly prompts: string[] = [];
-  readonly followUps: string[] = [];
+  readonly steered: string[] = [];
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
@@ -1178,14 +1178,14 @@ class FakeSession implements PiRuntimeSession {
       });
     }
     this.emitMessage(text);
-    for (const followUp of this.followUps) {
-      this.emitMessage(followUp);
+    for (const steered of this.steered) {
+      this.emitMessage(steered);
     }
     this.emit({ type: "agent_end", messages: [], willRetry: false });
   }
 
-  async followUp(text: string): Promise<void> {
-    this.followUps.push(text);
+  async steer(text: string): Promise<void> {
+    this.steered.push(text);
   }
 
   async abort(): Promise<void> {
@@ -1195,9 +1195,9 @@ class FakeSession implements PiRuntimeSession {
 
   clearQueue(): { steering: string[]; followUp: string[] } {
     this.clearQueues += 1;
-    const followUp = [...this.followUps];
-    this.followUps.length = 0;
-    return { steering: [], followUp };
+    const steering = [...this.steered];
+    this.steered.length = 0;
+    return { steering, followUp: [] };
   }
 
   dispose(): void {
