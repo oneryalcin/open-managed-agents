@@ -169,6 +169,9 @@ async function authSet(runtime: Runtime, args: string[]): Promise<string> {
     : await (runtime.promptSecret ?? promptSecret)(`API key for ${parsed.provider}: `);
   const trimmed = key.trim();
   if (trimmed === "") throw new Error("API key must not be empty");
+  if (trimmed.startsWith("!") && !parseModelDeploymentConfigFromEnv(runtime.env).allowModelAuthCommands) {
+    throw new Error("Command-backed keys (starting with \"!\") require OMA_ALLOW_MODEL_AUTH_COMMANDS=true");
+  }
   await catalog.credentials.modify(parsed.provider, async () => ({ type: "api_key", key: trimmed }));
   return (
     `Stored API key for ${parsed.provider}.\n` +

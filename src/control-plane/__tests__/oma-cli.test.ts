@@ -285,6 +285,20 @@ describe("oma CLI", () => {
     expect(validate.stdout).toContain("Default model: anthropic/claude-sonnet-5");
   });
 
+  it("refuses to store a command-backed key unless commands are allowed", () => {
+    const home = mkdtempSync(join(tmpdir(), "oma-cli-auth-cmd-"));
+    tempHomes.push(home);
+    const env = modelEnv(home, { ANTHROPIC_API_KEY: "" });
+
+    const rejected = run(["auth", "set", "anthropic", "--stdin"], env, "!printf injected\n");
+
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("OMA_ALLOW_MODEL_AUTH_COMMANDS=true");
+    expect(existsSync(join(home, "pi", "auth.json"))
+      ? readFileSync(join(home, "pi", "auth.json"), "utf8")
+      : "").not.toContain("injected");
+  });
+
   it("stores, reports, and idempotently removes provider auth without echoing keys", () => {
     const home = mkdtempSync(join(tmpdir(), "oma-cli-auth-"));
     tempHomes.push(home);

@@ -51,14 +51,37 @@ export class InMemoryAuthStorageBackend implements AuthStorageBackend {
  * backend lock, and api-key values are resolved on read. Unlike Pi's store it
  * does not swallow a corrupt auth.json; a server should fail loudly.
  */
+/**
+ * How "!command" api-key values are treated on read:
+ * - "deny": reject them. auth.json is re-read per request, so the startup
+ *   policy scan alone cannot stop a key written after startup;
+ * - "execute": run them (OMA_ALLOW_MODEL_AUTH_COMMANDS=true);
+ * - "unresolved": return them unexecuted, for read-only diagnostics.
+ */
+export type CredentialCommandPolicy = "deny" | "execute" | "unresolved";
+
 export class OmaCredentialStore implements PiCredentialStore {
   private inflightRead: Promise<AuthStorageData> | undefined;
+  private readonly commands: CredentialCommandPolicy;
 
-  constructor(private readonly backend: AuthStorageBackend) {}
+  constructor(
+    private readonly backend: AuthStorageBackend,
+    options: { commands?: CredentialCommandPolicy } = {},
+  ) {
+    this.commands = options.commands ?? "deny";
+  }
 
   async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
     const credential = (await this.readAll(options))[providerId];
     if (credential?.type !== "api_key" || credential.key === undefined) return credential;
+    if (credential.key.startsWith("!")) {
+      if (this.commands === "unresolved") return credential;
+      if (this.commands === "deny") {
+        throw new Error(
+          `auth.json.${providerId}.key uses command-backed auth; set OMA_ALLOW_MODEL_AUTH_COMMANDS=true to allow it`,
+        );
+      }
+    }
     return { ...credential, key: resolveConfigValue(credential.key, credential.env) };
   }
 

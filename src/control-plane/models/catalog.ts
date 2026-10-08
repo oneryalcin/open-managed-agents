@@ -41,7 +41,12 @@ export interface CreatePiModelCatalogConfig {
 }
 
 export function createPiModelCatalog(config: CreatePiModelCatalogConfig): Promise<PiModelCatalog> {
-  return createCatalog(config, config.authBackend);
+  return createCatalog(
+    config,
+    new OmaCredentialStore(config.authBackend, {
+      commands: config.allowModelAuthCommands === true ? "execute" : "deny",
+    }),
+  );
 }
 
 /**
@@ -53,12 +58,16 @@ export function createReadOnlyPiModelCatalog(
   config: Omit<CreatePiModelCatalogConfig, "authBackend">,
   authData: ReadOnlyAuthData = {},
 ): Promise<PiModelCatalog> {
-  return createCatalog(config, new InMemoryAuthStorageBackend(authData));
+  // Diagnostics must stay side-effect free: never run command-backed keys.
+  return createCatalog(
+    config,
+    new OmaCredentialStore(new InMemoryAuthStorageBackend(authData), { commands: "unresolved" }),
+  );
 }
 
 async function createCatalog(
   config: Omit<CreatePiModelCatalogConfig, "authBackend">,
-  authBackend: AuthStorageBackend,
+  credentials: OmaCredentialStore,
 ): Promise<PiModelCatalog> {
   const allowedProviders = new Set(config.allowedProviders);
   if (allowedProviders.size !== config.allowedProviders.length) {
@@ -75,7 +84,6 @@ async function createCatalog(
     allowCommands: config.allowModelAuthCommands,
   });
 
-  const credentials = new OmaCredentialStore(authBackend);
   // Fail at startup on an unreadable or corrupt auth.json (Pi's own store
   // would keep serving its last in-memory snapshot).
   try {
