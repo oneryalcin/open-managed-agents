@@ -107,8 +107,8 @@ describe("OpenAPI and interactive documentation", () => {
     assertDocumentInternallyValid(document);
   });
 
-  it("documents every shipped /v1 and /admin route exactly once", () => {
-    const plane = makeDeploymentPlane();
+  it("documents every shipped /v1 and /admin route exactly once", async () => {
+    const plane = await makeDeploymentPlane();
     try {
       const runtimeKeys = plane.app.routes
         .filter((entry) => entry.method !== "ALL")
@@ -164,7 +164,7 @@ describe("OpenAPI and interactive documentation", () => {
   });
 
   it("keeps documentation public even when workspace authentication is enabled", async () => {
-    const plane = makeDeploymentPlane();
+    const plane = await makeDeploymentPlane();
     try {
       expect((await plane.app.request("/openapi.json")).status).toBe(200);
       expect((await plane.app.request("/docs/")).status).toBe(200);
@@ -259,7 +259,7 @@ function toOpenApiPath(path: string): string {
   return path.replace(/:([A-Za-z][A-Za-z0-9_]*)/g, "{$1}");
 }
 
-function makeDeploymentPlane(): DeploymentControlPlane {
+async function makeDeploymentPlane(): Promise<DeploymentControlPlane> {
   const root = mkdtempSync(join(tmpdir(), "oma-openapi-"));
   roots.push(root);
   return createDeploymentControlPlane({

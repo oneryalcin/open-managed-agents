@@ -21,10 +21,10 @@ afterEach(() => {
   }
 });
 
-function boot(env: Record<string, string>): void {
+async function boot(env: Record<string, string>): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "oma-admin-transport-"));
   tempRoots.push(root);
-  const plane = createDeploymentControlPlane({
+  const plane = await createDeploymentControlPlane({
     OMA_HOME: root,
     OMA_SQLITE_PATH: join(root, "oma.sqlite"),
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
@@ -35,50 +35,50 @@ function boot(env: Record<string, string>): void {
 }
 
 describe("credential transport gate", () => {
-  it("refuses api-key mode on a non-loopback bind without TLS", () => {
-    expect(() => boot({ OMA_HOST: "0.0.0.0" })).toThrow(/cleartext/);
+  it("refuses api-key mode on a non-loopback bind without TLS", async () => {
+    await expect( boot({ OMA_HOST: "0.0.0.0" })).rejects.toThrow(/cleartext/);
   });
 
-  it("refuses an admin key on a non-loopback bind without TLS", () => {
-    expect(() => boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: "0.0.0.0" }))
-      .toThrow(/cleartext/);
+  it("refuses an admin key on a non-loopback bind without TLS", async () => {
+    await expect( boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: "0.0.0.0" }))
+      .rejects.toThrow(/cleartext/);
   });
 
-  it("boots when the operator asserts a TLS terminator", () => {
-    expect(() =>
+  it("boots when the operator asserts a TLS terminator", async () => {
+    await expect(
       boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: "0.0.0.0", OMA_TLS_TERMINATED: "1" }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
-  it("boots when the operator explicitly allows insecure transport", () => {
-    expect(() =>
+  it("boots when the operator explicitly allows insecure transport", async () => {
+    await expect(
       boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: "0.0.0.0", OMA_ALLOW_INSECURE_TRANSPORT: "1" }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
   it.each(["127.0.0.1", "localhost", "::1"])(
     "boots frictionless on loopback bind %s",
-    (host) => {
-      expect(() => boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: host })).not.toThrow();
+    async (host) => {
+      await expect( boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: host })).resolves.toBeUndefined();
     },
   );
 
-  it("boots on the default (unset OMA_HOST = loopback)", () => {
-    expect(() => boot({ OMA_ADMIN_KEY: ADMIN_KEY })).not.toThrow();
+  it("boots on the default (unset OMA_HOST = loopback)", async () => {
+    await expect( boot({ OMA_ADMIN_KEY: ADMIN_KEY })).resolves.toBeUndefined();
   });
 
-  it("does not gate auth-disabled deployments (no credentials in transit)", () => {
-    expect(() =>
+  it("does not gate auth-disabled deployments (no credentials in transit)", async () => {
+    await expect(
       boot({ OMA_AUTH_MODE: "disabled", OMA_HOST: "0.0.0.0" }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
-  it("refuses an unrecognized flag value instead of coercing it", () => {
+  it("refuses an unrecognized flag value instead of coercing it", async () => {
     // "true" must not silently mean either yes or no — unknown config
     // refuses to start (house rule), before any store is opened.
-    expect(() =>
+    await expect(
       boot({ OMA_ADMIN_KEY: ADMIN_KEY, OMA_HOST: "0.0.0.0", OMA_TLS_TERMINATED: "true" }),
-    ).toThrow(/OMA_TLS_TERMINATED/);
+    ).rejects.toThrow(/OMA_TLS_TERMINATED/);
   });
 });
 

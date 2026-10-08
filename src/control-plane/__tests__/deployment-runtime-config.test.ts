@@ -19,7 +19,7 @@ describe("deployment runtime config", () => {
   it("owns MCP background-worker teardown idempotently", async () => {
     const root = mkdtempSync(join(tmpdir(), "oma-mcp-teardown-"));
     try {
-      const plane = createDeploymentControlPlane({
+      const plane = await createDeploymentControlPlane({
         OMA_HOME: root,
         OMA_ENABLE_MCP: "true",
       });
@@ -69,7 +69,7 @@ describe("deployment runtime config", () => {
       });
     }) as never;
     const root = mkdtempSync(join(tmpdir(), "oma-refresh-race-"));
-    const plane = createDeploymentControlPlane(
+    const plane = await createDeploymentControlPlane(
       {
         OMA_HOME: root,
         OMA_ENABLE_MCP: "true",
@@ -573,17 +573,17 @@ describe("deployment runtime config", () => {
     );
   });
 
-  it("deployment app fails provider gates at construction", () => {
-    expect(() =>
+  it("deployment app fails provider gates at construction", async () => {
+    await expect(
       createDeploymentControlPlaneApp({
         OMA_SANDBOX_PROVIDER: "docker-local",
       }),
-    ).toThrow("Docker-local sandbox provider is disabled");
+    ).rejects.toThrow("Docker-local sandbox provider is disabled");
   });
 
   it("deployment app injects the configured runtime into served sessions", async () => {
     const factory = new FakeSessionFactory();
-    const app = createDeploymentControlPlaneApp(
+    const app = await createDeploymentControlPlaneApp(
       { OMA_SANDBOX_PROVIDER: "none" },
       {
         runner: {
@@ -614,7 +614,7 @@ describe("deployment runtime config", () => {
 });
 
 async function requestJson<T = unknown>(
-  app: ReturnType<typeof createDeploymentControlPlane>["app"],
+  app: Awaited<ReturnType<typeof createDeploymentControlPlane>>["app"],
   key: string,
   path: string,
   body: unknown,
@@ -679,7 +679,7 @@ class FakeSession implements PiRuntimeSession {
 }
 
 async function createAgent(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
 ): Promise<ManagedAgentsAgent> {
   const res = await app.request("/v1/agents", {
     method: "POST",
@@ -695,7 +695,7 @@ async function createAgent(
 }
 
 async function createEnvironment(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
 ): Promise<ManagedAgentsEnvironment> {
   const res = await app.request("/v1/environments", {
     method: "POST",
@@ -710,7 +710,7 @@ async function createEnvironment(
 }
 
 async function createSession(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
   body: unknown,
 ): Promise<ManagedAgentsSession> {
   const res = await app.request("/v1/sessions", {
@@ -723,7 +723,7 @@ async function createSession(
 }
 
 async function sendMessage(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
   sessionId: string,
   text: string,
 ): Promise<void> {
@@ -738,7 +738,7 @@ async function sendMessage(
 }
 
 async function getEvents(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
   sessionId: string,
 ): Promise<Array<Record<string, unknown>>> {
   const res = await app.request(`/v1/sessions/${sessionId}/events?order=asc`);

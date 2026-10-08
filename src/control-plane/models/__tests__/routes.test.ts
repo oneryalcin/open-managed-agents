@@ -19,7 +19,7 @@ afterEach(() => {
 
 describe("model catalog API", () => {
   it("is workspace-authenticated, beta-gated, route-classified, and secret-free", async () => {
-    const fixture = makeFixture();
+    const fixture = await makeFixture();
     try {
       expect(routeClassForPath("/v1/model-catalog")).toBe("v1");
       expect((await fixture.plane.app.request("/v1/model-catalog", {
@@ -63,7 +63,7 @@ describe("model catalog API", () => {
   });
 
   it("paginates in stable provider/id order and authenticates cursor context", async () => {
-    const fixture = makeFixture();
+    const fixture = await makeFixture();
     try {
       const first = await getPage(fixture.plane, fixture.key, "?limit=1");
       expect(first.data).toHaveLength(1);
@@ -106,7 +106,7 @@ describe("model catalog API", () => {
   });
 
   it("rejects malformed query values before catalog access", async () => {
-    const fixture = makeFixture();
+    const fixture = await makeFixture();
     try {
       for (const query of ["?available=yes", "?limit=0", "?limit=101", "?provider=", "?page="]) {
         const response = await fixture.plane.app.request(`/v1/model-catalog${query}`, {
@@ -120,7 +120,7 @@ describe("model catalog API", () => {
   });
 });
 
-function makeFixture(): { plane: DeploymentControlPlane; key: string } {
+async function makeFixture(): Promise<{ plane: DeploymentControlPlane; key: string }> {
   const root = mkdtempSync(join(tmpdir(), "oma-model-routes-"));
   roots.push(root);
   const piRoot = join(root, "pi");
@@ -130,7 +130,7 @@ function makeFixture(): { plane: DeploymentControlPlane; key: string } {
     JSON.stringify({ anthropic: { type: "api_key", key: "test-model-secret" } }),
     { mode: 0o600 },
   );
-  const plane = createDeploymentControlPlane({
+  const plane = await createDeploymentControlPlane({
     OMA_HOME: root,
     OMA_SQLITE_PATH: join(root, "oma.sqlite"),
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),

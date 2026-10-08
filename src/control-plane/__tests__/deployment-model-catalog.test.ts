@@ -23,7 +23,7 @@ function home(): string {
 
 describe("deployment model catalog admission", () => {
   it("rejects disabled providers before persisting an agent", async () => {
-    const app = createDeploymentControlPlaneApp({
+    const app = await createDeploymentControlPlaneApp({
       OMA_HOME: home(),
       OMA_MODEL_PROVIDERS: "anthropic",
     });
@@ -52,7 +52,7 @@ describe("deployment model catalog admission", () => {
   });
 
   it("rejects an unknown exact pair before persisting an agent", async () => {
-    const app = createDeploymentControlPlaneApp({ OMA_HOME: home() });
+    const app = await createDeploymentControlPlaneApp({ OMA_HOME: home() });
 
     const rejected = await app.request("/v1/agents", {
       method: "POST",
@@ -102,7 +102,7 @@ describe("deployment model catalog admission", () => {
       }),
       { mode: 0o600 },
     );
-    const app = createDeploymentControlPlaneApp({
+    const app = await createDeploymentControlPlaneApp({
       OMA_HOME: root,
       OMA_MODEL_PROVIDERS: "anthropic,local",
     });
@@ -137,7 +137,7 @@ describe("deployment model catalog admission", () => {
 });
 
 async function postJson(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
   path: string,
   body: unknown,
 ): Promise<Response> {

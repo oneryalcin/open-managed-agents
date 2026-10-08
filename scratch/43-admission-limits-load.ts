@@ -11,7 +11,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const BETA = { "anthropic-beta": "managed-agents-2026-04-01" };
 const JSON_HEADERS = { ...BETA, "content-type": "application/json" };
 
-const app = createDeploymentControlPlaneApp({
+const app = await createDeploymentControlPlaneApp({
   OMA_AUTH_MODE: "disabled",
   OMA_MAX_ACTIVE_SESSIONS_PER_WORKSPACE: "3",
   OMA_MAX_CONCURRENT_UPLOADS_PER_WORKSPACE: "2",

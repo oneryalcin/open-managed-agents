@@ -348,17 +348,17 @@ describe("deployment auth mode", () => {
     );
   });
 
-  it("rejects api-key mode without durable storage at construction", () => {
-    expect(() =>
+  it("rejects api-key mode without durable storage at construction", async () => {
+    await expect(
       createRawDeploymentControlPlaneApp({ OMA_AUTH_MODE: "api-key" }),
-    ).toThrow(/OMA_SQLITE_PATH and OMA_FILE_STORAGE_ROOT/);
+    ).rejects.toThrow(/OMA_SQLITE_PATH and OMA_FILE_STORAGE_ROOT/);
   });
 
   it("serves api-key mode from durable storage, honoring keys minted by a second connection", async () => {
     const root = mkdtempSync(join(tmpdir(), "oma-auth-"));
     tempRoots.push(root);
     const sqlitePath = join(root, "oma.db");
-    const app = createRawDeploymentControlPlaneApp({
+    const app = await createRawDeploymentControlPlaneApp({
       OMA_HOME: root,
       OMA_AUTH_MODE: "api-key",
       OMA_SQLITE_PATH: sqlitePath,

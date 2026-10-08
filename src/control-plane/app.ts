@@ -714,22 +714,22 @@ export interface DeploymentControlPlane {
   close(): Promise<void>;
 }
 
-export function createDeploymentControlPlaneApp(
+export async function createDeploymentControlPlaneApp(
   env: DeploymentControlPlaneEnv = process.env,
   opts: DeploymentControlPlaneAppOptions = {},
-): Hono<AppEnv> {
-  return createDeploymentControlPlane(env, opts, { backgroundWorkers: false }).app;
+): Promise<Hono<AppEnv>> {
+  return (await createDeploymentControlPlane(env, opts, { backgroundWorkers: false })).app;
 }
 
 // Same wiring as createDeploymentControlPlaneApp, but hands back the stores
 // so a caller that owns the process lifecycle (the appliance entrypoint,
 // tests that boot twice against one OMA_HOME) can close them and release the
 // .oma.lock instead of leaking them until process exit.
-export function createDeploymentControlPlane(
+export async function createDeploymentControlPlane(
   env: DeploymentControlPlaneEnv = process.env,
   opts: DeploymentControlPlaneAppOptions = {},
   internal: { backgroundWorkers?: boolean } = {},
-): DeploymentControlPlane {
+): Promise<DeploymentControlPlane> {
   if (opts.consoleBootstrap !== undefined && !isLoopbackHost(env.OMA_HOST)) {
     throw new Error("Console bootstrap is available only on a loopback appliance bind");
   }
@@ -884,7 +884,7 @@ export function createDeploymentControlPlane(
       : undefined;
   let modelCatalog: PiModelCatalog;
   try {
-    modelCatalog = opts.runner?.modelCatalog ?? createPiModelCatalog({
+    modelCatalog = opts.runner?.modelCatalog ?? await createPiModelCatalog({
       allowedProviders: modelConfig.allowedProviders,
       defaultModel: modelConfig.defaultModel,
       authBackend: createOmaAuthStorageBackend(modelConfig.authPath),

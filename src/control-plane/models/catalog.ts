@@ -1,11 +1,14 @@
-import {
-  AuthStorage,
-  ModelRegistry,
-  type AuthStorageBackend,
-} from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { scanModelConfigSecurity, type ModelConfigSecurityReport } from "./config-security.ts";
+import {
+  InMemoryAuthStorageBackend,
+  InMemoryModelsStore,
+  OmaCredentialStore,
+  type AuthStorageBackend,
+  type AuthStorageData,
+} from "./credential-store.ts";
 
-export const PINNED_PI_MODEL_RUNTIME_VERSION = "0.80.6";
+export const PINNED_PI_MODEL_RUNTIME_VERSION = "0.85.1";
 
 export interface PiModelRef {
   provider: string;
@@ -13,12 +16,13 @@ export interface PiModelRef {
 }
 
 export type PiResolvedModel = NonNullable<ReturnType<ModelRegistry["find"]>>;
-export type ReadOnlyAuthData = NonNullable<Parameters<typeof AuthStorage.inMemory>[0]>;
+export type ReadOnlyAuthData = AuthStorageData;
 
 export interface PiModelCatalog {
   defaultModel: PiModelRef;
   allowedProviders: ReadonlySet<string>;
-  authStorage: AuthStorage;
+  credentials: OmaCredentialStore;
+  modelRuntime: ModelRuntime;
   modelRegistry: ModelRegistry;
   securityReport: ModelConfigSecurityReport;
   resolve(ref: PiModelRef): PiResolvedModel | undefined;
@@ -36,8 +40,8 @@ export interface CreatePiModelCatalogConfig {
   allowModelAuthCommands?: boolean;
 }
 
-export function createPiModelCatalog(config: CreatePiModelCatalogConfig): PiModelCatalog {
-  return createCatalog(config, AuthStorage.fromStorage(config.authBackend));
+export function createPiModelCatalog(config: CreatePiModelCatalogConfig): Promise<PiModelCatalog> {
+  return createCatalog(config, config.authBackend);
 }
 
 /**
@@ -48,14 +52,14 @@ export function createPiModelCatalog(config: CreatePiModelCatalogConfig): PiMode
 export function createReadOnlyPiModelCatalog(
   config: Omit<CreatePiModelCatalogConfig, "authBackend">,
   authData: ReadOnlyAuthData = {},
-): PiModelCatalog {
-  return createCatalog(config, AuthStorage.inMemory(authData));
+): Promise<PiModelCatalog> {
+  return createCatalog(config, new InMemoryAuthStorageBackend(authData));
 }
 
-function createCatalog(
+async function createCatalog(
   config: Omit<CreatePiModelCatalogConfig, "authBackend">,
-  authStorage: AuthStorage,
-): PiModelCatalog {
+  authBackend: AuthStorageBackend,
+): Promise<PiModelCatalog> {
   const allowedProviders = new Set(config.allowedProviders);
   if (allowedProviders.size !== config.allowedProviders.length) {
     throw new Error("OMA_MODEL_PROVIDERS must not contain duplicate providers");
@@ -71,12 +75,21 @@ function createCatalog(
     allowCommands: config.allowModelAuthCommands,
   });
 
-  const authErrors = authStorage.drainErrors();
-  if (authErrors.length > 0) {
-    throw new Error(`Failed to load model auth storage: ${authErrors.map((error) => error.message).join("; ")}`);
+  const credentials = new OmaCredentialStore(authBackend);
+  // Fail at startup on an unreadable or corrupt auth.json (Pi's own store
+  // would keep serving its last in-memory snapshot).
+  try {
+    await credentials.list();
+  } catch (error) {
+    throw new Error(`Failed to load model auth storage: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const modelRegistry = ModelRegistry.create(authStorage, config.modelsPath);
+  const modelRuntime = await ModelRuntime.create({
+    credentials,
+    modelsPath: config.modelsPath,
+    modelsStore: new InMemoryModelsStore(),
+  });
+  const modelRegistry = new ModelRegistry(modelRuntime);
   const registryError = modelRegistry.getError();
   if (registryError !== undefined) {
     throw new Error(registryError);
@@ -94,7 +107,8 @@ function createCatalog(
   return {
     defaultModel: { ...config.defaultModel },
     allowedProviders,
-    authStorage,
+    credentials,
+    modelRuntime,
     modelRegistry,
     securityReport,
     resolve(ref) {
@@ -109,8 +123,6 @@ function createCatalog(
       });
     },
     hasConfiguredAuth(model) {
-      // Deliberately model-scoped: provider status can report env credentials as
-      // configured:false in Pi 0.80.6 while the resolved model is usable.
       return modelRegistry.hasConfiguredAuth(model);
     },
     providerAuthMetadata(provider) {

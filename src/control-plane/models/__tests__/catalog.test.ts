@@ -1,12 +1,9 @@
-import {
-  InMemoryAuthStorageBackend,
-  type AuthStorageBackend,
-} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createPiModelCatalog, createReadOnlyPiModelCatalog } from "../catalog.ts";
+import { InMemoryAuthStorageBackend, type AuthStorageBackend } from "../credential-store.ts";
 
 const roots: string[] = [];
 
@@ -42,10 +39,10 @@ function createTestCatalog(options: {
 }
 
 describe("createPiModelCatalog", () => {
-  it("constructs a diagnostic catalog from an in-memory snapshot without creating auth storage", () => {
+  it("constructs a diagnostic catalog from an in-memory snapshot without creating auth storage", async () => {
     const root = tempRoot();
     const authPath = join(root, "missing", "auth.json");
-    const catalog = createReadOnlyPiModelCatalog({
+    const catalog = await createReadOnlyPiModelCatalog({
       allowedProviders: ["anthropic"],
       defaultModel: { provider: "anthropic", id: "claude-sonnet-5" },
       authPath,
@@ -57,8 +54,8 @@ describe("createPiModelCatalog", () => {
     expect(() => readFileSync(authPath, "utf8")).toThrow();
   });
 
-  it("resolves and lists only exact allowed provider/model pairs", () => {
-    const catalog = createTestCatalog({ providers: ["anthropic", "openai"] });
+  it("resolves and lists only exact allowed provider/model pairs", async () => {
+    const catalog = await createTestCatalog({ providers: ["anthropic", "openai"] });
 
     expect(catalog.resolve({ provider: "anthropic", id: "claude-sonnet-5" })?.id).toBe("claude-sonnet-5");
     expect(catalog.resolve({ provider: "Anthropic", id: "claude-sonnet-5" })).toBeUndefined();
@@ -67,51 +64,51 @@ describe("createPiModelCatalog", () => {
     expect(catalog.list().every((model) => catalog.allowedProviders.has(model.provider))).toBe(true);
   });
 
-  it("uses model-scoped configured-auth readiness", () => {
+  it("uses model-scoped configured-auth readiness", async () => {
     const backend = new InMemoryAuthStorageBackend();
     backend.withLock(() => ({
       result: undefined,
       next: JSON.stringify({ openai: { type: "api_key", key: "sk-test" } }),
     }));
-    const catalog = createTestCatalog({ providers: ["anthropic", "openai"], authBackend: backend });
+    const catalog = await createTestCatalog({ providers: ["anthropic", "openai"], authBackend: backend });
     const openaiModel = catalog.resolve({ provider: "openai", id: "gpt-5" });
 
     expect(openaiModel).toBeDefined();
     expect(catalog.hasConfiguredAuth(openaiModel!)).toBe(true);
   });
 
-  it("recognizes environment credentials through model-scoped readiness", () => {
+  it("recognizes environment credentials through model-scoped readiness", async () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-environment-test");
-    const catalog = createTestCatalog({ providers: ["anthropic", "openai"] });
+    const catalog = await createTestCatalog({ providers: ["anthropic", "openai"] });
     const openaiModel = catalog.resolve({ provider: "openai", id: "gpt-5" });
 
     expect(openaiModel).toBeDefined();
     expect(catalog.hasConfiguredAuth(openaiModel!)).toBe(true);
   });
 
-  it("fails startup when auth storage cannot be parsed", () => {
+  it("fails startup when auth storage cannot be parsed", async () => {
     const backend = new InMemoryAuthStorageBackend();
     backend.withLock(() => ({ result: undefined, next: "not-json" }));
 
-    expect(() => createTestCatalog({ authBackend: backend })).toThrow(/Failed to load model auth storage/);
+    await expect( createTestCatalog({ authBackend: backend })).rejects.toThrow(/Failed to load model auth storage/);
   });
 
-  it("fails startup when Pi reports malformed models.json", () => {
+  it("fails startup when Pi reports malformed models.json", async () => {
     const root = tempRoot();
     const modelsPath = writeModelsJson(root, `{"providers":{"local":{"baseUrl":"http://localhost:11434","api":"openai-responses","models":[{"id":"local","input":["audio"]}]}}}`);
 
-    expect(() =>
+    await expect(
       createTestCatalog({
         providers: ["anthropic", "local"],
         modelsPath,
       }),
-    ).toThrow(/Invalid models\.json schema/);
+    ).rejects.toThrow(/Invalid models\.json schema/);
   });
 
-  it("fails startup for unknown allowed providers and unavailable defaults", () => {
-    expect(() => createTestCatalog({ providers: ["anthropic", "missing"] })).toThrow(/missing.*not available/);
-    expect(() =>
+  it("fails startup for unknown allowed providers and unavailable defaults", async () => {
+    await expect( createTestCatalog({ providers: ["anthropic", "missing"] })).rejects.toThrow(/missing.*not available/);
+    await expect(
       createTestCatalog({ defaultModel: { provider: "anthropic", id: "missing-model" } }),
-    ).toThrow(/Default model anthropic\/missing-model is not available/);
+    ).rejects.toThrow(/Default model anthropic\/missing-model is not available/);
   });
 });

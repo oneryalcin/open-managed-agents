@@ -1,4 +1,4 @@
-import type { AuthStorageBackend } from "@earendil-works/pi-coding-agent";
+import type { AuthStorageBackend } from "./credential-store.ts";
 import { constants } from "node:fs";
 import {
   chmodSync,

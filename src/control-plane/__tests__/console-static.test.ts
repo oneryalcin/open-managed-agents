@@ -183,7 +183,7 @@ describe("console in the deployment assembly", () => {
     // when every /v1 and /admin route demands a credential.
     const root = mkdtempSync(join(tmpdir(), "oma-console-deploy-"));
     tempRoots.push(root);
-    const plane = createDeploymentControlPlane({
+    const plane = await createDeploymentControlPlane({
       OMA_HOME: root,
       OMA_SQLITE_PATH: join(root, "oma.sqlite"),
       OMA_FILE_STORAGE_ROOT: join(root, "objects"),

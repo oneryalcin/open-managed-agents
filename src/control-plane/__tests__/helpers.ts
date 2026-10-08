@@ -43,12 +43,12 @@ export function createControlPlaneApp(services: ControlPlaneServices) {
   return withDefaultManagedAgentsBeta(createRawControlPlaneApp(services));
 }
 
-export function createDeploymentControlPlaneApp(
+export async function createDeploymentControlPlaneApp(
   env?: DeploymentControlPlaneEnv,
   opts?: DeploymentControlPlaneAppOptions,
 ) {
   return withDefaultManagedAgentsBeta(
-    createRawDeploymentControlPlaneApp(withTestModelHome(env), opts),
+    await createRawDeploymentControlPlaneApp(withTestModelHome(env), opts),
   );
 }
 

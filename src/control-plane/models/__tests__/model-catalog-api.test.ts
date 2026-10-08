@@ -152,7 +152,8 @@ function fakeCatalog(): PiModelCatalog {
   return {
     defaultModel: { provider: "anthropic", id: "claude-a" },
     allowedProviders: new Set(["anthropic", "openai"]),
-    authStorage: {} as never,
+    credentials: {} as never,
+    modelRuntime: {} as never,
     modelRegistry: {
       getProviderDisplayName(provider: string) {
         return provider === "anthropic" ? "Anthropic" : "OpenAI";

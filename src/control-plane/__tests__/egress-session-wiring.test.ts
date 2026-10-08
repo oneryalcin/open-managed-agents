@@ -55,9 +55,9 @@ afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function createDeploymentControlPlane(
+async function createDeploymentControlPlane(
   env: DeploymentControlPlaneEnv,
-): DeploymentControlPlane {
+): Promise<DeploymentControlPlane> {
   const root = mkdtempSync(join(tmpdir(), "oma-egress-models-"));
   tempRoots.push(root);
   return createRawDeploymentControlPlane({ OMA_HOME: root, ...env });
@@ -67,10 +67,10 @@ function createDeploymentControlPlane(
 // sidecar image and a master key — the ONLY configuration in which a secrets
 // store is allowed to exist (app.ts guards secrets ⇒ api-key ⇒ durable).
 // Returns a minted workspace key to authenticate requests.
-function makeDurableEgressPlane(): DeploymentControlPlane & { key: string } {
+async function makeDurableEgressPlane(): Promise<DeploymentControlPlane & { key: string }> {
   const root = mkdtempSync(join(tmpdir(), "oma-egress-plane-"));
   tempRoots.push(root);
-  const plane = createDeploymentControlPlane({
+  const plane = await createDeploymentControlPlane({
     OMA_SQLITE_PATH: join(root, "oma.sqlite"),
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
     OMA_AUTH_MODE: "api-key",
@@ -202,7 +202,7 @@ describe("createSessionEgressBundleResolver", () => {
 
 describe("fail-closed session-create gate", () => {
   it("rejects an egress-granting environment when the deployment cannot honor it", async () => {
-    const plane = createDeploymentControlPlane({});
+    const plane = await createDeploymentControlPlane({});
     const env = await createEnvironment(plane.app, {
       networking: { allow: [{ host: "api.github.com", port: 443 }] },
     });
@@ -215,7 +215,7 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("keeps absent and hosted-empty networking at default deny", async () => {
-    const plane = createDeploymentControlPlane({});
+    const plane = await createDeploymentControlPlane({});
     const configs: JsonObject[] = [
       { type: "cloud" },
       { type: "cloud", networking: { type: "limited", allowed_hosts: [] } },
@@ -229,7 +229,7 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("accepts limited hosted networking and persists its canonical config", async () => {
-    const plane = createDeploymentControlPlane({});
+    const plane = await createDeploymentControlPlane({});
     const config = {
       type: "cloud",
       networking: {
@@ -260,7 +260,7 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("rejects a non-empty hosted limited environment when egress cannot be honored", async () => {
-    const plane = createDeploymentControlPlane({});
+    const plane = await createDeploymentControlPlane({});
     const env = await createEnvironment(plane.app, {
       networking: { type: "limited", allowed_hosts: ["example.com"] },
     });
@@ -272,7 +272,7 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("rejects unsupported hosted networking before persisting the environment", async () => {
-    const plane = createDeploymentControlPlane({});
+    const plane = await createDeploymentControlPlane({});
     const res = await request(plane.app, "/v1/environments", {
       method: "POST",
       body: {
@@ -289,7 +289,7 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("rejects a credential-granting environment without a secrets store", async () => {
-    const plane = createDeploymentControlPlane({
+    const plane = await createDeploymentControlPlane({
       OMA_SANDBOX_PROVIDER: "docker-local",
       OMA_ALLOW_DOCKER_LOCAL: "true",
       OMA_ENABLE_EGRESS: "true",
@@ -307,7 +307,7 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("admits a credential-granting environment when egress and secrets are wired", async () => {
-    const plane = makeDurableEgressPlane();
+    const plane = await makeDurableEgressPlane();
     const env = await createEnvironment(
       plane.app,
       { networking: GRANTING_NETWORKING },
@@ -319,7 +319,7 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("does not reject egress-granting environments solely because resources are present", async () => {
-    const plane = makeDurableEgressPlane();
+    const plane = await makeDurableEgressPlane();
     const env = await createEnvironment(
       plane.app,
       { networking: GRANTING_NETWORKING },
@@ -337,7 +337,7 @@ describe("fail-closed session-create gate", () => {
   });
 
   it("rejects a malformed egress-shape networking config before persistence", async () => {
-    const plane = createDeploymentControlPlane({});
+    const plane = await createDeploymentControlPlane({});
     const res = await request(plane.app, "/v1/environments", {
       method: "POST",
       body: {
@@ -361,34 +361,34 @@ describe("secrets-store auth guard (Codex adversarial review)", () => {
   // A master key means the deployment handles real credentials; without
   // api-key auth the /v1/secrets API would be unauthenticated on wrk_default.
   // Refuse to boot the dangerous combination rather than warn.
-  it("refuses to boot with a master key when auth mode is unset (defaults disabled)", () => {
+  it("refuses to boot with a master key when auth mode is unset (defaults disabled)", async () => {
     const root = mkdtempSync(join(tmpdir(), "oma-guard-"));
     tempRoots.push(root);
-    expect(() =>
+    await expect(
       createDeploymentControlPlane({
         OMA_SQLITE_PATH: join(root, "oma.sqlite"),
         OMA_FILE_STORAGE_ROOT: join(root, "objects"),
         OMA_MASTER_KEY: generateMasterKey(),
         // OMA_AUTH_MODE deliberately unset -> disabled.
       }),
-    ).toThrow("requires OMA_AUTH_MODE=api-key");
+    ).rejects.toThrow("requires OMA_AUTH_MODE=api-key");
   });
 
-  it("refuses to boot with a master key when auth is explicitly disabled", () => {
+  it("refuses to boot with a master key when auth is explicitly disabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "oma-guard-"));
     tempRoots.push(root);
-    expect(() =>
+    await expect(
       createDeploymentControlPlane({
         OMA_SQLITE_PATH: join(root, "oma.sqlite"),
         OMA_FILE_STORAGE_ROOT: join(root, "objects"),
         OMA_AUTH_MODE: "disabled",
         OMA_MASTER_KEY: generateMasterKey(),
       }),
-    ).toThrow("requires OMA_AUTH_MODE=api-key");
+    ).rejects.toThrow("requires OMA_AUTH_MODE=api-key");
   });
 
   it("boots with a master key under api-key auth, and the secrets API demands a key", async () => {
-    const plane = makeDurableEgressPlane();
+    const plane = await makeDurableEgressPlane();
     // No x-api-key -> 401, not an unauthenticated wrk_default write.
     const noKey = await request(plane.app, "/v1/secrets", {
       method: "POST",

@@ -130,7 +130,7 @@ const unknownMcp = await startMcpFixture([], { requireBearer: "never-valid" });
 
 const guardedFetch = createGuardedMcpFetch({ allowAddress: () => true });
 const home = mkdtempSync(join(tmpdir(), "oma-oauth-smoke-"));
-const plane = createDeploymentControlPlane(
+const plane = await createDeploymentControlPlane(
   {
     OMA_AUTH_MODE: "api-key",
     OMA_MASTER_KEY: generateMasterKey(),

@@ -84,7 +84,7 @@ export async function startAppliance(
   const port = parseAppliancePort(resolved.OMA_PORT);
   const host = resolved.OMA_HOST ?? "127.0.0.1";
 
-  const plane = createDeploymentControlPlane(resolved, {
+  const plane = await createDeploymentControlPlane(resolved, {
     ...(opts.onboarding === undefined ? {} : { consoleBootstrap: opts.onboarding.bootstrap }),
   });
   const { app, stores, authMode } = plane;
@@ -174,7 +174,7 @@ export async function startAppliance(
   }
 }
 
-function mintOnboardingKey(workspaces: ReturnType<typeof createDeploymentControlPlane>["stores"]["workspaces"]) {
+function mintOnboardingKey(workspaces: Awaited<ReturnType<typeof createDeploymentControlPlane>>["stores"]["workspaces"]) {
   for (const key of workspaces.listKeys(DEFAULT_WORKSPACE_ID)) {
     if (key.label === "onboarding-console" && key.revoked_at === null) {
       workspaces.revokeKey(key.key_sha256);
