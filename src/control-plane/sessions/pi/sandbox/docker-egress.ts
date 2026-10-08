@@ -31,6 +31,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionEgressBundle } from "../../../egress/policy.ts";
+import {
+  type ContainerEngine,
+  detectContainerEngine,
+} from "./container-engine.ts";
 
 const SIDECAR_LABEL_KEY = "open-managed-agents.egress-sidecar";
 const SIDECAR_LABEL_VALUE = "docker-local";
@@ -154,6 +158,7 @@ export async function createEgressSidecar(
         repoMount: opts.sidecarRepoMount,
         user: currentUserSpec(),
         labels: sidecarLabels(opts.labels, opts.sessionId),
+        engine: detectContainerEngine(opts.dockerCommand),
       }),
       opts.operationTimeoutMs,
     );
@@ -243,6 +248,7 @@ export function buildSidecarRunArgs(opts: {
   memory?: string;
   pidsLimit?: string;
   tmpfsSize?: string;
+  engine?: ContainerEngine;
 }): string[] {
   const labels = Object.entries(opts.labels).flatMap(([k, v]) => [
     "--label",
@@ -271,6 +277,12 @@ export function buildSidecarRunArgs(opts: {
     `/tmp:rw,nosuid,nodev,size=${opts.tmpfsSize ?? DEFAULT_SIDECAR_TMPFS_SIZE}`,
     "--user",
     opts.user,
+    // Rootless Podman maps the host uid to container root, so `--user <uid>`
+    // alone could not read the 0600 bundle; keep-id preserves the mapping.
+    ...(opts.engine === "podman" ? ["--userns=keep-id"] : []),
+    // Node as PID 1 does not exit on SIGTERM; keep `rm -f` immediate.
+    "--stop-timeout",
+    "0",
     "--memory",
     opts.memory ?? DEFAULT_SIDECAR_MEMORY,
     "--pids-limit",

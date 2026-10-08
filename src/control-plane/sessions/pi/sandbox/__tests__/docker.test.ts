@@ -85,6 +85,23 @@ describe("Docker sandbox provider command construction", () => {
     expect(args).not.toContain("/var/run/docker.sock");
   });
 
+  it("speaks Podman's tmpfs ownership dialect (Podman 4.x rejects uid=/gid=)", () => {
+    const args = buildDockerRunArgs({
+      containerName: "oma-test",
+      workspacePath: "/workspace",
+      image: "alpine:3.19",
+      memory: "384m",
+      cpus: "1",
+      pidsLimit: "64",
+      tmpfsSize: "64m",
+      engine: "podman",
+    });
+
+    expect(args.filter((arg) => /uid=|gid=/.test(arg))).toEqual([]);
+    expect(args).toContain("/workspace:rw,exec,nosuid,nodev,U,mode=700,size=64m");
+    expect(args).toContain("/workspace/skills:rw,exec,nosuid,nodev,mode=755,size=64m");
+  });
+
   it("swaps --network none for the sidecar net and wires CA + proxy + sentinels under egress (0117d)", () => {
     const args = buildDockerRunArgs({
       containerName: "oma-test",
@@ -518,7 +535,10 @@ printf '%s\n' "$*" >> "${logPath}"
     });
     provider.dispose();
 
-    const run = (await readFile(logPath, "utf8")).split("\n")[0] ?? "";
+    const run =
+      (await readFile(logPath, "utf8"))
+        .split("\n")
+        .find((line) => line.startsWith("run ")) ?? "";
     expect(run).toContain("--memory 1g");
     expect(run).toContain("--pids-limit 128");
     expect(run).toContain("size=256m");
@@ -1187,7 +1207,7 @@ describe("Docker sandbox provider integration", () => {
       expect(inspectContainerIsolation(containerId)).toMatchObject({
         networkMode: "none",
         readOnlyRootfs: true,
-        capDrop: ["ALL"],
+        capabilityBoundingSet: "0000000000000000",
         noNewPrivileges: true,
         user: "65534:65534",
         hasDockerSocketBind: false,
@@ -1820,7 +1840,7 @@ describe("Docker sandbox provider integration", () => {
         "open-managed-agents.sandbox=docker-local",
         "--label",
         `open-managed-agents.test-id=${label}`,
-        "bash:5.2",
+        "docker.io/library/bash:5.2",
         "sleep",
         "600",
       ],
@@ -1865,7 +1885,7 @@ function containersForLabel(label: string): string[] {
 function inspectContainerIsolation(containerId: string): {
   networkMode: string | undefined;
   readOnlyRootfs: boolean | undefined;
-  capDrop: string[] | undefined;
+  capabilityBoundingSet: string | undefined;
   noNewPrivileges: boolean;
   user: string | undefined;
   hasDockerSocketBind: boolean;
@@ -1885,7 +1905,6 @@ function inspectContainerIsolation(containerId: string): {
     HostConfig?: {
       NetworkMode?: string;
       ReadonlyRootfs?: boolean;
-      CapDrop?: string[];
       SecurityOpt?: string[];
       Binds?: string[] | null;
       Tmpfs?: Record<string, string>;
@@ -1896,7 +1915,13 @@ function inspectContainerIsolation(containerId: string): {
   return {
     networkMode: inspect.HostConfig?.NetworkMode,
     readOnlyRootfs: inspect.HostConfig?.ReadonlyRootfs,
-    capDrop: inspect.HostConfig?.CapDrop,
+    // Behavioural, not inspect-shaped: Podman reports CapDrop as the expanded
+    // default list rather than ["ALL"]. An empty bounding set is the contract.
+    capabilityBoundingSet: spawnSync(
+      "docker",
+      ["exec", containerId, "sh", "-c", "grep CapBnd /proc/1/status"],
+      { encoding: "utf8" },
+    ).stdout.split(/\s+/)[1],
     noNewPrivileges:
       inspect.HostConfig?.SecurityOpt?.includes("no-new-privileges") ?? false,
     user: inspect.Config?.User,
