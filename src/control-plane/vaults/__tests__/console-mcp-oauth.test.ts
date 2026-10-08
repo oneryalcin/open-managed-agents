@@ -152,6 +152,38 @@ describe("ConsoleMcpOauthService", () => {
     }, CALLBACK_URL)).rejects.toThrow(/names a different authorization server/);
   });
 
+  it("never sends the reauthorize redirect to an authorization server that echoes the stored token endpoint", async () => {
+    const fixture = oauthFetch();
+    const service = new ConsoleMcpOauthService(vaults, fixture.fetch);
+    const vaultId = vaults.listVaults(WRK).data[0]!.id;
+    const first = await service.startConnect(WRK, { vault_id: vaultId, mcp_server_url: MCP_URL }, CALLBACK_URL);
+    await service.complete(new URL(first.authorization_url).searchParams.get("state")!, "first-code");
+    const credentialId = service.status(WRK, first.flow_id).credential_id!;
+
+    fixture.authorizationServer = "https://evil.example.test";
+    fixture.evilEchoesTokenEndpoint = true;
+
+    await expect(service.startReauthorize(WRK, {
+      vault_id: vaultId,
+      credential_id: credentialId,
+    }, CALLBACK_URL)).rejects.toThrow(/names a different authorization server/);
+  });
+
+  it("requires reconnecting a credential connected before its authorization server was recorded", async () => {
+    const fixture = oauthFetch();
+    const service = new ConsoleMcpOauthService(vaults, fixture.fetch);
+    const vaultId = vaults.listVaults(WRK).data[0]!.id;
+    const first = await service.startConnect(WRK, { vault_id: vaultId, mcp_server_url: MCP_URL }, CALLBACK_URL);
+    await service.complete(new URL(first.authorization_url).searchParams.get("state")!, "first-code");
+    const credentialId = service.status(WRK, first.flow_id).credential_id!;
+    db.exec("UPDATE vault_credentials SET oauth_authorization_server = NULL");
+
+    await expect(service.startReauthorize(WRK, {
+      vault_id: vaultId,
+      credential_id: credentialId,
+    }, CALLBACK_URL)).rejects.toThrow(/Delete it and connect again/);
+  });
+
   it("expires flow state at ten minutes and isolates status by workspace", async () => {
     let now = new Date("2026-07-23T10:00:00.000Z");
     const fixture = oauthFetch();
@@ -247,6 +279,8 @@ function oauthFetch(opts: { registration?: boolean; tokenStatus?: number } = {})
     refreshToken: REFRESH,
     // The MCP server controls which authorization server it advertises.
     authorizationServer: "https://auth.example.test",
+    // When set, the attacker's metadata copies the legitimate token endpoint.
+    evilEchoesTokenEndpoint: false,
     evilRequests,
     get registrationCalls() { return registrationCalls; },
     get tokenCalls() { return tokenCalls; },
@@ -263,7 +297,9 @@ function oauthFetch(opts: { registration?: boolean; tokenStatus?: number } = {})
           return json({
             issuer: "https://evil.example.test",
             authorization_endpoint: "https://evil.example.test/authorize",
-            token_endpoint: "https://evil.example.test/token",
+            token_endpoint: state.evilEchoesTokenEndpoint
+              ? "https://auth.example.test/token"
+              : "https://evil.example.test/token",
             response_types_supported: ["code"],
             token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
             code_challenge_methods_supported: ["S256"],

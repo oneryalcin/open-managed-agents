@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS vault_credentials (
   client_id       TEXT,
   scope           TEXT,
   token_endpoint_auth_type TEXT,
+  oauth_authorization_server TEXT,
   expires_at      TEXT,
   auth_version    INTEGER NOT NULL DEFAULT 1,
   refresh_status  TEXT,
@@ -99,6 +100,7 @@ interface VaultCredentialDbRow {
     | "client_secret_basic"
     | "client_secret_post"
     | null;
+  oauth_authorization_server: string | null;
   expires_at: string | null;
   auth_version: number;
   refresh_status: "ok" | "invalid" | "transient" | null;
@@ -211,8 +213,9 @@ export class SqliteVaultStore implements VaultStore {
       `INSERT INTO vault_credentials (
         id, workspace_id, vault_id, type, display_name, metadata, auth_type,
         mcp_server_url, token_endpoint, client_id, scope, token_endpoint_auth_type,
+        oauth_authorization_server,
         expires_at, auth_version, next_refresh_at, created_at, updated_at, archived_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.retrieveCredentialActiveStmt = this.db.prepare(
       `SELECT * FROM vault_credentials
@@ -456,6 +459,7 @@ export class SqliteVaultStore implements VaultStore {
         c.auth.type === "mcp_oauth"
           ? c.auth.refresh?.token_endpoint_auth.type ?? null
           : null,
+        record.oauthAuthorizationServer ?? null,
         c.auth.type === "mcp_oauth" ? c.auth.expires_at ?? null : null,
         c.auth_version,
         record.nextRefreshAt ?? null,
@@ -876,6 +880,9 @@ export class SqliteVaultStore implements VaultStore {
         : {
             refresh: {
               tokenEndpoint: auth.refresh.token_endpoint,
+              ...(row.oauth_authorization_server === null
+                ? {}
+                : { authorizationServer: row.oauth_authorization_server }),
               clientId: auth.refresh.client_id,
               ...(auth.refresh.scope === undefined
                 ? {}
@@ -1096,6 +1103,7 @@ function ensureVaultCredentialColumns(db: DatabaseSync): void {
     ["client_id", "TEXT"],
     ["scope", "TEXT"],
     ["token_endpoint_auth_type", "TEXT"],
+    ["oauth_authorization_server", "TEXT"],
     ["expires_at", "TEXT"],
     ["auth_version", "INTEGER NOT NULL DEFAULT 1"],
     ["refresh_status", "TEXT"],

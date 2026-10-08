@@ -132,6 +132,13 @@ export class ConsoleMcpOauthService {
     if (oauth?.refresh === undefined) {
       throw invalidRequest("This OAuth credential has no reusable client registration");
     }
+    // Without the connect-time authorization server, a hostile MCP server
+    // could echo the stored token endpoint and take the redirect (#257).
+    if (oauth.refresh.authorizationServer === undefined) {
+      throw invalidRequest(
+        "This OAuth credential was connected before OMA recorded its authorization server. Delete it and connect again to reauthorize.",
+      );
+    }
     return this.start({
       workspaceId,
       vaultId,
@@ -140,6 +147,7 @@ export class ConsoleMcpOauthService {
       callbackUrl,
       operation: "reauthorize",
       boundTokenEndpoint: oauth.refresh.tokenEndpoint,
+      boundAuthorizationServer: oauth.refresh.authorizationServer,
       clientInformation: {
         client_id: oauth.refresh.clientId,
         ...(oauth.secrets.clientSecret === undefined
@@ -210,6 +218,7 @@ export class ConsoleMcpOauthService {
     callbackUrl: string;
     operation: FlowOperation;
     boundTokenEndpoint?: string;
+    boundAuthorizationServer?: string;
     clientInformation?: OAuthClientInformationMixed;
   }): Promise<ConsoleMcpOauthFlowStart> {
     this.cleanup();
@@ -221,6 +230,7 @@ export class ConsoleMcpOauthService {
       state,
       clientInformation: input.clientInformation,
       boundTokenEndpoint: input.boundTokenEndpoint,
+      boundAuthorizationServer: input.boundAuthorizationServer,
     });
     const flow: OAuthFlow = {
       id: flowId,
@@ -332,7 +342,9 @@ export class ConsoleMcpOauthService {
               }
             : {}),
         },
-      });
+      }, discovery?.authorizationServerUrl === undefined
+        ? {}
+        : { oauthAuthorizationServer: discovery.authorizationServerUrl });
     } catch (error) {
       throw Object.assign(new Error("OAuth completed, but OMA could not save the credential"), {
         cause: error,
@@ -412,6 +424,7 @@ class FlowProvider implements OAuthClientProvider {
     state: string;
     clientInformation?: OAuthClientInformationMixed;
     boundTokenEndpoint?: string;
+    boundAuthorizationServer?: string;
   }) {
     this.savedClientInformation = input.clientInformation;
     this.clientMetadata = {
@@ -464,12 +477,18 @@ class FlowProvider implements OAuthClientProvider {
   // hostile or compromised server could point the stored client secret at
   // its own token endpoint (GHSA-6qxp-vccf-f47h). Stored credentials carry no
   // SDK issuer stamp, so bind to the token endpoint saved at connect time:
-  // the only place the SDK sends the secret. The SDK saves discovery state
-  // before the authorization redirect and before any token request.
+  // the only place the SDK sends the secret, and to the authorization server
+  // recorded at connect, so a server echoing the token endpoint cannot take
+  // the browser redirect (code injection, #257). The SDK saves discovery
+  // state before the redirect and before any token request.
   saveDiscoveryState(value: OAuthDiscoveryState): void {
     const bound = this.input.boundTokenEndpoint;
     const tokenEndpoint = value.authorizationServerMetadata?.token_endpoint;
-    if (bound !== undefined && (tokenEndpoint === undefined || !sameUrl(tokenEndpoint, bound))) {
+    const boundServer = this.input.boundAuthorizationServer;
+    if (
+      (bound !== undefined && (tokenEndpoint === undefined || !sameUrl(tokenEndpoint, bound))) ||
+      (boundServer !== undefined && !sameUrl(value.authorizationServerUrl, boundServer))
+    ) {
       throw Object.assign(new Error("OAuth authorization server changed since this credential was connected"), {
         oauthAuthorizationServerChanged: true,
       });
