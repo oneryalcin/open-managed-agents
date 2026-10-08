@@ -189,23 +189,21 @@ progress. That is unchanged from today and is ADR 0018 stage 3.
 - On a cache miss, `getOrCreateHandle` loads stored entries. If there are
   any, it builds the Pi session from `SessionManager.inMemory(cwd, undefined,
   entries)`, and the acknowledged count is the loaded count.
-- **Unclean end, by content coverage rather than turn order.** The event store
-  computes it, because it has the event log and the turn ledger; the runner's
-  `getOrCreateHandle` has no trigger ids. The store's load call returns
-  `{ entries, uncovered }`.
-  - **Candidates:** `user.message` events that actually dispatched a prompt.
-    Their dispatched text is `textFromContent(content)` (text blocks joined
-    with newlines and trimmed). Image-only or whitespace-only messages never
-    reach Pi and are not candidates.
-  - **Excluded:** trigger events of turns still pending (they are about to be
-    delivered, including the one starting now), and of turns closed
-    `interrupted` (a deliberate interrupt).
-  - **Matching:** walk candidates and stored user entries in order, comparing
-    dispatched text. Candidates left unmatched are uncovered: their turn never
-    settled.
-  - Turn order would mislabel steered messages: they belong to the earlier
-    turn's checkpoint, not their own runtime turn. Duplicate texts still match
-    correctly because matching is in order.
+- **Unclean end, by turn identity (revised in slice 3b review).** Each
+  settled checkpoint records the turns whose messages it includes: the owning
+  turn and any turn whose message was steered into that run. The runner learns
+  each message's turn id from `runUserMessage` and tracks turns not yet in a
+  committed checkpoint, the same way it tracks entries. The event store's
+  `loadConversation` returns `{ entries, unfinished }`.
+  - **Unfinished:** a `user.message` that started a turn, whose turn is closed,
+    not closed `interrupted`, not covered by any checkpoint, and not already
+    reported by a saved note.
+  - The first version matched message *text* in order. Both Codex passes
+    showed it mislabels a lost "Deploy" followed by a completed "Deploy", and
+    assumes event-id order equals delivery order. Identity has neither
+    problem.
+  - Known edge: a message stranded in Pi's queue by the #260 race is counted
+    as covered by the run it was steered into, although it was not delivered.
 - **Notes are idempotent.** A D2 note is added through Pi's custom-message
   entry, which the model sees as a user message and the next checkpoint saves.
   Rebuild skips a note when an identical one is already the last note entry,

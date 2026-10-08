@@ -8,43 +8,47 @@ import {
 import type { StoredConversationEntry } from "../types.ts";
 
 // Plan 0147: which dispatched user messages never reached the saved
-// conversation, so the rebuilt model is told about them.
+// conversation, by turn identity (each checkpoint records the turns it covers).
 
-function userEvent(id: string, ...texts: string[]): CoverageUserEvent {
-  return { id, content: texts.map((text) => ({ type: "text" as const, text })) };
+function userEvent(id: string, text: string): CoverageUserEvent {
+  return { id, content: [{ type: "text" as const, text }] };
 }
 
-function turn(trigger: string, state: string, closeReason: string | null = null): CoverageTurn {
-  return { state, triggerEventIds: [trigger], closeReason };
-}
-
-function storedUser(id: string, text: string): StoredConversationEntry {
-  return {
-    entryId: id,
-    json: JSON.stringify({ type: "message", id, message: { role: "user", content: [{ type: "text", text }] } }),
-    turnId: "rtun",
-    piVersion: "0.85.1",
-  };
+function turn(turnId: string, trigger: string, state: string, closeReason: string | null = null): CoverageTurn {
+  return { turnId, state, triggerEventIds: [trigger], closeReason };
 }
 
 const ids = (result: ReturnType<typeof unfinishedUserMessages>) => result.map((m) => m.eventId);
 
 describe("unfinished user messages", () => {
-  it("reports a dispatched message whose closed turn never reached the conversation", () => {
+  it("reports a message whose closed turn no checkpoint covers", () => {
     const result = unfinishedUserMessages({
       userEvents: [userEvent("a", "first"), userEvent("b", "second")],
-      turns: [turn("a", "completed"), turn("b", "terminalized")],
-      stored: [storedUser("u1", "first")],
+      turns: [turn("ta", "a", "completed"), turn("tb", "b", "terminalized")],
+      coveredTurnIds: new Set(["ta"]),
+      stored: [],
     });
 
     expect(result).toEqual([{ eventId: "b", text: "second" }]);
   });
 
-  it("treats a message steered into an earlier turn's checkpoint as covered", () => {
+  it("tells a lost message from an identical one that completed", () => {
+    const result = unfinishedUserMessages({
+      userEvents: [userEvent("lost", "Deploy"), userEvent("done", "Deploy")],
+      turns: [turn("t1", "lost", "terminalized"), turn("t2", "done", "completed")],
+      coveredTurnIds: new Set(["t2"]),
+      stored: [],
+    });
+
+    expect(ids(result)).toEqual(["lost"]);
+  });
+
+  it("treats a message steered into a covered run as covered", () => {
     const result = unfinishedUserMessages({
       userEvents: [userEvent("a", "first"), userEvent("b", "steered")],
-      turns: [turn("a", "completed"), turn("b", "completed")],
-      stored: [storedUser("u1", "first"), storedUser("u2", "steered")],
+      turns: [turn("ta", "a", "completed"), turn("tb", "b", "completed")],
+      coveredTurnIds: new Set(["ta", "tb"]),
+      stored: [],
     });
 
     expect(ids(result)).toEqual([]);
@@ -53,7 +57,8 @@ describe("unfinished user messages", () => {
   it("does not report a deliberately interrupted turn", () => {
     const result = unfinishedUserMessages({
       userEvents: [userEvent("a", "stop me")],
-      turns: [turn("a", "terminalized", "interrupted")],
+      turns: [turn("ta", "a", "terminalized", "interrupted")],
+      coveredTurnIds: new Set(),
       stored: [],
     });
 
@@ -63,7 +68,8 @@ describe("unfinished user messages", () => {
   it("does not report a turn that is still pending", () => {
     const result = unfinishedUserMessages({
       userEvents: [userEvent("a", "in flight")],
-      turns: [turn("a", "running")],
+      turns: [turn("ta", "a", "running")],
+      coveredTurnIds: new Set(),
       stored: [],
     });
 
@@ -72,19 +78,10 @@ describe("unfinished user messages", () => {
 
   it("ignores messages that never started a turn", () => {
     const result = unfinishedUserMessages({
-      userEvents: [{ id: "img", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "x" } }] as never }],
+      userEvents: [userEvent("img", "ignored: no turn")],
       turns: [],
+      coveredTurnIds: new Set(),
       stored: [],
-    });
-
-    expect(ids(result)).toEqual([]);
-  });
-
-  it("matches multi-block messages by the text the runner sent", () => {
-    const result = unfinishedUserMessages({
-      userEvents: [userEvent("a", "line one", "line two")],
-      turns: [turn("a", "completed")],
-      stored: [storedUser("u1", "line one\nline two")],
     });
 
     expect(ids(result)).toEqual([]);
@@ -105,7 +102,8 @@ describe("unfinished user messages", () => {
 
     const result = unfinishedUserMessages({
       userEvents: [userEvent("a", "lost")],
-      turns: [turn("a", "terminalized")],
+      turns: [turn("ta", "a", "terminalized")],
+      coveredTurnIds: new Set(),
       stored: [note],
     });
 

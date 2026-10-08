@@ -50,6 +50,7 @@ function checkpoint(
     ownerGeneration: 1,
     piVersion: "0.85.1",
     entries,
+    coveredTurnIds: [],
     now: new Date().toISOString(),
     ...overrides,
   };

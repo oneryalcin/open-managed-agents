@@ -175,6 +175,7 @@ export function isRuntimeConversationSettledEvent(
   return (
     event.type === "oma.conversation_settled" &&
     Array.isArray(event.entries) &&
+    Array.isArray(event.turnIds) &&
     typeof event.piVersion === "string" &&
     typeof event.release === "function"
   );

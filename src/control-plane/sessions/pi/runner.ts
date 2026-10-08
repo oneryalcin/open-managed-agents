@@ -163,6 +163,8 @@ interface RuntimeHandle {
   holdWaiters: Array<() => void>;
   /** How many of [header, ...entries] the store has acknowledged. */
   conversationAcked: number;
+  /** Turns delivered into this session but not yet in a committed checkpoint. */
+  unackedTurnIds: string[];
   needsFreshPromptAfterInterrupt: boolean;
   closeWhenIdle: boolean;
   lastUsedAt: number;
@@ -362,9 +364,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
     text: string,
-    opts: { signal?: AbortSignal } = {},
+    opts: { signal?: AbortSignal; turnId?: string } = {},
   ): AsyncIterable<unknown> {
-    return this.runOnSession(workspaceId, sessionId, text, opts.signal);
+    return this.runOnSession(workspaceId, sessionId, text, opts.signal, opts.turnId);
   }
 
   async prepareSession(
@@ -548,6 +550,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
     text: string,
     signal: AbortSignal | undefined,
+    turnId: string | undefined,
   ): AsyncIterable<unknown> {
     // Cross-request interrupt/message ordering: a message that arrives while
     // abort is settling waits and then starts a fresh post-interrupt turn.
@@ -558,6 +561,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
       throw new Error("PiSessionRunner is closed");
     }
     this.touch(sessionId, handle);
+    // Whichever run delivers this message, its next settled checkpoint
+    // records the turn as covered (plan 0147).
+    if (turnId !== undefined) handle.unackedTurnIds.push(turnId);
 
     if (handle.running && !handle.needsFreshPromptAfterInterrupt) {
       try {
@@ -577,6 +583,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     // generator only later (e.g. after output indexing), by which time a newer
     // turn can have appended to the same Pi session log.
     let settledLog: Array<{ id: string }> | undefined;
+    let settledTurnIds: string[] = [];
 
     const queue: unknown[] = [];
     const gatedEvents: unknown[] = [];
@@ -658,6 +665,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       .prompt(text, { expandPromptTemplates: false })
       .then(() => {
         settledLog = conversationLog(handle.session);
+        settledTurnIds = [...handle.unackedTurnIds];
       })
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
@@ -782,7 +790,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       if (!queuedOnRunningTurn) {
         const settled = settledLog === undefined
           ? undefined
-          : this.conversationSettledEvent(sessionId, handle, hold, settledLog);
+          : this.conversationSettledEvent(sessionId, handle, hold, settledLog, settledTurnIds);
         if (settled) {
           settledEmitted = true;
           yield settled;
@@ -830,6 +838,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     handle: RuntimeHandle,
     hold: symbol,
     all: ReadonlyArray<{ id: string }>,
+    turnIds: readonly string[],
   ): RuntimeConversationSettledEvent {
     // A newer run may append before this checkpoint commits; the cursor only
     // ever advances to this settlement's endpoint.
@@ -841,12 +850,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
         entryId: entry.id,
         json: JSON.stringify(entry),
       })),
+      turnIds,
       piVersion: PINNED_PI_MODEL_RUNTIME_VERSION,
       release: (committed) => {
         if (released) return;
         released = true;
         if (committed) {
           handle.conversationAcked = Math.max(handle.conversationAcked, endpoint);
+          handle.unackedTurnIds = handle.unackedTurnIds.filter((id) => !turnIds.includes(id));
         }
         this.releaseHold(sessionId, handle, hold);
       },
@@ -1012,6 +1023,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           // harmless no-op). Continuity notes after them are not, so the next
           // settled checkpoint saves them.
           conversationAcked: storedCount,
+          unackedTurnIds: [],
           needsFreshPromptAfterInterrupt: false,
           // Retrying MCP failures use fresh-handle mechanics: dispose at
           // idle so the NEXT turn re-runs connect/discovery (plan 0122 §4.6).

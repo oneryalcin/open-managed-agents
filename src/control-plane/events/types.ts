@@ -235,6 +235,8 @@ export interface RuntimeConversationCheckpoint {
   ownerGeneration: number;
   piVersion: string;
   entries: readonly ConversationEntryRecord[];
+  /** Turns whose user messages these entries include (coverage provenance). */
+  coveredTurnIds: readonly string[];
   now: string;
 }
 
@@ -441,7 +443,11 @@ export interface RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
     text: string,
-    opts?: { signal?: AbortSignal },
+    opts?: {
+      signal?: AbortSignal;
+      /** The runtime turn this message started; checkpoints record it (plan 0147). */
+      turnId?: string;
+    },
   ): AsyncIterable<unknown>;
   claimCustomToolResult?(
     workspaceId: WorkspaceId,
@@ -629,6 +635,8 @@ export interface RuntimeMcpConnectionFailedEvent {
 export interface RuntimeConversationSettledEvent {
   type: "oma.conversation_settled";
   entries: readonly ConversationEntryRecord[];
+  /** Turns whose messages this settled run delivered: its own, plus steered. */
+  turnIds: readonly string[];
   piVersion: string;
   release: (committed: boolean) => void;
 }

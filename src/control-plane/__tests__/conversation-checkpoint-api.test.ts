@@ -163,6 +163,7 @@ describe("conversation checkpoint per settled turn", () => {
         yield {
           type: "oma.conversation_settled",
           entries: [{ entryId: "hdr", json: "{}" }],
+          turnIds: [],
           piVersion: "0.85.1",
           release: (committed: boolean) => {
             if (released.length === 0) released.push(committed);
@@ -198,6 +199,7 @@ describe("conversation checkpoint per settled turn", () => {
         yield {
           type: "oma.conversation_settled",
           entries: [{ entryId: "hdr", json: "{}" }, { entryId: "e1", json: "{}" }],
+          turnIds: [],
           piVersion: "0.85.1",
           // Idempotent, first call wins, as the runner's is.
           release: (committed: boolean) => {
@@ -245,6 +247,7 @@ describe("conversation checkpoint per settled turn", () => {
         yield {
           type: "oma.conversation_settled",
           entries: [{ entryId: "hdr", json: "{}" }],
+          turnIds: [],
           piVersion: "0.85.1",
           release: () => {
             settledReleased = true;
@@ -435,6 +438,30 @@ describe("continuity notes on rebuild (plan 0147 slice 3b)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("does not report a message steered into a settled turn after a rebuild", async () => {
+    const h = await harness({ idleTtlMs: 20 });
+    const gate = deferred<void>();
+    h.pi.core.setResponses([
+      async () => {
+        await gate.promise;
+        return h.pi.faux.fauxAssistantMessage("first reply");
+      },
+      h.pi.faux.fauxAssistantMessage("steered reply"),
+      h.pi.faux.fauxAssistantMessage("third reply"),
+    ]);
+    h.send("first");
+    await waitFor(() => h.pi.core.state.callCount === 1);
+    h.send("steered");
+    gate.resolve();
+    await waitFor(() => h.stored().length === 4);
+    await waitFor(() => evicted(h));
+
+    h.send("third");
+    await waitFor(() => h.pi.core.state.callCount === 3);
+
+    expect(lastRequest(h.pi).some((m) => m.includes("did not finish"))).toBe(false);
   });
 
   it("tells the model its sandbox was recreated when a rebuild gets a fresh workspace", async () => {

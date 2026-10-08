@@ -116,6 +116,15 @@ CREATE TABLE IF NOT EXISTS session_conversation_entries (
   PRIMARY KEY (workspace_id, session_id, seq),
   UNIQUE (workspace_id, session_id, entry_id)
 );
+-- Which runtime turns' user messages a saved checkpoint includes (plan 0147):
+-- the settled turn and any steered into it. A closed turn missing here never
+-- reached the saved conversation.
+CREATE TABLE IF NOT EXISTS session_conversation_turns (
+  workspace_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, session_id, turn_id)
+);
 `;
 
 const INDEXES = `
@@ -224,6 +233,9 @@ export class EventStore implements SessionEventStore {
   private readonly insertConversationEntryStmt: StatementSync;
   private readonly listConversationEntriesStmt: StatementSync;
   private readonly deleteConversationForSessionStmt: StatementSync;
+  private readonly insertConversationTurnStmt: StatementSync;
+  private readonly conversationTurnsStmt: StatementSync;
+  private readonly deleteConversationTurnsForSessionStmt: StatementSync;
   private readonly deleteIdempotencyKeysForSessionStmt: StatementSync;
   private readonly deleteRuntimeActionsForSessionStmt: StatementSync;
   private readonly deleteRuntimeTurnsForSessionStmt: StatementSync;
@@ -280,7 +292,7 @@ export class EventStore implements SessionEventStore {
          AND owner_id = ? AND owner_generation = ?`,
     );
     this.turnsForSessionStmt = this.db.prepare(
-      `SELECT state, trigger_event_ids, close_reason FROM pending_runtime_turns
+      `SELECT turn_id, state, trigger_event_ids, close_reason FROM pending_runtime_turns
        WHERE workspace_id = ? AND session_id = ?`,
     );
     this.userMessagesForSessionStmt = this.db.prepare(
@@ -313,6 +325,17 @@ export class EventStore implements SessionEventStore {
     );
     this.deleteConversationForSessionStmt = this.db.prepare(
       `DELETE FROM session_conversation_entries WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.insertConversationTurnStmt = this.db.prepare(
+      `INSERT INTO session_conversation_turns (workspace_id, session_id, turn_id)
+       VALUES (?, ?, ?)
+       ON CONFLICT (workspace_id, session_id, turn_id) DO NOTHING`,
+    );
+    this.conversationTurnsStmt = this.db.prepare(
+      `SELECT turn_id FROM session_conversation_turns WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.deleteConversationTurnsForSessionStmt = this.db.prepare(
+      `DELETE FROM session_conversation_turns WHERE workspace_id = ? AND session_id = ?`,
     );
     this.deleteIdempotencyKeysForSessionStmt = this.db.prepare(
       `DELETE FROM idempotency_keys
@@ -678,6 +701,7 @@ export class EventStore implements SessionEventStore {
       this.deleteRuntimeTurnsForSessionStmt.run(workspaceId, sessionId);
       this.deleteForSessionStmt.run(workspaceId, sessionId);
       this.deleteConversationForSessionStmt.run(workspaceId, sessionId);
+      this.deleteConversationTurnsForSessionStmt.run(workspaceId, sessionId);
       this.deleteIdempotencyKeysForSessionStmt.run(
         workspaceId,
         `/v1/sessions/${sessionId}/events`,
@@ -1093,17 +1117,22 @@ export class EventStore implements SessionEventStore {
         checkpoint.sessionId,
       );
     }
+    for (const turnId of checkpoint.coveredTurnIds) {
+      this.insertConversationTurnStmt.run(checkpoint.workspaceId, checkpoint.sessionId, turnId);
+    }
   }
 
   loadConversation(workspaceId: WorkspaceId, sessionId: string): LoadedConversation {
     const entries = this.listConversationEntries(workspaceId, sessionId);
     const turns = (
       this.turnsForSessionStmt.all(workspaceId, sessionId) as Array<{
+        turn_id: string;
         state: string;
         trigger_event_ids: string;
         close_reason: string | null;
       }>
     ).map((row) => ({
+      turnId: row.turn_id,
       state: row.state,
       triggerEventIds: JSON.parse(row.trigger_event_ids) as string[],
       closeReason: row.close_reason,
@@ -1117,7 +1146,15 @@ export class EventStore implements SessionEventStore {
       id: row.id,
       content: ((JSON.parse(row.payload) as { content?: ManagedAgentsContentBlock[] }).content ?? []),
     }));
-    return { entries, unfinished: unfinishedUserMessages({ userEvents, turns, stored: entries }) };
+    const coveredTurnIds = new Set(
+      (this.conversationTurnsStmt.all(workspaceId, sessionId) as Array<{ turn_id: string }>).map(
+        (row) => row.turn_id,
+      ),
+    );
+    return {
+      entries,
+      unfinished: unfinishedUserMessages({ userEvents, turns, coveredTurnIds, stored: entries }),
+    };
   }
 
   listConversationEntries(
