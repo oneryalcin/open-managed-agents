@@ -2,7 +2,7 @@
 
 ## Status
 
-Design, 2026-10-08. Not started. Implements stage 1 of
+Design accepted 2026-10-08 (decisions below). Implementation not started. Implements stage 1 of
 [ADR 0018](../adrs/0018-session-durability-and-parking.md) and fixes #265. It is
 an M2 item in [0145](0145-road-to-external-testers.md).
 
@@ -163,7 +163,10 @@ progress. That is unchanged from today and is ADR 0018 stage 3.
     matching is in order.
 - No tool-result repair (Pi fact 5).
 
-## Decisions needed
+## Decisions
+
+**Decided 2026-10-08 (maintainer): D1 (a), D2 (a), D3 (a)**, as recommended
+below.
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
