@@ -11,7 +11,7 @@ import {
   InMemoryModelsStore,
   OmaCredentialStore,
 } from "../../../models/credential-store.ts";
-import type { PiRuntimeSession } from "../runner.ts";
+import type { PiConversationSeed, PiRuntimeSession } from "../runner.ts";
 
 // Real Pi sessions driven by Pi's own faux model provider, for tests that
 // depend on Pi's actual behaviour (session entries, settlement, compaction)
@@ -61,7 +61,13 @@ export interface RealPi {
   core: ReturnType<FauxModule["createFauxCore"]>;
   /** User-visible text of every model request's messages, in call order. */
   requests: string[][];
-  sessionFactory: () => Promise<PiRuntimeSession>;
+  /** Counts sessions created, so tests can tell a rebuild happened. */
+  created: { count: number };
+  sessionFactory: (
+    workspaceId: string,
+    sessionId: string,
+    seed: PiConversationSeed,
+  ) => Promise<PiRuntimeSession>;
 }
 
 export async function createRealPi(): Promise<RealPi> {
@@ -105,17 +111,22 @@ export async function createRealPi(): Promise<RealPi> {
   });
   const model = runtime.getModel("faux", "m");
   if (!model) throw new Error("faux model not registered");
+  const created = { count: 0 };
   return {
     faux,
     core,
     requests,
-    sessionFactory: async () => {
+    created,
+    sessionFactory: async (_workspaceId, _sessionId, seed) => {
+      created.count += 1;
       const { session } = await createAgentSession({
         model,
         modelRuntime: runtime,
         noTools: "all",
         thinkingLevel: "off",
-        sessionManager: SessionManager.inMemory(),
+        sessionManager: seed.length === 0
+          ? SessionManager.inMemory()
+          : SessionManager.inMemory(undefined, undefined, seed),
       });
       return session as unknown as PiRuntimeSession;
     },

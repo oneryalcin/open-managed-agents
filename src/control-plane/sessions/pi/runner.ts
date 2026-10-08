@@ -20,6 +20,7 @@ import type {
   RuntimeEventRunner,
   RuntimeConversationSettledEvent,
   RuntimeInternalEvent,
+  SessionEventStore,
   RuntimeMcpConnectionFailedEvent,
   RuntimeMcpToolWithModelEndEvent,
   RuntimeSessionFileMount,
@@ -98,9 +99,13 @@ export interface PiRuntimeSession {
   getActiveToolNames(): string[];
 }
 
+/** Stored Pi session entries (header first) to rebuild a session from. */
+export type PiConversationSeed = NonNullable<Parameters<typeof SessionManager.inMemory>[2]>;
+
 export type PiRuntimeSessionFactory = (
   workspaceId: WorkspaceId,
   sessionId: string,
+  seed: PiConversationSeed,
 ) => Promise<PiRuntimeSession>;
 
 export type PiSessionFileMount = RuntimeSessionFileMount;
@@ -262,6 +267,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly idleTtlMs: number;
   private readonly now: () => number;
   private readonly sessionFactory: PiRuntimeSessionFactory | undefined;
+  private readonly conversation:
+    | Pick<SessionEventStore, "listConversationEntries">
+    | undefined;
   private readonly mcpFetch: McpFetch;
   /**
    * Consecutive connect failures per (session, server). Runner-level so the
@@ -291,6 +299,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
       idleTtlMs?: number;
       now?: () => number;
       sessionFactory?: PiRuntimeSessionFactory;
+      /**
+       * Saved conversations (plan 0147): a session missing from the cache
+       * (idle eviction, restart) is rebuilt from its stored entries.
+       */
+      conversation?: Pick<SessionEventStore, "listConversationEntries">;
       sandboxProviderFactory?: SandboxProviderFactory;
       sandboxProviderSelection?: SandboxProviderSelection;
       sandboxProviderSelectionOptions?: SandboxProviderSelectionResolverOptions;
@@ -313,6 +326,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     this.idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
     this.now = opts.now ?? Date.now;
     this.sessionFactory = opts.sessionFactory;
+    this.conversation = opts.conversation;
     this.mcpFetch = opts.mcp?.fetch ?? createGuardedMcpFetch();
     this.customToolBridge = new PiCustomToolBridge({
       customTools: opts.customTools,
@@ -780,6 +794,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
   }
 
+  // Stored entries are what Pi appended, serialized by the settled checkpoint.
+  // A corrupt row fails session creation rather than silently starting a
+  // session with no memory.
+  private conversationSeed(workspaceId: WorkspaceId, sessionId: string): PiConversationSeed {
+    return (this.conversation?.listConversationEntries(workspaceId, sessionId) ?? []).map(
+      (row) => JSON.parse(row.json) as PiConversationSeed[number],
+    );
+  }
+
   private conversationSettledEvent(
     sessionId: string,
     handle: RuntimeHandle,
@@ -883,6 +906,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         const sandboxProviderFactory = this.resolveSandboxProviderFactory();
         let sandbox: SandboxProvider | undefined;
         let session: PiRuntimeSession | undefined;
+        let seed: PiConversationSeed = [];
         let mcp: PreparedMcp = EMPTY_MCP;
         try {
           try {
@@ -924,6 +948,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
             }
           }
           assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
+          seed = this.conversationSeed(workspaceId, sessionId);
           session =
             this.sessionFactory === undefined
               ? await this.createPiSession(
@@ -934,8 +959,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
                   agentRevision,
                   revisionModel,
                   mcp.toolDefinitions,
+                  seed,
                 )
-              : await this.sessionFactory(workspaceId, sessionId);
+              : await this.sessionFactory(workspaceId, sessionId, seed);
           assertActiveToolSurface(
             session,
             this.enabledSandboxToolNames(workspaceId, sessionId, sandbox),
@@ -954,7 +980,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
           running: false,
           holds: new Set(),
           holdWaiters: [],
-          conversationAcked: 0,
+          // Loaded entries are already stored; re-offering them would be a
+          // harmless no-op (idempotent append), so this only saves work.
+          conversationAcked: seed.length,
           needsFreshPromptAfterInterrupt: false,
           // Retrying MCP failures use fresh-handle mechanics: dispose at
           // idle so the NEXT turn re-runs connect/discovery (plan 0122 §4.6).
@@ -1200,6 +1228,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     } | undefined,
     revisionModel: Exclude<ReturnType<ModelRegistry["find"]>, undefined> | undefined,
     mcpTools: readonly ToolDefinition<any, any, any>[] = [],
+    seed: PiConversationSeed = [],
   ): Promise<PiRuntimeSession> {
     const modelCatalog = await this.modelCatalog();
     const provider = revision?.model.provider ?? modelCatalog.defaultModel.provider;
@@ -1237,7 +1266,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
         : [...customToolNames, ...mcpToolNames],
       customTools,
       modelRuntime: modelCatalog.modelRuntime,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager: seed.length === 0
+        ? SessionManager.inMemory()
+        : SessionManager.inMemory(undefined, undefined, seed),
       resourceLoader: await this.createResourceLoader(
         workspaceId,
         sessionId,
