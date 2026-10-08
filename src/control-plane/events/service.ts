@@ -112,6 +112,11 @@ import {
 // collection, turn close) before falling back to the running-session 400.
 const POST_IDLE_SETTLE_TIMEOUT_MS = 10_000;
 
+/** One live runtime task; postIdle = it published its terminal idle. */
+interface RuntimeTaskHandle {
+  postIdle: boolean;
+}
+
 interface ToolConfirmationCommit {
   event: ManagedAgentsUserToolConfirmationEventInput;
   toolUseId: string;
@@ -188,7 +193,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
   // Sessions whose live runtime task has already published its terminal
   // session.status_idle and is only doing post-idle work (output collection,
   // turn close). A delete waits for these instead of rejecting them.
-  private readonly idlePublishedRuntimeTasks = new Set<string>();
+  // Per session: how many live runtime tasks are post-idle. A delete waits
+  // only while every live task is post-idle; any genuinely running task means
+  // the session is running and gets the 400 without waiting.
+  private readonly postIdleRuntimeTasks = new Map<string, number>();
   private readonly runtimeSettledWaiters = new Map<string, Array<() => void>>();
   private readonly interruptedCustomToolActions = new Map<string, Set<string>>();
   private readonly pendingToolConfirmations = new Map<
@@ -799,8 +807,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     timeoutMs = POST_IDLE_SETTLE_TIMEOUT_MS,
   ): Promise<void> {
     const key = sessionScopeKey(workspaceId, sessionId);
-    if (!this.idlePublishedRuntimeTasks.has(key)) return;
-    if (this.activeRuntimeTaskCount(workspaceId, sessionId) === 0) return;
+    if (!this.allRuntimeTasksPostIdle(key)) return;
     await new Promise<void>((resolve) => {
       // One cleanup for both outcomes: a timed-out waiter must not stay
       // registered while post-idle work is stalled, or retried deletes leak.
@@ -1007,14 +1014,15 @@ export class DefaultSessionEventsService implements SessionEventsService {
           );
           continue;
         }
-        this.beginRuntimeTask(workspaceId, claimed.session_id);
+        const task = this.beginRuntimeTask(workspaceId, claimed.session_id);
         void this.runRuntimePrompts(
           workspaceId,
           claimed.session_id,
           prompts,
           undefined,
+          task,
         ).finally(() => {
-          this.finishRuntimeTask(workspaceId, claimed.session_id);
+          this.finishRuntimeTask(workspaceId, claimed.session_id, task);
         });
         continue;
       }
@@ -1287,31 +1295,39 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (!this.runtimeRunner || !this.runtimeTranslator) return;
     if (prompts.length === 0) return;
 
-    this.beginRuntimeTask(workspaceId, sessionId);
-    void this.runRuntimePrompts(workspaceId, sessionId, prompts, signal)
+    const task = this.beginRuntimeTask(workspaceId, sessionId);
+    void this.runRuntimePrompts(workspaceId, sessionId, prompts, signal, task)
       .finally(() => {
-        this.finishRuntimeTask(workspaceId, sessionId);
+        this.finishRuntimeTask(workspaceId, sessionId, task);
       });
   }
 
-  private beginRuntimeTask(workspaceId: WorkspaceId, sessionId: string): void {
+  private beginRuntimeTask(workspaceId: WorkspaceId, sessionId: string): RuntimeTaskHandle {
     const key = sessionScopeKey(workspaceId, sessionId);
     this.activeRuntimeTasks.set(
       key,
       (this.activeRuntimeTasks.get(key) ?? 0) + 1,
     );
+    return { postIdle: false };
   }
 
-  private finishRuntimeTask(workspaceId: WorkspaceId, sessionId: string): void {
+  private finishRuntimeTask(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    task: RuntimeTaskHandle,
+  ): void {
     const key = sessionScopeKey(workspaceId, sessionId);
+    // Both counts drop in the same synchronous step, so a woken delete never
+    // observes this task as still active.
+    if (task.postIdle) this.adjustPostIdleRuntimeTasks(key, -1);
     const remaining = (this.activeRuntimeTasks.get(key) ?? 1) - 1;
     if (remaining > 0) {
       this.activeRuntimeTasks.set(key, remaining);
+      this.wakeSettleWaitersUnlessAllPostIdle(key);
       return;
     }
     this.activeRuntimeTasks.delete(key);
-    this.idlePublishedRuntimeTasks.delete(key);
-    for (const settle of [...(this.runtimeSettledWaiters.get(key) ?? [])]) settle();
+    this.wakeSettleWaitersUnlessAllPostIdle(key);
     this.interruptedCustomToolActions.delete(key);
     this.interruptedToolConfirmations.delete(key);
     this.retireLifecycleGuardsIfIdle(workspaceId, sessionId);
@@ -1327,6 +1343,35 @@ export class DefaultSessionEventsService implements SessionEventsService {
     this.deletedSessions.delete(key);
   }
 
+  private setRuntimeTaskPostIdle(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    task: RuntimeTaskHandle,
+    postIdle: boolean,
+  ): void {
+    if (task.postIdle === postIdle) return;
+    task.postIdle = postIdle;
+    const key = sessionScopeKey(workspaceId, sessionId);
+    this.adjustPostIdleRuntimeTasks(key, postIdle ? 1 : -1);
+    if (!postIdle) this.wakeSettleWaitersUnlessAllPostIdle(key);
+  }
+
+  private adjustPostIdleRuntimeTasks(key: string, delta: number): void {
+    const next = (this.postIdleRuntimeTasks.get(key) ?? 0) + delta;
+    if (next > 0) this.postIdleRuntimeTasks.set(key, next);
+    else this.postIdleRuntimeTasks.delete(key);
+  }
+
+  private allRuntimeTasksPostIdle(key: string): boolean {
+    const active = this.activeRuntimeTasks.get(key) ?? 0;
+    return active > 0 && (this.postIdleRuntimeTasks.get(key) ?? 0) === active;
+  }
+
+  private wakeSettleWaitersUnlessAllPostIdle(key: string): void {
+    if (this.allRuntimeTasksPostIdle(key)) return;
+    for (const settle of [...(this.runtimeSettledWaiters.get(key) ?? [])]) settle();
+  }
+
   private activeRuntimeTaskCount(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -1339,6 +1384,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
     prompts: readonly RuntimePrompt[],
     signal: AbortSignal | undefined,
+    task: RuntimeTaskHandle,
   ): Promise<void> {
     if (!this.runtimeRunner || !this.runtimeTranslator) return;
     let activePrompt: RuntimePrompt | undefined;
@@ -1347,7 +1393,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       for (const prompt of prompts) {
         activePrompt = prompt;
         activeOpenModelRequestStartIds = [];
-        this.idlePublishedRuntimeTasks.delete(sessionScopeKey(workspaceId, sessionId));
+        this.setRuntimeTaskPostIdle(workspaceId, sessionId, task, false);
         const stopRenewing = this.startRuntimeLeaseRenewal(
           workspaceId,
           sessionId,
@@ -1577,7 +1623,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
               activeOpenModelRequestStartIds.pop();
             }
             if (hasTerminalIdleDraft(drafts)) {
-              this.idlePublishedRuntimeTasks.add(sessionScopeKey(workspaceId, sessionId));
+              this.setRuntimeTaskPostIdle(workspaceId, sessionId, task, true);
               await this.indexSessionOutputsFromLiveRuntime(
                 workspaceId,
                 sessionId,

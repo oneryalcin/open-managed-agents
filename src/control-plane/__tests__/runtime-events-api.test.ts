@@ -397,6 +397,42 @@ describe("Runtime events API", () => {
     runner.releaseCollection();
   });
 
+  it("does not make a delete wait when another turn is still genuinely running", async () => {
+    // Two overlapping runtime tasks: turn 0 reaches idle and finishes while
+    // turn 1 is still running. The session is running, so DELETE must get the
+    // hosted 400 promptly instead of waiting out the post-idle timeout.
+    const runner = new GatedTurnRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+    const send = (text: string) =>
+      fixture.app.request(`/v1/sessions/${session.id}/events`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ events: [{ type: "user.message", content: [{ type: "text", text }] }] }),
+      });
+    await send("first");
+    await runner.started(0);
+    await send("second");
+    await runner.started(1);
+
+    runner.finishTurn(0);
+    await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc`,
+      (body) => body.data.some((event) => event.type === "session.status_idle"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const startedAt = Date.now();
+    const deleted = await fixture.app.request(`/v1/sessions/${session.id}`, { method: "DELETE" });
+
+    expect({ status: deleted.status, prompt: Date.now() - startedAt < 2_000 }).toEqual({
+      status: 400,
+      prompt: true,
+    });
+    runner.finishTurn(1);
+  }, 20_000);
+
   it("interrupts the local runner when runtime turn ownership is lost", async () => {
     const runner = new InterruptTrackingRunner();
     const fixture = makeFixture(runner, {
@@ -541,6 +577,47 @@ class UnpairedStartRunner implements RuntimeEventRunner {
         },
       },
     };
+  }
+}
+
+// Each turn waits on its own gate before finishing, so a test can hold one
+// turn running while another completes.
+class GatedTurnRunner extends FakeRunner {
+  private readonly gates: Array<ReturnType<typeof deferred<void>>> = [];
+  private readonly turnStarted = new Map<number, ReturnType<typeof deferred<void>>>();
+  private turns = 0;
+
+  started(turn: number): Promise<void> {
+    return this.startedGate(turn).promise;
+  }
+
+  finishTurn(turn: number): void {
+    this.gate(turn).resolve();
+  }
+
+  override async *runUserMessage(
+    workspaceId: string,
+    sessionId: string,
+    text: string,
+  ): AsyncIterable<unknown> {
+    const turn = this.turns++;
+    this.startedGate(turn).resolve();
+    await this.gate(turn).promise;
+    yield* super.runUserMessage(workspaceId, sessionId, text);
+  }
+
+  async collectSessionOutputs(): Promise<RuntimeSessionOutputCollection> {
+    return { kind: "collected", files: [] };
+  }
+
+  private gate(turn: number) {
+    this.gates[turn] ??= deferred<void>();
+    return this.gates[turn]!;
+  }
+
+  private startedGate(turn: number) {
+    if (!this.turnStarted.has(turn)) this.turnStarted.set(turn, deferred<void>());
+    return this.turnStarted.get(turn)!;
   }
 }
 
