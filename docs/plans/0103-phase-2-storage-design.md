@@ -12,6 +12,14 @@ admission-control or worker-pool work.
 This is a design pass before code. It deliberately excludes admission controls
 and worker extraction.
 
+> **Session state includes the conversation (#230).** Durable session state is
+> more than the event log: the model's conversation must survive eviction and
+> restart too, and a waiting session must be resumable without a live runtime.
+> [ADR 0018](../adrs/0018-session-durability-and-parking.md) decides this
+> (durable conversation, disposable compute). This phase covers the storage
+> half; the compute half (workspace persistence, parking) is ADR 0018 stages 2
+> and 3.
+
 ## Current Code Facts
 
 - `createDeploymentControlPlaneApp` currently opens independent stores:

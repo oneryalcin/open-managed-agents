@@ -168,6 +168,8 @@ The decisions we've already made, with the alternatives we rejected and why:
 - [ADR 0014: Storage engine strategy for managed SaaS](adrs/0014-storage-engine-strategy.md)
 - [ADR 0015: Request idempotency for retry-safe writes](adrs/0015-request-idempotency.md)
 - [ADR 0016: Egress proxy and boundary secret injection](adrs/0016-egress-proxy-and-secret-injection.md) — OMA-owned egress proxy (vendored srt stack) with allowlist + sentinel substitution, and envelope-encrypted `SecretsStore` in SQLite; closes #130 and threat-model §3/§4.
+- [ADR 0017: Supply-chain minimum release age is 2 days](adrs/0017-supply-chain-min-release-age-2-days.md) — npm refuses package versions younger than 2 days; CI checks lockfile changes because `npm ci` does not.
+- [ADR 0018: Session durability and parking](adrs/0018-session-durability-and-parking.md) — the conversation lives only in memory today (lost after idle eviction or restart); decided: durable conversation with disposable compute, staged (conversation, workspace, resumable waits and parking).
 
 ## How this is organized
 
