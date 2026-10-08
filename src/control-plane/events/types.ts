@@ -215,6 +215,36 @@ export interface RuntimeTurnRecoveryClaim {
   now: string;
 }
 
+/** One Pi session entry (header or SessionEntry), serialized by the runner. */
+export interface ConversationEntryRecord {
+  entryId: string;
+  json: string;
+}
+
+/**
+ * A settled turn's new Pi conversation entries (plan 0147). Written only while
+ * `ownerId`/`ownerGeneration` still own the turn row, whatever its state, so
+ * a turn this owner already closed (e.g. interrupted) still saves its entries
+ * while a stale owner's write is rejected.
+ */
+export interface RuntimeConversationCheckpoint {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  turnId: string;
+  ownerId: string;
+  ownerGeneration: number;
+  piVersion: string;
+  entries: readonly ConversationEntryRecord[];
+  now: string;
+}
+
+export interface StoredConversationEntry {
+  entryId: string;
+  json: string;
+  turnId: string;
+  piVersion: string;
+}
+
 export interface EventStoreRuntimeChanges {
   acceptedTurns?: AcceptedRuntimeTurnDraft[];
   openedActions?: RuntimeActionDraft[];
@@ -225,10 +255,17 @@ export interface EventStoreRuntimeChanges {
   openedModelRequestStarts?: RuntimeTurnModelRequestStartOpen[];
   closedModelRequestStarts?: RuntimeTurnModelRequestStartClose[];
   closedTurns?: RuntimeTurnClosure[];
+  /** Applied after closedTurns, in the same transaction. */
+  conversationCheckpoints?: RuntimeConversationCheckpoint[];
 }
 
 export interface SessionEventStore {
   append(event: PersistedSessionEvent): void;
+  /** A session's saved Pi conversation, in append order (plan 0147). */
+  listConversationEntries(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): StoredConversationEntry[];
   appendBatch(events: readonly PersistedSessionEvent[]): void;
   appendBatchWithRuntimeChanges(
     events: readonly PersistedSessionEvent[],

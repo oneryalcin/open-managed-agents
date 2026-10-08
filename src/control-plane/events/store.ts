@@ -22,9 +22,11 @@ import type {
   PendingRuntimeActionRecord,
   PendingRuntimeTurnRecord,
   PersistedSessionEvent,
+  RuntimeConversationCheckpoint,
   RuntimeTurnRecoveryClaim,
   SessionEventRecordPage,
   SessionEventStore,
+  StoredConversationEntry,
 } from "./types.ts";
 import type { RequestIdempotencyKey } from "../request-idempotency.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
@@ -95,6 +97,20 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   updated_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   PRIMARY KEY (workspace_id, method, concrete_path, idempotency_key)
+);
+-- A session's Pi conversation, saved once per settled turn (plan 0147), so it
+-- can be rebuilt after idle eviction or a restart. Deleted with the events.
+CREATE TABLE IF NOT EXISTS session_conversation_entries (
+  workspace_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  entry_id TEXT NOT NULL,
+  entry_json TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  pi_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, session_id, seq),
+  UNIQUE (workspace_id, session_id, entry_id)
 );
 `;
 
@@ -197,6 +213,10 @@ export class EventStore implements SessionEventStore {
   private readonly db: DatabaseSync;
   private readonly appendStmt: StatementSync;
   private readonly deleteForSessionStmt: StatementSync;
+  private readonly turnOwnedByStmt: StatementSync;
+  private readonly insertConversationEntryStmt: StatementSync;
+  private readonly listConversationEntriesStmt: StatementSync;
+  private readonly deleteConversationForSessionStmt: StatementSync;
   private readonly deleteIdempotencyKeysForSessionStmt: StatementSync;
   private readonly deleteRuntimeActionsForSessionStmt: StatementSync;
   private readonly deleteRuntimeTurnsForSessionStmt: StatementSync;
@@ -245,6 +265,31 @@ export class EventStore implements SessionEventStore {
     );
     this.deleteForSessionStmt = this.db.prepare(
       `DELETE FROM events WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.turnOwnedByStmt = this.db.prepare(
+      `SELECT 1 FROM pending_runtime_turns
+       WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
+         AND owner_id = ? AND owner_generation = ?`,
+    );
+    // Idempotent on entry_id only: re-offering an already-saved entry is a
+    // no-op and does not consume a seq. Any other constraint violation still
+    // raises, so a durability write never drops a row silently.
+    this.insertConversationEntryStmt = this.db.prepare(
+      `INSERT INTO session_conversation_entries
+         (workspace_id, session_id, seq, entry_id, entry_json, turn_id, pi_version, created_at)
+       SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?
+       FROM session_conversation_entries
+       WHERE workspace_id = ? AND session_id = ?
+       ON CONFLICT (workspace_id, session_id, entry_id) DO NOTHING`,
+    );
+    this.listConversationEntriesStmt = this.db.prepare(
+      `SELECT entry_id, entry_json, turn_id, pi_version
+       FROM session_conversation_entries
+       WHERE workspace_id = ? AND session_id = ?
+       ORDER BY seq`,
+    );
+    this.deleteConversationForSessionStmt = this.db.prepare(
+      `DELETE FROM session_conversation_entries WHERE workspace_id = ? AND session_id = ?`,
     );
     this.deleteIdempotencyKeysForSessionStmt = this.db.prepare(
       `DELETE FROM idempotency_keys
@@ -608,6 +653,7 @@ export class EventStore implements SessionEventStore {
       this.deleteRuntimeActionsForSessionStmt.run(workspaceId, sessionId);
       this.deleteRuntimeTurnsForSessionStmt.run(workspaceId, sessionId);
       this.deleteForSessionStmt.run(workspaceId, sessionId);
+      this.deleteConversationForSessionStmt.run(workspaceId, sessionId);
       this.deleteIdempotencyKeysForSessionStmt.run(
         workspaceId,
         `/v1/sessions/${sessionId}/events`,
@@ -961,6 +1007,57 @@ export class EventStore implements SessionEventStore {
         turn.turnId,
       );
     }
+    for (const checkpoint of changes.conversationCheckpoints ?? []) {
+      this.applyConversationCheckpoint(checkpoint);
+    }
+  }
+
+  // Fenced on turn ownership, not on the turn being open: a turn this owner
+  // already closed still saves its settled entries; a stale owner throws and
+  // the whole batch rolls back.
+  private applyConversationCheckpoint(checkpoint: RuntimeConversationCheckpoint): void {
+    const owned = this.turnOwnedByStmt.get(
+      checkpoint.workspaceId,
+      checkpoint.sessionId,
+      checkpoint.turnId,
+      checkpoint.ownerId,
+      checkpoint.ownerGeneration,
+    );
+    if (owned === undefined) {
+      throw new RuntimeTurnOwnershipLostError(checkpoint.turnId);
+    }
+    for (const entry of checkpoint.entries) {
+      this.insertConversationEntryStmt.run(
+        checkpoint.workspaceId,
+        checkpoint.sessionId,
+        entry.entryId,
+        entry.json,
+        checkpoint.turnId,
+        checkpoint.piVersion,
+        checkpoint.now,
+        checkpoint.workspaceId,
+        checkpoint.sessionId,
+      );
+    }
+  }
+
+  listConversationEntries(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): StoredConversationEntry[] {
+    return (
+      this.listConversationEntriesStmt.all(workspaceId, sessionId) as Array<{
+        entry_id: string;
+        entry_json: string;
+        turn_id: string;
+        pi_version: string;
+      }>
+    ).map((row) => ({
+      entryId: row.entry_id,
+      json: row.entry_json,
+      turnId: row.turn_id,
+      piVersion: row.pi_version,
+    }));
   }
 
   private updateRuntimeTurnOpenModelRequestStarts(
