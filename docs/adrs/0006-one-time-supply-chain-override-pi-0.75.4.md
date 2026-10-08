@@ -4,6 +4,8 @@
 
 ## Context
 
+> Historical record: written under the 30-day policy that applied in May 2026. The current policy is a 2-day minimum release age, enforced by the project `.npmrc` and CI ([ADR 0017](0017-supply-chain-min-release-age-2-days.md)).
+
 The user-global npm config enforces `min-release-age=30` — npm refuses to install any package version published less than 30 days ago. This is a deliberate supply-chain defense, modeled on the idea that compromised package versions tend to be caught and yanked within a few weeks of publication.
 
 Pi (`@earendil-works/pi-coding-agent`) has been chosen as our engine ([ADR 0001](0001-use-pi-agent-sdk-as-engine.md)). Its release timeline at decision time:
