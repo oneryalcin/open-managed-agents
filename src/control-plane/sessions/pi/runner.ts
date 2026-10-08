@@ -562,7 +562,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
     this.touch(sessionId, handle);
     // Whichever run delivers this message, its next settled checkpoint
-    // records the turn as covered (plan 0147).
+    // records the turn as covered (plan 0147). A steered message that an
+    // interrupt then clears from Pi's queue is counted as covered too: an
+    // interrupt is a deliberate stop, which is never reported as unfinished.
+    // A crash loses this in-memory list, so crash-lost turns stay uncovered.
     if (turnId !== undefined) handle.unackedTurnIds.push(turnId);
 
     if (handle.running && !handle.needsFreshPromptAfterInterrupt) {

@@ -116,15 +116,6 @@ CREATE TABLE IF NOT EXISTS session_conversation_entries (
   PRIMARY KEY (workspace_id, session_id, seq),
   UNIQUE (workspace_id, session_id, entry_id)
 );
--- Which runtime turns' user messages a saved checkpoint includes (plan 0147):
--- the settled turn and any steered into it. A closed turn missing here never
--- reached the saved conversation.
-CREATE TABLE IF NOT EXISTS session_conversation_turns (
-  workspace_id TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  turn_id TEXT NOT NULL,
-  PRIMARY KEY (workspace_id, session_id, turn_id)
-);
 `;
 
 const INDEXES = `
@@ -277,6 +268,7 @@ export class EventStore implements SessionEventStore {
     ensureWorkspaceIdColumn(this.db);
     ensureOpenModelRequestStartIdsColumn(this.db);
     ensureRuntimeTurnCloseReasonColumn(this.db);
+    ensureConversationTurnsTable(this.db);
     ensureIdempotencyResourceColumns(this.db);
     this.db.exec(INDEXES);
     this.appendStmt = this.db.prepare(
@@ -1451,6 +1443,29 @@ function ensureOpenModelRequestStartIdsColumn(db: DatabaseSync): void {
   db.exec(
     "ALTER TABLE pending_runtime_turns ADD COLUMN open_model_request_start_ids TEXT NOT NULL DEFAULT '[]'",
   );
+}
+
+// Which runtime turns' user messages a saved checkpoint includes (plan 0147):
+// the settled turn and any steered into it. A closed turn missing here never
+// reached the saved conversation. Conversations saved before this table
+// existed are backfilled from each entry's checkpoint turn, so their settled
+// turns are not reported as unfinished (steered turns of that period cannot be
+// recovered and may be reported once).
+function ensureConversationTurnsTable(db: DatabaseSync): void {
+  const exists = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_conversation_turns'")
+    .get();
+  if (exists !== undefined) return;
+  db.exec(`
+    CREATE TABLE session_conversation_turns (
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, session_id, turn_id)
+    );
+    INSERT INTO session_conversation_turns (workspace_id, session_id, turn_id)
+      SELECT DISTINCT workspace_id, session_id, turn_id FROM session_conversation_entries;
+  `);
 }
 
 // Why a turn closed (plan 0147): a deliberately interrupted turn is not

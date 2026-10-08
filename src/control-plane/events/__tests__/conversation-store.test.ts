@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { createSingleDatabaseRuntimeEventCoordinator } from "../../deployment-runtime-event-coordinator.ts";
 import { EventStore } from "../store.ts";
@@ -263,6 +264,42 @@ describe("conversation store", () => {
     });
 
     expect(store.loadConversation(WORKSPACE_ID, SESSION_ID).unfinished).toEqual([]);
+  });
+
+  it("backfills turn coverage for conversations saved before coverage was recorded", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-coverage-"));
+    try {
+      const path = join(dir, "events.sqlite");
+      const first = EventStore.open(path);
+      const now = new Date().toISOString();
+      const message: PersistedSessionEvent = {
+        id: "sevt_saved", workspace_id: WORKSPACE_ID, session_id: SESSION_ID, type: "user.message",
+        processed_at: now, payload: { content: [{ type: "text", text: "saved" }] }, created_at: now,
+      };
+      first.appendBatchWithRuntimeChanges([message], {
+        acceptedTurns: [{
+          workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID, ownerId: "owner_a",
+          ownerGeneration: 1, leaseExpiresAt: now, triggerEventIds: [message.id], now,
+        }],
+      });
+      first.appendBatchWithRuntimeChanges([], {
+        closedTurns: [{
+          workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID, ownerId: "owner_a",
+          ownerGeneration: 1, reason: "completed", state: "completed", now,
+        }],
+        conversationCheckpoints: [checkpoint([entry("e1")])], // no coveredTurnIds, as before
+      });
+      // Model a database written before the coverage table existed.
+      const raw = new DatabaseSync(path);
+      raw.exec("DROP TABLE session_conversation_turns");
+      raw.close();
+
+      const reopened = EventStore.open(path);
+
+      expect(reopened.loadConversation(WORKSPACE_ID, SESSION_ID).unfinished).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("keeps the conversation across a reopen of a file-backed store", () => {
