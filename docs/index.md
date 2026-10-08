@@ -99,8 +99,9 @@ Agents product parity remains tracked in [PARITY.md](../PARITY.md).
   with a guided terminal flow, no secret leakage, and separate cold-image
   accounting.
 - [events/service.ts god-class split](plans/0146-events-service-split.md) —
-  #164: shared `PendingActionStore` (Slice 1, landed), then custom-tool and
-  tool-confirmation collaborators (Slice 2); M2's first item in 0145.
+  #164: shared `PendingActionStore` (Slice 1) and the custom-tool and
+  tool-confirmation collaborators (Slice 2), both landed; M2's first item in
+  0145.
 - [Road to external testers](plans/0145-road-to-external-testers.md) —
   sequences the remaining pre-v1 work into releases (0.2.0 trust, 0.3.0
   capability, hardening), the decisions that need ADRs, and the gate for

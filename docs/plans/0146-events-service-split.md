@@ -16,11 +16,23 @@ Renumbered 0146 and picked up as the first item of
 - **Slice 1 (`PendingActionStore`): landed** against `main` at `c7691e5`. The
   July commits applied cleanly; no assertion changed (one test's
   private-state accessor follows the map into the store).
-- **Slice 2: not started.** Every `file:line` below is against `40917ed`
-  (July) and is stale: `service.ts` has since gained per-task post-idle
-  tracking (#240), the Pi 0.85 runner changes (#239) and the steer path
-  (#245/#255). Re-confirm each reference before editing. The §5.1 (b)/(c)
-  decision is still the gate.
+- **§5.1 decided: (b)** (maintainer, 2026-10-08). The claim methods move
+  as-is and `claimTurnForTerminalization` is injected; it stays in
+  `service.ts` because crash recovery uses it too.
+- **Slice 2: landed** as `CustomToolActions` (`custom-tool-actions.ts`) and
+  `ToolConfirmations` (`tool-confirmations.ts`), extracted together, with
+  their shared dependencies in `tool-action-deps.ts`.
+  - All 22 moved methods are byte-identical to their `service.ts` originals
+    (checked mechanically). Collaborators expose same-named fields bound to
+    the service's objects, so no body changed.
+  - `service.ts` went from 3080 lines (before slice 1) to 1851.
+  - New regressions cover the lifecycle-guard dependency (§4.1): a late
+    custom-tool use after archive and an ask-gated tool use after delete are
+    dropped. Both fail if the collaborators get unshared sets. The
+    release-close dependency is already caught by *"does not keep stale
+    requires_action IDs after a runtime-side tool failure"*.
+  - The `file:line` references below are against `40917ed` (July) and are
+    historical.
 - **Out of scope here, now known to hurt:** runtime turn ownership in
   `runRuntimePrompts` and `PiSessionRunner.runOnSession` (#260, #254). That is
   the slice after this one, and it should be shaped together with the session

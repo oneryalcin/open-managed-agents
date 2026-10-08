@@ -2,12 +2,10 @@ import {
   type ManagedAgentsContentBlock,
   type ListSessionEventsResponse,
   type ManagedAgentsEvent,
-  type ManagedAgentsUserCustomToolResultEventInput,
   type ManagedAgentsUserEventInput,
-  type ManagedAgentsUserToolConfirmationEventInput,
   type SendSessionEventsRequest,
 } from "../../types/events.ts";
-import { ApiError, invalidRequest, notFound, rateLimited, toApiErrorBody } from "../errors.ts";
+import { ApiError, notFound, rateLimited, toApiErrorBody } from "../errors.ts";
 import { log } from "../logging.ts";
 import {
   idempotencyCompletion,
@@ -40,15 +38,8 @@ import type {
   ListSessionEventsOptions,
   PendingRuntimeActionRecord,
   PendingRuntimeTurnRecord,
-  RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
   RuntimeEventTranslator,
-  RuntimeMcpConnectionFailedEvent,
-  RuntimeMcpToolResultEvent,
-  RuntimeMcpToolUseEvent,
-  RuntimeMcpToolWithModelEndEvent,
-  RuntimeToolPermissionUseEvent,
-  RuntimeToolPermissionWithModelEndEvent,
   PersistedSessionEvent,
   SessionEventBroadcaster,
   SessionEventStore,
@@ -68,73 +59,40 @@ import {
   sessionNotDeletable,
   sessionScopeKey,
 } from "./session-guards.ts";
-import { PendingActionStore } from "./pending-actions.ts";
+import { CustomToolActions, type CustomToolResultClaim } from "./custom-tool-actions.ts";
+import type { ToolActionDeps } from "./tool-action-deps.ts";
+import {
+  ToolConfirmations,
+  type ToolConfirmationCommit,
+  type ToolConfirmationReplay,
+  type ToolConfirmationTerminalize,
+} from "./tool-confirmations.ts";
 import {
   eventPayload,
-  hasToolResultForToolUseId,
-  lostMcpToolConfirmationPayload,
-  lostToolConfirmationPayload,
   parseSendRequest,
-  sameCustomToolResult,
-  sameCustomToolResultPayload,
-  sameToolConfirmation,
   toSendResponseEvent,
 } from "./request.ts";
 import {
-  actionClosedWithoutResult,
   hasTerminalIdleDraft,
-  isAcknowledgedInFlightAction,
   isRuntimeCustomToolUseEvent,
-  isRuntimeLeaseExpired,
   isRuntimeMcpConnectionFailedEvent,
   isRuntimeMcpToolResultEvent,
   isRuntimeMcpToolUseEvent,
   isRuntimeMcpToolWithModelEndEvent,
   isRuntimeToolPermissionUseEvent,
   isRuntimeToolPermissionWithModelEndEvent,
-  isRuntimeTurnClosed,
   leaseExpiresAt,
   runtimeErrorDraft,
   runtimeLeaseRetryDelayMs,
-  runtimeTurnStillOwned,
   textFromContent,
-  toError,
   unique,
 } from "./runtime-helpers.ts";
-import {
-  materializeMcpConnectionFailedRows,
-  materializeMcpToolResultRows,
-  materializeMcpToolUseRows,
-  materializeToolPermissionUseRows,
-  toolPermissionRuntimeChanges,
-} from "./tool-persistence.ts";
 
-// Upper bound on how long DELETE waits for post-idle runtime work (output
-// collection, turn close) before falling back to the running-session 400.
 const POST_IDLE_SETTLE_TIMEOUT_MS = 10_000;
 
 /** One live runtime task; postIdle = it published its terminal idle. */
 interface RuntimeTaskHandle {
   postIdle: boolean;
-}
-
-interface ToolConfirmationCommit {
-  event: ManagedAgentsUserToolConfirmationEventInput;
-  toolUseId: string;
-  commit: () => void;
-  row?: PersistedSessionEvent;
-}
-
-interface ToolConfirmationReplay {
-  event: ManagedAgentsUserToolConfirmationEventInput;
-  row: PersistedSessionEvent;
-}
-
-interface ToolConfirmationTerminalize {
-  event: ManagedAgentsUserToolConfirmationEventInput;
-  toolUseId: string;
-  action: PendingRuntimeActionRecord;
-  row?: PersistedSessionEvent;
 }
 
 interface RuntimePrompt {
@@ -144,27 +102,6 @@ interface RuntimePrompt {
   ownerId: string;
   ownerGeneration: number;
 }
-
-type CustomToolResultClaim =
-  | {
-      kind: "live";
-      event: ManagedAgentsUserCustomToolResultEventInput;
-      customToolUseId: string;
-      commit: () => void;
-      action?: PendingRuntimeActionRecord;
-    }
-  | {
-      kind: "duplicate";
-      event: ManagedAgentsUserCustomToolResultEventInput;
-      customToolUseId: string;
-      row?: PersistedSessionEvent;
-    }
-  | {
-      kind: "terminalize";
-      event: ManagedAgentsUserCustomToolResultEventInput;
-      customToolUseId: string;
-      action: PendingRuntimeActionRecord;
-    };
 
 export class DefaultSessionEventsService implements SessionEventsService {
   private readonly maxPendingRuntimeTurnsPerWorkspace: number | undefined;
@@ -180,9 +117,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly runtimeEventCoordinator:
     | DeploymentRuntimeEventCoordinator
     | undefined;
-  private readonly pendingCustomToolActions = new PendingActionStore(
-    (workspaceId, sessionId) => this.flushPendingActions(workspaceId, sessionId),
-  );
+  private readonly customTools: CustomToolActions;
+  private readonly toolConfirmations: ToolConfirmations;
   private readonly closedSessions = new Set<string>();
   private readonly deletedSessions = new Set<string>();
   private readonly activeRuntimeTasks = new Map<string, number>();
@@ -194,21 +130,6 @@ export class DefaultSessionEventsService implements SessionEventsService {
   // the session is running and gets the 400 without waiting.
   private readonly postIdleRuntimeTasks = new Map<string, number>();
   private readonly runtimeSettledWaiters = new Map<string, Array<() => void>>();
-  private readonly interruptedCustomToolActions = new Map<string, Set<string>>();
-  private readonly pendingToolConfirmations = new PendingActionStore(
-    (workspaceId, sessionId) => this.flushPendingActions(workspaceId, sessionId),
-  );
-  private readonly interruptedToolConfirmations = new Map<string, Set<string>>();
-  private readonly completedToolConfirmations = new Map<
-    string,
-    {
-      workspaceId: WorkspaceId;
-      sessionId: string;
-      result: "allow" | "deny";
-      denyMessage?: string | null;
-      row: PersistedSessionEvent;
-    }
-  >();
   private readonly archivingSessions = new Map<string, number>();
   private readonly recoveryTimers = new Map<
     WorkspaceId,
@@ -245,6 +166,24 @@ export class DefaultSessionEventsService implements SessionEventsService {
     this.runtimeEventCoordinator = runtime?.runtimeEventCoordinator;
     this.ownerId = runtime?.ownerId ?? `owner_${newRequestId()}`;
     this.leaseTtlMs = runtime?.leaseTtlMs ?? 120_000;
+    const toolActionDeps: ToolActionDeps = {
+      events: this.events,
+      broadcaster: this.broadcaster,
+      runtimeRunner: this.runtimeRunner,
+      runtimeTranslator: this.runtimeTranslator,
+      ownerId: this.ownerId,
+      closedSessions: this.closedSessions,
+      deletedSessions: this.deletedSessions,
+      claimTurnForTerminalization: (turn) => this.claimTurnForTerminalization(turn),
+      closeReleasedRuntimeAction: (workspaceId, sessionId, actionId, reason) =>
+        this.closeReleasedRuntimeAction(workspaceId, sessionId, actionId, reason),
+      persistRuntimeDrafts: (workspaceId, sessionId, drafts) =>
+        this.persistRuntimeDrafts(workspaceId, sessionId, drafts),
+      flushPendingActions: (workspaceId, sessionId) =>
+        this.flushPendingActions(workspaceId, sessionId),
+    };
+    this.customTools = new CustomToolActions(toolActionDeps);
+    this.toolConfirmations = new ToolConfirmations(toolActionDeps);
   }
 
   send(
@@ -324,12 +263,12 @@ export class DefaultSessionEventsService implements SessionEventsService {
     requireActiveSession(this.sessions, workspaceId, sessionId);
     const req = parseSendRequest(input);
     this.enforceRuntimeTurnAdmission(workspaceId, req.events);
-    const customToolResultClaims = this.claimCustomToolResults(
+    const customToolResultClaims = this.customTools.claimCustomToolResults(
       workspaceId,
       sessionId,
       req.events,
     );
-    const toolConfirmationClaims = this.claimToolConfirmations(
+    const toolConfirmationClaims = this.toolConfirmations.claimToolConfirmations(
       workspaceId,
       sessionId,
       req.events,
@@ -400,14 +339,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
             runtimeChanges,
           )
         : [];
-    const terminalRows = this.customToolTerminalizationRows(
+    const terminalRows = this.customTools.customToolTerminalizationRows(
       workspaceId,
       sessionId,
       customToolResultClaims,
       now,
       runtimeChanges,
     );
-    const toolConfirmationTerminalRows = this.toolConfirmationTerminalizationRows(
+    const toolConfirmationTerminalRows = this.toolConfirmations.toolConfirmationTerminalizationRows(
       workspaceId,
       sessionId,
       toolConfirmationClaims,
@@ -463,10 +402,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
       committedToolConfirmations.length > 0;
     if (hasCommittedRuntimeInputs) {
       for (const { customToolUseId } of liveCustomToolResultClaims) {
-        this.pendingCustomToolActions.remove(workspaceId, sessionId, customToolUseId);
+        this.customTools.pendingCustomToolActions.remove(workspaceId, sessionId, customToolUseId);
       }
       for (const { toolUseId } of committedToolConfirmations) {
-        this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
+        this.toolConfirmations.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
       }
       this.persistRuntimeDrafts(workspaceId, sessionId, [
         { type: "session.status_running", payload: {} },
@@ -496,7 +435,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             error,
           });
         }
-        this.completedToolConfirmations.set(claim.event.tool_use_id, {
+        this.toolConfirmations.completedToolConfirmations.set(claim.event.tool_use_id, {
           workspaceId,
           sessionId,
           result: claim.event.result,
@@ -522,26 +461,26 @@ export class DefaultSessionEventsService implements SessionEventsService {
     events: SendSessionEventsRequest["events"],
   ): void {
     if (!events.some((event) => event.type === "user.interrupt")) return;
-    this.blockInterruptedCustomToolActions(
+    this.customTools.blockInterruptedCustomToolActions(
       workspaceId,
       sessionId,
       this.closeInterruptedRuntimeActions(
         workspaceId,
         sessionId,
         unique([
-          ...this.pendingCustomToolActions.clear(workspaceId, sessionId),
+          ...this.customTools.pendingCustomToolActions.clear(workspaceId, sessionId),
           ...this.pendingRuntimeActionIds(workspaceId, sessionId, "custom_tool"),
         ]),
       ),
     );
-    this.blockInterruptedToolConfirmations(
+    this.toolConfirmations.blockInterruptedToolConfirmations(
       workspaceId,
       sessionId,
       this.closeInterruptedRuntimeActions(
         workspaceId,
         sessionId,
         unique([
-          ...this.pendingToolConfirmations.clear(workspaceId, sessionId),
+          ...this.toolConfirmations.pendingToolConfirmations.clear(workspaceId, sessionId),
           ...this.pendingRuntimeActionIds(
             workspaceId,
             sessionId,
@@ -652,105 +591,6 @@ export class DefaultSessionEventsService implements SessionEventsService {
       });
     }
     return prompts;
-  }
-
-  private customToolTerminalizationRows(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    claims: readonly CustomToolResultClaim[],
-    now: string,
-    runtimeChanges: EventStoreRuntimeChanges,
-  ): PersistedSessionEvent[] {
-    const terminalizedTurnIds = new Set<string>();
-    const drafts: EventDraft[] = [];
-    for (const claim of claims) {
-      if (claim.kind !== "terminalize") continue;
-      const turn = claim.action.turn;
-      (runtimeChanges.acknowledgedActions ??= []).push({
-        workspaceId,
-        sessionId,
-        actionId: claim.customToolUseId,
-        now,
-      });
-      if (terminalizedTurnIds.has(claim.action.turn_id)) continue;
-      terminalizedTurnIds.add(claim.action.turn_id);
-      (runtimeChanges.closedTurns ??= []).push({
-        workspaceId,
-        sessionId,
-        turnId: claim.action.turn_id,
-        ownerId: turn.owner_id,
-        ownerGeneration: turn.owner_generation,
-        reason: "terminalized",
-        state: "terminalized",
-        now,
-      });
-      drafts.push(
-        ...syntheticSpanModelRequestEndDrafts(
-          turn.open_model_request_start_ids,
-        ),
-        {
-          type: "session.error",
-          payload: {
-            message: `Custom tool result ${claim.customToolUseId} was accepted, but runtime state is no longer available and the custom tool execution outcome is unknown.`,
-          },
-        },
-        {
-          type: "session.status_idle",
-          payload: { stop_reason: { type: "end_turn" } },
-        },
-      );
-    }
-    if (drafts.length === 0) return [];
-    return materializePersistedEvents(workspaceId, sessionId, drafts, now);
-  }
-
-  private toolConfirmationTerminalizationRows(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    claims: readonly (ToolConfirmationCommit | ToolConfirmationReplay | ToolConfirmationTerminalize)[],
-    now: string,
-    runtimeChanges: EventStoreRuntimeChanges,
-  ): PersistedSessionEvent[] {
-    const terminalizedTurnIds = new Set<string>();
-    const drafts: EventDraft[] = [];
-    for (const claim of claims) {
-      if (!("action" in claim)) continue;
-      const turn = claim.action.turn;
-      (runtimeChanges.acknowledgedActions ??= []).push({
-        workspaceId,
-        sessionId,
-        actionId: claim.toolUseId,
-        now,
-      });
-      if (terminalizedTurnIds.has(claim.action.turn_id)) continue;
-      terminalizedTurnIds.add(claim.action.turn_id);
-      (runtimeChanges.closedTurns ??= []).push({
-        workspaceId,
-        sessionId,
-        turnId: claim.action.turn_id,
-        ownerId: turn.owner_id,
-        ownerGeneration: turn.owner_generation,
-        reason: "terminalized",
-        state: "terminalized",
-        now,
-      });
-      drafts.push(
-        ...syntheticSpanModelRequestEndDrafts(
-          turn.open_model_request_start_ids,
-        ),
-        this.lostToolConfirmationResultDraft(
-          workspaceId,
-          sessionId,
-          claim.toolUseId,
-        ),
-        {
-          type: "session.status_idle",
-          payload: { stop_reason: { type: "end_turn" } },
-        },
-      );
-    }
-    if (drafts.length === 0) return [];
-    return materializePersistedEvents(workspaceId, sessionId, drafts, now);
   }
 
   archiveSessionRowAfterPreflight(
@@ -870,11 +710,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
   ): Promise<void> {
     requireExistingSession(this.sessions, workspaceId, sessionId);
     this.closedSessions.add(sessionScopeKey(workspaceId, sessionId));
-    this.pendingCustomToolActions.clear(workspaceId, sessionId);
-    this.pendingToolConfirmations.clear(workspaceId, sessionId);
-    this.clearCompletedToolConfirmations(workspaceId, sessionId);
-    this.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
-    this.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
+    this.customTools.pendingCustomToolActions.clear(workspaceId, sessionId);
+    this.toolConfirmations.pendingToolConfirmations.clear(workspaceId, sessionId);
+    this.toolConfirmations.clearCompletedToolConfirmations(workspaceId, sessionId);
+    this.customTools.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
+    this.toolConfirmations.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
     this.closePendingRuntimeTurnsForSession(workspaceId, sessionId, "archived", {
       includeTerminatedStatus:
         !this.hasSessionEvent(workspaceId, sessionId, "session.status_terminated"),
@@ -888,11 +728,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
     sessionId: string,
   ): Promise<void> {
     this.closedSessions.add(sessionScopeKey(workspaceId, sessionId));
-    this.pendingCustomToolActions.clear(workspaceId, sessionId);
-    this.pendingToolConfirmations.clear(workspaceId, sessionId);
-    this.clearCompletedToolConfirmations(workspaceId, sessionId);
-    this.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
-    this.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
+    this.customTools.pendingCustomToolActions.clear(workspaceId, sessionId);
+    this.toolConfirmations.pendingToolConfirmations.clear(workspaceId, sessionId);
+    this.toolConfirmations.clearCompletedToolConfirmations(workspaceId, sessionId);
+    this.customTools.interruptedCustomToolActions.delete(sessionScopeKey(workspaceId, sessionId));
+    this.toolConfirmations.interruptedToolConfirmations.delete(sessionScopeKey(workspaceId, sessionId));
     this.closePendingRuntimeTurnsForSession(workspaceId, sessionId, "deleted");
     this.persistLifecycleDrafts(workspaceId, sessionId, [
       { type: "session.deleted", payload: {} },
@@ -1319,8 +1159,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
     this.activeRuntimeTasks.delete(key);
     this.wakeSettleWaitersUnlessAllPostIdle(key);
-    this.interruptedCustomToolActions.delete(key);
-    this.interruptedToolConfirmations.delete(key);
+    this.customTools.interruptedCustomToolActions.delete(key);
+    this.toolConfirmations.interruptedToolConfirmations.delete(key);
     this.retireLifecycleGuardsIfIdle(workspaceId, sessionId);
   }
 
@@ -1407,7 +1247,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           );
           for await (const piEvent of source) {
             if (isRuntimeCustomToolUseEvent(piEvent)) {
-              this.persistCustomToolUse(
+              this.customTools.persistCustomToolUse(
                 workspaceId,
                 sessionId,
                 prompt.turnId,
@@ -1418,7 +1258,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
               continue;
             }
             if (isRuntimeToolPermissionUseEvent(piEvent)) {
-              this.persistToolPermissionUse(
+              this.toolConfirmations.persistToolPermissionUse(
                 workspaceId,
                 sessionId,
                 prompt.turnId,
@@ -1434,7 +1274,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
                   activeOpenModelRequestStartIds.length - 1
                 ];
               const closedModelRequestStartId =
-                this.persistToolPermissionUseWithModelEnd(
+                this.toolConfirmations.persistToolPermissionUseWithModelEnd(
                   workspaceId,
                   sessionId,
                   prompt.turnId,
@@ -1449,7 +1289,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
               continue;
             }
             if (isRuntimeMcpToolUseEvent(piEvent)) {
-              this.persistMcpToolUse(
+              this.toolConfirmations.persistMcpToolUse(
                 workspaceId,
                 sessionId,
                 prompt.turnId,
@@ -1465,7 +1305,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
                   activeOpenModelRequestStartIds.length - 1
                 ];
               const closedModelRequestStartId =
-                this.persistMcpToolUseWithModelEnd(
+                this.toolConfirmations.persistMcpToolUseWithModelEnd(
                   workspaceId,
                   sessionId,
                   prompt.turnId,
@@ -1480,7 +1320,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
               continue;
             }
             if (isRuntimeMcpToolResultEvent(piEvent)) {
-              this.persistMcpToolResult(
+              this.toolConfirmations.persistMcpToolResult(
                 workspaceId,
                 sessionId,
                 prompt.turnId,
@@ -1491,7 +1331,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
               continue;
             }
             if (isRuntimeMcpConnectionFailedEvent(piEvent)) {
-              this.persistMcpConnectionFailed(
+              this.toolConfirmations.persistMcpConnectionFailed(
                 workspaceId,
                 sessionId,
                 prompt.turnId,
@@ -1972,945 +1812,18 @@ export class DefaultSessionEventsService implements SessionEventsService {
     persistAndPublish(this.events, this.broadcaster, rows);
   }
 
-  private persistCustomToolUse(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
-    ownerId: string,
-    ownerGeneration: number,
-    event: RuntimeCustomToolUseEvent,
-  ): void {
-    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    try {
-      const now = new Date().toISOString();
-      const useRows = materializePersistedEvents(
-        workspaceId,
-        sessionId,
-        [
-          {
-            type: "agent.custom_tool_use",
-            payload: {
-              name: event.name,
-              input: event.input,
-            },
-          },
-        ],
-        now,
-      );
-      event.bindCustomToolUseId(useRows[0].id, (reason) => {
-        if (reason !== undefined) {
-          this.closeReleasedRuntimeAction(
-            workspaceId,
-            sessionId,
-            useRows[0].id,
-            reason,
-          );
-        }
-        this.pendingCustomToolActions.remove(workspaceId, sessionId, useRows[0].id);
-      });
-      persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
-        openedActions: [
-          {
-            workspaceId,
-            sessionId,
-            turnId,
-            actionId: useRows[0].id,
-            actionType: "custom_tool",
-            now,
-          },
-        ],
-        turnStates: [
-          {
-            workspaceId,
-            sessionId,
-            turnId,
-            ownerId,
-            ownerGeneration,
-            state: "paused",
-            now,
-          },
-        ],
-      });
-      this.pendingCustomToolActions.add(workspaceId, sessionId, useRows[0].id);
-    } catch (error) {
-      event.rejectCustomToolUse(toError(error));
-      throw error;
-    }
-  }
-
-  private persistToolPermissionUse(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
-    ownerId: string,
-    ownerGeneration: number,
-    event: RuntimeToolPermissionUseEvent,
-  ): void {
-    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    try {
-      const now = new Date().toISOString();
-      const useRows = materializeToolPermissionUseRows({
-        workspaceId,
-        sessionId,
-        event,
-        now,
-        onReleased: (toolUseId, reason) => {
-          if (reason !== undefined) {
-            this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
-          }
-          this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
-        },
-      });
-      persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
-        ...toolPermissionRuntimeChanges({
-          workspaceId,
-          sessionId,
-          turnId,
-          ownerId,
-          ownerGeneration,
-          evaluatedPermission: event.evaluatedPermission,
-          toolUseId: useRows[0].id,
-          now,
-        }),
-      });
-      if (event.evaluatedPermission === "ask") {
-        this.pendingToolConfirmations.add(workspaceId, sessionId, useRows[0].id);
-      }
-    } catch (error) {
-      event.rejectToolUse(toError(error));
-      throw error;
-    }
-  }
-
-  private persistToolPermissionUseWithModelEnd(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
-    ownerId: string,
-    ownerGeneration: number,
-    event: RuntimeToolPermissionWithModelEndEvent,
-    closingModelRequestStartId: string | undefined,
-  ): string | undefined {
-    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) {
-      return undefined;
-    }
-    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) {
-      return undefined;
-    }
-    const permission = event.permissionUse;
-    try {
-      const now = new Date().toISOString();
-      const useRows = materializeToolPermissionUseRows({
-        workspaceId,
-        sessionId,
-        event: permission,
-        now,
-        onReleased: (toolUseId, reason) => {
-          if (reason !== undefined) {
-            this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
-          }
-          this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
-        },
-      });
-      const suppressedPiToolCallIds = new Set([
-        permission.piToolCallId,
-        ...event.suppressedPiToolCallIds,
-      ]);
-      const transcriptDrafts = this.runtimeTranslator?.(event.messageEnd, {
-        customToolNames: this.runtimeRunner?.customToolNames?.(
-          workspaceId,
-          sessionId,
-        ),
-        publicToolUseIdForPiToolCallId: (piToolCallId) =>
-          this.runtimeRunner?.publicToolUseIdForPiToolCallId?.(
-            workspaceId,
-            sessionId,
-            piToolCallId,
-        ),
-        suppressPiToolUse: (piToolCallId) =>
-          suppressedPiToolCallIds.has(piToolCallId) ||
-          this.runtimeRunner?.suppressPiToolUse?.(
-            workspaceId,
-            sessionId,
-            piToolCallId,
-          ) === true,
-      }) ?? [];
-      const spanEndDrafts = spanModelRequestEndDraft(
-        event.messageEnd,
-        closingModelRequestStartId,
-      );
-      const remainingRows = materializePersistedEvents(
-        workspaceId,
-        sessionId,
-        [...transcriptDrafts, ...spanEndDrafts],
-        now,
-      );
-      persistRuntimeChangesAndPublish(
-        this.events,
-        this.broadcaster,
-        [...useRows, ...remainingRows],
-        {
-          ...toolPermissionRuntimeChanges({
-            workspaceId,
-            sessionId,
-            turnId,
-            ownerId,
-            ownerGeneration,
-            evaluatedPermission: permission.evaluatedPermission,
-            toolUseId: useRows[0].id,
-            now,
-          }),
-          closedModelRequestStarts:
-            spanEndDrafts.length === 0 ||
-            closingModelRequestStartId === undefined
-              ? []
-              : [
-                  {
-                    workspaceId,
-                    sessionId,
-                    turnId,
-                    ownerId,
-                    ownerGeneration,
-                    startEventId: closingModelRequestStartId,
-                    now,
-                  },
-                ],
-        },
-      );
-      if (permission.evaluatedPermission === "ask") {
-        this.pendingToolConfirmations.add(workspaceId, sessionId, useRows[0].id);
-      }
-      return spanEndDrafts.length > 0 ? closingModelRequestStartId : undefined;
-    } catch (error) {
-      permission.rejectToolUse(toError(error));
-      throw error;
-    }
-  }
-
   // ── MCP persistence (plan 0122 §4.4/§4.5) — mirrors the tool-permission
   // pair: sevt_* id bound on persist (before the tool executes), ask-path
   // opens a tool_confirmation action, allow-path continues running.
-
-  private persistMcpToolUse(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
-    ownerId: string,
-    ownerGeneration: number,
-    event: RuntimeMcpToolUseEvent,
-  ): void {
-    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    try {
-      const now = new Date().toISOString();
-      const useRows = materializeMcpToolUseRows({
-        workspaceId,
-        sessionId,
-        event,
-        now,
-        onReleased: (toolUseId, reason) => {
-          if (reason !== undefined) {
-            this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
-          }
-          this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
-        },
-      });
-      persistRuntimeChangesAndPublish(this.events, this.broadcaster, useRows, {
-        ...toolPermissionRuntimeChanges({
-          workspaceId,
-          sessionId,
-          turnId,
-          ownerId,
-          ownerGeneration,
-          evaluatedPermission: event.evaluatedPermission,
-          toolUseId: useRows[0].id,
-          now,
-        }),
-      });
-      if (event.evaluatedPermission === "ask") {
-        this.pendingToolConfirmations.add(workspaceId, sessionId, useRows[0].id);
-      }
-    } catch (error) {
-      event.rejectToolUse(toError(error));
-      throw error;
-    }
-  }
-
-  private persistMcpToolUseWithModelEnd(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
-    ownerId: string,
-    ownerGeneration: number,
-    event: RuntimeMcpToolWithModelEndEvent,
-    closingModelRequestStartId: string | undefined,
-  ): string | undefined {
-    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) {
-      return undefined;
-    }
-    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) {
-      return undefined;
-    }
-    const mcpToolUse = event.mcpToolUse;
-    try {
-      const now = new Date().toISOString();
-      const useRows = materializeMcpToolUseRows({
-        workspaceId,
-        sessionId,
-        event: mcpToolUse,
-        now,
-        onReleased: (toolUseId, reason) => {
-          if (reason !== undefined) {
-            this.closeReleasedRuntimeAction(workspaceId, sessionId, toolUseId, reason);
-          }
-          this.pendingToolConfirmations.remove(workspaceId, sessionId, toolUseId);
-        },
-      });
-      const suppressedPiToolCallIds = new Set([
-        mcpToolUse.piToolCallId,
-        ...event.suppressedPiToolCallIds,
-      ]);
-      const transcriptDrafts = this.runtimeTranslator?.(event.messageEnd, {
-        customToolNames: this.runtimeRunner?.customToolNames?.(
-          workspaceId,
-          sessionId,
-        ),
-        publicToolUseIdForPiToolCallId: (piToolCallId) =>
-          this.runtimeRunner?.publicToolUseIdForPiToolCallId?.(
-            workspaceId,
-            sessionId,
-            piToolCallId,
-          ),
-        suppressPiToolUse: (piToolCallId) =>
-          suppressedPiToolCallIds.has(piToolCallId) ||
-          this.runtimeRunner?.suppressPiToolUse?.(
-            workspaceId,
-            sessionId,
-            piToolCallId,
-          ) === true,
-      }) ?? [];
-      const spanEndDrafts = spanModelRequestEndDraft(
-        event.messageEnd,
-        closingModelRequestStartId,
-      );
-      const remainingRows = materializePersistedEvents(
-        workspaceId,
-        sessionId,
-        [...transcriptDrafts, ...spanEndDrafts],
-        now,
-      );
-      persistRuntimeChangesAndPublish(
-        this.events,
-        this.broadcaster,
-        [...useRows, ...remainingRows],
-        {
-          ...toolPermissionRuntimeChanges({
-            workspaceId,
-            sessionId,
-            turnId,
-            ownerId,
-            ownerGeneration,
-            evaluatedPermission: mcpToolUse.evaluatedPermission,
-            toolUseId: useRows[0].id,
-            now,
-          }),
-          closedModelRequestStarts:
-            spanEndDrafts.length === 0 ||
-            closingModelRequestStartId === undefined
-              ? []
-              : [
-                  {
-                    workspaceId,
-                    sessionId,
-                    turnId,
-                    ownerId,
-                    ownerGeneration,
-                    startEventId: closingModelRequestStartId,
-                    now,
-                  },
-                ],
-        },
-      );
-      if (mcpToolUse.evaluatedPermission === "ask") {
-        this.pendingToolConfirmations.add(workspaceId, sessionId, useRows[0].id);
-      }
-      return spanEndDrafts.length > 0 ? closingModelRequestStartId : undefined;
-    } catch (error) {
-      mcpToolUse.rejectToolUse(toError(error));
-      throw error;
-    }
-  }
-
-  /** Terminal result for a persisted agent.mcp_tool_use — no action state. */
-  private persistMcpToolResult(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
-    ownerId: string,
-    ownerGeneration: number,
-    event: RuntimeMcpToolResultEvent,
-  ): void {
-    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    const now = new Date().toISOString();
-    const rows = materializeMcpToolResultRows({
-      workspaceId,
-      sessionId,
-      now,
-      event,
-    });
-    persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
-      turnStates: [
-        {
-          workspaceId,
-          sessionId,
-          turnId,
-          ownerId,
-          ownerGeneration,
-          state: "running",
-          now,
-        },
-      ],
-    });
-  }
-
-  private persistMcpConnectionFailed(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    turnId: string,
-    ownerId: string,
-    ownerGeneration: number,
-    event: RuntimeMcpConnectionFailedEvent,
-  ): void {
-    if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-    const now = new Date().toISOString();
-    const rows = materializeMcpConnectionFailedRows({
-      workspaceId,
-      sessionId,
-      now,
-      event,
-    });
-    persistRuntimeChangesAndPublish(this.events, this.broadcaster, rows, {
-      turnStates: [
-        {
-          workspaceId,
-          sessionId,
-          turnId,
-          ownerId,
-          ownerGeneration,
-          state: "running",
-          now,
-        },
-      ],
-    });
-  }
-
-  private claimCustomToolResults(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    events: SendSessionEventsRequest["events"],
-  ): CustomToolResultClaim[] {
-    this.rejectAmbiguousCustomToolResultDuplicates(events);
-    const claims: CustomToolResultClaim[] = [];
-    let interruptedInBatch = false;
-    const runtimeResolvedInBatch = new Set<string>();
-    for (const event of events) {
-      if (event.type === "user.interrupt") {
-        interruptedInBatch = true;
-        continue;
-      }
-      if (event.type !== "user.custom_tool_result") continue;
-      if (
-        interruptedInBatch ||
-        this.interruptedCustomToolActions
-          .get(sessionScopeKey(workspaceId, sessionId))
-          ?.has(event.custom_tool_use_id) === true
-      ) {
-        throw notFound(`No pending custom tool call: ${event.custom_tool_use_id}`);
-      }
-      if (runtimeResolvedInBatch.has(event.custom_tool_use_id)) {
-        claims.push({
-          kind: "duplicate",
-          event,
-          customToolUseId: event.custom_tool_use_id,
-        });
-        continue;
-      }
-      const action = this.events.findRuntimeAction(
-        workspaceId,
-        sessionId,
-        event.custom_tool_use_id,
-      );
-      const prior = this.findPersistedCustomToolResult(
-        workspaceId,
-        sessionId,
-        event,
-      );
-      if (actionClosedWithoutResult(action)) {
-        throw notFound(`No pending custom tool call: ${event.custom_tool_use_id}`);
-      }
-      if (prior && action && isAcknowledgedInFlightAction(action)) {
-        claims.push({
-          kind: "duplicate",
-          event,
-          customToolUseId: event.custom_tool_use_id,
-          row: prior,
-        });
-        continue;
-      }
-      if (prior && action && !isRuntimeTurnClosed(action.turn.state)) {
-        if (
-          action.turn.owner_id !== this.ownerId &&
-          !isRuntimeLeaseExpired(action.turn.lease_expires_at)
-        ) {
-          throw runtimeTurnStillOwned(action.turn_id);
-        }
-        const claimed = this.claimTurnForTerminalization(action.turn);
-        if (!claimed) {
-          throw runtimeTurnStillOwned(action.turn_id);
-        }
-        claims.push({
-          kind: "terminalize",
-          event,
-          customToolUseId: event.custom_tool_use_id,
-          action: { ...action, turn: claimed },
-        });
-        continue;
-      }
-      if (prior) {
-        claims.push({
-          kind: "duplicate",
-          event,
-          customToolUseId: event.custom_tool_use_id,
-        });
-        continue;
-      }
-      if (
-        action &&
-        (action.turn.state === "completed" ||
-          action.turn.state === "terminalized")
-      ) {
-        throw invalidRequest(
-          `Custom tool result ${event.custom_tool_use_id} cannot be accepted because the runtime turn is already ${action.turn.state}`,
-        );
-      }
-      const commit = this.runtimeRunner?.claimCustomToolResult?.(
-        workspaceId,
-        sessionId,
-        event,
-      );
-      if (!commit && this.runtimeRunner?.claimCustomToolResult) {
-        if (action) {
-          if (
-            action.turn.owner_id !== this.ownerId &&
-            !isRuntimeLeaseExpired(action.turn.lease_expires_at)
-          ) {
-            throw runtimeTurnStillOwned(action.turn_id);
-          }
-          const claimed = this.claimTurnForTerminalization(action.turn);
-          if (!claimed) {
-            throw runtimeTurnStillOwned(action.turn_id);
-          }
-          claims.push({
-            kind: "terminalize",
-            event,
-            customToolUseId: event.custom_tool_use_id,
-            action: { ...action, turn: claimed },
-          });
-          continue;
-        }
-        throw notFound(`No pending custom tool call: ${event.custom_tool_use_id}`);
-      }
-      if (commit) {
-        runtimeResolvedInBatch.add(event.custom_tool_use_id);
-        claims.push({
-          kind: "live",
-          event,
-          customToolUseId: event.custom_tool_use_id,
-          commit,
-          action,
-        });
-      }
-    }
-    return claims;
-  }
-
-  private rejectAmbiguousCustomToolResultDuplicates(
-    events: SendSessionEventsRequest["events"],
-  ): void {
-    const seen = new Map<string, ManagedAgentsUserCustomToolResultEventInput>();
-    for (const event of events) {
-      if (event.type !== "user.custom_tool_result") continue;
-      const existing = seen.get(event.custom_tool_use_id);
-      if (!existing) {
-        seen.set(event.custom_tool_use_id, event);
-        continue;
-      }
-      if (sameCustomToolResult(existing, event)) continue;
-      throw invalidRequest(
-        `Custom tool result ${event.custom_tool_use_id} was already accepted with different content`,
-      );
-    }
-  }
-
-  private findPersistedCustomToolResult(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    event: ManagedAgentsUserCustomToolResultEventInput,
-  ): PersistedSessionEvent | undefined {
-    const rows = this.listCustomToolHistory(workspaceId, sessionId);
-    const row = rows.find(
-      (candidate) =>
-        candidate.type === "user.custom_tool_result" &&
-        candidate.payload.custom_tool_use_id === event.custom_tool_use_id,
-    );
-    if (!row) return undefined;
-    if (!sameCustomToolResultPayload(row.payload, event)) {
-      throw invalidRequest(
-        `Custom tool result ${event.custom_tool_use_id} was already accepted with different content`,
-      );
-    }
-    return row;
-  }
-
-  private listCustomToolHistory(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): PersistedSessionEvent[] {
-    const rows: PersistedSessionEvent[] = [];
-    let page: string | undefined;
-    do {
-      const result = this.events.listPage(workspaceId, sessionId, {
-        order: "asc",
-        limit: 1000,
-        page,
-        types: ["user.custom_tool_result"],
-      });
-      rows.push(...result.data);
-      page = result.next_page ?? undefined;
-    } while (page !== undefined);
-    return rows;
-  }
-
-  private claimToolConfirmations(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    events: SendSessionEventsRequest["events"],
-  ): Array<ToolConfirmationCommit | ToolConfirmationReplay | ToolConfirmationTerminalize> {
-    const claims: Array<
-      ToolConfirmationCommit | ToolConfirmationReplay | ToolConfirmationTerminalize
-    > = [];
-    let interruptedInBatch = false;
-    const seenToolUseIds = new Set<string>();
-    for (const event of events) {
-      if (event.type === "user.interrupt") {
-        interruptedInBatch = true;
-        continue;
-      }
-      if (event.type !== "user.tool_confirmation") continue;
-      if (seenToolUseIds.has(event.tool_use_id)) {
-        throw invalidRequest(
-          `\`events\` cannot contain duplicate user.tool_confirmation for ${event.tool_use_id}`,
-        );
-      }
-      seenToolUseIds.add(event.tool_use_id);
-      if (
-        interruptedInBatch ||
-        this.interruptedToolConfirmations
-          .get(sessionScopeKey(workspaceId, sessionId))
-          ?.has(event.tool_use_id) === true
-      ) {
-        throw notFound(`No pending tool confirmation: ${event.tool_use_id}`);
-      }
-      const completed = this.completedToolConfirmations.get(event.tool_use_id);
-      const persisted = this.findPersistedToolConfirmation(
-        workspaceId,
-        sessionId,
-        event,
-      );
-      const action = this.events.findRuntimeAction(
-        workspaceId,
-        sessionId,
-        event.tool_use_id,
-      );
-      if (actionClosedWithoutResult(action)) {
-        throw notFound(`No pending tool confirmation: ${event.tool_use_id}`);
-      }
-      const durableCompleted =
-        completed ?? persisted?.completed;
-      if (durableCompleted) {
-        if (
-          durableCompleted.workspaceId !== workspaceId ||
-          durableCompleted.sessionId !== sessionId
-        ) {
-          throw notFound(`No pending tool confirmation: ${event.tool_use_id}`);
-        }
-        if (!sameToolConfirmation(durableCompleted, event)) {
-          throw invalidRequest(
-            `Tool confirmation ${event.tool_use_id} was already processed with a different result`,
-          );
-        }
-        claims.push({ event, row: durableCompleted.row });
-        continue;
-      }
-      if (persisted?.row && action && isAcknowledgedInFlightAction(action)) {
-        claims.push({ event, row: persisted.row });
-        continue;
-      }
-      const commit = this.runtimeRunner?.claimToolConfirmation?.(
-        workspaceId,
-        sessionId,
-        event,
-      );
-      if (!commit) {
-        if (action && !isRuntimeTurnClosed(action.turn.state)) {
-          if (
-            action.turn.owner_id !== this.ownerId &&
-            !isRuntimeLeaseExpired(action.turn.lease_expires_at)
-          ) {
-            throw runtimeTurnStillOwned(action.turn_id);
-          }
-          const claimed = this.claimTurnForTerminalization(action.turn);
-          if (!claimed) {
-            throw runtimeTurnStillOwned(action.turn_id);
-          }
-          claims.push({
-            event,
-            toolUseId: event.tool_use_id,
-            action: { ...action, turn: claimed },
-            ...(persisted?.row === undefined ? {} : { row: persisted.row }),
-          });
-          continue;
-        }
-        if (persisted?.row) {
-          this.terminalizeLostToolConfirmation(
-            workspaceId,
-            sessionId,
-            event.tool_use_id,
-          );
-          claims.push({ event, row: persisted.row });
-          continue;
-        }
-        if (action) {
-          if (
-            action.turn.owner_id !== this.ownerId &&
-            !isRuntimeLeaseExpired(action.turn.lease_expires_at)
-          ) {
-            throw runtimeTurnStillOwned(action.turn_id);
-          }
-          const claimed = this.claimTurnForTerminalization(action.turn);
-          if (!claimed) {
-            throw runtimeTurnStillOwned(action.turn_id);
-          }
-          claims.push({
-            event,
-            toolUseId: event.tool_use_id,
-            action,
-          });
-          continue;
-        }
-        throw notFound(`No pending tool confirmation: ${event.tool_use_id}`);
-      }
-      claims.push({
-        event,
-        toolUseId: event.tool_use_id,
-        commit,
-        ...(persisted?.row === undefined ? {} : { row: persisted.row }),
-      });
-    }
-    return claims;
-  }
-
-  private findPersistedToolConfirmation(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    event: ManagedAgentsUserToolConfirmationEventInput,
-  ):
-    | {
-        row: PersistedSessionEvent;
-        completed?: {
-          workspaceId: WorkspaceId;
-          sessionId: string;
-          result: "allow" | "deny";
-          denyMessage?: string | null;
-          row: PersistedSessionEvent;
-        };
-      }
-    | undefined {
-    const rows = this.listToolConfirmationHistory(workspaceId, sessionId);
-    const row = rows.find(
-      (candidate) =>
-        candidate.type === "user.tool_confirmation" &&
-        candidate.payload.tool_use_id === event.tool_use_id,
-    );
-    if (!row) return undefined;
-    const result = row.payload.result;
-    if (result !== "allow" && result !== "deny") return undefined;
-    const denyMessage = row.payload.deny_message;
-    const accepted: {
-      result: "allow" | "deny";
-      denyMessage?: string | null;
-    } = {
-      result,
-      denyMessage:
-        denyMessage === null || typeof denyMessage === "string"
-          ? denyMessage
-          : undefined,
-    };
-    if (!sameToolConfirmation(accepted, event)) {
-      throw invalidRequest(
-        `Tool confirmation ${event.tool_use_id} was already accepted with a different result`,
-      );
-    }
-    if (!hasToolResultForToolUseId(rows, event.tool_use_id)) {
-      return { row };
-    }
-    return {
-      row,
-      completed: {
-        workspaceId,
-        sessionId,
-        result,
-        denyMessage: accepted.denyMessage,
-        row,
-      },
-    };
-  }
-
-  private terminalizeLostToolConfirmation(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    toolUseId: string,
-  ): void {
-    this.persistRuntimeDrafts(workspaceId, sessionId, [
-      this.lostToolConfirmationResultDraft(workspaceId, sessionId, toolUseId),
-      {
-        type: "session.status_idle",
-        payload: { stop_reason: { type: "end_turn" } },
-      },
-    ]);
-  }
-
-  /**
-   * The lost-runtime terminal result must match the use event's family:
-   * agent.mcp_tool_use gets agent.mcp_tool_result (terminal-result rule,
-   * plan 0122 §4.4), builtin gets agent.tool_result. Rare recovery path —
-   * the paged scan is acceptable.
-   */
-  private lostToolConfirmationResultDraft(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    toolUseId: string,
-  ): EventDraft {
-    if (this.isMcpToolUseEventId(workspaceId, sessionId, toolUseId)) {
-      return {
-        type: "agent.mcp_tool_result",
-        payload: lostMcpToolConfirmationPayload(toolUseId),
-      };
-    }
-    return {
-      type: "agent.tool_result",
-      payload: lostToolConfirmationPayload(toolUseId),
-    };
-  }
-
-  private isMcpToolUseEventId(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    toolUseId: string,
-  ): boolean {
-    let page: string | undefined;
-    do {
-      const result = this.events.listPage(workspaceId, sessionId, {
-        order: "asc",
-        limit: 1000,
-        page,
-        types: ["agent.mcp_tool_use"],
-      });
-      if (result.data.some((row) => row.id === toolUseId)) return true;
-      page = result.next_page ?? undefined;
-    } while (page !== undefined);
-    return false;
-  }
-
-  private listToolConfirmationHistory(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): PersistedSessionEvent[] {
-    const rows: PersistedSessionEvent[] = [];
-    let page: string | undefined;
-    do {
-      const result = this.events.listPage(workspaceId, sessionId, {
-        order: "asc",
-        limit: 1000,
-        page,
-        types: [
-          "user.tool_confirmation",
-          "agent.tool_result",
-          "agent.mcp_tool_result",
-        ],
-      });
-      rows.push(...result.data);
-      page = result.next_page ?? undefined;
-    } while (page !== undefined);
-    return rows;
-  }
-
-  private clearCompletedToolConfirmations(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-  ): void {
-    for (const [id, completed] of this.completedToolConfirmations) {
-      if (
-        completed.workspaceId === workspaceId &&
-        completed.sessionId === sessionId
-      ) {
-        this.completedToolConfirmations.delete(id);
-      }
-    }
-  }
 
   private hasPendingRuntimeActions(
     workspaceId: WorkspaceId,
     sessionId: string,
   ): boolean {
     return (
-      this.pendingCustomToolActions.has(workspaceId, sessionId) ||
-      this.pendingToolConfirmations.has(workspaceId, sessionId)
+      this.customTools.pendingCustomToolActions.has(workspaceId, sessionId) ||
+      this.toolConfirmations.pendingToolConfirmations.has(workspaceId, sessionId)
     );
-  }
-
-  private blockInterruptedCustomToolActions(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    customToolUseIds: readonly string[],
-  ): void {
-    if (customToolUseIds.length === 0) return;
-    const key = sessionScopeKey(workspaceId, sessionId);
-    let blocked = this.interruptedCustomToolActions.get(key);
-    if (!blocked) {
-      blocked = new Set<string>();
-      this.interruptedCustomToolActions.set(key, blocked);
-    }
-    for (const id of customToolUseIds) blocked.add(id);
-  }
-
-  private blockInterruptedToolConfirmations(
-    workspaceId: WorkspaceId,
-    sessionId: string,
-    toolUseIds: readonly string[],
-  ): void {
-    if (toolUseIds.length === 0) return;
-    const key = sessionScopeKey(workspaceId, sessionId);
-    let blocked = this.interruptedToolConfirmations.get(key);
-    if (!blocked) {
-      blocked = new Set<string>();
-      this.interruptedToolConfirmations.set(key, blocked);
-    }
-    for (const id of toolUseIds) blocked.add(id);
   }
 
   private flushPendingActions(workspaceId: WorkspaceId, sessionId: string): void {
@@ -2919,8 +1832,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
     // and drops the entry when empty; ids persist until resolved, so a later
     // flush re-emits requires_action with the full remaining pending set.
     const ids = [
-      ...this.pendingCustomToolActions.snapshotForFlush(workspaceId, sessionId),
-      ...this.pendingToolConfirmations.snapshotForFlush(workspaceId, sessionId),
+      ...this.customTools.pendingCustomToolActions.snapshotForFlush(workspaceId, sessionId),
+      ...this.toolConfirmations.pendingToolConfirmations.snapshotForFlush(workspaceId, sessionId),
     ];
     if (ids.length === 0) return;
     this.persistRuntimeDrafts(workspaceId, sessionId, [
