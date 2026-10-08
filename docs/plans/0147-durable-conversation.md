@@ -93,34 +93,62 @@ told about it.
 2. **Settled event, from the owning run only.** At that point, before the
    existing `closeWhenIdle` eviction, the runner yields one internal
    `oma.conversation_settled` event. It carries the entries appended since the
-   last *acknowledged* checkpoint and an `ack()` callback. It is emitted only
+   last *acknowledged* checkpoint and a `release(committed)` callback. It is
+   emitted only
    by the generator whose `prompt()` actually ran the Pi turn, never by the
    losing side of the prompt race (`queuedOnRunningTurn`) or the steer path,
    which would otherwise save the winner's partial entries under the wrong
    turn's fence.
-3. **The handle stays alive until the checkpoint is acknowledged.**
+3. **The handle stays alive until the checkpoint is released.**
    `handle.running` clears at `agent_end`, but Pi's post-run work (retry,
    compaction, steered continuation) runs after that, and the service may
-   still be processing queued events. A new `handle.turnActive` flag, set when
-   the owning `prompt()` starts and cleared after `ack()` (or when the
-   generator ends without settling), stops idle eviction, `closeWhenIdle`
-   eviction and handle replacement while a turn is in flight. Today this race
-   already disposes handles during post-run compaction; the flag fixes it as
-   part of this plan.
-4. **Fenced write.** The service holds those entries and writes them in the
+   still be processing queued events.
+   - A **set of hold tokens** per handle, not a boolean. Every `runOnSession`
+     that enters the fresh-prompt path adds a token. Idle eviction,
+     `closeWhenIdle` eviction, handle replacement and `close()` shutdown wait
+     while the set is non-empty.
+   - A boolean is wrong here: the loser of the prompt race also starts a
+     `prompt()`, and after an interrupt a new turn can start while the old
+     turn's close is still pending.
+   - A token is removed in exactly two ways. The service calls
+     `release(committed)` from a `finally` on **every** exit after consuming the
+     settled event: commit, rollback, `RuntimeTurnOwnershipLostError`, or a
+     skipped close for a closed or deleted session. Otherwise the runner
+     removes it itself when its generator ends without settling (loser of the
+     prompt race, hard error).
+   - `release(true)` also advances the acknowledged cursor, monotonically, to
+     the **endpoint captured when the settled event was emitted**, never to
+     the live entry count. A newer run may already have appended entries that
+     were not in the committed batch. `release(false)` keeps the entries for
+     the next settled turn.
+   - `interruptSession`, `closeSession`, archive and delete keep evicting
+     unconditionally; holds never block them.
+   - Today this race already disposes handles during post-run compaction; the
+     token set fixes it as part of this plan.
+4. **Fenced write.** The conversation write is fenced on **turn ownership**
+   (owner and generation match the turn row), not on this call being the one
+   that closes the turn. So a turn this owner already closed (for example
+   `interrupted` by `maybeInterruptRuntime`) still gets its settled entries
+   saved, while a stale owner's write is still rejected. Otherwise: The service holds those entries and writes them in the
    **same** `appendBatchWithRuntimeChanges` call that closes the turn, as a new
    `conversationEntries` change applied after `closedTurns`. The turn close is
    owner- and generation-fenced (`closeRuntimeTurnStmt`, which throws
    `RuntimeTurnOwnershipLostError`), so the conversation commits only if this
    owner legitimately closes the turn. A closed or deleted session is skipped,
    as turn close already is.
-5. **Acknowledge after commit.** The service calls `ack()` only after the
-   transaction commits. If it rolls back, the runner keeps the entries and
-   offers them again with the next settled turn of that handle.
+5. **Acknowledge after commit.** Only `release(true)` advances the cursor,
+   and the service calls it only after the transaction commits. On rollback the
+   runner keeps the entries and offers them again with the next settled turn of
+   that handle.
 6. **Nothing else writes.** No checkpoint happens mid-turn, on disposal, on
-   hard error, on interrupt-driven eviction, or on `close()`. Those paths
-   don't reach a settled point, so their turn is not saved (see "Crash and
-   failure behaviour").
+   hard error, or on `close()`. Those paths don't reach a settled point, so
+   their turn is not saved (see "Crash and failure behaviour").
+7. **Interrupt settles.** `abort()` resolves `prompt()`, so an interrupted turn
+   reaches the settled point and its aborted assistant entry is saved (Pi
+   drops it from requests; fact 5). When the turn was already closed
+   `interrupted` by `maybeInterruptRuntime`, the ownership fence (step 4)
+   still saves its entries, including messages steered into it. A deliberate
+   interrupt is never reported to the model as cut off.
 
 The steer path's second runtime task (#245) runs no Pi turn of its own, so it
 yields no settled event. The owning task's settled event includes the steered
@@ -131,8 +159,8 @@ messages.
 - Never ahead of the event log: the checkpoint commits with the turn close,
   after all of the turn's event rows.
 - No stale owner writes: the write sits inside the ownership-fenced close.
-- No disposal race: eviction waits for `turnActive` to clear, which is after
-  the checkpoint is acknowledged; other disposals write nothing.
+- No disposal race: eviction waits for the hold set to empty, which happens
+  only after the service's `release`; other disposals write nothing.
 - No watermarks, coalescing or gating accounting.
 
 ### Crash and failure behaviour
@@ -152,15 +180,27 @@ progress. That is unchanged from today and is ADR 0018 stage 3.
 - On a cache miss, `getOrCreateHandle` loads stored entries. If there are
   any, it builds the Pi session from `SessionManager.inMemory(cwd, undefined,
   entries)`, and the acknowledged count is the loaded count.
-- **Unclean end, by content coverage rather than turn order.** Walk the event
-  log's `user.message` events (excluding the one starting this turn) and the
-  stored conversation's user entries in order, matching by content. Events left
-  unmatched at the end were never saved, so their turn did not settle. If there
-  are any, the rebuild adds the D2 note quoting them.
+- **Unclean end, by content coverage rather than turn order.** The event store
+  computes it, because it has the event log and the turn ledger; the runner's
+  `getOrCreateHandle` has no trigger ids. The store's load call returns
+  `{ entries, uncovered }`.
+  - **Candidates:** `user.message` events that actually dispatched a prompt.
+    Their dispatched text is `textFromContent(content)` (text blocks joined
+    with newlines and trimmed). Image-only or whitespace-only messages never
+    reach Pi and are not candidates.
+  - **Excluded:** trigger events of turns still pending (they are about to be
+    delivered, including the one starting now), and of turns closed
+    `interrupted` (a deliberate interrupt).
+  - **Matching:** walk candidates and stored user entries in order, comparing
+    dispatched text. Candidates left unmatched are uncovered: their turn never
+    settled.
   - Turn order would mislabel steered messages: they belong to the earlier
-    turn's checkpoint, not their own runtime turn.
-  - No extra state is needed. Duplicate texts still match correctly because
-    matching is in order.
+    turn's checkpoint, not their own runtime turn. Duplicate texts still match
+    correctly because matching is in order.
+- **Notes are idempotent.** A D2 note is added through Pi's custom-message
+  entry, which the model sees as a user message and the next checkpoint saves.
+  Rebuild skips a note when an identical one is already the last note entry,
+  so repeated rebuilds don't pile them up.
 - No tool-result repair (Pi fact 5).
 
 ## Decisions
@@ -213,6 +253,19 @@ Real Pi with the faux provider (D3), through the events service unless noted:
 - **Fenced:** when the turn close throws `RuntimeTurnOwnershipLostError`, no
   conversation rows are written and the entries are offered again on the next
   settled turn.
+- **Release on every exit:** after a rolled-back close, and after a skipped
+  close for a deleted session, the handle's hold set is empty and idle
+  eviction proceeds.
+- **Overlapping runs:** an interrupt followed by a new message while the old
+  turn's close is still pending keeps the handle held until both release.
+- **Interrupt is not an unclean end:** after an interrupt and eviction, the
+  rebuild adds no cut-off note. This includes a paused owner with a message
+  steered into it before the interrupt.
+- **Cursor endpoint:** a release after a newer run has appended entries
+  advances the cursor only to the released checkpoint's endpoint.
+- **Undispatched and pending messages:** an image-only message, and a message
+  whose turn is still pending at rebuild, produce no cut-off note.
+- **Notes don't pile up:** two rebuilds in a row leave one workspace note.
 - **Closed or deleted session:** no conversation rows are written.
 - **Delete:** deleting a session removes its conversation rows.
 - **Unclean end:** after a turn that ends in a hard error, the next rebuild's
@@ -283,4 +336,25 @@ Plus store unit tests: idempotent append, ordering, isolation by session.
     coverage.
 
   These are local conditions, not a new layer; the settled design stands.
+- **Final review of the accepted plan, 2026-10-08 (Codex adversarial and
+  independent real-Pi review, run on the merged plan):**
+  - Confirmed: the end of the owning run is a settled point (steered and
+    compaction entries are present when `prompt()` resolves), and every normal
+    turn close goes through the fenced transaction.
+  - A failed or skipped close left the eviction hold set forever → mandatory
+    `release(committed)` on every service exit (both reviewers).
+  - A boolean hold is wrong for overlapping runs → token set.
+  - Interrupt does settle → saved normally, never reported as cut off.
+  - Content coverage false positives (undispatched, multi-block, pending
+    turns), and the check can't run in `getOrCreateHandle` → computed by the
+    event store using `textFromContent`, excluding pending and interrupted
+    triggers (both reviewers).
+  - Notes accumulated across rebuilds → idempotent.
+- **Focused Codex pass on that revision, 2026-10-08:**
+  - `release(true)` must advance only to the endpoint captured at settlement
+    → specified, monotonic;
+  - a deliberately interrupted turn could lose its entries (and look like a
+    cut-off for messages steered into it) because its normal close fails the
+    ownership check → the conversation write is fenced on turn ownership, not
+    on closing the turn.
 
