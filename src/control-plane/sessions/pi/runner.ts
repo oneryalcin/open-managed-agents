@@ -962,6 +962,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
                   seed,
                 )
               : await this.sessionFactory(workspaceId, sessionId, seed);
+          assertRebuiltFromSeed(session, seed);
           assertActiveToolSurface(
             session,
             this.enabledSandboxToolNames(workspaceId, sessionId, sandbox),
@@ -1506,6 +1507,18 @@ function updateRunning(handle: RuntimeHandle, event: unknown): void {
 
 function steerVerbatim(session: PiRuntimeSession, text: string): void {
   session.agent.steer({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+}
+
+// The checkpoint cursor starts at the seed's length, so a session that did
+// not actually load its saved conversation would start with no memory and
+// silently skip every later checkpoint. Refuse it instead.
+function assertRebuiltFromSeed(session: PiRuntimeSession, seed: PiConversationSeed): void {
+  if (seed.length === 0) return;
+  const log = conversationLog(session) ?? [];
+  const seedIds = seed.map((entry) => (entry as { id?: unknown }).id);
+  if (!seedIds.every((id, index) => log[index]?.id === id)) {
+    throw new Error("Pi session was not rebuilt from its saved conversation");
+  }
 }
 
 /** Header plus entries, or undefined when the session keeps no log. */

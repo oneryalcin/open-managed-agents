@@ -321,6 +321,23 @@ describe("conversation rebuild (plan 0147 slice 3a)", () => {
     });
   });
 
+  it("fails loudly when a rebuilt session does not contain its saved conversation", async () => {
+    // A factory that ignores the seed would otherwise start with no memory and
+    // silently skip every later checkpoint.
+    const pi = await createRealPi();
+    const ignoresSeed = { ...pi, sessionFactory: (ws: string, sid: string) => pi.sessionFactory(ws, sid, []) };
+    const h = await harness({ idleTtlMs: 20, pi: ignoresSeed });
+    h.pi.core.setResponses([h.pi.faux.fauxAssistantMessage("one")]);
+    h.send("first");
+    await waitFor(() => h.stored().length === 2);
+    await waitFor(() => (h.runner as unknown as { sessions: Map<string, unknown> }).sessions.size === 0);
+
+    h.send("second");
+    await waitFor(() => h.realStore.list(WS, h.sessionId).some((event) => event.type === "session.error"));
+
+    expect(h.pi.core.state.callCount).toBe(1);
+  });
+
   it("rebuilds the conversation after a restart on durable stores", async () => {
     const dir = mkdtempSync(join(tmpdir(), "oma-rebuild-"));
     try {
