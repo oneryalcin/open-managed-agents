@@ -402,6 +402,7 @@ class UnsupportedFileResourceRuntime implements RuntimeEventRunner {
 }
 
 class UnsupportedFileResourceSession {
+  readonly isStreaming = false;
   async prompt(): Promise<void> {}
   async abort(): Promise<void> {}
   dispose(): void {}

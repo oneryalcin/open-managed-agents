@@ -146,10 +146,14 @@ class FakeQueuedSession {
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
 
+  get isStreaming(): boolean {
+    return this.running;
+  }
+
   constructor(private readonly gate: Promise<void>) {}
 
   async prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void> {
-    if (opts?.streamingBehavior === "steer") {
+    if (opts?.streamingBehavior === "steer" && this.running) {
       this.steered.push(text);
       return;
     }

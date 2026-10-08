@@ -61,7 +61,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   });
 
   it("falls back to steer when Pi rejects prompt because the session is already running", async () => {
-    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true });
+    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true, reportsStreaming: true });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
       idleTtlMs: 0,
@@ -72,6 +72,18 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(events).toEqual([]);
     expect(factory.sessions[0]?.prompts).toEqual(["two"]);
     expect(factory.sessions[0]?.steered).toEqual(["two"]);
+  });
+
+  it("runs the message as its own turn when the other turn ends before the steer fallback", async () => {
+    // Pi rejected the prompt as already processing, but is idle by the time
+    // the fallback runs; Pi would then start a fresh turn instead of queueing,
+    // so this caller must own and stream it.
+    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+
+    const events = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+
+    expect(messageTexts(events)).toEqual(["reply: two"]);
   });
 
   // Pi expands "/skill:<name>" by reading the skill file from the control-plane
@@ -100,7 +112,7 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   });
 
   it("falls back to steer without Pi command expansion", async () => {
-    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true });
+    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true, reportsStreaming: true });
     const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
 
     await collect(runner.runUserMessage("wrk", "sesn_1", "/skill:demo go"));
@@ -748,6 +760,9 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
         const session = await factory.create();
         return {
           prompt: session.prompt.bind(session),
+          get isStreaming() {
+            return session.isStreaming;
+          },
           abort: session.abort.bind(session),
           dispose: session.dispose.bind(session),
           subscribe: session.subscribe.bind(session),
@@ -1109,6 +1124,8 @@ interface FakeSessionOptions {
   promptGate?: Promise<void>;
   abortGate?: Promise<void>;
   throwAlreadyProcessingOnce?: boolean;
+  // Report a run as active even when this fake has not started one.
+  reportsStreaming?: boolean;
   throwAlreadyProcessingAfterFirstPrompt?: boolean;
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
@@ -1128,6 +1145,10 @@ class FakeSession implements PiRuntimeSession {
   readonly prompts: string[] = [];
   readonly steered: string[] = [];
   readonly promptOptions: Array<PiPromptOptions | undefined> = [];
+
+  get isStreaming(): boolean {
+    return this.running || this.opts.reportsStreaming === true;
+  }
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
@@ -1145,8 +1166,8 @@ class FakeSession implements PiRuntimeSession {
 
   async prompt(text: string, opts?: PiPromptOptions): Promise<void> {
     this.promptOptions.push(opts);
-    // Pi queues instead of starting a turn when told how to.
-    if (opts?.streamingBehavior === "steer") {
+    // Like Pi, queue only while a run is active; otherwise start a turn.
+    if (opts?.streamingBehavior === "steer" && this.isStreaming) {
       this.steered.push(text);
       return;
     }

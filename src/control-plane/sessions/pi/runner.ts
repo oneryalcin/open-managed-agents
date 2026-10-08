@@ -77,6 +77,9 @@ const LITERAL_STEER: PiPromptOptions = { expandPromptTemplates: false, streaming
 
 export interface PiRuntimeSession {
   prompt(text: string, opts?: PiPromptOptions): Promise<void>;
+  // Pi queues a prompt with streamingBehavior only while this is true;
+  // otherwise it starts a fresh turn.
+  readonly isStreaming: boolean;
   abort(): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
   dispose(): void;
@@ -593,6 +596,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
       .prompt(text, LITERAL_PROMPT)
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
+          if (!handle.session.isStreaming) {
+            // The other turn ended between the rejection and now, so Pi would
+            // start a fresh turn rather than queue: run it as this caller's
+            // turn, without the other turn's captured tail. Pi decides
+            // synchronously, so nothing can change between check and call.
+            queue.length = 0;
+            await handle.session.prompt(text, LITERAL_PROMPT);
+            return;
+          }
           await handle.session.prompt(text, LITERAL_STEER);
           // Best effort for the losing prompt race: once Pi confirms this
           // message is queued on the running turn, discard overlap events
