@@ -1452,24 +1452,28 @@ function ensureOpenModelRequestStartIdsColumn(db: DatabaseSync): void {
 // earlier saved no conversation at all), so there is nothing honest to report
 // about them, and reporting them would tell the model its whole history was
 // cut off.
+// One transaction: a crash mid-backfill must not leave an existing but
+// incomplete table that later startups would treat as migrated.
 function ensureConversationTurnsTable(db: DatabaseSync): void {
-  const exists = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_conversation_turns'")
-    .get();
-  if (exists !== undefined) return;
-  db.exec(`
-    CREATE TABLE session_conversation_turns (
-      workspace_id TEXT NOT NULL,
-      session_id TEXT NOT NULL,
-      turn_id TEXT NOT NULL,
-      PRIMARY KEY (workspace_id, session_id, turn_id)
-    );
-    INSERT OR IGNORE INTO session_conversation_turns (workspace_id, session_id, turn_id)
-      SELECT workspace_id, session_id, turn_id FROM pending_runtime_turns
-      WHERE state IN ('completed', 'terminalized');
-    INSERT OR IGNORE INTO session_conversation_turns (workspace_id, session_id, turn_id)
-      SELECT DISTINCT workspace_id, session_id, turn_id FROM session_conversation_entries;
-  `);
+  withSqliteTransaction(db, () => {
+    const exists = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_conversation_turns'")
+      .get();
+    if (exists !== undefined) return;
+    db.exec(`
+      CREATE TABLE session_conversation_turns (
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, session_id, turn_id)
+      );
+      INSERT OR IGNORE INTO session_conversation_turns (workspace_id, session_id, turn_id)
+        SELECT workspace_id, session_id, turn_id FROM pending_runtime_turns
+        WHERE state IN ('completed', 'terminalized');
+      INSERT OR IGNORE INTO session_conversation_turns (workspace_id, session_id, turn_id)
+        SELECT DISTINCT workspace_id, session_id, turn_id FROM session_conversation_entries;
+    `);
+  });
 }
 
 // Why a turn closed (plan 0147): a deliberately interrupted turn is not
