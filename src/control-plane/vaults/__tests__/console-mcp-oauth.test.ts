@@ -114,6 +114,44 @@ describe("ConsoleMcpOauthService", () => {
     expect(fixture.registrationCalls).toBe(1);
   });
 
+  it("never presents the stored client secret to an authorization server the MCP server switched to", async () => {
+    const fixture = oauthFetch();
+    const service = new ConsoleMcpOauthService(vaults, fixture.fetch);
+    const vaultId = vaults.listVaults(WRK).data[0]!.id;
+    const first = await service.startConnect(WRK, { vault_id: vaultId, mcp_server_url: MCP_URL }, CALLBACK_URL);
+    await service.complete(new URL(first.authorization_url).searchParams.get("state")!, "first-code");
+    const credentialId = service.status(WRK, first.flow_id).credential_id!;
+
+    fixture.authorizationServer = "https://evil.example.test";
+    try {
+      const second = await service.startReauthorize(WRK, { vault_id: vaultId, credential_id: credentialId }, CALLBACK_URL);
+      await service.complete(new URL(second.authorization_url).searchParams.get("state")!, "evil-code");
+    } catch {
+      // Refusing the flow is the expected outcome; the assertion is about what leaked.
+    }
+
+    const basic = Buffer.from(`oma-dynamic-client:${CLIENT_SECRET}`).toString("base64");
+    expect(fixture.evilRequests.filter((request) =>
+      request.body.includes(CLIENT_SECRET) || request.authorization?.includes(basic),
+    )).toEqual([]);
+  });
+
+  it("rejects reauthorize when the MCP server now names a different token endpoint", async () => {
+    const fixture = oauthFetch();
+    const service = new ConsoleMcpOauthService(vaults, fixture.fetch);
+    const vaultId = vaults.listVaults(WRK).data[0]!.id;
+    const first = await service.startConnect(WRK, { vault_id: vaultId, mcp_server_url: MCP_URL }, CALLBACK_URL);
+    await service.complete(new URL(first.authorization_url).searchParams.get("state")!, "first-code");
+    const credentialId = service.status(WRK, first.flow_id).credential_id!;
+
+    fixture.authorizationServer = "https://evil.example.test";
+
+    await expect(service.startReauthorize(WRK, {
+      vault_id: vaultId,
+      credential_id: credentialId,
+    }, CALLBACK_URL)).rejects.toThrow(/names a different authorization server/);
+  });
+
   it("expires flow state at ten minutes and isolates status by workspace", async () => {
     let now = new Date("2026-07-23T10:00:00.000Z");
     const fixture = oauthFetch();
@@ -203,18 +241,43 @@ function oauthFetch(opts: { registration?: boolean; tokenStatus?: number } = {})
   let registrationCalls = 0;
   let tokenCalls = 0;
   const tokenBodies: string[] = [];
+  const evilRequests: Array<{ url: string; authorization: string | null; body: string }> = [];
   const state = {
     accessToken: ACCESS,
     refreshToken: REFRESH,
+    // The MCP server controls which authorization server it advertises.
+    authorizationServer: "https://auth.example.test",
+    evilRequests,
     get registrationCalls() { return registrationCalls; },
     get tokenCalls() { return tokenCalls; },
     tokenBodies,
     fetch: (async (input, init) => {
       const url = new URL(input);
+      if (url.hostname === "evil.example.test") {
+        evilRequests.push({
+          url: url.href,
+          authorization: new Headers(init?.headers).get("authorization"),
+          body: String(init?.body ?? ""),
+        });
+        if (url.pathname === "/.well-known/oauth-authorization-server") {
+          return json({
+            issuer: "https://evil.example.test",
+            authorization_endpoint: "https://evil.example.test/authorize",
+            token_endpoint: "https://evil.example.test/token",
+            response_types_supported: ["code"],
+            token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+            code_challenge_methods_supported: ["S256"],
+          });
+        }
+        if (url.pathname === "/token") {
+          return json({ access_token: "evil-access", token_type: "Bearer" });
+        }
+        return new Response("not found", { status: 404 });
+      }
       if (url.hostname === "mcp.example.test" && url.pathname.includes(".well-known/oauth-protected-resource")) {
         return json({
           resource: MCP_URL,
-          authorization_servers: ["https://auth.example.test"],
+          authorization_servers: [state.authorizationServer],
           scopes_supported: ["workspace.read", "workspace.write"],
         });
       }

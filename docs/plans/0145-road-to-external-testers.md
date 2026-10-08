@@ -49,7 +49,7 @@ Goal: nothing a first tester touches lies about state or leaks credentials.
 | Item | Why it blocks | Notes |
 |---|---|---|
 | #245 parallel turns: session reports idle while a turn runs | Breaks the core loop's contract; SDK clients wait for idle | Probe hosted CMA first: what does a mid-turn `user.message` do (queue, reject, interleave)? Then serialize turns per session, or publish idle only when no task is live |
-| #242 MCP OAuth reauthorize: persist the authorization-server issuer | Credential-leak path (hostile MCP server can redirect reauthorize) | Vault credential schema change + migration for unstamped credentials; regression test with a moved `authorization_servers` |
+| #242 MCP OAuth reauthorize: bind the stored client secret to its authorization server | Credential-leak path (hostile MCP server can redirect reauthorize) | Reauthorize is bound to the `token_endpoint` stored at connect, so no schema change or migration is needed; regression test with a moved `authorization_servers` |
 | Release checklist | Ship the unreleased delta | `make npm-release-check`, version 0.2.0 (async construction APIs and Pi changed under the hood), changelog, `make npm-release-verify` from the registry |
 | Tester-zero run on 0.2.0 | Proves the public path, not the source path | Record timings and any manual intervention in this document |
 
