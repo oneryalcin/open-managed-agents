@@ -139,8 +139,10 @@ told about it.
    owner- and generation-fenced (`closeRuntimeTurnStmt`, which throws
    `RuntimeTurnOwnershipLostError`), so the conversation commits only if this
    owner legitimately closes the turn. No separate session-lifecycle check is
-   needed: a deleted session's turn rows are gone, so the fence refuses it,
-   and an archive ends the run before it can settle (verified in slice 2).
+   needed in the checkpoint path: a deleted session's turn rows are gone, so
+   the fence refuses it; for an archived session the service's existing
+   `closedSessions` guard stops processing the run's events, so its settled
+   event is never consumed (verified in slice 2).
 5. **Acknowledge after commit.** Only `release(true)` advances the cursor,
    and the service calls it only after the transaction commits. On rollback the
    runner keeps the entries and offers them again with the next settled turn of

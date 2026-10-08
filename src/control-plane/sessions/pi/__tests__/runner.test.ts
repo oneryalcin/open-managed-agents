@@ -119,6 +119,22 @@ describe("PiSessionRunner conversation checkpoints (plan 0147)", () => {
       .toEqual({ replacedWhileHeld: false, replacedAfterRelease: 2 });
   });
 
+  it("does not build a new session for a message that waited while its session was closed", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [settled] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one")));
+    (runner as unknown as { sessions: Map<string, { closeWhenIdle: boolean }> })
+      .sessions.get("sesn_1")!.closeWhenIdle = true;
+
+    const waiting = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runner.closeSession("wrk", "sesn_1");
+    settled!.release(true);
+
+    await expect(waiting).rejects.toThrow(/is closed/);
+    expect(factory.sessions).toHaveLength(1);
+  });
+
   it("emits no checkpoint from the losing side of the prompt race and releases its hold", async () => {
     const factory = new FakeSessionFactory({
       sessionLog: [{ id: "e1" }],

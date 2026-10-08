@@ -248,6 +248,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly pendingSessions = new Map<string, Promise<RuntimeHandle>>();
   private readonly pendingInterrupts = new Map<string, Promise<void>>();
   private readonly closedSessionIds = new Set<string>();
+  // Bumped by every closeSession, so a message that waited on a held handle
+  // can tell its session was closed meanwhile (closedSessionIds is cleared
+  // when the close finishes).
+  private readonly sessionCloses = new Map<string, number>();
   private readonly customToolBridge: PiCustomToolBridge;
   private readonly toolPermissionBridge: PiToolPermissionBridge;
   private readonly preparingSessionAgents = new Map<
@@ -493,6 +497,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
   ): Promise<void> {
     this.closedSessionIds.add(sessionId);
+    this.sessionCloses.set(sessionId, (this.sessionCloses.get(sessionId) ?? 0) + 1);
     this.mcpFailureCounts.delete(sessionId);
     try {
       const existing = this.sessions.get(sessionId);
@@ -832,7 +837,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
       // Don't replace a handle whose last turn may still be checkpointing:
       // the new one would rebuild from a store that lacks it.
       if (existing.holds.size > 0) {
+        const closesBefore = this.sessionCloses.get(sessionId) ?? 0;
         await new Promise<void>((resume) => existing.holdWaiters.push(resume));
+        if ((this.sessionCloses.get(sessionId) ?? 0) !== closesBefore) {
+          throw new Error(`Runtime session ${sessionId} is closed`);
+        }
       }
       if (this.sessions.get(sessionId) === existing) this.evict(sessionId, existing);
       if (this.closed) throw new Error("PiSessionRunner is closed");
@@ -1404,6 +1413,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
   private evict(sessionId: string, handle: RuntimeHandle): void {
     if (handle.timer) clearTimeout(handle.timer);
+    // Nothing can be replaced from a disposed handle; let waiters re-check.
+    for (const resume of handle.holdWaiters.splice(0)) resume();
     if (this.sessions.get(sessionId) === handle) {
       this.sessions.delete(sessionId);
     }
