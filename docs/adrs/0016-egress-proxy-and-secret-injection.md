@@ -226,10 +226,17 @@ Per the 0114 modularity rule (interface when the second implementation is
 
 ## Implementation status
 
-Design accepted; not yet built. Foundations proven (probes 44, 45). Next
-slices, each its own PR: vendor the proxy stack + private-IP deny;
-`SqliteSecretsStore` + `SecretsStore` interface; egress-policy resolution and
-proxy wiring into the Docker provider; then skills, then MCP on top.
+Built for `docker-local` (updated 2026-10-07). Foundations proven by probes
+44 and 45. All planned slices shipped:
+
+- vendored proxy stack plus private-IP deny (`src/control-plane/egress/`);
+- `SecretsStore` (`src/control-plane/secrets/`);
+- per-session dual-homed egress sidecar wired into the Docker provider
+  (`docker-egress.ts`, #141, #146), with networking presets (#203);
+- skills (#174) and MCP vault credentials (#167, #171, #172) on top.
+
+`microsandbox-local` still rejects egress configuration and runs offline-only;
+fail-closed egress for it is tracked in #204.
 
 ## Open questions
 

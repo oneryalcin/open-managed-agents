@@ -2,7 +2,7 @@
 
 ## Goal
 
-Match Anthropic's Managed Agents REST + SSE API surface, self-hostable on Modal / K8s / Docker. Pluggable sandbox, pluggable engine (Pi for now).
+Match Anthropic's Managed Agents REST + SSE API surface, self-hostable on Docker today, with Kubernetes and hosted sandbox backends behind the same provider boundary. Pluggable sandbox, pluggable engine (Pi for now).
 
 The platform shape — agents as persisted versioned objects, sessions as event-stream-driven instances, custom tools round-tripped through the API caller — is exactly the design we're cloning. The engine and the sandbox are interchangeable.
 
@@ -11,7 +11,7 @@ The platform shape — agents as persisted versioned objects, sessions as event-
 The smallest end-to-end flow that proves the architecture **and preserves the "base-URL swap" compatibility claim** in ADR 0004:
 
 **Environments:**
-- `POST /v1/environments` — create an environment config object. B.1 persists and returns config; Modal sandbox interpretation lands with sandbox runtime. Response: full environment object with field `id` (not `environment_id`).
+- `POST /v1/environments` — create an environment config object. B.1 persists and returns config; the sandbox provider interprets it at session runtime. Response: full environment object with field `id` (not `environment_id`).
 - `GET /v1/environments` — list environments (paginated).
 - `GET /v1/environments/{id}` — read one environment.
 - `POST /v1/environments/{id}/archive` — archive an environment; it remains retrievable and existing sessions retain it.
@@ -66,7 +66,7 @@ Each of these is an additive feature, not a redesign:
 - **Skills** — Anthropic prebuilt + custom skill upload/loading
 - **GitHub repo resources** — clone-into-sandbox at session create
 - **File resources** — upload + mount at absolute paths
-- **K8s sandbox impl** — second `Sandbox` implementation alongside Modal
+- **K8s sandbox impl** — Kubernetes `agent-sandbox` provider (plan 0106 design target) alongside `docker-local` and `microsandbox-local`
 - **Postgres persistence** — replace SQLite when multi-process scaling matters
 - **Identity + multi-tenant auth** — users, organizations, teams, workspaces, API keys, memberships, roles, and rate limits. MVP uses one internal workspace (`wrk_default`) so stores/services are scoped correctly without exposing identity fields on the public wire API before an auth ADR exists.
 - **Multi-process / horizontally-scaled control plane** — MVP is **single-process**; pending-call map and Pi sessions are process-local. Externalizing these (sticky routing, Redis-backed pending state) is post-MVP.
