@@ -6,8 +6,9 @@ parity work. It separates immediate wire-honesty fixes, planned pre-v1 arcs,
 post-v1 deferrals, and deliberate architecture-specific divergences.
 
 - **Baseline:** OMA `main` @ `bd9134a` · CMA docs snapshot 2026-07-11 (26 pages under `managed-agents/`)
-- **Release state:** `open-managed-agents@0.1.2` is published on npm and tagged
-  `latest`; its public README leads with `npx --yes open-managed-agents@latest`.
+- **Release state:** `open-managed-agents@0.2.0` (the 0145 trust release; see
+  [CHANGELOG.md](CHANGELOG.md)) is published on npm and tagged `latest`; its
+  public README leads with `npx --yes open-managed-agents@latest`.
   The three-minute warm-path claim remains explicitly unverified until the
   packed-browser and non-maintainer observation gates pass.
 - **Method:** 10-domain audit (one reviewer per doc cluster) cross-checked against the codebase; Tier-1 items independently re-verified.
