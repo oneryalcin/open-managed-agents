@@ -108,6 +108,10 @@ import {
   toolPermissionRuntimeChanges,
 } from "./tool-persistence.ts";
 
+// Upper bound on how long DELETE waits for post-idle runtime work (output
+// collection, turn close) before falling back to the running-session 400.
+const POST_IDLE_SETTLE_TIMEOUT_MS = 10_000;
+
 interface ToolConfirmationCommit {
   event: ManagedAgentsUserToolConfirmationEventInput;
   toolUseId: string;
@@ -181,6 +185,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
   private readonly closedSessions = new Set<string>();
   private readonly deletedSessions = new Set<string>();
   private readonly activeRuntimeTasks = new Map<string, number>();
+  // Sessions whose live runtime task has already published its terminal
+  // session.status_idle and is only doing post-idle work (output collection,
+  // turn close). A delete waits for these instead of rejecting them.
+  private readonly idlePublishedRuntimeTasks = new Set<string>();
+  private readonly runtimeSettledWaiters = new Map<string, Array<() => void>>();
   private readonly interruptedCustomToolActions = new Map<string, Set<string>>();
   private readonly pendingToolConfirmations = new Map<
     string,
@@ -780,6 +789,30 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
   }
 
+  // A client that saw session.status_idle may delete while the runtime task is
+  // still collecting outputs and closing the turn. Wait (bounded) for that
+  // post-idle work to finish so assertSessionDeletable sees a settled session;
+  // a genuinely running turn is not waited on and still gets the hosted 400.
+  async waitForPostIdleRuntimeSettle(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    timeoutMs = POST_IDLE_SETTLE_TIMEOUT_MS,
+  ): Promise<void> {
+    const key = sessionScopeKey(workspaceId, sessionId);
+    if (!this.idlePublishedRuntimeTasks.has(key)) return;
+    if (this.activeRuntimeTaskCount(workspaceId, sessionId) === 0) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      timer.unref?.();
+      const waiters = this.runtimeSettledWaiters.get(key) ?? [];
+      waiters.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+      this.runtimeSettledWaiters.set(key, waiters);
+    });
+  }
+
   // Preflight for DELETE /v1/sessions/:id. Hosted CMA rejects a delete while the
   // session is running with a 400 (probe 38); we reuse the same running-detection
   // as archive so a session whose runtime task is live but whose row status lags
@@ -1270,6 +1303,9 @@ export class DefaultSessionEventsService implements SessionEventsService {
       return;
     }
     this.activeRuntimeTasks.delete(key);
+    this.idlePublishedRuntimeTasks.delete(key);
+    for (const resolve of this.runtimeSettledWaiters.get(key) ?? []) resolve();
+    this.runtimeSettledWaiters.delete(key);
     this.interruptedCustomToolActions.delete(key);
     this.interruptedToolConfirmations.delete(key);
     this.retireLifecycleGuardsIfIdle(workspaceId, sessionId);
@@ -1305,6 +1341,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       for (const prompt of prompts) {
         activePrompt = prompt;
         activeOpenModelRequestStartIds = [];
+        this.idlePublishedRuntimeTasks.delete(sessionScopeKey(workspaceId, sessionId));
         const stopRenewing = this.startRuntimeLeaseRenewal(
           workspaceId,
           sessionId,
@@ -1534,6 +1571,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
               activeOpenModelRequestStartIds.pop();
             }
             if (hasTerminalIdleDraft(drafts)) {
+              this.idlePublishedRuntimeTasks.add(sessionScopeKey(workspaceId, sessionId));
               await this.indexSessionOutputsFromLiveRuntime(
                 workspaceId,
                 sessionId,

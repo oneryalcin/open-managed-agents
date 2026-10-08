@@ -1132,6 +1132,7 @@ export function createDeploymentControlPlane(
       stores.files,
       {
         assertDeletable: sessionEvents.assertSessionDeletable.bind(sessionEvents),
+        awaitDeletable: sessionEvents.waitForPostIdleRuntimeSettle.bind(sessionEvents),
         runtime: runner,
         modelAvailability,
         skills: stores.skills,
@@ -1291,6 +1292,7 @@ export function createInMemoryControlPlaneApp(
       fileStorage,
       {
         assertDeletable: sessionEvents.assertSessionDeletable.bind(sessionEvents),
+        awaitDeletable: sessionEvents.waitForPostIdleRuntimeSettle.bind(sessionEvents),
         ...(opts.runtime?.runner ? { runtime: opts.runtime.runner } : {}),
         skills: skillsStore,
         vaults: vaultService,

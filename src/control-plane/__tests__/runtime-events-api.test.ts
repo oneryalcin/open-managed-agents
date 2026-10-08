@@ -311,7 +311,7 @@ describe("Runtime events API", () => {
     expect(deletedDownload.status).toBe(404);
   });
 
-  it("blocks delete during output collection, then cleans up once the turn settles", async () => {
+  it("waits out post-idle output collection on delete instead of rejecting a session that reported idle", async () => {
     const runner = new DelayedOutputCollectingRunner([
       {
         relativePath: "late.txt",
@@ -334,28 +334,28 @@ describe("Runtime events API", () => {
     });
     expect(send.status).toBe(200);
     await runner.collectionStarted;
-
-    // The turn is still running (output collection is mid-flight), so hosted
-    // rejects the delete (probe 38). Because the guard refuses any delete while
-    // the runtime task is live, a delete can never run concurrently with output
-    // indexing — the resurrection race is unreachable, not merely cleaned up after.
-    const rejected = await fixture.app.request(`/v1/sessions/${session.id}`, {
-      method: "DELETE",
-    });
-    expect(rejected.status).toBe(400);
-
-    runner.releaseCollection();
-    await runner.collectionFinished;
+    // Output collection runs after the terminal idle is already published, so
+    // a client that waited for idle and then deletes lands in this window.
     await eventuallyList(
       fixture.app,
       `/v1/sessions/${session.id}/events?order=asc`,
-      (body) =>
-        body.data.some((event) => event.type === "session.status_idle"),
+      (body) => body.data.some((event) => event.type === "session.status_idle"),
     );
 
-    const deleted = await fixture.app.request(`/v1/sessions/${session.id}`, {
-      method: "DELETE",
+    // The delete waits for the runtime to settle rather than racing output
+    // indexing (or rejecting a session the API already reported idle).
+    let settled = false;
+    const deleting = Promise.resolve(
+      fixture.app.request(`/v1/sessions/${session.id}`, { method: "DELETE" }),
+    ).then((response) => {
+      settled = true;
+      return response;
     });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(settled).toBe(false);
+
+    runner.releaseCollection();
+    const deleted = await deleting;
     expect(deleted.status).toBe(200);
 
     const outputs = await fixture.app.request(
@@ -590,6 +590,8 @@ function makeFixture(
         {
           assertDeletable: (workspaceId, sessionId) =>
             sessionEvents.assertSessionDeletable(workspaceId, sessionId),
+          awaitDeletable: (workspaceId, sessionId) =>
+            sessionEvents.waitForPostIdleRuntimeSettle(workspaceId, sessionId),
         },
       ),
       sessionEvents,
