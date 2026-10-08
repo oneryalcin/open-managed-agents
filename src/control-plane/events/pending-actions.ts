@@ -5,7 +5,7 @@ import { sessionScopeKey } from "./session-guards.ts";
  * Per-session waiting-room bookkeeping for runtime actions that pause a turn
  * pending an external result — custom-tool calls and tool confirmations each
  * kept a byte-identical copy of this add/remove/clear/has logic on
- * `DefaultSessionEventsService` (#164, plan 0123 Slice 1).
+ * `DefaultSessionEventsService` (#164, plan 0146 Slice 1).
  *
  * The flush is intentionally cross-store: one coalesced `requires_action`
  * event spans BOTH stores, so the flush callback is injected and stays in the
