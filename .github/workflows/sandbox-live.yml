@@ -1,0 +1,74 @@
+name: Sandbox live suite
+
+# Runs the docker-local provider against a real engine. The live tests skip
+# themselves when `docker info` fails, so the job asserts nothing was skipped.
+
+on:
+  pull_request:
+    paths:
+      - "src/control-plane/sessions/pi/sandbox/**"
+      - "src/control-plane/egress/**"
+      - "src/egress-proxy-main.ts"
+      - ".github/workflows/sandbox-live.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-local:
+    # Pinned: the Podman dialect is verified against the 24.04 image's Podman 4.9.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [docker, podman]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.18.0"
+          cache: npm
+      - name: Install from the lockfile
+        run: npm ci
+      - name: Route docker to rootless Podman
+        if: matrix.engine == 'podman'
+        run: |
+          set -euo pipefail
+          # Rootless Podman needs a systemd user session to apply --memory/--pids-limit.
+          sudo loginctl enable-linger "$USER"
+          uid="$(id -u)"
+          for _ in $(seq 1 20); do [ -S "/run/user/$uid/bus" ] && break; sleep 0.5; done
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/engine-bin"
+          ln -s "$(command -v podman)" "$RUNNER_TEMP/engine-bin/docker"
+          echo "$RUNNER_TEMP/engine-bin" >> "$GITHUB_PATH"
+      - name: Show engine
+        run: |
+          docker version
+          docker info
+      - name: Pull the pinned sandbox image
+        run: |
+          set -euo pipefail
+          image="$(sed -n 's/.*"\(ghcr.io[^"]*\)".*/\1/p' src/control-plane/sessions/pi/sandbox/image.ts)"
+          test -n "$image"
+          docker pull "$image"
+          echo "OMA_TEST_SANDBOX_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Run the live provider suite
+        run: |
+          npx vitest run \
+            src/control-plane/sessions/pi/sandbox/__tests__/docker.test.ts \
+            src/control-plane/sessions/pi/sandbox/__tests__/docker-egress.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/vitest.json"
+      - name: Fail if any live test was skipped
+        run: |
+          node -e '
+            const r = require(process.argv[1]);
+            const skipped = r.numPendingTests + r.numTodoTests;
+            console.log(`passed=${r.numPassedTests} skipped=${skipped}`);
+            if (skipped > 0 || r.numPassedTests === 0) process.exit(1);
+          ' "$RUNNER_TEMP/vitest.json"
