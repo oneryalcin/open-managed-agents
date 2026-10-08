@@ -162,15 +162,11 @@ describe("ConsoleMcpOauthService", () => {
 
     fixture.authorizationServer = "https://evil.example.test";
     fixture.evilEchoesTokenEndpoint = true;
-    let redirectHost: string | undefined;
-    try {
-      const second = await service.startReauthorize(WRK, { vault_id: vaultId, credential_id: credentialId }, CALLBACK_URL);
-      redirectHost = new URL(second.authorization_url).host;
-    } catch {
-      // Refusing the flow is the expected outcome.
-    }
 
-    expect(redirectHost).not.toBe("evil.example.test");
+    await expect(service.startReauthorize(WRK, {
+      vault_id: vaultId,
+      credential_id: credentialId,
+    }, CALLBACK_URL)).rejects.toThrow(/names a different authorization server/);
   });
 
   it("requires reconnecting a credential connected before its authorization server was recorded", async () => {
