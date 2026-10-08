@@ -146,12 +146,6 @@ class FakeQueuedSession {
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
 
-  get isStreaming(): boolean {
-    return this.running;
-  }
-
-  async waitForIdle(): Promise<void> {}
-
   constructor(private readonly gate: Promise<void>) {}
 
   async prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void> {
@@ -166,6 +160,14 @@ class FakeQueuedSession {
       this.emitAssistant(steered);
     }
     this.emit({ type: "agent_end", messages: [], willRetry: false });
+  }
+
+  get isStreaming(): boolean {
+    return this.running;
+  }
+
+  async steer(text: string): Promise<void> {
+    this.steered.push(text);
   }
 
   async abort(): Promise<void> {}

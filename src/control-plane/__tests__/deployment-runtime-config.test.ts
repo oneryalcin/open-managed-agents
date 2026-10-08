@@ -643,8 +643,6 @@ class FakeSessionFactory {
 }
 
 class FakeSession implements PiRuntimeSession {
-  readonly isStreaming = false;
-  async waitForIdle(): Promise<void> {}
   private readonly listeners = new Set<(event: unknown) => void>();
 
   async prompt(text: string): Promise<void> {
@@ -658,6 +656,8 @@ class FakeSession implements PiRuntimeSession {
     });
   }
 
+  readonly isStreaming = false;
+  async steer(_text: string): Promise<void> {}
 
   async abort(): Promise<void> {}
 

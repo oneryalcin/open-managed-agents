@@ -402,9 +402,9 @@ class UnsupportedFileResourceRuntime implements RuntimeEventRunner {
 }
 
 class UnsupportedFileResourceSession {
-  readonly isStreaming = false;
-  async waitForIdle(): Promise<void> {}
   async prompt(): Promise<void> {}
+  readonly isStreaming = false;
+  async steer(): Promise<void> {}
   async abort(): Promise<void> {}
   dispose(): void {}
   subscribe(): () => void {

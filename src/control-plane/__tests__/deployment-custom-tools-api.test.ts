@@ -27,8 +27,6 @@ const sdk = vi.hoisted(() => {
   }
 
   class MockSession implements PiRuntimeSession {
-    readonly isStreaming = false;
-    async waitForIdle(): Promise<void> {}
     private readonly listeners = new Set<(event: unknown) => void>();
 
     async prompt(text: string): Promise<void> {
@@ -42,6 +40,8 @@ const sdk = vi.hoisted(() => {
       });
     }
 
+    readonly isStreaming = false;
+    async steer(): Promise<void> {}
 
     async abort(): Promise<void> {}
 

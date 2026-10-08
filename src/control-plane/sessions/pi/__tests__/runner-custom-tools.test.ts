@@ -19,8 +19,6 @@ const sdk = vi.hoisted(() => {
   }
 
   class MockSession implements PiRuntimeSession {
-    readonly isStreaming = false;
-    async waitForIdle(): Promise<void> {}
     readonly results: unknown[] = [];
     private readonly listeners = new Set<(event: unknown) => void>();
 
@@ -69,6 +67,8 @@ const sdk = vi.hoisted(() => {
       this.emit({ type: "agent_end", messages: [], willRetry: false });
     }
 
+    readonly isStreaming = false;
+    async steer(): Promise<void> {}
 
     async abort(): Promise<void> {}
 

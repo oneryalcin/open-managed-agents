@@ -60,41 +60,18 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(messageTexts(firstEvents)).toEqual(["reply: one", "reply: two"]);
   });
 
-  it("runs a message that arrives after agent_end as a new turn once Pi's run settles", async () => {
-    // Pi may already have made its last queued-message check after agent_end,
-    // so a steer there could sit unconsumed; the message must run as a turn.
-    const settle = deferred<void>();
-    const factory = new FakeSessionFactory({ settleGate: settle.promise });
-    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+  it("falls back to steer when Pi rejects prompt because the session is already running", async () => {
+    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true });
+    const runner = new PiSessionRunner({
+      sessionFactory: () => factory.create(),
+      idleTtlMs: 0,
+    });
 
-    const sent = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    settle.resolve();
+    const events = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
 
-    expect(messageTexts(await sent)).toEqual(["reply: two"]);
-  });
-
-  it("steers a second message that arrives while the first prompt is still in Pi preflight", async () => {
-    const preflight = deferred<void>();
-    const turn = deferred<void>();
-    const factory = new FakeSessionFactory({ preflightGate: preflight.promise, promptGate: turn.promise });
-    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
-
-    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
-    await until(() => factory.sessions[0]?.prompts.length === 1);
-    const second = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
-    // Let the second message reach routing while the first is in preflight.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    preflight.resolve();
-    await second;
-    turn.resolve();
-    await first;
-
-    expect({
-      prompts: factory.sessions[0]?.prompts,
-      steered: factory.sessions[0]?.steered,
-      disposed: factory.sessions[0]?.disposed,
-    }).toEqual({ prompts: ["one"], steered: ["two"], disposed: false });
+    expect(events).toEqual([]);
+    expect(factory.sessions[0]?.prompts).toEqual(["two"]);
+    expect(factory.sessions[0]?.steered).toEqual(["two"]);
   });
 
   // Pi expands "/skill:<name>" by reading the skill file from the control-plane
@@ -124,7 +101,10 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
 
   it("does not emit duplicate events when two idle sends race into prompt/steer", async () => {
     const gate = deferred<void>();
-    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const factory = new FakeSessionFactory({
+      promptGate: gate.promise,
+      throwAlreadyProcessingAfterFirstPrompt: true,
+    });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
       idleTtlMs: 0,
@@ -288,9 +268,12 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.prompts).toEqual(["one", "three"]);
   });
 
-  it("interruptSession clears a message steered into the running turn", async () => {
+  it("interruptSession clears follow-ups queued by the prompt-race fallback", async () => {
     const gate = deferred<void>();
-    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const factory = new FakeSessionFactory({
+      promptGate: gate.promise,
+      throwAlreadyProcessingAfterFirstPrompt: true,
+    });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
       idleTtlMs: 0,
@@ -756,10 +739,10 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
         const session = await factory.create();
         return {
           prompt: session.prompt.bind(session),
+          steer: session.steer.bind(session),
           get isStreaming() {
             return session.isStreaming;
           },
-          waitForIdle: session.waitForIdle.bind(session),
           abort: session.abort.bind(session),
           dispose: session.dispose.bind(session),
           subscribe: session.subscribe.bind(session),
@@ -1120,11 +1103,8 @@ class FakeSessionFactory {
 interface FakeSessionOptions {
   promptGate?: Promise<void>;
   abortGate?: Promise<void>;
-  // Hold the run active past agent_end until this settles, as Pi does while
-  // it runs post-run hooks; a fresh session starts in that state.
-  settleGate?: Promise<void>;
-  // Pi awaits auth, compaction and hooks before marking its run active.
-  preflightGate?: Promise<void>;
+  throwAlreadyProcessingOnce?: boolean;
+  throwAlreadyProcessingAfterFirstPrompt?: boolean;
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
   emitSandboxedTool?: string;
@@ -1144,30 +1124,17 @@ class FakeSession implements PiRuntimeSession {
   readonly steered: string[] = [];
   readonly promptOptions: Array<PiPromptOptions | undefined> = [];
 
-  // Like Pi, a run stays active from prompt() until it settles, past agent_end.
   get isStreaming(): boolean {
-    return this.runActive || this.settling;
-  }
-  private runActive = false;
-  private settling: boolean;
-
-  private readonly idleWaiters: Array<() => void> = [];
-
-  async waitForIdle(): Promise<void> {
-    if (this.settling) await this.opts.settleGate;
-    this.settling = false;
-    while (this.runActive) {
-      await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
-    }
+    return this.running;
   }
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
   aborts = 0;
   clearQueues = 0;
+  private threwAlreadyProcessing = false;
 
   constructor(private readonly opts: FakeSessionOptions = {}) {
-    this.settling = opts.settleGate !== undefined;
     this.agent = {
       state: {
         tools: (opts.activeToolNames ?? []).map((name) => ({ name })),
@@ -1177,35 +1144,29 @@ class FakeSession implements PiRuntimeSession {
 
   async prompt(text: string, opts?: PiPromptOptions): Promise<void> {
     this.promptOptions.push(opts);
-    if (this.isStreaming) {
-      if (opts?.streamingBehavior !== "steer") {
-        throw new Error(
-          "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-        );
-      }
+    // Pi queues instead of starting a turn only while a run is active.
+    if (opts?.streamingBehavior === "steer" && this.isStreaming) {
       this.steered.push(text);
       return;
     }
     this.prompts.push(text);
-    if (this.opts.preflightGate) {
-      await this.opts.preflightGate;
-      // Pi's Agent rejects a second run that cleared preflight concurrently.
-      if (this.runActive) {
-        throw new Error(
-          "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-        );
-      }
+    if (
+      this.opts.throwAlreadyProcessingAfterFirstPrompt === true &&
+      this.prompts.length > 1
+    ) {
+      throw new Error(
+        "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+      );
     }
-    this.runActive = true;
-    try {
-      await this.runPrompt(text);
-    } finally {
-      this.runActive = false;
-      for (const resolve of this.idleWaiters.splice(0)) resolve();
+    if (
+      this.opts.throwAlreadyProcessingOnce === true &&
+      this.threwAlreadyProcessing === false
+    ) {
+      this.threwAlreadyProcessing = true;
+      throw new Error(
+        "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+      );
     }
-  }
-
-  private async runPrompt(text: string): Promise<void> {
     if (this.opts.shouldThrowHardError?.() === true) {
       throw new Error("hard runtime failure");
     }
@@ -1258,6 +1219,10 @@ class FakeSession implements PiRuntimeSession {
       this.emitMessage(steered);
     }
     this.emit({ type: "agent_end", messages: [], willRetry: false });
+  }
+
+  async steer(text: string): Promise<void> {
+    this.steered.push(text);
   }
 
   async abort(): Promise<void> {

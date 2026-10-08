@@ -60,28 +60,33 @@ import {
 } from "./sandbox/selection.ts";
 
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000;
+const ALREADY_PROCESSING_MESSAGE = "Agent is already processing";
+
+// API text reaches the model verbatim, as in hosted Managed Agents. Pi's
+// default expands "/skill:<name>" by reading the skill file from the
+// control-plane host, not the sandbox (#255).
+const LITERAL_PROMPT: PiPromptOptions = { expandPromptTemplates: false };
+const LITERAL_STEER: PiPromptOptions = { expandPromptTemplates: false, streamingBehavior: "steer" };
+
+// Queue text on the running turn without starting one. prompt() with
+// streamingBehavior is literal but starts a fresh turn when Pi is idle, so
+// use it only while Pi is streaming (it decides synchronously, with no await
+// before its own check); otherwise keep steer(), which always just queues.
+function queueOnRunningTurn(session: PiRuntimeSession, text: string): Promise<void> {
+  return session.isStreaming ? session.prompt(text, LITERAL_STEER) : session.steer(text);
+}
 
 export interface PiPromptOptions {
   expandPromptTemplates?: boolean;
   streamingBehavior?: "steer" | "followUp";
 }
 
-// API text reaches the model verbatim, as in hosted Managed Agents. Pi's
-// default expands "/skill:<name>" by reading the skill file from the
-// control-plane host, not the sandbox (#255).
-const LITERAL_PROMPT: PiPromptOptions = { expandPromptTemplates: false };
-// Hosted Managed Agents delivers a mid-turn user.message at the next
-// model-request boundary (probe 70); Pi's steer queue has the same semantics.
-const LITERAL_STEER: PiPromptOptions = { expandPromptTemplates: false, streamingBehavior: "steer" };
-
 export interface PiRuntimeSession {
   prompt(text: string, opts?: PiPromptOptions): Promise<void>;
-  // True from prompt() until its run settles, past agent_end. Pi queues a
-  // prompt with streamingBehavior only while this is true, rejects one
-  // without it, and otherwise starts a fresh turn.
   readonly isStreaming: boolean;
-  /** Resolves once the run has settled (isStreaming false, no compaction). */
-  waitForIdle(): Promise<void>;
+  // Hosted Managed Agents delivers a mid-turn user.message at the next
+  // model-request boundary (probe 70); Pi's steer() has the same semantics.
+  steer(text: string): Promise<void>;
   abort(): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
   dispose(): void;
@@ -136,12 +141,6 @@ interface RuntimeHandle {
   session: PiRuntimeSession;
   sandbox: SandboxProvider | undefined;
   running: boolean;
-  /**
-   * Set while a fresh prompt runs Pi's preflight (auth, compaction, hooks),
-   * before Pi marks its run active; cleared at agent_start or when the
-   * prompt settles. Later messages wait on it so they steer, not race.
-   */
-  turnStarting: Promise<void> | undefined;
   needsFreshPromptAfterInterrupt: boolean;
   closeWhenIdle: boolean;
   lastUsedAt: number;
@@ -514,34 +513,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
     this.touch(sessionId, handle);
 
-    // Pi reports isStreaming only once a fresh prompt's preflight is done, so
-    // wait for a starting turn before deciding; a failed start may evict the
-    // handle, in which case start over on a fresh one.
-    for (;;) {
-      if (handle.turnStarting) {
-        await handle.turnStarting;
-        continue;
-      }
-      // After agent_end Pi is still settling (post-run hooks, compaction)
-      // and may already have made its last queued-message check, so a steer
-      // could be left unconsumed. Let the run settle, then start a turn.
-      if (handle.session.isStreaming && !handle.running) {
-        await handle.session.waitForIdle();
-        continue;
-      }
-      break;
-    }
-    if (this.sessions.get(sessionId) !== handle) {
-      yield* this.runOnSession(workspaceId, sessionId, text, signal);
-      return;
-    }
-
-    // Route on Pi's own run state, not handle.running (false from agent_end
-    // until the run settles). From here to Pi's isStreaming check inside
-    // prompt() there is no await, so Pi decides exactly as checked here.
-    if (handle.session.isStreaming && !handle.needsFreshPromptAfterInterrupt) {
+    if (handle.running && !handle.needsFreshPromptAfterInterrupt) {
       try {
-        await handle.session.prompt(text, LITERAL_STEER);
+        await queueOnRunningTurn(handle.session, text);
         this.touch(sessionId, handle);
       } catch (error) {
         this.evict(sessionId, handle);
@@ -551,16 +525,6 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
     handle.needsFreshPromptAfterInterrupt = false;
 
-    let resolveTurnStart: () => void = () => {};
-    const turnStarting = new Promise<void>((resolve) => {
-      resolveTurnStart = resolve;
-    });
-    handle.turnStarting = turnStarting;
-    const releaseTurnStart = () => {
-      if (handle.turnStarting === turnStarting) handle.turnStarting = undefined;
-      resolveTurnStart();
-    };
-
     const queue: unknown[] = [];
     const gatedEvents: unknown[] = [];
     const activeSandboxedToolCalls = new Map<
@@ -569,11 +533,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
     >();
     let done = false;
     let failure: unknown;
+    let queuedOnRunningTurn = false;
     let wake: (() => void) | undefined;
 
     const stop = handle.session.subscribe((event) => {
       updateRunning(handle, event);
-      if (handle.running) releaseTurnStart();
       queue.push(event);
       wake?.();
     });
@@ -637,21 +601,33 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     const run = handle.session
       .prompt(text, LITERAL_PROMPT)
-      .catch((error) => {
+      .catch(async (error) => {
+        if (isAlreadyProcessing(error)) {
+          await queueOnRunningTurn(handle.session, text);
+          // Best effort for the losing prompt race: once Pi confirms this
+          // message is queued on the running turn, discard overlap events
+          // captured by this temporary subscriber. A pre-rejection event can
+          // still escape; in practice that should be limited to early status
+          // frames, while the winning prompt subscriber owns the full turn,
+          // including the steered message's output.
+          queuedOnRunningTurn = true;
+          queue.length = 0;
+          return;
+        }
         failure = error;
       })
       .finally(() => {
-        releaseTurnStart();
         done = true;
         wake?.();
       });
 
     try {
       while (!done || queue.length > 0) {
+        if (queuedOnRunningTurn) break;
         if (queue.length === 0) {
           await new Promise<void>((resolve) => {
             wake = resolve;
-            if (done || queue.length > 0) {
+            if (done || queuedOnRunningTurn || queue.length > 0) {
               wake = undefined;
               resolve();
             }
@@ -884,7 +860,6 @@ export class PiSessionRunner implements RuntimeEventRunner {
           session,
           sandbox,
           running: false,
-          turnStarting: undefined,
           needsFreshPromptAfterInterrupt: false,
           // Retrying MCP failures use fresh-handle mechanics: dispose at
           // idle so the NEXT turn re-runs connect/discovery (plan 0122 §4.6).
@@ -1401,6 +1376,12 @@ function updateRunning(handle: RuntimeHandle, event: unknown): void {
   if (type === "agent_end") handle.running = false;
 }
 
+function isAlreadyProcessing(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes(ALREADY_PROCESSING_MESSAGE)
+  );
+}
 
 function isInternalRuntimeEvent(event: unknown): boolean {
   if (typeof event !== "object" || event === null) return false;
