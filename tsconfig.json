@@ -13,7 +13,7 @@
     "lib": ["es2022"],
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "scratch/**/*.ts"],
+  "include": ["src/**/*.ts", "scratch/**/*.ts", "test/**/*.ts"],
   "exclude": [
     "node_modules",
     "dist",

@@ -10,5 +10,6 @@ export default defineConfig({
     ],
     // Probes (scratch/0N-*.ts) are runnable scripts, not unit tests — exclude them.
     exclude: ["**/node_modules/**", "scratch/0*-*.ts"],
+    setupFiles: ["test/hermetic-env.ts"],
   },
 });

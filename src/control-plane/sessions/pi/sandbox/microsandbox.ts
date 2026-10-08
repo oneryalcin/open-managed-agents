@@ -1521,11 +1521,23 @@ export function execMicrosandboxCommand(
 ): Promise<MicrosandboxCliResult> {
   return new Promise((resolve, reject) => {
     const maxBuffer = opts.maxBuffer ?? DEFAULT_MICROSANDBOX_MAX_BUFFER;
+    // Own process group, so a kill reaches grandchildren too. Otherwise a
+    // forked descendant (Linux /bin/sh does not exec its last command) keeps
+    // the stdio pipes open and "close" waits for it to exit on its own.
     const child = spawn(command, [...args], {
       cwd: opts.cwd,
       env: opts.env,
       stdio: ["pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
+    const killTree = (): void => {
+      try {
+        if (child.pid !== undefined && process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let outputBytes = 0;
@@ -1551,7 +1563,7 @@ export function execMicrosandboxCommand(
       if (settled || terminalError) return;
       terminalError = new Error("aborted");
       terminalError.name = "AbortError";
-      child.kill("SIGKILL");
+      killTree();
     };
     const collect = (
       target: Buffer[],
@@ -1564,7 +1576,7 @@ export function execMicrosandboxCommand(
           terminalError = new Error(
             `Microsandbox command output exceeded ${maxBuffer} bytes`,
           );
-          child.kill("SIGKILL");
+          killTree();
         }
         return;
       }
@@ -1595,7 +1607,7 @@ export function execMicrosandboxCommand(
       fail(error as Error);
     }
     if (opts.timeoutMs !== undefined) {
-      timeout = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs);
+      timeout = setTimeout(killTree, opts.timeoutMs);
     }
   });
 }

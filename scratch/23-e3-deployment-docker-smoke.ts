@@ -16,6 +16,7 @@
  *        docker-local    -> IN_DOCKER=yes  PWD=/workspace
  *        host-passthrough-> IN_DOCKER=no   PWD=<host tmpdir, not /workspace>
  *      The host-passthrough run is the negative control: it proves /.dockerenv
+ *      (Docker) or /run/.containerenv (Podman)
  *      and PWD=/workspace are genuine discriminators, not always-true strings.
  *
  *   2. MODEL-DRIVEN SERVED PATH (docker-local only, manual/model-dependent):
@@ -61,7 +62,7 @@ const SESSION_ID = `sesn_probe23_${RUN_ID.toLowerCase()}`;
 //   "<MARKER> IN_DOCKER=<yes|no> PWD=<cwd>\n"
 const CMD =
   `printf '${MARKER} IN_DOCKER='; ` +
-  `if [ -f /.dockerenv ]; then printf yes; else printf no; fi; ` +
+  `if [ -f /.dockerenv ] || [ -f /run/.containerenv ]; then printf yes; else printf no; fi; ` +
   `printf ' PWD='; pwd`;
 const EXPECTED_DOCKER_OUTPUT = `${MARKER} IN_DOCKER=yes PWD=/workspace\n`;
 
