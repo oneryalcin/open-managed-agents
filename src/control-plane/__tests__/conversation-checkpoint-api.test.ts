@@ -464,6 +464,41 @@ describe("continuity notes on rebuild (plan 0147 slice 3b)", () => {
     expect(lastRequest(h.pi).some((m) => m.includes("did not finish"))).toBe(false);
   });
 
+  it("recovers from a server-side failure mid-turn and tells the model that turn did not finish", async () => {
+    // A failure while the service persists the turn's events abandons the
+    // runner mid-turn; the session must not wedge on the dead run.
+    let failNext = true;
+    const h = await harness({
+      wrapStore: (store) =>
+        new Proxy(store, {
+          get(target, prop, receiver) {
+            if (prop !== "appendBatchWithRuntimeChanges") {
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            }
+            return (events: readonly PersistedSessionEvent[], changes: EventStoreRuntimeChanges) => {
+              if (failNext && events.some((event) => event.type === "agent.message")) {
+                failNext = false;
+                throw new Error("disk full");
+              }
+              return target.appendBatchWithRuntimeChanges(events, changes);
+            };
+          },
+        }),
+    });
+    h.pi.core.setResponses([
+      h.pi.faux.fauxAssistantMessage("lost reply"),
+      h.pi.faux.fauxAssistantMessage("ok"),
+    ]);
+    h.send("Deploy the app.");
+    await waitFor(() => !failNext && h.idles() >= 1);
+
+    h.send("Status?");
+    await waitFor(() => h.pi.core.state.callCount === 2);
+
+    expect(lastRequest(h.pi).find((m) => m.includes("did not finish"))).toContain("> Deploy the app.");
+  });
+
   it("tells the model its sandbox was recreated when a rebuild gets a fresh workspace", async () => {
     const h = await harness({ idleTtlMs: 20, rebuildRecreatesWorkspace: true });
     h.pi.core.setResponses([

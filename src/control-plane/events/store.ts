@@ -1447,10 +1447,11 @@ function ensureOpenModelRequestStartIdsColumn(db: DatabaseSync): void {
 
 // Which runtime turns' user messages a saved checkpoint includes (plan 0147):
 // the settled turn and any steered into it. A closed turn missing here never
-// reached the saved conversation. Conversations saved before this table
-// existed are backfilled from each entry's checkpoint turn, so their settled
-// turns are not reported as unfinished (steered turns of that period cannot be
-// recovered and may be reported once).
+// reached the saved conversation. When the table is first created, every turn
+// already closed is marked covered: those predate this tracking (0.2.0 and
+// earlier saved no conversation at all), so there is nothing honest to report
+// about them, and reporting them would tell the model its whole history was
+// cut off.
 function ensureConversationTurnsTable(db: DatabaseSync): void {
   const exists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_conversation_turns'")
@@ -1463,7 +1464,10 @@ function ensureConversationTurnsTable(db: DatabaseSync): void {
       turn_id TEXT NOT NULL,
       PRIMARY KEY (workspace_id, session_id, turn_id)
     );
-    INSERT INTO session_conversation_turns (workspace_id, session_id, turn_id)
+    INSERT OR IGNORE INTO session_conversation_turns (workspace_id, session_id, turn_id)
+      SELECT workspace_id, session_id, turn_id FROM pending_runtime_turns
+      WHERE state IN ('completed', 'terminalized');
+    INSERT OR IGNORE INTO session_conversation_turns (workspace_id, session_id, turn_id)
       SELECT DISTINCT workspace_id, session_id, turn_id FROM session_conversation_entries;
   `);
 }

@@ -812,6 +812,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
       signal?.removeEventListener("abort", onAbort);
       // Once yielded, the settled event's release() belongs to the service.
       if (!settledEmitted) this.releaseHold(sessionId, handle, hold);
+      // The consumer abandoned the turn before Pi settled (e.g. the service
+      // failed to persist its events). With the listener gone, agent_end is
+      // never seen and handle.running would stay true, so every later message
+      // would steer into a dead run. Evict: the next message rebuilds from the
+      // saved conversation.
+      if (!done && this.sessions.get(sessionId) === handle) {
+        this.evict(sessionId, handle);
+      }
     }
   }
 

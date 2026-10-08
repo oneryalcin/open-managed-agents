@@ -302,6 +302,41 @@ describe("conversation store", () => {
     }
   });
 
+  it("does not report turns closed before coverage existed, as in a 0.2.0 database", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-coverage-"));
+    try {
+      const path = join(dir, "events.sqlite");
+      const first = EventStore.open(path);
+      const now = new Date().toISOString();
+      const message: PersistedSessionEvent = {
+        id: "sevt_old", workspace_id: WORKSPACE_ID, session_id: SESSION_ID, type: "user.message",
+        processed_at: now, payload: { content: [{ type: "text", text: "old" }] }, created_at: now,
+      };
+      first.appendBatchWithRuntimeChanges([message], {
+        acceptedTurns: [{
+          workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID, ownerId: "owner_a",
+          ownerGeneration: 1, leaseExpiresAt: now, triggerEventIds: [message.id], now,
+        }],
+      });
+      first.appendBatchWithRuntimeChanges([], {
+        closedTurns: [{
+          workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID, ownerId: "owner_a",
+          ownerGeneration: 1, reason: "completed", state: "completed", now,
+        }],
+      });
+      // 0.2.0 shape: closed turns, no saved conversation, no coverage table.
+      const raw = new DatabaseSync(path);
+      raw.exec("DROP TABLE session_conversation_turns");
+      raw.close();
+
+      const reopened = EventStore.open(path);
+
+      expect(reopened.loadConversation(WORKSPACE_ID, SESSION_ID).unfinished).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the conversation across a reopen of a file-backed store", () => {
     const dir = mkdtempSync(join(tmpdir(), "oma-conversation-"));
     try {

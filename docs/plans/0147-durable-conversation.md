@@ -204,10 +204,19 @@ progress. That is unchanged from today and is ADR 0018 stage 3.
     problem.
   - Known edge: a message stranded in Pi's queue by the #260 race is counted
     as covered by the run it was steered into, although it was not delivered.
-- **Notes are idempotent.** A D2 note is added through Pi's custom-message
+- **Notes are not repeated needlessly.** A D2 note is a Pi custom-message
   entry, which the model sees as a user message and the next checkpoint saves.
-  Rebuild skips a note when an identical one is already the last note entry,
-  so repeated rebuilds don't pile them up.
+  - The unfinished-turn note records the event ids it reported, and those are
+    never reported again.
+  - The sandbox note is added once per rebuild that really recreated the
+    sandbox, since each one loses files again. It is skipped when the last saved
+    entry is already that note (a rebuild with no turn since).
+- **Known delay (#273):** after a crash, the abandoned turn stays pending
+  until its lease expires, so a message sent in that window gets no
+  unfinished-turn note until the next eviction or restart.
+- **A server-side failure mid-turn evicts the runtime handle** (found in
+  review; it previously wedged the session, a bug that already existed in
+  `main`), so the next message rebuilds and gets the note.
 - No tool-result repair (Pi fact 5).
 
 ## Decisions
@@ -272,7 +281,8 @@ Real Pi with the faux provider (D3), through the events service unless noted:
   advances the cursor only to the released checkpoint's endpoint.
 - **Undispatched and pending messages:** an image-only message, and a message
   whose turn is still pending at rebuild, produce no cut-off note.
-- **Notes don't pile up:** two rebuilds in a row leave one workspace note.
+- **Notes aren't repeated:** an unfinished-turn note is not added again on a
+  later rebuild.
 - **Closed or deleted session:** no conversation rows are written.
 - **Delete:** deleting a session removes its conversation rows.
 - **Unclean end:** after a turn that ends in a hard error, the next rebuild's
