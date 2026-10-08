@@ -214,6 +214,7 @@ export class EventStore implements SessionEventStore {
   private readonly appendStmt: StatementSync;
   private readonly deleteForSessionStmt: StatementSync;
   private readonly turnOwnedByStmt: StatementSync;
+  private readonly turnClosedByStmt: StatementSync;
   private readonly insertConversationEntryStmt: StatementSync;
   private readonly listConversationEntriesStmt: StatementSync;
   private readonly deleteConversationForSessionStmt: StatementSync;
@@ -270,6 +271,12 @@ export class EventStore implements SessionEventStore {
       `SELECT 1 FROM pending_runtime_turns
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
          AND owner_id = ? AND owner_generation = ?`,
+    );
+    this.turnClosedByStmt = this.db.prepare(
+      `SELECT 1 FROM pending_runtime_turns
+       WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
+         AND owner_id = ? AND owner_generation = ?
+         AND state IN ('completed', 'terminalized')`,
     );
     // Idempotent on entry_id only: re-offering an already-saved entry is a
     // no-op and does not consume a seq. Any other constraint violation still
@@ -1012,18 +1019,47 @@ export class EventStore implements SessionEventStore {
     }
   }
 
+  isRuntimeTurnOwnedBy(fence: {
+    workspaceId: WorkspaceId;
+    sessionId: string;
+    turnId: string;
+    ownerId: string;
+    ownerGeneration: number;
+  }): boolean {
+    return (
+      this.turnOwnedByStmt.get(
+        fence.workspaceId,
+        fence.sessionId,
+        fence.turnId,
+        fence.ownerId,
+        fence.ownerGeneration,
+      ) !== undefined
+    );
+  }
+
+  isRuntimeTurnClosedBy(fence: {
+    workspaceId: WorkspaceId;
+    sessionId: string;
+    turnId: string;
+    ownerId: string;
+    ownerGeneration: number;
+  }): boolean {
+    return (
+      this.turnClosedByStmt.get(
+        fence.workspaceId,
+        fence.sessionId,
+        fence.turnId,
+        fence.ownerId,
+        fence.ownerGeneration,
+      ) !== undefined
+    );
+  }
+
   // Fenced on turn ownership, not on the turn being open: a turn this owner
   // already closed still saves its settled entries; a stale owner throws and
   // the whole batch rolls back.
   private applyConversationCheckpoint(checkpoint: RuntimeConversationCheckpoint): void {
-    const owned = this.turnOwnedByStmt.get(
-      checkpoint.workspaceId,
-      checkpoint.sessionId,
-      checkpoint.turnId,
-      checkpoint.ownerId,
-      checkpoint.ownerGeneration,
-    );
-    if (owned === undefined) {
+    if (!this.isRuntimeTurnOwnedBy(checkpoint)) {
       throw new RuntimeTurnOwnershipLostError(checkpoint.turnId);
     }
     for (const entry of checkpoint.entries) {

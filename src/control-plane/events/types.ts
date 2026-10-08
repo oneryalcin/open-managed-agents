@@ -261,6 +261,28 @@ export interface EventStoreRuntimeChanges {
 
 export interface SessionEventStore {
   append(event: PersistedSessionEvent): void;
+  /**
+   * Whether this owner and generation still own the turn row, open or closed
+   * (the conversation checkpoint fence, plan 0147).
+   */
+  isRuntimeTurnOwnedBy(fence: {
+    workspaceId: WorkspaceId;
+    sessionId: string;
+    turnId: string;
+    ownerId: string;
+    ownerGeneration: number;
+  }): boolean;
+  /**
+   * Whether the turn is closed and this owner and generation still own it:
+   * what this owner's own interrupt leaves behind (plan 0147).
+   */
+  isRuntimeTurnClosedBy(fence: {
+    workspaceId: WorkspaceId;
+    sessionId: string;
+    turnId: string;
+    ownerId: string;
+    ownerGeneration: number;
+  }): boolean;
   /** A session's saved Pi conversation, in append order (plan 0147). */
   listConversationEntries(
     workspaceId: WorkspaceId,
@@ -577,6 +599,22 @@ export interface RuntimeMcpConnectionFailedEvent {
   mcpServerName: string;
   message: string;
   retryStatus: "retrying" | "exhausted" | "terminal";
+}
+
+/**
+ * Yielded once by the runner when the Pi run that owns a turn has settled
+ * (plan 0147): `entries` are the Pi conversation entries appended since the
+ * last acknowledged checkpoint. The service must call `release` on every exit:
+ * `true` only after the checkpoint committed, which advances the runner's
+ * cursor to this settlement's endpoint; `false` otherwise, keeping the
+ * entries for the next settled turn. `release` is idempotent: the first call
+ * wins, so a `finally` can always release with `false`.
+ */
+export interface RuntimeConversationSettledEvent {
+  type: "oma.conversation_settled";
+  entries: readonly ConversationEntryRecord[];
+  piVersion: string;
+  release: (committed: boolean) => void;
 }
 
 export type RuntimeInternalEvent =

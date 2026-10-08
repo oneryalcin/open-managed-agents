@@ -6,7 +6,149 @@ import {
   type PiRuntimeSession,
   type PiUserMessage,
 } from "../runner.ts";
+import type { RuntimeConversationSettledEvent } from "../../../events/types.ts";
 import type { SandboxProvider } from "../sandbox/provider.ts";
+
+describe("PiSessionRunner conversation checkpoints (plan 0147)", () => {
+  type Settled = RuntimeConversationSettledEvent;
+  const settledOf = (events: unknown[]): Settled[] =>
+    events.filter((event): event is Settled =>
+      (event as { type?: unknown }).type === "oma.conversation_settled");
+
+  it("holds the handle through close() until the settled checkpoint is released", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [settled] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one")));
+
+    runner.close();
+    const disposedWhileHeld = factory.sessions[0]?.disposed;
+    settled!.release(true);
+
+    expect({ disposedWhileHeld, disposedAfterRelease: factory.sessions[0]?.disposed })
+      .toEqual({ disposedWhileHeld: false, disposedAfterRelease: true });
+  });
+
+  it("advances the cursor only to the endpoint captured at settlement", async () => {
+    const log = [{ id: "e1" }];
+    const factory = new FakeSessionFactory({ sessionLog: log });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [first] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one")));
+    log.push({ id: "e2" }); // a newer run appends before the first checkpoint commits
+    first!.release(true);
+    log.push({ id: "e3" });
+
+    const [second] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "two")));
+
+    expect(second!.entries.map((entry) => entry.entryId)).toEqual(["e2", "e3"]);
+  });
+
+  it("snapshots the conversation when the prompt resolves, not when the generator resumes", async () => {
+    // The service can pause on an event (e.g. output indexing) while a newer
+    // turn starts and appends; the older checkpoint must not include it.
+    const log = [{ id: "e1" }];
+    const factory = new FakeSessionFactory({ sessionLog: log });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const iterator = runner.runUserMessage("wrk", "sesn_1", "one")[Symbol.asyncIterator]();
+    await iterator.next(); // first event; the fake's prompt resolves right after
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    log.push({ id: "newer_turn_user" });
+
+    const rest: unknown[] = [];
+    for (let step = await iterator.next(); !step.done; step = await iterator.next()) {
+      rest.push(step.value);
+    }
+
+    expect(settledOf(rest)[0]!.entries.map((entry) => entry.entryId)).toEqual(["hdr", "e1"]);
+  });
+
+  it("offers the same entries again after a release that did not commit", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [first] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one")));
+    first!.release(false);
+
+    const [second] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "two")));
+
+    expect(second!.entries.map((entry) => entry.entryId)).toEqual(["hdr", "e1"]);
+  });
+
+  it("keeps the handle until every overlapping hold is released", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [first] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one")));
+    const [second] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "two")));
+    runner.close();
+
+    second!.release(true);
+    const disposedWithOneHold = factory.sessions[0]?.disposed;
+    first!.release(true);
+
+    expect({ disposedWithOneHold, disposedAfterBoth: factory.sessions[0]?.disposed })
+      .toEqual({ disposedWithOneHold: false, disposedAfterBoth: true });
+  });
+
+  it("does not idle-evict a handle whose settled checkpoint is still held", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 10 });
+    const [settled] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one")));
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const disposedWhileHeld = factory.sessions[0]?.disposed;
+    settled!.release(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect({ disposedWhileHeld, disposedAfterRelease: factory.sessions[0]?.disposed })
+      .toEqual({ disposedWhileHeld: false, disposedAfterRelease: true });
+  });
+
+  it("waits for a held closeWhenIdle handle's checkpoint before replacing it", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [settled] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one")));
+    // As after an MCP connection failure (plan 0122 §4.6).
+    (runner as unknown as { sessions: Map<string, { closeWhenIdle: boolean }> })
+      .sessions.get("sesn_1")!.closeWhenIdle = true;
+
+    const next = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const replacedWhileHeld = factory.sessions.length > 1;
+    settled!.release(true);
+    await next;
+
+    expect({ replacedWhileHeld, replacedAfterRelease: factory.sessions.length })
+      .toEqual({ replacedWhileHeld: false, replacedAfterRelease: 2 });
+  });
+
+  it("does not build a new session for a message that waited while its session was closed", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [settled] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one")));
+    (runner as unknown as { sessions: Map<string, { closeWhenIdle: boolean }> })
+      .sessions.get("sesn_1")!.closeWhenIdle = true;
+
+    const waiting = collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runner.closeSession("wrk", "sesn_1");
+    settled!.release(true);
+
+    await expect(waiting).rejects.toThrow(/is closed/);
+    expect(factory.sessions).toHaveLength(1);
+  });
+
+  it("emits no checkpoint from the losing side of the prompt race and releases its hold", async () => {
+    const factory = new FakeSessionFactory({
+      sessionLog: [{ id: "e1" }],
+      throwAlreadyProcessingOnce: true,
+    });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+
+    const events = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    runner.close();
+
+    expect({ settled: settledOf(events).length, disposed: factory.sessions[0]?.disposed })
+      .toEqual({ settled: 0, disposed: true });
+  });
+});
 
 describe("PiSessionRunner continuity (Cycle C.3a)", () => {
   it("reuses one Pi session for multiple turns of the same managed session", async () => {
@@ -1103,6 +1245,8 @@ interface FakeSessionOptions {
   promptGate?: Promise<void>;
   abortGate?: Promise<void>;
   throwAlreadyProcessingOnce?: boolean;
+  // Opt-in Pi session log, so the runner checkpoints settled turns (plan 0147).
+  sessionLog?: Array<{ id: string }>;
   throwAlreadyProcessingAfterFirstPrompt?: boolean;
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
@@ -1126,6 +1270,9 @@ class FakeSession implements PiRuntimeSession {
   readonly promptOptions: Array<{ expandPromptTemplates?: boolean } | undefined> = [];
   readonly steered: string[] = [];
   readonly steeredMessages: PiUserMessage[] = [];
+  readonly sessionManager:
+    | { getHeader(): { id: string }; getEntries(): Array<{ id: string }> }
+    | undefined;
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
@@ -1134,6 +1281,11 @@ class FakeSession implements PiRuntimeSession {
   private threwAlreadyProcessing = false;
 
   constructor(private readonly opts: FakeSessionOptions = {}) {
+    const log = opts.sessionLog;
+    this.sessionManager =
+      log === undefined
+        ? undefined
+        : { getHeader: () => ({ id: "hdr" }), getEntries: () => log };
     this.agent = {
       state: {
         tools: (opts.activeToolNames ?? []).map((name) => ({ name })),

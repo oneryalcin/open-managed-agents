@@ -38,6 +38,8 @@ import type {
   ListSessionEventsOptions,
   PendingRuntimeActionRecord,
   PendingRuntimeTurnRecord,
+  RuntimeConversationCheckpoint,
+  RuntimeConversationSettledEvent,
   RuntimeEventRunner,
   RuntimeEventTranslator,
   PersistedSessionEvent,
@@ -73,6 +75,7 @@ import {
   toSendResponseEvent,
 } from "./request.ts";
 import {
+  isRuntimeConversationSettledEvent,
   hasTerminalIdleDraft,
   isRuntimeCustomToolUseEvent,
   isRuntimeMcpConnectionFailedEvent,
@@ -1230,6 +1233,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
           sessionId,
           prompt,
         );
+        let settled: RuntimeConversationSettledEvent | undefined;
+        let drainingClosedTurn = false;
         try {
           this.markRuntimeTurnState(
             workspaceId,
@@ -1246,232 +1251,253 @@ export class DefaultSessionEventsService implements SessionEventsService {
             { signal },
           );
           for await (const piEvent of source) {
-            if (isRuntimeCustomToolUseEvent(piEvent)) {
-              this.customTools.persistCustomToolUse(
-                workspaceId,
-                sessionId,
-                prompt.turnId,
-                prompt.ownerId,
-                prompt.ownerGeneration,
-                piEvent,
-              );
+            if (isRuntimeConversationSettledEvent(piEvent)) {
+              settled = piEvent;
               continue;
             }
-            if (isRuntimeToolPermissionUseEvent(piEvent)) {
-              this.toolConfirmations.persistToolPermissionUse(
-                workspaceId,
-                sessionId,
-                prompt.turnId,
-                prompt.ownerId,
-                prompt.ownerGeneration,
-                piEvent,
-              );
-              continue;
-            }
-            if (isRuntimeToolPermissionWithModelEndEvent(piEvent)) {
-              const closingModelRequestStartId =
-                activeOpenModelRequestStartIds[
-                  activeOpenModelRequestStartIds.length - 1
-                ];
-              const closedModelRequestStartId =
-                this.toolConfirmations.persistToolPermissionUseWithModelEnd(
+            // This owner's own interrupt can close the turn mid-stream; later
+            // writes then fail the pending-only fence. Keep draining (writing
+            // nothing) until the settled event so the conversation is saved.
+            if (drainingClosedTurn) continue;
+            try {
+              if (isRuntimeCustomToolUseEvent(piEvent)) {
+                this.customTools.persistCustomToolUse(
                   workspaceId,
                   sessionId,
                   prompt.turnId,
                   prompt.ownerId,
                   prompt.ownerGeneration,
                   piEvent,
-                  closingModelRequestStartId,
                 );
-              if (closedModelRequestStartId !== undefined) {
-                activeOpenModelRequestStartIds.pop();
+                continue;
               }
-              continue;
-            }
-            if (isRuntimeMcpToolUseEvent(piEvent)) {
-              this.toolConfirmations.persistMcpToolUse(
-                workspaceId,
-                sessionId,
-                prompt.turnId,
-                prompt.ownerId,
-                prompt.ownerGeneration,
-                piEvent,
-              );
-              continue;
-            }
-            if (isRuntimeMcpToolWithModelEndEvent(piEvent)) {
-              const closingModelRequestStartId =
-                activeOpenModelRequestStartIds[
-                  activeOpenModelRequestStartIds.length - 1
-                ];
-              const closedModelRequestStartId =
-                this.toolConfirmations.persistMcpToolUseWithModelEnd(
+              if (isRuntimeToolPermissionUseEvent(piEvent)) {
+                this.toolConfirmations.persistToolPermissionUse(
                   workspaceId,
                   sessionId,
                   prompt.turnId,
                   prompt.ownerId,
                   prompt.ownerGeneration,
                   piEvent,
-                  closingModelRequestStartId,
                 );
-              if (closedModelRequestStartId !== undefined) {
-                activeOpenModelRequestStartIds.pop();
+                continue;
               }
-              continue;
-            }
-            if (isRuntimeMcpToolResultEvent(piEvent)) {
-              this.toolConfirmations.persistMcpToolResult(
-                workspaceId,
-                sessionId,
-                prompt.turnId,
-                prompt.ownerId,
-                prompt.ownerGeneration,
-                piEvent,
-              );
-              continue;
-            }
-            if (isRuntimeMcpConnectionFailedEvent(piEvent)) {
-              this.toolConfirmations.persistMcpConnectionFailed(
-                workspaceId,
-                sessionId,
-                prompt.turnId,
-                prompt.ownerId,
-                prompt.ownerGeneration,
-                piEvent,
-              );
-              continue;
-            }
-            const spanStartDrafts = spanModelRequestStartDraft(piEvent);
-            const transcriptDrafts = this.runtimeTranslator(piEvent, {
-              customToolNames: this.runtimeRunner.customToolNames?.(
-                workspaceId,
-                sessionId,
-              ),
-              publicToolUseIdForPiToolCallId: (piToolCallId) =>
-                this.runtimeRunner?.publicToolUseIdForPiToolCallId?.(
-                  workspaceId,
-                  sessionId,
-                  piToolCallId,
-                ),
-              suppressPiToolUse: (piToolCallId) =>
-                this.runtimeRunner?.suppressPiToolUse?.(
-                  workspaceId,
-                  sessionId,
-                  piToolCallId,
-                ) === true,
-            });
-            const closingModelRequestStartId =
-              activeOpenModelRequestStartIds[
-                activeOpenModelRequestStartIds.length - 1
-              ];
-            const spanEndDrafts = spanModelRequestEndDraft(
-              piEvent,
-              closingModelRequestStartId,
-            );
-            const drafts = [
-              ...spanStartDrafts,
-              ...transcriptDrafts,
-              ...spanEndDrafts,
-            ];
-            if (drafts.length === 0) continue;
-            if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-            if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
-            const now = new Date().toISOString();
-            const rows = materializePersistedEvents(
-              workspaceId,
-              sessionId,
-              drafts,
-              now,
-            );
-            if (spanStartDrafts.length > 1) {
-              throw new Error("Expected at most one model request start draft");
-            }
-            const openedModelRequestStartId =
-              spanStartDrafts.length > 0 ? rows[0]?.id : undefined;
-            // First coordinator slice: fence the general translated runtime
-            // transcript path. Custom tool, tool-permission, renewal, and
-            // error-cleanup paths still use their existing store-level owner
-            // checks; track the remaining seam audit in GitHub issue #113.
-            this.runtimeEventCoordinator!.commitRuntimeEventsForTurn({
-              workspaceId,
-              sessionId,
-              turnId: prompt.turnId,
-              ownerId: prompt.ownerId,
-              ownerGeneration: prompt.ownerGeneration,
-              events: rows,
-              changes: {
-                openedModelRequestStarts:
-                  openedModelRequestStartId === undefined
-                    ? []
-                    : [
-                        {
-                          workspaceId,
-                          sessionId,
-                          turnId: prompt.turnId,
-                          ownerId: prompt.ownerId,
-                          ownerGeneration: prompt.ownerGeneration,
-                          startEventId: openedModelRequestStartId,
-                          now,
-                        },
-                      ],
-                closedModelRequestStarts:
-                  spanEndDrafts.length === 0 ||
-                  closingModelRequestStartId === undefined
-                    ? []
-                    : [
-                        {
-                          workspaceId,
-                          sessionId,
-                          turnId: prompt.turnId,
-                          ownerId: prompt.ownerId,
-                          ownerGeneration: prompt.ownerGeneration,
-                          startEventId: closingModelRequestStartId,
-                          now,
-                        },
-                      ],
-                turnStates: [
-                  {
+              if (isRuntimeToolPermissionWithModelEndEvent(piEvent)) {
+                const closingModelRequestStartId =
+                  activeOpenModelRequestStartIds[
+                    activeOpenModelRequestStartIds.length - 1
+                  ];
+                const closedModelRequestStartId =
+                  this.toolConfirmations.persistToolPermissionUseWithModelEnd(
                     workspaceId,
                     sessionId,
-                    turnId: prompt.turnId,
-                    ownerId: prompt.ownerId,
-                    ownerGeneration: prompt.ownerGeneration,
-                    leaseExpiresAt: leaseExpiresAt(now, this.leaseTtlMs),
-                    state: "running",
-                    now,
-                  },
-                ],
-              },
-            });
-            this.broadcaster.publishPersisted(rows);
-            if (openedModelRequestStartId !== undefined) {
-              activeOpenModelRequestStartIds.push(openedModelRequestStartId);
-            }
-            if (
-              spanEndDrafts.length > 0 &&
-              closingModelRequestStartId !== undefined
-            ) {
-              activeOpenModelRequestStartIds.pop();
-            }
-            if (hasTerminalIdleDraft(drafts)) {
-              this.setRuntimeTaskPostIdle(workspaceId, sessionId, task, true);
-              await this.indexSessionOutputsFromLiveRuntime(
+                    prompt.turnId,
+                    prompt.ownerId,
+                    prompt.ownerGeneration,
+                    piEvent,
+                    closingModelRequestStartId,
+                  );
+                if (closedModelRequestStartId !== undefined) {
+                  activeOpenModelRequestStartIds.pop();
+                }
+                continue;
+              }
+              if (isRuntimeMcpToolUseEvent(piEvent)) {
+                this.toolConfirmations.persistMcpToolUse(
+                  workspaceId,
+                  sessionId,
+                  prompt.turnId,
+                  prompt.ownerId,
+                  prompt.ownerGeneration,
+                  piEvent,
+                );
+                continue;
+              }
+              if (isRuntimeMcpToolWithModelEndEvent(piEvent)) {
+                const closingModelRequestStartId =
+                  activeOpenModelRequestStartIds[
+                    activeOpenModelRequestStartIds.length - 1
+                  ];
+                const closedModelRequestStartId =
+                  this.toolConfirmations.persistMcpToolUseWithModelEnd(
+                    workspaceId,
+                    sessionId,
+                    prompt.turnId,
+                    prompt.ownerId,
+                    prompt.ownerGeneration,
+                    piEvent,
+                    closingModelRequestStartId,
+                  );
+                if (closedModelRequestStartId !== undefined) {
+                  activeOpenModelRequestStartIds.pop();
+                }
+                continue;
+              }
+              if (isRuntimeMcpToolResultEvent(piEvent)) {
+                this.toolConfirmations.persistMcpToolResult(
+                  workspaceId,
+                  sessionId,
+                  prompt.turnId,
+                  prompt.ownerId,
+                  prompt.ownerGeneration,
+                  piEvent,
+                );
+                continue;
+              }
+              if (isRuntimeMcpConnectionFailedEvent(piEvent)) {
+                this.toolConfirmations.persistMcpConnectionFailed(
+                  workspaceId,
+                  sessionId,
+                  prompt.turnId,
+                  prompt.ownerId,
+                  prompt.ownerGeneration,
+                  piEvent,
+                );
+                continue;
+              }
+              const spanStartDrafts = spanModelRequestStartDraft(piEvent);
+              const transcriptDrafts = this.runtimeTranslator(piEvent, {
+                customToolNames: this.runtimeRunner.customToolNames?.(
+                  workspaceId,
+                  sessionId,
+                ),
+                publicToolUseIdForPiToolCallId: (piToolCallId) =>
+                  this.runtimeRunner?.publicToolUseIdForPiToolCallId?.(
+                    workspaceId,
+                    sessionId,
+                    piToolCallId,
+                  ),
+                suppressPiToolUse: (piToolCallId) =>
+                  this.runtimeRunner?.suppressPiToolUse?.(
+                    workspaceId,
+                    sessionId,
+                    piToolCallId,
+                  ) === true,
+              });
+              const closingModelRequestStartId =
+                activeOpenModelRequestStartIds[
+                  activeOpenModelRequestStartIds.length - 1
+                ];
+              const spanEndDrafts = spanModelRequestEndDraft(
+                piEvent,
+                closingModelRequestStartId,
+              );
+              const drafts = [
+                ...spanStartDrafts,
+                ...transcriptDrafts,
+                ...spanEndDrafts,
+              ];
+              if (drafts.length === 0) continue;
+              if (this.closedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+              if (this.deletedSessions.has(sessionScopeKey(workspaceId, sessionId))) return;
+              const now = new Date().toISOString();
+              const rows = materializePersistedEvents(
                 workspaceId,
                 sessionId,
-                prompt,
+                drafts,
+                now,
               );
+              if (spanStartDrafts.length > 1) {
+                throw new Error("Expected at most one model request start draft");
+              }
+              const openedModelRequestStartId =
+                spanStartDrafts.length > 0 ? rows[0]?.id : undefined;
+              // First coordinator slice: fence the general translated runtime
+              // transcript path. Custom tool, tool-permission, renewal, and
+              // error-cleanup paths still use their existing store-level owner
+              // checks; track the remaining seam audit in GitHub issue #113.
+              this.runtimeEventCoordinator!.commitRuntimeEventsForTurn({
+                workspaceId,
+                sessionId,
+                turnId: prompt.turnId,
+                ownerId: prompt.ownerId,
+                ownerGeneration: prompt.ownerGeneration,
+                events: rows,
+                changes: {
+                  openedModelRequestStarts:
+                    openedModelRequestStartId === undefined
+                      ? []
+                      : [
+                          {
+                            workspaceId,
+                            sessionId,
+                            turnId: prompt.turnId,
+                            ownerId: prompt.ownerId,
+                            ownerGeneration: prompt.ownerGeneration,
+                            startEventId: openedModelRequestStartId,
+                            now,
+                          },
+                        ],
+                  closedModelRequestStarts:
+                    spanEndDrafts.length === 0 ||
+                    closingModelRequestStartId === undefined
+                      ? []
+                      : [
+                          {
+                            workspaceId,
+                            sessionId,
+                            turnId: prompt.turnId,
+                            ownerId: prompt.ownerId,
+                            ownerGeneration: prompt.ownerGeneration,
+                            startEventId: closingModelRequestStartId,
+                            now,
+                          },
+                        ],
+                  turnStates: [
+                    {
+                      workspaceId,
+                      sessionId,
+                      turnId: prompt.turnId,
+                      ownerId: prompt.ownerId,
+                      ownerGeneration: prompt.ownerGeneration,
+                      leaseExpiresAt: leaseExpiresAt(now, this.leaseTtlMs),
+                      state: "running",
+                      now,
+                    },
+                  ],
+                },
+              });
+              this.broadcaster.publishPersisted(rows);
+              if (openedModelRequestStartId !== undefined) {
+                activeOpenModelRequestStartIds.push(openedModelRequestStartId);
+              }
+              if (
+                spanEndDrafts.length > 0 &&
+                closingModelRequestStartId !== undefined
+              ) {
+                activeOpenModelRequestStartIds.pop();
+              }
+              if (hasTerminalIdleDraft(drafts)) {
+                this.setRuntimeTaskPostIdle(workspaceId, sessionId, task, true);
+                await this.indexSessionOutputsFromLiveRuntime(
+                  workspaceId,
+                  sessionId,
+                  prompt,
+                );
+              }
+            } catch (error) {
+              if (
+                error instanceof RuntimeTurnOwnershipLostError &&
+                this.events.isRuntimeTurnClosedBy({ workspaceId, sessionId, ...prompt })
+              ) {
+                drainingClosedTurn = true;
+                continue;
+              }
+              throw error;
             }
           }
-          this.closeRuntimeTurnWithSyntheticSpanEnds(
+          this.closeSettledRuntimeTurn(
             workspaceId,
             sessionId,
             prompt,
             activeOpenModelRequestStartIds,
-            "completed",
-            "completed",
+            settled,
           );
         } finally {
           stopRenewing();
+          // Every exit releases the runner's hold; a committed checkpoint
+          // already released with true, so this is a no-op then.
+          settled?.release(false);
         }
         activePrompt = undefined;
         activeOpenModelRequestStartIds = [];
@@ -1716,6 +1742,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     ownerGeneration: number | undefined,
     state: "completed" | "terminalized",
     reason: "completed" | "terminalized" | "interrupted" | "archived" | "deleted",
+    conversation?: RuntimeConversationCheckpoint,
   ): void {
     this.events.appendBatchWithRuntimeChanges([], {
       closedTurns: [
@@ -1730,7 +1757,66 @@ export class DefaultSessionEventsService implements SessionEventsService {
           now: new Date().toISOString(),
         },
       ],
+      ...(conversation === undefined ? {} : { conversationCheckpoints: [conversation] }),
     });
+  }
+
+  // Plan 0147: a settled turn's conversation commits in the same transaction
+  // as the turn close. If this owner already closed the turn (an interrupt),
+  // the close throws and the checkpoint is written alone, still fenced on
+  // turn ownership; a stale owner's checkpoint is rejected either way.
+  private closeSettledRuntimeTurn(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    prompt: RuntimePrompt,
+    openModelRequestStartIds: readonly string[],
+    settled: RuntimeConversationSettledEvent | undefined,
+  ): void {
+    // No session-lifecycle check: a deleted session's turn rows are gone, so
+    // the ownership fence refuses it, and an archive ends the run before it
+    // can settle.
+    const conversation =
+      settled === undefined || settled.entries.length === 0
+        ? undefined
+        : {
+            workspaceId,
+            sessionId,
+            turnId: prompt.turnId,
+            ownerId: prompt.ownerId,
+            ownerGeneration: prompt.ownerGeneration,
+            piVersion: settled.piVersion,
+            entries: settled.entries,
+            now: new Date().toISOString(),
+          };
+    try {
+      this.closeRuntimeTurnWithSyntheticSpanEnds(
+        workspaceId,
+        sessionId,
+        prompt,
+        openModelRequestStartIds,
+        "completed",
+        "completed",
+        conversation,
+      );
+    } catch (error) {
+      // This owner's own interrupt already closed the turn: expected, not an
+      // ownership loss. Save the checkpoint alone and return, so the session
+      // is not interrupted again (a newer turn may be running by now).
+      if (
+        error instanceof RuntimeTurnOwnershipLostError &&
+        this.events.isRuntimeTurnClosedBy({ workspaceId, sessionId, ...prompt })
+      ) {
+        if (conversation !== undefined) {
+          this.events.appendBatchWithRuntimeChanges([], {
+            conversationCheckpoints: [conversation],
+          });
+        }
+        settled?.release(true);
+        return;
+      }
+      throw error;
+    }
+    settled?.release(true);
   }
 
   private closeRuntimeTurnWithSyntheticSpanEnds(
@@ -1740,6 +1826,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     openModelRequestStartIds: readonly string[],
     state: "completed" | "terminalized",
     reason: "completed" | "terminalized" | "interrupted" | "archived" | "deleted",
+    conversation?: RuntimeConversationCheckpoint,
   ): void {
     if (openModelRequestStartIds.length === 0) {
       this.closeRuntimeTurn(
@@ -1750,6 +1837,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         prompt.ownerGeneration,
         state,
         reason,
+        conversation,
       );
       return;
     }
@@ -1778,6 +1866,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           now,
         },
       ],
+      ...(conversation === undefined ? {} : { conversationCheckpoints: [conversation] }),
     });
   }
 
