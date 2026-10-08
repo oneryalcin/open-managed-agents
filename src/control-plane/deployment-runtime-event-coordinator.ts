@@ -33,6 +33,19 @@ interface RuntimeEventCommitStore {
   ): void;
 }
 
+// Conversation checkpoints (plan 0147) are written with the turn close, straight
+// to the event store, whose own fence is turn ownership regardless of state.
+// This coordinator's fence accepts only pending turns, so a checkpoint for a
+// turn its owner already closed (interrupted) would be refused here. Reject
+// them loudly rather than lose them.
+function assertNoConversationCheckpoints(changes: EventStoreRuntimeChanges): void {
+  if ((changes.conversationCheckpoints?.length ?? 0) > 0) {
+    throw new Error(
+      "Conversation checkpoints are written with the turn close, not through the runtime event coordinator",
+    );
+  }
+}
+
 export function createSingleDatabaseRuntimeEventCoordinator(opts: {
   sessions: Pick<SessionStore, "retrieve">;
   events: Pick<SessionEventStore, "listPendingRuntimeTurns"> &
@@ -42,6 +55,7 @@ export function createSingleDatabaseRuntimeEventCoordinator(opts: {
   return {
     commitRuntimeEventsForTurn: (input) =>
       opts.events.withTransaction(() => {
+        assertNoConversationCheckpoints(input.changes);
         if (!canCommitRuntimeTurn(opts, input)) {
           throw new RuntimeTurnOwnershipLostError(input.turnId);
         }
@@ -65,6 +79,7 @@ export function createBestEffortRuntimeEventCoordinator(opts: {
       // In-memory/test deployments do not share one database transaction
       // across sessions and events. Keep the same fence as durable mode, but
       // the check is best-effort before the event/runtime mutation.
+      assertNoConversationCheckpoints(input.changes);
       if (!canCommitRuntimeTurn(opts, input)) {
         throw new RuntimeTurnOwnershipLostError(input.turnId);
       }

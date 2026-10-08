@@ -129,7 +129,11 @@ told about it.
    (owner and generation match the turn row), not on this call being the one
    that closes the turn. So a turn this owner already closed (for example
    `interrupted` by `maybeInterruptRuntime`) still gets its settled entries
-   saved, while a stale owner's write is still rejected. Otherwise: The service holds those entries and writes them in the
+   saved, while a stale owner's write is still rejected. For such a turn the
+   service sends a checkpoint-only batch without `closedTurns`, since closing
+   it again would throw. Checkpoints go straight to the event store, like the
+   turn close, never through the runtime event coordinator: its fence accepts
+   only pending turns, and it rejects batches carrying checkpoints. Otherwise: The service holds those entries and writes them in the
    **same** `appendBatchWithRuntimeChanges` call that closes the turn, as a new
    `conversationEntries` change applied after `closedTurns`. The turn close is
    owner- and generation-fenced (`closeRuntimeTurnStmt`, which throws

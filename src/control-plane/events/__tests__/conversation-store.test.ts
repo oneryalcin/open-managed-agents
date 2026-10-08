@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createSingleDatabaseRuntimeEventCoordinator } from "../../deployment-runtime-event-coordinator.ts";
 import { EventStore } from "../store.ts";
 import {
   RuntimeTurnOwnershipLostError,
@@ -141,6 +142,39 @@ describe("conversation store", () => {
     });
 
     expect(ids(store)).toEqual(["e1"]);
+  });
+
+  it("rejects a checkpoint after the session is deleted", () => {
+    const store = EventStore.open(":memory:");
+    acceptTurn(store);
+    store.deleteForSession(WORKSPACE_ID, SESSION_ID);
+
+    expect(() =>
+      store.appendBatchWithRuntimeChanges([], {
+        conversationCheckpoints: [checkpoint([entry("e1")])],
+      }),
+    ).toThrow(RuntimeTurnOwnershipLostError);
+  });
+
+  it("is refused by the runtime event coordinator, whose fence only knows pending turns", () => {
+    const store = EventStore.open(":memory:");
+    acceptTurn(store);
+    const coordinator = createSingleDatabaseRuntimeEventCoordinator({
+      sessions: { retrieve: () => ({}) as never },
+      events: store,
+    });
+
+    expect(() =>
+      coordinator.commitRuntimeEventsForTurn({
+        workspaceId: WORKSPACE_ID,
+        sessionId: SESSION_ID,
+        turnId: TURN_ID,
+        ownerId: "owner_a",
+        ownerGeneration: 1,
+        events: [],
+        changes: { conversationCheckpoints: [checkpoint([entry("e1")])] },
+      }),
+    ).toThrow(/written with the turn close/);
   });
 
   it("keeps each session's conversation separate", () => {
