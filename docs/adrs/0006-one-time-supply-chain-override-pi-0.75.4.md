@@ -101,8 +101,9 @@ $ grep integrity package-lock.json | head -1
 ## Update, 2026-10-08: Pi 0.85.1
 
 Pi moved from 0.80.6 to 0.85.1 (published 2026-09-05) **without** an override.
-It was installed with `npm install --before=2026-09-08`, and a lockfile scan
-confirmed that no changed package is younger than the policy window.
+It was installed with `npm install --before=2026-09-08`, so it was within
+policy even under the old 30-day window (now 2 days, ADR 0017). A lockfile scan
+confirmed that no changed package is younger than that cap.
 
 - **Shrinkwrap still holds.** 0.85.1 ships `npm-shrinkwrap.json` and the
   lockfile records `hasShrinkwrap: true`.
@@ -116,5 +117,5 @@ confirmed that no changed package is younger than the policy window.
   - Catalog construction is async, because `ModelRuntime.create` is async.
   - Sandbox tools pin `ctx.cwd`, because Pi now resolves paths against the
     session cwd.
-- **Policy enforcement gap:** the date cap above was passed by hand. See
-  ADR 0017 for the `min-release-age` enforcement gap.
+- **Date cap passed by hand:** the cap above was passed explicitly, because
+  npm was not enforcing `min-release-age` at the time; ADR 0017 fixed that.
