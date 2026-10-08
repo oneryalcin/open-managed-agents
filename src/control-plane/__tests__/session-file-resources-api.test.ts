@@ -403,7 +403,6 @@ class UnsupportedFileResourceRuntime implements RuntimeEventRunner {
 
 class UnsupportedFileResourceSession {
   async prompt(): Promise<void> {}
-  async steer(): Promise<void> {}
   async abort(): Promise<void> {}
   dispose(): void {}
   subscribe(): () => void {

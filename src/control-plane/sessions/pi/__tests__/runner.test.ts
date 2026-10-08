@@ -3,6 +3,7 @@ import type { PiCustomToolsProvider } from "../custom-tools.ts";
 import {
   PiSessionRunner,
   type PiSessionFileMount,
+  type PiPromptOptions,
   type PiRuntimeSession,
 } from "../runner.ts";
 import type { SandboxProvider } from "../sandbox/provider.ts";
@@ -71,6 +72,40 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(events).toEqual([]);
     expect(factory.sessions[0]?.prompts).toEqual(["two"]);
     expect(factory.sessions[0]?.steered).toEqual(["two"]);
+  });
+
+  // Pi expands "/skill:<name>" by reading the skill file from the control-plane
+  // host unless told not to (#255); hosted passes user text through verbatim.
+  it("starts a turn without Pi command expansion", async () => {
+    const factory = new FakeSessionFactory();
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "/skill:demo go"));
+
+    expect(factory.sessions[0]?.promptOptions.map((opts) => opts?.expandPromptTemplates)).toEqual([false]);
+  });
+
+  it("steers a mid-turn message without Pi command expansion", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one"));
+    await until(() => factory.sessions[0]?.running === true);
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "/skill:demo go"));
+    gate.resolve();
+    await first;
+
+    expect(factory.sessions[0]?.promptOptions[1]).toEqual({ expandPromptTemplates: false, streamingBehavior: "steer" });
+  });
+
+  it("falls back to steer without Pi command expansion", async () => {
+    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+
+    await collect(runner.runUserMessage("wrk", "sesn_1", "/skill:demo go"));
+
+    expect(factory.sessions[0]?.promptOptions.map((opts) => opts?.expandPromptTemplates)).toEqual([false, false]);
   });
 
   it("does not emit duplicate events when two idle sends race into prompt/steer", async () => {
@@ -713,7 +748,6 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
         const session = await factory.create();
         return {
           prompt: session.prompt.bind(session),
-          steer: session.steer.bind(session),
           abort: session.abort.bind(session),
           dispose: session.dispose.bind(session),
           subscribe: session.subscribe.bind(session),
@@ -1093,6 +1127,7 @@ class FakeSession implements PiRuntimeSession {
   readonly agent: { state: { tools: Array<{ name: string }> } };
   readonly prompts: string[] = [];
   readonly steered: string[] = [];
+  readonly promptOptions: Array<PiPromptOptions | undefined> = [];
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
@@ -1108,10 +1143,13 @@ class FakeSession implements PiRuntimeSession {
     };
   }
 
-  async prompt(
-    text: string,
-    _opts?: { streamingBehavior?: "steer" | "followUp" },
-  ): Promise<void> {
+  async prompt(text: string, opts?: PiPromptOptions): Promise<void> {
+    this.promptOptions.push(opts);
+    // Pi queues instead of starting a turn when told how to.
+    if (opts?.streamingBehavior === "steer") {
+      this.steered.push(text);
+      return;
+    }
     this.prompts.push(text);
     if (
       this.opts.throwAlreadyProcessingAfterFirstPrompt === true &&
@@ -1182,10 +1220,6 @@ class FakeSession implements PiRuntimeSession {
       this.emitMessage(steered);
     }
     this.emit({ type: "agent_end", messages: [], willRetry: false });
-  }
-
-  async steer(text: string): Promise<void> {
-    this.steered.push(text);
   }
 
   async abort(): Promise<void> {

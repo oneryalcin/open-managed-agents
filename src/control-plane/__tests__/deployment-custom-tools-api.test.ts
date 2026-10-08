@@ -40,7 +40,6 @@ const sdk = vi.hoisted(() => {
       });
     }
 
-    async steer(): Promise<void> {}
 
     async abort(): Promise<void> {}
 

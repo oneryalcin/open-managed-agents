@@ -656,7 +656,6 @@ class FakeSession implements PiRuntimeSession {
     });
   }
 
-  async steer(_text: string): Promise<void> {}
 
   async abort(): Promise<void> {}
 

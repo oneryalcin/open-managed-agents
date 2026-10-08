@@ -62,14 +62,21 @@ import {
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000;
 const ALREADY_PROCESSING_MESSAGE = "Agent is already processing";
 
+export interface PiPromptOptions {
+  expandPromptTemplates?: boolean;
+  streamingBehavior?: "steer" | "followUp";
+}
+
+// API text reaches the model verbatim, as in hosted Managed Agents. Pi's
+// default expands "/skill:<name>" by reading the skill file from the
+// control-plane host, not the sandbox (#255).
+const LITERAL_PROMPT: PiPromptOptions = { expandPromptTemplates: false };
+// Hosted Managed Agents delivers a mid-turn user.message at the next
+// model-request boundary (probe 70); Pi's steer queue has the same semantics.
+const LITERAL_STEER: PiPromptOptions = { expandPromptTemplates: false, streamingBehavior: "steer" };
+
 export interface PiRuntimeSession {
-  prompt(
-    text: string,
-    opts?: { streamingBehavior?: "steer" | "followUp" },
-  ): Promise<void>;
-  // Hosted Managed Agents delivers a mid-turn user.message at the next
-  // model-request boundary (probe 70); Pi's steer() has the same semantics.
-  steer(text: string): Promise<void>;
+  prompt(text: string, opts?: PiPromptOptions): Promise<void>;
   abort(): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
   dispose(): void;
@@ -498,7 +505,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     if (handle.running && !handle.needsFreshPromptAfterInterrupt) {
       try {
-        await handle.session.steer(text);
+        await handle.session.prompt(text, LITERAL_STEER);
         this.touch(sessionId, handle);
       } catch (error) {
         this.evict(sessionId, handle);
@@ -583,10 +590,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     signal?.addEventListener("abort", onAbort, { once: true });
 
     const run = handle.session
-      .prompt(text)
+      .prompt(text, LITERAL_PROMPT)
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
-          await handle.session.steer(text);
+          await handle.session.prompt(text, LITERAL_STEER);
           // Best effort for the losing prompt race: once Pi confirms this
           // message is queued on the running turn, discard overlap events
           // captured by this temporary subscriber. A pre-rejection event can
