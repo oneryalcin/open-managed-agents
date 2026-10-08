@@ -60,7 +60,6 @@ import {
 } from "./sandbox/selection.ts";
 
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000;
-const ALREADY_PROCESSING_MESSAGE = "Agent is already processing";
 
 export interface PiPromptOptions {
   expandPromptTemplates?: boolean;
@@ -77,8 +76,9 @@ const LITERAL_STEER: PiPromptOptions = { expandPromptTemplates: false, streaming
 
 export interface PiRuntimeSession {
   prompt(text: string, opts?: PiPromptOptions): Promise<void>;
-  // Pi queues a prompt with streamingBehavior only while this is true;
-  // otherwise it starts a fresh turn.
+  // True from prompt() until its run settles, past agent_end. Pi queues a
+  // prompt with streamingBehavior only while this is true, rejects one
+  // without it, and otherwise starts a fresh turn.
   readonly isStreaming: boolean;
   abort(): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
@@ -506,7 +506,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
     this.touch(sessionId, handle);
 
-    if (handle.running && !handle.needsFreshPromptAfterInterrupt) {
+    // Route on Pi's own run state, not handle.running (false from agent_end
+    // until the run settles). From here to Pi's isStreaming check inside
+    // prompt() there is no await, so Pi decides exactly as checked here.
+    if (handle.session.isStreaming && !handle.needsFreshPromptAfterInterrupt) {
       try {
         await handle.session.prompt(text, LITERAL_STEER);
         this.touch(sessionId, handle);
@@ -526,7 +529,6 @@ export class PiSessionRunner implements RuntimeEventRunner {
     >();
     let done = false;
     let failure: unknown;
-    let queuedOnRunningTurn = false;
     let wake: (() => void) | undefined;
 
     const stop = handle.session.subscribe((event) => {
@@ -594,28 +596,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     const run = handle.session
       .prompt(text, LITERAL_PROMPT)
-      .catch(async (error) => {
-        if (isAlreadyProcessing(error)) {
-          if (!handle.session.isStreaming) {
-            // The other turn ended between the rejection and now, so Pi would
-            // start a fresh turn rather than queue: run it as this caller's
-            // turn, without the other turn's captured tail. Pi decides
-            // synchronously, so nothing can change between check and call.
-            queue.length = 0;
-            await handle.session.prompt(text, LITERAL_PROMPT);
-            return;
-          }
-          await handle.session.prompt(text, LITERAL_STEER);
-          // Best effort for the losing prompt race: once Pi confirms this
-          // message is queued on the running turn, discard overlap events
-          // captured by this temporary subscriber. A pre-rejection event can
-          // still escape; in practice that should be limited to early status
-          // frames, while the winning prompt subscriber owns the full turn,
-          // including the steered message's output.
-          queuedOnRunningTurn = true;
-          queue.length = 0;
-          return;
-        }
+      .catch((error) => {
         failure = error;
       })
       .finally(() => {
@@ -625,11 +606,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
     try {
       while (!done || queue.length > 0) {
-        if (queuedOnRunningTurn) break;
         if (queue.length === 0) {
           await new Promise<void>((resolve) => {
             wake = resolve;
-            if (done || queuedOnRunningTurn || queue.length > 0) {
+            if (done || queue.length > 0) {
               wake = undefined;
               resolve();
             }
@@ -1378,12 +1358,6 @@ function updateRunning(handle: RuntimeHandle, event: unknown): void {
   if (type === "agent_end") handle.running = false;
 }
 
-function isAlreadyProcessing(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes(ALREADY_PROCESSING_MESSAGE)
-  );
-}
 
 function isInternalRuntimeEvent(event: unknown): boolean {
   if (typeof event !== "object" || event === null) return false;

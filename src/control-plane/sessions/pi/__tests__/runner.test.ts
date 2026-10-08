@@ -60,30 +60,15 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(messageTexts(firstEvents)).toEqual(["reply: one", "reply: two"]);
   });
 
-  it("falls back to steer when Pi rejects prompt because the session is already running", async () => {
-    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true, reportsStreaming: true });
-    const runner = new PiSessionRunner({
-      sessionFactory: () => factory.create(),
-      idleTtlMs: 0,
-    });
-
-    const events = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
-
-    expect(events).toEqual([]);
-    expect(factory.sessions[0]?.prompts).toEqual(["two"]);
-    expect(factory.sessions[0]?.steered).toEqual(["two"]);
-  });
-
-  it("runs the message as its own turn when the other turn ends before the steer fallback", async () => {
-    // Pi rejected the prompt as already processing, but is idle by the time
-    // the fallback runs; Pi would then start a fresh turn instead of queueing,
-    // so this caller must own and stream it.
-    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true });
+  it("steers a message that arrives after agent_end while Pi's run is still settling", async () => {
+    // handle.running is false from agent_end, but Pi still reports the run as
+    // active and would reject a plain prompt; the message must queue instead.
+    const factory = new FakeSessionFactory({ reportsStreaming: true });
     const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
 
-    const events = await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
+    await collect(runner.runUserMessage("wrk", "sesn_1", "two"));
 
-    expect(messageTexts(events)).toEqual(["reply: two"]);
+    expect(factory.sessions[0]?.steered).toEqual(["two"]);
   });
 
   // Pi expands "/skill:<name>" by reading the skill file from the control-plane
@@ -111,21 +96,9 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.promptOptions[1]).toEqual({ expandPromptTemplates: false, streamingBehavior: "steer" });
   });
 
-  it("falls back to steer without Pi command expansion", async () => {
-    const factory = new FakeSessionFactory({ throwAlreadyProcessingOnce: true, reportsStreaming: true });
-    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
-
-    await collect(runner.runUserMessage("wrk", "sesn_1", "/skill:demo go"));
-
-    expect(factory.sessions[0]?.promptOptions.map((opts) => opts?.expandPromptTemplates)).toEqual([false, false]);
-  });
-
   it("does not emit duplicate events when two idle sends race into prompt/steer", async () => {
     const gate = deferred<void>();
-    const factory = new FakeSessionFactory({
-      promptGate: gate.promise,
-      throwAlreadyProcessingAfterFirstPrompt: true,
-    });
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
       idleTtlMs: 0,
@@ -289,12 +262,9 @@ describe("PiSessionRunner continuity (Cycle C.3a)", () => {
     expect(factory.sessions[0]?.prompts).toEqual(["one", "three"]);
   });
 
-  it("interruptSession clears follow-ups queued by the prompt-race fallback", async () => {
+  it("interruptSession clears a message steered into the running turn", async () => {
     const gate = deferred<void>();
-    const factory = new FakeSessionFactory({
-      promptGate: gate.promise,
-      throwAlreadyProcessingAfterFirstPrompt: true,
-    });
+    const factory = new FakeSessionFactory({ promptGate: gate.promise });
     const runner = new PiSessionRunner({
       sessionFactory: () => factory.create(),
       idleTtlMs: 0,
@@ -1123,10 +1093,8 @@ class FakeSessionFactory {
 interface FakeSessionOptions {
   promptGate?: Promise<void>;
   abortGate?: Promise<void>;
-  throwAlreadyProcessingOnce?: boolean;
   // Report a run as active even when this fake has not started one.
   reportsStreaming?: boolean;
-  throwAlreadyProcessingAfterFirstPrompt?: boolean;
   throwHardErrorOnce?: boolean;
   shouldThrowHardError?: () => boolean;
   emitSandboxedTool?: string;
@@ -1146,15 +1114,16 @@ class FakeSession implements PiRuntimeSession {
   readonly steered: string[] = [];
   readonly promptOptions: Array<PiPromptOptions | undefined> = [];
 
+  // Like Pi, a run stays active from prompt() until it settles, past agent_end.
   get isStreaming(): boolean {
-    return this.running || this.opts.reportsStreaming === true;
+    return this.runActive || this.opts.reportsStreaming === true;
   }
+  private runActive = false;
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
   disposed = false;
   aborts = 0;
   clearQueues = 0;
-  private threwAlreadyProcessing = false;
 
   constructor(private readonly opts: FakeSessionOptions = {}) {
     this.agent = {
@@ -1166,29 +1135,25 @@ class FakeSession implements PiRuntimeSession {
 
   async prompt(text: string, opts?: PiPromptOptions): Promise<void> {
     this.promptOptions.push(opts);
-    // Like Pi, queue only while a run is active; otherwise start a turn.
-    if (opts?.streamingBehavior === "steer" && this.isStreaming) {
+    if (this.isStreaming) {
+      if (opts?.streamingBehavior !== "steer") {
+        throw new Error(
+          "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+        );
+      }
       this.steered.push(text);
       return;
     }
     this.prompts.push(text);
-    if (
-      this.opts.throwAlreadyProcessingAfterFirstPrompt === true &&
-      this.prompts.length > 1
-    ) {
-      throw new Error(
-        "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-      );
+    this.runActive = true;
+    try {
+      await this.runPrompt(text);
+    } finally {
+      this.runActive = false;
     }
-    if (
-      this.opts.throwAlreadyProcessingOnce === true &&
-      this.threwAlreadyProcessing === false
-    ) {
-      this.threwAlreadyProcessing = true;
-      throw new Error(
-        "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-      );
-    }
+  }
+
+  private async runPrompt(text: string): Promise<void> {
     if (this.opts.shouldThrowHardError?.() === true) {
       throw new Error("hard runtime failure");
     }
