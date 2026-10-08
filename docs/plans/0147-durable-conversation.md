@@ -90,21 +90,34 @@ told about it.
    steered continuation. Its queue is drained by then. So when the runner's
    generator is about to finish normally, Pi has no in-flight work and every
    event has been yielded.
-2. **Settled event.** At that point, before the existing `closeWhenIdle`
-   eviction, the runner yields one internal `oma.conversation_settled` event.
-   It carries the entries appended since the last *acknowledged* checkpoint and
-   an `ack()` callback.
-3. **Fenced write.** The service holds those entries and writes them in the
+2. **Settled event, from the owning run only.** At that point, before the
+   existing `closeWhenIdle` eviction, the runner yields one internal
+   `oma.conversation_settled` event. It carries the entries appended since the
+   last *acknowledged* checkpoint and an `ack()` callback. It is emitted only
+   by the generator whose `prompt()` actually ran the Pi turn, never by the
+   losing side of the prompt race (`queuedOnRunningTurn`) or the steer path,
+   which would otherwise save the winner's partial entries under the wrong
+   turn's fence.
+3. **The handle stays alive until the checkpoint is acknowledged.**
+   `handle.running` clears at `agent_end`, but Pi's post-run work (retry,
+   compaction, steered continuation) runs after that, and the service may
+   still be processing queued events. A new `handle.turnActive` flag, set when
+   the owning `prompt()` starts and cleared after `ack()` (or when the
+   generator ends without settling), stops idle eviction, `closeWhenIdle`
+   eviction and handle replacement while a turn is in flight. Today this race
+   already disposes handles during post-run compaction; the flag fixes it as
+   part of this plan.
+4. **Fenced write.** The service holds those entries and writes them in the
    **same** `appendBatchWithRuntimeChanges` call that closes the turn, as a new
    `conversationEntries` change applied after `closedTurns`. The turn close is
    owner- and generation-fenced (`closeRuntimeTurnStmt`, which throws
    `RuntimeTurnOwnershipLostError`), so the conversation commits only if this
    owner legitimately closes the turn. A closed or deleted session is skipped,
    as turn close already is.
-4. **Acknowledge after commit.** The service calls `ack()` only after the
+5. **Acknowledge after commit.** The service calls `ack()` only after the
    transaction commits. If it rolls back, the runner keeps the entries and
    offers them again with the next settled turn of that handle.
-5. **Nothing else writes.** No checkpoint happens mid-turn, on disposal, on
+6. **Nothing else writes.** No checkpoint happens mid-turn, on disposal, on
    hard error, on interrupt-driven eviction, or on `close()`. Those paths
    don't reach a settled point, so their turn is not saved (see "Crash and
    failure behaviour").
@@ -118,8 +131,8 @@ messages.
 - Never ahead of the event log: the checkpoint commits with the turn close,
   after all of the turn's event rows.
 - No stale owner writes: the write sits inside the ownership-fenced close.
-- No disposal race: idle eviction only touches non-running handles, and those
-  have already settled and checkpointed; other disposals write nothing.
+- No disposal race: eviction waits for `turnActive` to clear, which is after
+  the checkpoint is acknowledged; other disposals write nothing.
 - No watermarks, coalescing or gating accounting.
 
 ### Crash and failure behaviour
@@ -139,10 +152,15 @@ progress. That is unchanged from today and is ADR 0018 stage 3.
 - On a cache miss, `getOrCreateHandle` loads stored entries. If there are
   any, it builds the Pi session from `SessionManager.inMemory(cwd, undefined,
   entries)`, and the acknowledged count is the loaded count.
-- **Unclean end:** user messages persisted after the turn of the last stored
-  checkpoint and before the turn being started. These are found from the event
-  log by `turn_id` order, so no extra state is needed. When there are any, the
-  rebuild adds the D2 note.
+- **Unclean end, by content coverage rather than turn order.** Walk the event
+  log's `user.message` events (excluding the one starting this turn) and the
+  stored conversation's user entries in order, matching by content. Events left
+  unmatched at the end were never saved, so their turn did not settle. If there
+  are any, the rebuild adds the D2 note quoting them.
+  - Turn order would mislabel steered messages: they belong to the earlier
+    turn's checkpoint, not their own runtime turn.
+  - No extra state is needed. Duplicate texts still match correctly because
+    matching is in order.
 - No tool-result repair (Pi fact 5).
 
 ## Decisions needed
@@ -182,7 +200,13 @@ Real Pi with the faux provider (D3), through the events service unless noted:
 - **Post-run work included:** entries Pi appends after `agent_end` (auto
   compaction) are in the settled checkpoint.
 - **Steered message included:** a message steered into a running turn is in
-  that turn's checkpoint.
+  that turn's checkpoint, and after eviction the next rebuild adds **no**
+  unclean-end note for it.
+- **Prompt race:** with two concurrent first sends, the losing task saves and
+  acknowledges nothing; only the owning run's checkpoint is written.
+- **No eviction before settle:** eviction attempted during gated post-run
+  compaction, and while the service is stalled on output indexing, waits until
+  the checkpoint is acknowledged.
 - **Fenced:** when the turn close throws `RuntimeTurnOwnershipLostError`, no
   conversation rows are written and the entries are offered again on the next
   settled turn.
@@ -246,4 +270,14 @@ Plus store unit tests: idempotent append, ordering, isolation by session.
   Response: replaced in-turn checkpointing with one checkpoint per settled
   turn inside the fenced turn-close transaction. That removes all three
   classes rather than patching each one.
+- **Codex adversarial, third pass on the settled design, 2026-10-08:**
+  - the losing side of the prompt race also completes normally → settled event
+    only from the owning run;
+  - eviction can precede settlement because `handle.running` clears at
+    `agent_end` → `turnActive` held until acknowledgement (fixes a
+    pre-existing race too);
+  - turn-order unclean detection mislabels steered messages → content
+    coverage.
+
+  These are local conditions, not a new layer; the settled design stands.
 
