@@ -52,7 +52,7 @@ if (!dockerAvailable) {
   process.exit(0);
 }
 
-const app = createDeploymentControlPlaneApp({
+const app = await createDeploymentControlPlaneApp({
   OMA_SANDBOX_PROVIDER: "docker-local",
   OMA_ALLOW_DOCKER_LOCAL: "true",
 });

@@ -150,6 +150,32 @@ describe("host passthrough sandbox provider (Cycle E.1)", () => {
     }
   });
 
+  it("runs tools in the sandbox cwd even when Pi's context carries the control plane's cwd", async () => {
+    // Pi >= 0.85 resolves tool paths against ctx.cwd, which defaults to the
+    // control plane's process.cwd() because OMA creates sessions without one.
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), "oma-sandbox-")));
+    try {
+      const provider = createHostPassthroughSandboxProvider({
+        workspaceRoot: workspace,
+        unsafeAllowHostPassthrough: true,
+        envAllowlist: ["PATH"],
+      });
+      const bash = provider.tools.find((tool) => tool.name === "bash");
+
+      const result = await bash?.execute(
+        "toolu_provider_cwd",
+        { command: "pwd", timeout: 5 },
+        new AbortController().signal,
+        undefined,
+        { cwd: process.cwd() } as never,
+      );
+
+      expect(result?.content[0]).toMatchObject({ type: "text", text: `${workspace}\n` });
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
+    }
+  });
+
   it("attributes concurrent same-tool provider calls to their own Pi tool ids", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "oma-sandbox-"));
     try {

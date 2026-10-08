@@ -1,13 +1,18 @@
 import {
-  AuthStorage,
   createAgentSession,
   createSyntheticSourceInfo,
   DefaultResourceLoader,
   ModelRegistry,
+  ModelRuntime,
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { PiModelCatalog } from "../../models/catalog.ts";
+import {
+  InMemoryAuthStorageBackend,
+  InMemoryModelsStore,
+  OmaCredentialStore,
+} from "../../models/credential-store.ts";
 import type {
   RuntimeEventRunner,
   RuntimeInternalEvent,
@@ -157,19 +162,30 @@ interface McpFailureBudgetEntry {
   fingerprint: string;
 }
 
-function createPrivatePiModelCatalog(
+async function createPrivatePiModelCatalog(
   provider = "anthropic",
   modelId = "claude-haiku-4-5",
-): PiModelCatalog {
-  const authStorage = AuthStorage.create();
-  const modelRegistry = ModelRegistry.create(authStorage);
+): Promise<PiModelCatalog> {
+  // No stored credentials: provider auth comes from the environment. This
+  // seam never reads the operator's personal Pi auth.json.
+  const credentials = new OmaCredentialStore(new InMemoryAuthStorageBackend());
+  // modelsPath null: no models.json either (Pi would otherwise read the
+  // operator's ~/.pi/agent/models.json, which no OMA policy scan covers).
+  const modelRuntime = await ModelRuntime.create({
+    credentials,
+    modelsPath: null,
+    modelsStore: new InMemoryModelsStore(),
+  });
+  const modelRegistry = new ModelRegistry(modelRuntime);
   const allowedProviders = new Set([provider]);
   return {
     defaultModel: { provider, id: modelId },
     allowedProviders,
-    authStorage,
+    credentials,
+    modelRuntime,
     modelRegistry,
     securityReport: { warnings: [] },
+    assertConfigSecurity: () => {},
     // Standalone runners are an internal/test seam without deployment
     // admission policy. Production always receives the shared allowlisted
     // catalog from the composition root.
@@ -194,9 +210,7 @@ function createPrivatePiModelCatalog(
 }
 
 export class PiSessionRunner implements RuntimeEventRunner {
-  private readonly authStorage: AuthStorage;
-  private readonly modelRegistry: ModelRegistry;
-  private readonly modelCatalog: PiModelCatalog;
+  private modelCatalogPromise: Promise<PiModelCatalog> | undefined;
   private readonly sessions = new Map<string, RuntimeHandle>();
   private readonly pendingSessions = new Map<string, Promise<RuntimeHandle>>();
   private readonly pendingInterrupts = new Map<string, Promise<void>>();
@@ -255,13 +269,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
       mcp?: PiMcpOptions;
     } = {},
   ) {
-    const catalog = opts.modelCatalog ?? createPrivatePiModelCatalog(
-      opts.provider,
-      opts.model,
-    );
-    this.modelCatalog = catalog;
-    this.authStorage = catalog.authStorage;
-    this.modelRegistry = catalog.modelRegistry;
+    if (opts.modelCatalog !== undefined) {
+      this.modelCatalogPromise = Promise.resolve(opts.modelCatalog);
+    }
     this.resolveSandboxProviderFactory();
     this.idleTtlMs = opts.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
     this.now = opts.now ?? Date.now;
@@ -735,9 +745,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
           sessionId,
           customToolContext,
         );
+        const modelCatalog = await this.modelCatalog();
         const revisionModel = agentRevision === undefined
           ? undefined
-          : this.modelCatalog.resolve(agentRevision.model);
+          : modelCatalog.resolve(agentRevision.model);
         if (agentRevision !== undefined && revisionModel === undefined) {
           throw new Error(
             `Pi model not available: ${agentRevision.model.provider}/${agentRevision.model.id}`,
@@ -746,7 +757,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         if (
           agentRevision !== undefined &&
           revisionModel !== undefined &&
-          !this.modelCatalog.hasConfiguredAuth(revisionModel)
+          !modelCatalog.hasConfiguredAuth(revisionModel)
         ) {
           throw new Error(
             `Credentials for model provider ${agentRevision.model.provider} are not configured on this deployment`,
@@ -1075,12 +1086,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
     revisionModel: Exclude<ReturnType<ModelRegistry["find"]>, undefined> | undefined,
     mcpTools: readonly ToolDefinition<any, any, any>[] = [],
   ): Promise<PiRuntimeSession> {
-    const provider = revision?.model.provider ?? this.modelCatalog.defaultModel.provider;
-    const modelId = revision?.model.id ?? this.modelCatalog.defaultModel.id;
-    const model = revisionModel ?? this.modelCatalog.resolve({ provider, id: modelId });
+    const modelCatalog = await this.modelCatalog();
+    const provider = revision?.model.provider ?? modelCatalog.defaultModel.provider;
+    const modelId = revision?.model.id ?? modelCatalog.defaultModel.id;
+    const model = revisionModel ?? modelCatalog.resolve({ provider, id: modelId });
     if (!model) {
       throw new Error(`Pi model not available: ${provider}/${modelId}`);
     }
+    modelCatalog.assertConfigSecurity();
     const customToolNames = (
       this.opts.customTools?.(workspaceId, sessionId, context) ?? []
     ).map((tool) => tool.name);
@@ -1108,8 +1121,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           ]
         : [...customToolNames, ...mcpToolNames],
       customTools,
-      authStorage: this.authStorage,
-      modelRegistry: this.modelRegistry,
+      modelRuntime: modelCatalog.modelRuntime,
       sessionManager: SessionManager.inMemory(),
       resourceLoader: await this.createResourceLoader(
         workspaceId,
@@ -1133,6 +1145,19 @@ export class PiSessionRunner implements RuntimeEventRunner {
     // skill files are mounted in the sandbox.
     await loader.reload();
     return loader;
+  }
+
+  // Pi's ModelRuntime can only be built asynchronously, so the standalone
+  // default catalog is created on first use rather than in the constructor.
+  private modelCatalog(): Promise<PiModelCatalog> {
+    // Reset on failure so one bad attempt is not cached for the runner's life.
+    this.modelCatalogPromise ??= createPrivatePiModelCatalog(this.opts.provider, this.opts.model).catch(
+      (error: unknown) => {
+        this.modelCatalogPromise = undefined;
+        throw error;
+      },
+    );
+    return this.modelCatalogPromise;
   }
 
   private preparingSessionAgentContext(

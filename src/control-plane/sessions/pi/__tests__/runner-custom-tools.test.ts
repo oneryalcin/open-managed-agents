@@ -7,17 +7,15 @@ import type {
 import type { PiRuntimeSession } from "../runner.ts";
 
 const sdk = vi.hoisted(() => {
-  class MockAuthStorage {
-    static create(): Record<string, never> {
+  class MockModelRuntime {
+    static async create(): Promise<Record<string, never>> {
       return {};
     }
   }
 
   const modelFind = vi.fn((_provider: string, id: string) => ({ id }));
   class MockModelRegistry {
-    static create(): { find: typeof modelFind } {
-      return { find: modelFind };
-    }
+    find = modelFind;
   }
 
   class MockSession implements PiRuntimeSession {
@@ -116,7 +114,7 @@ const sdk = vi.hoisted(() => {
     };
   };
 
-  // Faithful to real Pi 0.80.6: getSkills() stays empty until reload() runs
+  // Faithful to real Pi: getSkills() stays empty until reload() runs
   // skillsOverride. If the runner ever stops awaiting reload(), the skills
   // assertions below go empty and fail — which is the bug the mock previously hid.
   class MockResourceLoader {
@@ -132,7 +130,7 @@ const sdk = vi.hoisted(() => {
   let emitBuiltinToolCallMessage = false;
 
   return {
-    AuthStorage: MockAuthStorage,
+    ModelRuntime: MockModelRuntime,
     ModelRegistry: MockModelRegistry,
     SessionManager: { inMemory: vi.fn(() => ({})) },
     DefaultResourceLoader: MockResourceLoader,
@@ -155,7 +153,7 @@ const sdk = vi.hoisted(() => {
 });
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
-  AuthStorage: sdk.AuthStorage,
+  ModelRuntime: sdk.ModelRuntime,
   createAgentSession: sdk.createAgentSession,
   defineTool: sdk.defineTool,
   ModelRegistry: sdk.ModelRegistry,
@@ -399,9 +397,11 @@ describe("PiSessionRunner custom-tool bridge", () => {
       modelCatalog: {
         defaultModel: { provider: "anthropic", id: "default-model" },
         allowedProviders: new Set(["anthropic", "openai"]),
-        authStorage: {} as never,
+        credentials: {} as never,
+        modelRuntime: {} as never,
         modelRegistry: { find: () => resolved } as never,
         securityReport: { warnings: [] },
+        assertConfigSecurity: () => {},
         resolve: () => resolved as never,
         list: () => [],
         hasConfiguredAuth: () => false,

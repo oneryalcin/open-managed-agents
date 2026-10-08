@@ -14,5 +14,21 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "scratch/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    // Historical Pi probes written against the pre-0.80.8 AuthStorage /
+    // ModelRegistry.create API. Kept as recorded evidence, not maintained.
+    "scratch/01-smoke.ts",
+    "scratch/02-abort.ts",
+    "scratch/03-throw.ts",
+    "scratch/04-tool-array.ts",
+    "scratch/10-pi-event-dump.ts",
+    "scratch/11-pi-session-continuity.ts",
+    "scratch/13-pi-followup-resolution.ts",
+    "scratch/15-d-custom-tool-capability.ts",
+    "scratch/18-d-custom-tool-error.ts",
+    "scratch/19-e0-builtin-operations-injection.ts",
+    "scratch/21-e2-define-tool-builtins.ts"
+  ]
 }

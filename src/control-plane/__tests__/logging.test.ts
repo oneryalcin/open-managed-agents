@@ -404,11 +404,11 @@ describe("default writer", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('"event":"spy_check"'));
   });
 
-  it("logs bounded model catalog counts without configuration paths", () => {
+  it("logs bounded model catalog counts without configuration paths", async () => {
     const home = tempModelHome();
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const plane = createDeploymentControlPlane({ OMA_HOME: home });
+    const plane = await createDeploymentControlPlane({ OMA_HOME: home });
     try {
       const line = infoSpy.mock.calls
         .map((call) => String(call[0]))
@@ -416,7 +416,7 @@ describe("default writer", () => {
       expect(line).toBeTruthy();
       const record = JSON.parse(line!);
       expect(record).toMatchObject({
-        piVersion: "0.80.6",
+        piVersion: "0.85.1",
         providers: ["anthropic", "openai", "openrouter"],
         defaultProvider: "anthropic",
         defaultModel: "claude-sonnet-5",
@@ -436,7 +436,7 @@ describe("request_failed on 5xx", () => {
   it("logs event with requestId matching the response header, secrets absent", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {}); // auth_mode_disabled boot warning
-    const plane = createDeploymentControlPlane({ OMA_HOME: tempModelHome() });
+    const plane = await createDeploymentControlPlane({ OMA_HOME: tempModelHome() });
     plane.app.get("/test-boom", () => {
       throw new Error(`downstream refused key ${WORKSPACE_KEY}`);
     });
@@ -462,7 +462,7 @@ describe("request_failed on 5xx", () => {
   it("stays silent on 4xx", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const plane = createDeploymentControlPlane({ OMA_HOME: tempModelHome() });
+    const plane = await createDeploymentControlPlane({ OMA_HOME: tempModelHome() });
     const res = await plane.app.request("/no-such-route");
     expect(res.status).toBe(404);
     expect(

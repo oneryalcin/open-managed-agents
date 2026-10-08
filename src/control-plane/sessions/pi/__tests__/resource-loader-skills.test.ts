@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildSessionSkillsResourceLoader } from "../runner.ts";
 
-// Pins the real Pi 0.80.6 DefaultResourceLoader contract the runner depends on:
+// Pins the real Pi DefaultResourceLoader contract the runner depends on:
 // skillsOverride only runs inside reload(), so getSkills() is empty until then.
 // The mocked runner test cannot prove this against the real SDK; a Pi upgrade
 // that changed the contract would silently break skill delivery to the model,

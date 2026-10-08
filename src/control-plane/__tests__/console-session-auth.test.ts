@@ -16,7 +16,7 @@ afterEach(() => {
 
 describe("console session authentication", () => {
   it("exchanges a workspace key for an opaque cookie and honors key revocation", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const key = plane.stores.workspaces.mintKey("wrk_default", "console");
     const login = await request(plane.app, "/console/auth/workspace", {
       method: "POST",
@@ -39,7 +39,7 @@ describe("console session authentication", () => {
   });
 
   it("keeps admin and workspace authority separate while allowing admin selection", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const workspace = plane.stores.workspaces.createWorkspace("Tenant A");
     const adminLogin = await request(plane.app, "/console/auth/admin", {
       method: "POST",
@@ -76,13 +76,13 @@ describe("console session authentication", () => {
   });
 
   it("uses Secure cookies only when TLS termination is explicitly configured", async () => {
-    const loopback = makePlane();
+    const loopback = await makePlane();
     const key = loopback.stores.workspaces.mintKey("wrk_default", "console");
     const plain = await request(loopback.app, "/console/auth/workspace", { method: "POST", body: { api_key: key.plaintextKey } });
     expect(plain.headers.get("set-cookie")).not.toContain("Secure");
     loopback.stores.close();
 
-    const tls = makePlane({ tls: true });
+    const tls = await makePlane({ tls: true });
     const tlsKey = tls.stores.workspaces.mintKey("wrk_default", "console");
     const secure = await request(tls.app, "/console/auth/workspace", { method: "POST", body: { api_key: tlsKey.plaintextKey } });
     expect(secure.headers.get("set-cookie")).toContain("Secure");
@@ -91,7 +91,7 @@ describe("console session authentication", () => {
 
   it("exchanges a single-use bootstrap nonce without exposing workspace authority", async () => {
     const bootstrap = new ConsoleBootstrapService();
-    const plane = makePlane({ bootstrap });
+    const plane = await makePlane({ bootstrap });
     const key = plane.stores.workspaces.mintKey("wrk_default", "onboarding-console");
     const nonce = bootstrap.issue(key.plaintextKey);
 
@@ -120,7 +120,7 @@ describe("console session authentication", () => {
 
   it("issues a fresh bootstrap nonce only to the onboarding lifecycle token", async () => {
     const bootstrap = new ConsoleBootstrapService();
-    const plane = makePlane({ bootstrap });
+    const plane = await makePlane({ bootstrap });
     const key = plane.stores.workspaces.mintKey("wrk_default", "onboarding-console");
     bootstrap.bindResumeAuthority(key.plaintextKey, "oct_control");
 
@@ -152,7 +152,7 @@ describe("console session authentication", () => {
   it("expires bootstrap nonces and rejects cross-origin consumption", async () => {
     let now = 1_000;
     const bootstrap = new ConsoleBootstrapService(() => now, 10);
-    const plane = makePlane({ bootstrap });
+    const plane = await makePlane({ bootstrap });
     const key = plane.stores.workspaces.mintKey("wrk_default", "onboarding-console");
     const crossOriginNonce = bootstrap.issue(key.plaintextKey);
     const foreign = await request(plane.app, "/console/auth/bootstrap", {
@@ -184,22 +184,22 @@ describe("console session authentication", () => {
     expect(bootstrap.consume(atBoundary)).toBeUndefined();
   });
 
-  it("refuses to register console bootstrap on a non-loopback bind", () => {
-    expect(() => makePlane({
+  it("refuses to register console bootstrap on a non-loopback bind", async () => {
+    await expect( makePlane({
       bootstrap: new ConsoleBootstrapService(),
       host: "0.0.0.0",
-    })).toThrow(/only on a loopback appliance bind/);
+    })).rejects.toThrow(/only on a loopback appliance bind/);
   });
 
-  it("refuses to register local console bootstrap behind TLS termination", () => {
-    expect(() => makePlane({
+  it("refuses to register local console bootstrap behind TLS termination", async () => {
+    await expect( makePlane({
       bootstrap: new ConsoleBootstrapService(),
       tls: true,
-    })).toThrow(/not available behind TLS termination/);
+    })).rejects.toThrow(/not available behind TLS termination/);
   });
 
   it("completes guided MCP OAuth without putting tokens in the browser or requiring the console cookie on callback", async () => {
-    const plane = makePlane({ mcpFetch: oauthConsoleFetch() });
+    const plane = await makePlane({ mcpFetch: oauthConsoleFetch() });
     const key = plane.stores.workspaces.mintKey("wrk_default", "console");
     const login = await request(plane.app, "/console/auth/workspace", {
       method: "POST",
@@ -253,7 +253,7 @@ describe("console session authentication", () => {
   });
 });
 
-function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapService; host?: string; mcpFetch?: McpFetch } = {}) {
+async function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapService; host?: string; mcpFetch?: McpFetch } = {}) {
   const root = mkdtempSync(join(tmpdir(), "oma-console-session-"));
   roots.push(root);
   return createDeploymentControlPlane({
@@ -317,7 +317,7 @@ function json(value: unknown): Response {
 }
 
 function request(
-  app: ReturnType<typeof createDeploymentControlPlane>["app"],
+  app: Awaited<ReturnType<typeof createDeploymentControlPlane>>["app"],
   path: string,
   opts: {
     method?: string;

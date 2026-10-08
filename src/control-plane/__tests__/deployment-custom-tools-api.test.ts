@@ -10,27 +10,20 @@ const sdk = vi.hoisted(() => {
   };
   let lastCreateOptions: MockCreateOptions | undefined;
 
-  class MockAuthStorage {
-    static create(): Record<string, never> {
+  class MockModelRuntime {
+    static async create(): Promise<Record<string, never>> {
       return {};
-    }
-    static fromStorage(): { drainErrors: () => never[] } {
-      return { drainErrors: () => [] };
     }
   }
 
+  const mockModel = { provider: "anthropic", id: "claude-sonnet-5" };
   class MockModelRegistry {
-    static create() {
-      const model = { provider: "anthropic", id: "claude-sonnet-5" };
-      return {
-        find: () => model,
-        getAll: () => [model],
-        getAvailable: () => [model],
-        getError: () => undefined,
-        hasConfiguredAuth: () => true,
-        getProviderAuthStatus: () => ({}),
-      };
-    }
+    find = () => mockModel;
+    getAll = () => [mockModel];
+    getAvailable = () => [mockModel];
+    getError = () => undefined;
+    hasConfiguredAuth = () => true;
+    getProviderAuthStatus = () => ({});
   }
 
   class MockSession implements PiRuntimeSession {
@@ -70,7 +63,7 @@ const sdk = vi.hoisted(() => {
   }
 
   return {
-    AuthStorage: MockAuthStorage,
+    ModelRuntime: MockModelRuntime,
     ModelRegistry: MockModelRegistry,
     SessionManager: { inMemory: vi.fn(() => ({})) },
     DefaultResourceLoader: class {
@@ -92,7 +85,7 @@ const sdk = vi.hoisted(() => {
 });
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
-  AuthStorage: sdk.AuthStorage,
+  ModelRuntime: sdk.ModelRuntime,
   createAgentSession: sdk.createAgentSession,
   defineTool: sdk.defineTool,
   ModelRegistry: sdk.ModelRegistry,
@@ -113,7 +106,7 @@ describe("deployment custom tools", () => {
   });
 
   it("exposes persisted agent custom tools to the Pi session", async () => {
-    const app = createDeploymentControlPlaneApp({
+    const app = await createDeploymentControlPlaneApp({
       OMA_SANDBOX_PROVIDER: "none",
       OMA_MODEL_PROVIDERS: "anthropic",
     });
@@ -136,7 +129,7 @@ describe("deployment custom tools", () => {
   });
 
   it("keeps custom tools available for active sessions after the agent is archived", async () => {
-    const app = createDeploymentControlPlaneApp({
+    const app = await createDeploymentControlPlaneApp({
       OMA_SANDBOX_PROVIDER: "none",
       OMA_MODEL_PROVIDERS: "anthropic",
     });
@@ -161,7 +154,7 @@ describe("deployment custom tools", () => {
 });
 
 async function createAgent(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
 ): Promise<ManagedAgentsAgent> {
   const res = await app.request("/v1/agents", {
     method: "POST",
@@ -184,7 +177,7 @@ async function createAgent(
 }
 
 async function createEnvironment(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
 ): Promise<ManagedAgentsEnvironment> {
   const res = await app.request("/v1/environments", {
     method: "POST",
@@ -199,7 +192,7 @@ async function createEnvironment(
 }
 
 async function createSession(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
   body: unknown,
 ): Promise<ManagedAgentsSession> {
   const res = await app.request("/v1/sessions", {
@@ -212,7 +205,7 @@ async function createSession(
 }
 
 async function archiveAgent(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
   agentId: string,
 ): Promise<void> {
   const res = await app.request(`/v1/agents/${agentId}/archive`, {
@@ -222,7 +215,7 @@ async function archiveAgent(
 }
 
 async function sendMessage(
-  app: ReturnType<typeof createDeploymentControlPlaneApp>,
+  app: Awaited<ReturnType<typeof createDeploymentControlPlaneApp>>,
   sessionId: string,
   text: string,
 ): Promise<void> {

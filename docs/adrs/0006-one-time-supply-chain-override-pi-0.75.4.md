@@ -97,3 +97,25 @@ found 0 vulnerabilities
 $ grep integrity package-lock.json | head -1
 "integrity": "sha512-Fb+FRo08b5H9pYKbQJ708/5OKL0+K/yclhfCMEhrBzSPTZZ4c85nY1YsBo4qwL20ohBMlBezHMRuHzcJ1ylEoQ=="
 ```
+
+## Update, 2026-10-08: Pi 0.85.1
+
+Pi moved from 0.80.6 to 0.85.1 (published 2026-09-05) **without** an override.
+It was installed with `npm install --before=2026-09-08`, so it was within
+policy even under the old 30-day window (now 2 days, ADR 0017). A lockfile scan
+confirmed that no changed package is younger than that cap.
+
+- **Shrinkwrap still holds.** 0.85.1 ships `npm-shrinkwrap.json` and the
+  lockfile records `hasShrinkwrap: true`.
+- **The next bump is a decision, not a routine update.** Pi 1.0.1+ drops the
+  shrinkwrap and uses caret ranges for its internal packages, so OMA's lockfile
+  would become the only pin on Pi's dependency tree.
+- **SDK break absorbed:**
+  - `AuthStorage` and `ModelRegistry.create` are gone. OMA now supplies a
+    `CredentialStore` (`models/credential-store.ts`) over its own hardened
+    `auth.json` backend.
+  - Catalog construction is async, because `ModelRuntime.create` is async.
+  - Sandbox tools pin `ctx.cwd`, because Pi now resolves paths against the
+    session cwd.
+- **Date cap passed by hand:** the cap above was passed explicitly, because
+  npm was not enforcing `min-release-age` at the time; ADR 0017 fixed that.

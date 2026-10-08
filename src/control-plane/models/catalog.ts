@@ -1,11 +1,14 @@
-import {
-  AuthStorage,
-  ModelRegistry,
-  type AuthStorageBackend,
-} from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { scanModelConfigSecurity, type ModelConfigSecurityReport } from "./config-security.ts";
+import {
+  InMemoryAuthStorageBackend,
+  InMemoryModelsStore,
+  OmaCredentialStore,
+  type AuthStorageBackend,
+  type AuthStorageData,
+} from "./credential-store.ts";
 
-export const PINNED_PI_MODEL_RUNTIME_VERSION = "0.80.6";
+export const PINNED_PI_MODEL_RUNTIME_VERSION = "0.85.1";
 
 export interface PiModelRef {
   provider: string;
@@ -13,14 +16,21 @@ export interface PiModelRef {
 }
 
 export type PiResolvedModel = NonNullable<ReturnType<ModelRegistry["find"]>>;
-export type ReadOnlyAuthData = NonNullable<Parameters<typeof AuthStorage.inMemory>[0]>;
+export type ReadOnlyAuthData = AuthStorageData;
 
 export interface PiModelCatalog {
   defaultModel: PiModelRef;
   allowedProviders: ReadonlySet<string>;
-  authStorage: AuthStorage;
+  credentials: OmaCredentialStore;
+  modelRuntime: ModelRuntime;
   modelRegistry: ModelRegistry;
   securityReport: ModelConfigSecurityReport;
+  /**
+   * Re-run the startup config scan. Pi re-reads models.json on every session
+   * start, so the command-auth policy must be re-checked there, not only at
+   * boot. Throws on a violation.
+   */
+  assertConfigSecurity(): void;
   resolve(ref: PiModelRef): PiResolvedModel | undefined;
   list(options?: { provider?: string; availableOnly?: boolean }): PiResolvedModel[];
   hasConfiguredAuth(model: PiResolvedModel): boolean;
@@ -36,8 +46,13 @@ export interface CreatePiModelCatalogConfig {
   allowModelAuthCommands?: boolean;
 }
 
-export function createPiModelCatalog(config: CreatePiModelCatalogConfig): PiModelCatalog {
-  return createCatalog(config, AuthStorage.fromStorage(config.authBackend));
+export function createPiModelCatalog(config: CreatePiModelCatalogConfig): Promise<PiModelCatalog> {
+  return createCatalog(
+    config,
+    new OmaCredentialStore(config.authBackend, {
+      commands: config.allowModelAuthCommands === true ? "execute" : "deny",
+    }),
+  );
 }
 
 /**
@@ -48,14 +63,18 @@ export function createPiModelCatalog(config: CreatePiModelCatalogConfig): PiMode
 export function createReadOnlyPiModelCatalog(
   config: Omit<CreatePiModelCatalogConfig, "authBackend">,
   authData: ReadOnlyAuthData = {},
-): PiModelCatalog {
-  return createCatalog(config, AuthStorage.inMemory(authData));
+): Promise<PiModelCatalog> {
+  // Diagnostics must stay side-effect free: never run command-backed keys.
+  return createCatalog(
+    config,
+    new OmaCredentialStore(new InMemoryAuthStorageBackend(authData), { commands: "unresolved" }),
+  );
 }
 
-function createCatalog(
+async function createCatalog(
   config: Omit<CreatePiModelCatalogConfig, "authBackend">,
-  authStorage: AuthStorage,
-): PiModelCatalog {
+  credentials: OmaCredentialStore,
+): Promise<PiModelCatalog> {
   const allowedProviders = new Set(config.allowedProviders);
   if (allowedProviders.size !== config.allowedProviders.length) {
     throw new Error("OMA_MODEL_PROVIDERS must not contain duplicate providers");
@@ -64,19 +83,29 @@ function createCatalog(
     throw new Error(`Default model provider ${config.defaultModel.provider} is not enabled on this deployment`);
   }
 
-  const securityReport = scanModelConfigSecurity({
-    modelsPath: config.modelsPath,
-    authPath: config.authPath,
-    allowedProviders,
-    allowCommands: config.allowModelAuthCommands,
-  });
+  const scan = () =>
+    scanModelConfigSecurity({
+      modelsPath: config.modelsPath,
+      authPath: config.authPath,
+      allowedProviders,
+      allowCommands: config.allowModelAuthCommands,
+    });
+  const securityReport = scan();
 
-  const authErrors = authStorage.drainErrors();
-  if (authErrors.length > 0) {
-    throw new Error(`Failed to load model auth storage: ${authErrors.map((error) => error.message).join("; ")}`);
+  // Fail at startup on an unreadable or corrupt auth.json (Pi's own store
+  // would keep serving its last in-memory snapshot).
+  try {
+    await credentials.list();
+  } catch (error) {
+    throw new Error(`Failed to load model auth storage: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const modelRegistry = ModelRegistry.create(authStorage, config.modelsPath);
+  const modelRuntime = await ModelRuntime.create({
+    credentials,
+    modelsPath: config.modelsPath,
+    modelsStore: new InMemoryModelsStore(),
+  });
+  const modelRegistry = new ModelRegistry(modelRuntime);
   const registryError = modelRegistry.getError();
   if (registryError !== undefined) {
     throw new Error(registryError);
@@ -94,9 +123,13 @@ function createCatalog(
   return {
     defaultModel: { ...config.defaultModel },
     allowedProviders,
-    authStorage,
+    credentials,
+    modelRuntime,
     modelRegistry,
     securityReport,
+    assertConfigSecurity() {
+      scan();
+    },
     resolve(ref) {
       if (!allowedProviders.has(ref.provider)) return undefined;
       return modelRegistry.find(ref.provider, ref.id);
@@ -109,8 +142,6 @@ function createCatalog(
       });
     },
     hasConfiguredAuth(model) {
-      // Deliberately model-scoped: provider status can report env credentials as
-      // configured:false in Pi 0.80.6 while the resolved model is usable.
       return modelRegistry.hasConfiguredAuth(model);
     },
     providerAuthMetadata(provider) {

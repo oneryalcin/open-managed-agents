@@ -1,4 +1,3 @@
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import {
   chmodSync,
   existsSync,
@@ -16,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { OmaAuthStorageBackend } from "../auth-storage-backend.ts";
+import { OmaCredentialStore } from "../credential-store.ts";
 
 const roots: string[] = [];
 
@@ -37,17 +37,29 @@ describe("OmaAuthStorageBackend", () => {
     expect(readFileSync(authPath, "utf8")).toBe("{}");
   });
 
-  it("preserves Pi auth schema through AuthStorage.set and remove", () => {
+  it("preserves Pi auth schema through the credential store's modify and delete", async () => {
     const authPath = tempAuthPath();
-    const auth = AuthStorage.fromStorage(new OmaAuthStorageBackend(authPath));
+    const auth = new OmaCredentialStore(new OmaAuthStorageBackend(authPath));
 
-    auth.set("openai", { type: "api_key", key: "sk-one" });
-    auth.set("anthropic", { type: "api_key", key: "sk-two" });
-    auth.remove("openai");
+    await auth.modify("openai", async () => ({ type: "api_key", key: "sk-one" }));
+    await auth.modify("anthropic", async () => ({ type: "api_key", key: "sk-two" }));
+    await auth.delete("openai");
 
     expect(JSON.parse(readFileSync(authPath, "utf8"))).toEqual({
       anthropic: { type: "api_key", key: "sk-two" },
     });
+  });
+
+  it("serves concurrent credential reads without contending for the file lock", async () => {
+    // Pi's availability refresh reads every provider in parallel at startup.
+    const authPath = tempAuthPath();
+    // No lock retries: any lock contention between readers fails outright.
+    const auth = new OmaCredentialStore(new OmaAuthStorageBackend(authPath, { asyncRetries: 0 }));
+    await auth.modify("anthropic", async () => ({ type: "api_key", key: "sk-two" }));
+
+    const reads = await Promise.all(Array.from({ length: 40 }, () => auth.read("anthropic")));
+
+    expect(reads.every((credential) => credential?.type === "api_key")).toBe(true);
   });
 
   it("passes the latest durable bytes to each sync callback", () => {

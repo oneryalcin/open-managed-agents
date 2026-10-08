@@ -273,7 +273,7 @@ describe("session file resources API", () => {
   it("rejects file resources through the real host-passthrough provider", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "oma-host-files-"));
     try {
-      const app = createDeploymentControlPlaneApp(
+      const app = await createDeploymentControlPlaneApp(
         {
           OMA_SANDBOX_PROVIDER: "host-passthrough",
           OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH: "true",

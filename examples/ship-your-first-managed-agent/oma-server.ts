@@ -17,7 +17,7 @@ if (!Number.isSafeInteger(port) || port <= 0) {
   throw new Error(`invalid OMA_PROBE_PORT: ${process.env.OMA_PROBE_PORT}`);
 }
 
-const app = createDeploymentControlPlaneApp({
+const app = await createDeploymentControlPlaneApp({
   ...process.env,
   OMA_SANDBOX_PROVIDER: process.env.OMA_SANDBOX_PROVIDER ?? "docker-local",
   OMA_ALLOW_DOCKER_LOCAL: process.env.OMA_ALLOW_DOCKER_LOCAL ?? "true",

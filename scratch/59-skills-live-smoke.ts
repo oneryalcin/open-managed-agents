@@ -25,7 +25,7 @@ process.env.OMA_SKILLS_HOST_SECRET_CANARY = HOST_CANARY;
 console.error = (...args) => { observedLogs.push(args.map(String).join(" ")); originalError(...args); };
 console.warn = (...args) => { observedLogs.push(args.map(String).join(" ")); originalWarn(...args); };
 
-const app = createDeploymentControlPlaneApp({
+const app = await createDeploymentControlPlaneApp({
   ...process.env,
   OMA_SANDBOX_PROVIDER: "docker-local",
   OMA_ALLOW_DOCKER_LOCAL: "true",

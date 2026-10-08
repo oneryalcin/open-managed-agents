@@ -71,7 +71,7 @@ export async function inspectOma(
       throw new Error("Pi configuration paths are not safe to read");
     }
     const authData = readAuthSnapshot(deployment.authPath);
-    const catalog = createReadOnlyPiModelCatalog({
+    const catalog = await createReadOnlyPiModelCatalog({
       allowedProviders: deployment.allowedProviders,
       defaultModel: deployment.defaultModel,
       authPath: deployment.authPath,

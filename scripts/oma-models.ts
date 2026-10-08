@@ -46,20 +46,20 @@ export async function runModelsCli(
   try {
     switch (command) {
       case "providers-status":
-        return ok(providersStatus(loadCatalog(runtime.env)));
+        return ok(providersStatus(await loadCatalog(runtime.env)));
       case "models-list": {
         const options = parseModelsListArgs(args);
-        return ok(modelsList(loadCatalog(runtime.env), options));
+        return ok(modelsList(await loadCatalog(runtime.env), options));
       }
       case "models-validate":
-        return ok(modelsValidate(runtime.env, parseModelsValidateArgs(args)));
+        return ok(await modelsValidate(runtime.env, parseModelsValidateArgs(args)));
       case "auth-set":
         return ok(await authSet(runtime, args));
       case "auth-remove":
-        return ok(authRemove(runtime.env, args));
+        return ok(await authRemove(runtime.env, args));
       case "auth-status":
         assertAuthStatusArgs(args);
-        return ok(authStatus(loadCatalog(runtime.env), args));
+        return ok(await authStatus(await loadCatalog(runtime.env), args));
       default:
         return fail(`Unknown command: ${command}\n\n${USAGE}`);
     }
@@ -68,16 +68,16 @@ export async function runModelsCli(
   }
 }
 
-function loadCatalog(
+async function loadCatalog(
   env: ModelDeploymentEnv & Record<string, string | undefined>,
   overrides: { modelsPath?: string } = {},
-): PiModelCatalog {
+): Promise<PiModelCatalog> {
   const deployment = parseModelDeploymentConfigFromEnv(env);
   const config = {
     ...deployment,
     ...(overrides.modelsPath === undefined ? {} : { modelsPath: overrides.modelsPath }),
   };
-  const catalog = createPiModelCatalog({
+  const catalog = await createPiModelCatalog({
     allowedProviders: config.allowedProviders,
     defaultModel: config.defaultModel,
     authPath: config.authPath,
@@ -145,11 +145,11 @@ function modelsList(
   return `${lines.join("\n")}\n`;
 }
 
-function modelsValidate(
+async function modelsValidate(
   env: ModelDeploymentEnv & Record<string, string | undefined>,
   options: { file?: string },
-): string {
-  const catalog = loadCatalog(env, options.file === undefined ? {} : { modelsPath: options.file });
+): Promise<string> {
+  const catalog = await loadCatalog(env, options.file === undefined ? {} : { modelsPath: options.file });
   const warnings = catalog.securityReport.warnings.map((warning) => `Warning: ${warning}`);
   return [
     ...warnings,
@@ -162,34 +162,38 @@ function modelsValidate(
 
 async function authSet(runtime: Runtime, args: string[]): Promise<string> {
   const parsed = parseAuthSetArgs(args);
-  const catalog = loadCatalog(runtime.env);
+  const catalog = await loadCatalog(runtime.env);
   assertEnabledProvider(catalog, parsed.provider);
   const key = parsed.stdin
     ? await (runtime.readStdin ?? readAllStdin)()
     : await (runtime.promptSecret ?? promptSecret)(`API key for ${parsed.provider}: `);
   const trimmed = key.trim();
   if (trimmed === "") throw new Error("API key must not be empty");
-  catalog.authStorage.set(parsed.provider, { type: "api_key", key: trimmed });
+  if (trimmed.startsWith("!") && !parseModelDeploymentConfigFromEnv(runtime.env).allowModelAuthCommands) {
+    throw new Error("Command-backed keys (starting with \"!\") require OMA_ALLOW_MODEL_AUTH_COMMANDS=true");
+  }
+  await catalog.credentials.modify(parsed.provider, async () => ({ type: "api_key", key: trimmed }));
   return (
     `Stored API key for ${parsed.provider}.\n` +
     `The key was not printed. Restart \`oma up\` for a running appliance to observe this change.\n`
   );
 }
 
-function authRemove(
+async function authRemove(
   env: ModelDeploymentEnv & Record<string, string | undefined>,
   args: string[],
-): string {
+): Promise<string> {
   if (args.length !== 1) throw new Error("Usage: oma auth remove <provider>");
   const [provider] = args;
   assertProviderName(provider);
-  const catalog = loadCatalog(env);
-  catalog.authStorage.remove(provider);
+  const catalog = await loadCatalog(env);
+  await catalog.credentials.delete(provider);
   return `Removed stored API key for ${provider} if one existed. Restart \`oma up\` for a running appliance to observe this change.\n`;
 }
 
-function authStatus(catalog: PiModelCatalog, args: string[]): string {
+async function authStatus(catalog: PiModelCatalog, args: string[]): Promise<string> {
   const providers = args.length === 1 ? [args[0]!] : [...catalog.allowedProviders].sort();
+  const stored = new Set((await catalog.credentials.list()).map((entry) => entry.providerId));
   const lines = ["provider\tstored\tready_models\ttotal_models"];
   for (const provider of providers) {
     assertProviderName(provider);
@@ -198,7 +202,7 @@ function authStatus(catalog: PiModelCatalog, args: string[]): string {
     const ready = models.filter((model) => catalog.hasConfiguredAuth(model));
     lines.push([
       provider,
-      catalog.authStorage.has(provider) ? "true" : "false",
+      stored.has(provider) ? "true" : "false",
       String(ready.length),
       String(models.length),
     ].join("\t"));

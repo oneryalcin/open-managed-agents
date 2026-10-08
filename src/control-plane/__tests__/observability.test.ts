@@ -32,18 +32,18 @@ afterEach(() => {
   }
 });
 
-function makePlane(env: DeploymentControlPlaneEnv = {}): DeploymentControlPlane {
+async function makePlane(env: DeploymentControlPlaneEnv = {}): Promise<DeploymentControlPlane> {
   const root = mkdtempSync(join(tmpdir(), "oma-observability-memory-"));
   tempRoots.push(root);
   return createDeploymentControlPlane({ OMA_HOME: root, ...env });
 }
 
-function makeDurablePlane(
+async function makeDurablePlane(
   env: DeploymentControlPlaneEnv = {},
-): DeploymentControlPlane & { root: string } {
+): Promise<DeploymentControlPlane & { root: string }> {
   const root = mkdtempSync(join(tmpdir(), "oma-observability-"));
   tempRoots.push(root);
-  const plane = createDeploymentControlPlane({
+  const plane = await createDeploymentControlPlane({
     OMA_HOME: root,
     OMA_SQLITE_PATH: join(root, "oma.sqlite"),
     OMA_FILE_STORAGE_ROOT: join(root, "objects"),
@@ -156,7 +156,7 @@ describe("event store runtime-changes observer (post-commit chokepoint)", () => 
 
 describe("GET /health", () => {
   it("answers unauthenticated on a durable auth-enabled deployment", async () => {
-    const plane = makeDurablePlane({ OMA_AUTH_MODE: "api-key" });
+    const plane = await makeDurablePlane({ OMA_AUTH_MODE: "api-key" });
     const res = await plane.app.request("/health");
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -180,7 +180,7 @@ describe("GET /health", () => {
   });
 
   it("reports in-memory mode instead of claiming durability", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const res = await plane.app.request("/health");
     const body = (await res.json()) as {
       checks: { storage: { mode?: string } };
@@ -190,7 +190,7 @@ describe("GET /health", () => {
   });
 
   it("degrades to 503 when storage is unusable", async () => {
-    const plane = makeDurablePlane();
+    const plane = await makeDurablePlane();
     plane.stores.close(); // storage probe now throws on the closed handle
     const res = await plane.app.request("/health");
     expect(res.status).toBe(503);
@@ -205,7 +205,7 @@ describe("GET /health", () => {
 
 describe("GET /metrics exposure matrix", () => {
   it("serves openly on the default loopback bind (polarity: unset flag is ON)", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const res = await plane.app.request("/metrics");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe(
@@ -217,14 +217,14 @@ describe("GET /metrics exposure matrix", () => {
   });
 
   it("fails closed (404) on a non-loopback bind without a token", async () => {
-    const plane = makePlane({ OMA_HOST: "0.0.0.0" });
+    const plane = await makePlane({ OMA_HOST: "0.0.0.0" });
     const res = await plane.app.request("/metrics");
     expect(res.status).toBe(404);
     plane.stores.close();
   });
 
   it("requires the bearer token when configured, constant-time compared", async () => {
-    const plane = makePlane({
+    const plane = await makePlane({
       OMA_HOST: "0.0.0.0",
       OMA_METRICS_TOKEN: "scrape-me-7",
     });
@@ -244,36 +244,36 @@ describe("GET /metrics exposure matrix", () => {
   });
 
   it("a token also gates loopback binds", async () => {
-    const plane = makePlane({ OMA_METRICS_TOKEN: "scrape-me-8" });
+    const plane = await makePlane({ OMA_METRICS_TOKEN: "scrape-me-8" });
     expect((await plane.app.request("/metrics")).status).toBe(401);
     plane.stores.close();
   });
 
   it("OMA_METRICS=0 disables the endpoint everywhere", async () => {
-    const plane = makePlane({ OMA_METRICS: "0" });
+    const plane = await makePlane({ OMA_METRICS: "0" });
     expect((await plane.app.request("/metrics")).status).toBe(404);
     plane.stores.close();
   });
 
-  it("refuses to boot on an unknown OMA_METRICS value", () => {
-    expect(() => makePlane({ OMA_METRICS: "yes" })).toThrow(
+  it("refuses to boot on an unknown OMA_METRICS value", async () => {
+    await expect( makePlane({ OMA_METRICS: "yes" })).rejects.toThrow(
       /Unsupported OMA_METRICS/,
     );
   });
 
-  it("refuses both token variants set together", () => {
-    expect(() =>
+  it("refuses both token variants set together", async () => {
+    await expect(
       makePlane({
         OMA_METRICS_TOKEN: "a",
         OMA_METRICS_TOKEN_FILE: "/nonexistent",
       }),
-    ).toThrow(/exactly one of/);
+    ).rejects.toThrow(/exactly one of/);
   });
 });
 
 describe("HTTP metrics middleware placement", () => {
   it("counts 200, 404, 413, and onError 500 with correct route_class/status", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     plane.app.get("/test-boom", () => {
       throw new Error("forced");
     });
@@ -332,7 +332,7 @@ describe("HTTP metrics middleware placement", () => {
 
 describe("gauges and admission counters", () => {
   it("oma_sessions_active reflects a created session at scrape time", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const agentRes = await plane.app.request("/v1/agents", {
       method: "POST",
       headers: V1_HEADERS,
@@ -374,7 +374,7 @@ describe("gauges and admission counters", () => {
   });
 
   it("counts a session-cap 429 as an admission rejection", async () => {
-    const plane = makePlane({ OMA_MAX_ACTIVE_SESSIONS_PER_WORKSPACE: "1" });
+    const plane = await makePlane({ OMA_MAX_ACTIVE_SESSIONS_PER_WORKSPACE: "1" });
     const agentRes = await plane.app.request("/v1/agents", {
       method: "POST",
       headers: V1_HEADERS,
@@ -414,7 +414,7 @@ describe("gauges and admission counters", () => {
   });
 
   it("counts model admission failures with bounded provider labels", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const rejected = await plane.app.request("/v1/agents", {
       method: "POST",
       headers: V1_HEADERS,
@@ -468,7 +468,7 @@ describe("turn outcome metrics (post-commit chokepoint, end-to-end)", () => {
   });
 
   it("maps close reasons to outcomes; archived/deleted are not counted", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const reasons = [
       "completed",
       "interrupted",
@@ -530,7 +530,7 @@ describe("in-flight gauge total", () => {
 
 describe("health degradation and kill-switch recovery", () => {
   it("fails the storage check when the object root cannot be statfs'd", async () => {
-    const plane = makeDurablePlane();
+    const plane = await makeDurablePlane();
     rmSync(join(plane.root, "objects"), { recursive: true, force: true });
     const res = await plane.app.request("/health");
     expect(res.status).toBe(503);
@@ -540,7 +540,7 @@ describe("health degradation and kill-switch recovery", () => {
   });
 
   it("OMA_METRICS=0 boots despite broken token config (kill-switch recovery)", async () => {
-    const plane = makePlane({
+    const plane = await makePlane({
       OMA_METRICS: "0",
       OMA_METRICS_TOKEN_FILE: "/nonexistent/metrics-token",
     });
@@ -551,8 +551,8 @@ describe("health degradation and kill-switch recovery", () => {
 });
 
 describe("schema", () => {
-  it("creates the partial live-sessions index", () => {
-    const plane = makeDurablePlane();
+  it("creates the partial live-sessions index", async () => {
+    const plane = await makeDurablePlane();
     plane.stores.close();
     const db = new DatabaseSync(join(plane.root, "oma.sqlite"));
     const row = db
@@ -564,11 +564,11 @@ describe("schema", () => {
     expect(row?.sql).toContain("WHERE archived_at IS NULL");
   });
 
-  it("serves both live-turn counts from the partial index, not a table scan", () => {
+  it("serves both live-turn counts from the partial index, not a table scan", async () => {
     // Turns are closed by UPDATE and retained as history; without the
     // partial index every /metrics scrape and /health check is O(history)
     // (C2 review, Codex-adv HIGH — EXPLAIN-verified SCAN before the fix).
-    const plane = makeDurablePlane();
+    const plane = await makeDurablePlane();
     plane.stores.close();
     const db = new DatabaseSync(join(plane.root, "oma.sqlite"));
     const plan = (sql: string): string =>

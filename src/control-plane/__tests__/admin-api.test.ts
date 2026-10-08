@@ -26,14 +26,14 @@ afterEach(() => {
 
 describe("admin API", () => {
   it("is disabled by default", async () => {
-    const plane = makePlane({ admin: false });
+    const plane = await makePlane({ admin: false });
     const res = await adminRequest(plane.app, "/admin/workspaces");
     expect(res.status).toBe(404);
     plane.stores.close();
   });
 
   it("requires the admin key and rejects workspace keys", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const workspaceKey = plane.stores.workspaces.mintKey("wrk_default", "test")
       .plaintextKey;
 
@@ -60,7 +60,7 @@ describe("admin API", () => {
   });
 
   it("does not let the admin key authenticate as a workspace key", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const res = await managedRequest(plane.app, "/v1/agents", {
       key: ADMIN_KEY,
     });
@@ -69,7 +69,7 @@ describe("admin API", () => {
   });
 
   it("creates, lists, and retrieves workspaces", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const created = await adminRequest(plane.app, "/admin/workspaces", {
       method: "POST",
       adminKey: ADMIN_KEY,
@@ -110,7 +110,7 @@ describe("admin API", () => {
   });
 
   it("mints a key once and never re-reveals plaintext from list-keys", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const workspace = plane.stores.workspaces.createWorkspace("tenant-a");
 
     const minted = await adminRequest(
@@ -152,7 +152,7 @@ describe("admin API", () => {
   });
 
   it("returns 404 for key operations on nonexistent workspaces", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const minted = await adminRequest(
       plane.app,
       "/admin/workspaces/wrk_missing/keys",
@@ -170,7 +170,7 @@ describe("admin API", () => {
   });
 
   it("lists token-free credential health through the paginated admin endpoint", async () => {
-    const plane = makePlane({ masterKey: true });
+    const plane = await makePlane({ masterKey: true });
     const workspace = plane.stores.workspaces.createWorkspace("tenant-health");
     plane.stores.vaults.createVault({ row: {
       id: "vlt_health", workspace_id: workspace.workspace_id, type: "vault",
@@ -210,7 +210,7 @@ describe("admin API", () => {
     // MCP execution deliberately left disabled: this admin read is metadata
     // only and must work (and cause no egress) with OMA_ENABLE_MCP unset.
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const plane = makePlane({ masterKey: true });
+    const plane = await makePlane({ masterKey: true });
     const workspace = plane.stores.workspaces.createWorkspace("tenant-page");
     const other = plane.stores.workspaces.createWorkspace("tenant-other");
     const mkVault = (ws: string, id: string) => plane.stores.vaults.createVault({ row: {
@@ -255,7 +255,7 @@ describe("admin API", () => {
   });
 
   it("rejects an admin credential-health read carrying only a workspace key", async () => {
-    const plane = makePlane({ masterKey: true });
+    const plane = await makePlane({ masterKey: true });
     const workspace = plane.stores.workspaces.createWorkspace("tenant-tier");
     const minted = plane.stores.workspaces.mintKey(workspace.workspace_id, "browse");
     const res = await plane.app.request(
@@ -267,7 +267,7 @@ describe("admin API", () => {
   });
 
   it("rejects malformed admin payloads", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const workspace = plane.stores.workspaces.createWorkspace("tenant-a");
 
     for (const body of [
@@ -336,7 +336,7 @@ describe("admin API", () => {
   });
 
   it("minted keys authenticate against managed-agents routes", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const workspace = plane.stores.workspaces.createWorkspace("tenant-a");
     const minted = await adminRequest(
       plane.app,
@@ -357,7 +357,7 @@ describe("admin API", () => {
   });
 
   it("revokes keys and makes revoked keys fail workspace auth", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const workspace = plane.stores.workspaces.createWorkspace("tenant-a");
     const { plaintextKey, keySha256 } = plane.stores.workspaces.mintKey(
       workspace.workspace_id,
@@ -401,7 +401,7 @@ describe("admin API", () => {
   });
 
   it("manages keys across workspaces as the operator tier", async () => {
-    const plane = makePlane();
+    const plane = await makePlane();
     const a = plane.stores.workspaces.createWorkspace("tenant-a");
     const b = plane.stores.workspaces.createWorkspace("tenant-b");
     const keyA = await adminRequest(
@@ -432,29 +432,29 @@ describe("admin API", () => {
     plane.stores.close();
   });
 
-  it("fails closed at boot for weak or misleading admin configurations", () => {
-    expect(() => makePlane({ adminKey: "not-a-canonical-256-bit-key" })).toThrow(
+  it("fails closed at boot for weak or misleading admin configurations", async () => {
+    await expect( makePlane({ adminKey: "not-a-canonical-256-bit-key" })).rejects.toThrow(
       "exactly 32 random bytes",
     );
-    expect(() =>
+    await expect(
       makePlane({ durable: false, authMode: "api-key" }),
-    ).toThrow("requires durable deployment storage");
-    expect(() =>
+    ).rejects.toThrow("requires durable deployment storage");
+    await expect(
       makePlane({ admin: true, authMode: "disabled" }),
-    ).toThrow("requires OMA_AUTH_MODE=api-key");
-    expect(() =>
+    ).rejects.toThrow("requires OMA_AUTH_MODE=api-key");
+    await expect(
       makePlane({ admin: true, authMode: undefined }),
-    ).toThrow("requires OMA_AUTH_MODE=api-key");
+    ).rejects.toThrow("requires OMA_AUTH_MODE=api-key");
   });
 });
 
-function makePlane(opts: {
+async function makePlane(opts: {
   admin?: boolean;
   adminKey?: string;
   durable?: boolean;
   authMode?: "api-key" | "disabled" | undefined;
   masterKey?: boolean;
-} = {}): DeploymentControlPlane {
+} = {}): Promise<DeploymentControlPlane> {
   const root = mkdtempSync(join(tmpdir(), "oma-admin-api-"));
   tempRoots.push(root);
   const durable = opts.durable ?? true;

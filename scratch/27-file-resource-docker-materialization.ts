@@ -50,7 +50,7 @@ if (process.env.OMA_RUN_FILE_RESOURCE_MATERIALIZATION_PROBE !== "true") {
   process.exit(0);
 }
 
-const app = createDeploymentControlPlaneApp({
+const app = await createDeploymentControlPlaneApp({
   ...process.env,
   OMA_SANDBOX_PROVIDER: "docker-local",
   OMA_ALLOW_DOCKER_LOCAL: "true",

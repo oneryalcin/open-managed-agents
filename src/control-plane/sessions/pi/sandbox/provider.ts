@@ -523,45 +523,54 @@ export function createSandboxToolDefinitions(
   return [
     withToolCallAccounting(
       "bash",
-      createBashToolDefinition(cwd, { operations: operations.bash }),
+      // Pi >= 0.82 exports PI_SESSION_ID/PI_MODEL/... into bash by default;
+      // control-plane session metadata does not belong in the sandbox.
+      createBashToolDefinition(cwd, { operations: operations.bash, exposeSessionEnvironment: false }),
       invocations,
       disposed,
+      cwd,
     ),
     withToolCallAccounting(
       "read",
       createReadToolDefinition(cwd, { operations: operations.read }),
       invocations,
       disposed,
+      cwd,
     ),
     withToolCallAccounting(
       "write",
       createWriteToolDefinition(cwd, { operations: operations.write }),
       invocations,
       disposed,
+      cwd,
     ),
     withToolCallAccounting(
       "edit",
       createEditToolDefinition(cwd, { operations: operations.edit }),
       invocations,
       disposed,
+      cwd,
     ),
     withToolCallAccounting(
       "glob",
       createCmaGlobToolDefinition(cwd, operations.glob),
       invocations,
       disposed,
+      cwd,
     ),
     withToolCallAccounting(
       "grep",
       createCmaGrepToolDefinition(cwd, operations.grep),
       invocations,
       disposed,
+      cwd,
     ),
     withToolCallAccounting(
       "ls",
       createLsToolDefinition(cwd, { operations: operations.ls }),
       invocations,
       disposed,
+      cwd,
     ),
   ];
 }
@@ -597,6 +606,7 @@ function withToolCallAccounting<T extends ToolDefinition<any, any, any>>(
   tool: T,
   invocations: MutableSandboxInvocationStats,
   disposed: SandboxDisposedFlag,
+  cwd: string,
 ): T {
   return {
     ...tool,
@@ -604,8 +614,12 @@ function withToolCallAccounting<T extends ToolDefinition<any, any, any>>(
       if (disposed.value) {
         throw new Error("Sandbox provider is disposed");
       }
+      // Pi >= 0.85 resolves paths against ctx.cwd ahead of the tool's own
+      // cwd, and ctx.cwd is the control plane's process.cwd(). Pin it to the
+      // sandbox so relative paths and bash never land on the host directory.
+      const sandboxCtx = ctx === undefined ? ctx : { ...ctx, cwd };
       return toolExecutionContext.run({ toolName, toolCallId }, () =>
-        tool.execute(toolCallId, params, signal, onUpdate, ctx),
+        tool.execute(toolCallId, params, signal, onUpdate, sandboxCtx),
       );
     },
   };
