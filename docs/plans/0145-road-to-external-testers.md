@@ -106,7 +106,8 @@ when all of these hold:
   MCP servers you trust.** On a first-time MCP OAuth connect the MCP server
   chooses the authorization server (inherent to MCP), so a hostile server can
   send the browser to its own login page. Reauthorize is bound to the
-  connect-time authorization server and token endpoint (#242, #257).
+  connect-time authorization server and token endpoint (#242, #257);
+  credentials connected before 0.2.0 must be reconnected to reauthorize.
 
 ## Deferred to post-v1
 

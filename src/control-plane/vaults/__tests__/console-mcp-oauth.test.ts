@@ -173,7 +173,7 @@ describe("ConsoleMcpOauthService", () => {
     expect(redirectHost).not.toBe("evil.example.test");
   });
 
-  it("still keeps the client secret from a switched authorization server for credentials connected before #257", async () => {
+  it("requires reconnecting a credential connected before its authorization server was recorded", async () => {
     const fixture = oauthFetch();
     const service = new ConsoleMcpOauthService(vaults, fixture.fetch);
     const vaultId = vaults.listVaults(WRK).data[0]!.id;
@@ -182,18 +182,10 @@ describe("ConsoleMcpOauthService", () => {
     const credentialId = service.status(WRK, first.flow_id).credential_id!;
     db.exec("UPDATE vault_credentials SET oauth_authorization_server = NULL");
 
-    fixture.authorizationServer = "https://evil.example.test";
-    try {
-      const second = await service.startReauthorize(WRK, { vault_id: vaultId, credential_id: credentialId }, CALLBACK_URL);
-      await service.complete(new URL(second.authorization_url).searchParams.get("state")!, "evil-code");
-    } catch {
-      // Refusing the flow is the expected outcome; the assertion is about what leaked.
-    }
-
-    const basic = Buffer.from(`oma-dynamic-client:${CLIENT_SECRET}`).toString("base64");
-    expect(fixture.evilRequests.filter((request) =>
-      request.body.includes(CLIENT_SECRET) || request.authorization?.includes(basic),
-    )).toEqual([]);
+    await expect(service.startReauthorize(WRK, {
+      vault_id: vaultId,
+      credential_id: credentialId,
+    }, CALLBACK_URL)).rejects.toThrow(/Delete it and connect again/);
   });
 
   it("expires flow state at ten minutes and isolates status by workspace", async () => {
