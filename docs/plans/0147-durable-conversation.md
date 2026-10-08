@@ -116,13 +116,20 @@ told about it.
      skipped close for a closed or deleted session. Otherwise the runner
      removes it itself when its generator ends without settling (loser of the
      prompt race, hard error).
-   - `release(true)` also advances the acknowledged cursor. `release(false)`
-     keeps the entries for the next settled turn.
+   - `release(true)` also advances the acknowledged cursor, monotonically, to
+     the **endpoint captured when the settled event was emitted**, never to
+     the live entry count. A newer run may already have appended entries that
+     were not in the committed batch. `release(false)` keeps the entries for
+     the next settled turn.
    - `interruptSession`, `closeSession`, archive and delete keep evicting
      unconditionally; holds never block them.
    - Today this race already disposes handles during post-run compaction; the
      token set fixes it as part of this plan.
-4. **Fenced write.** The service holds those entries and writes them in the
+4. **Fenced write.** The conversation write is fenced on **turn ownership**
+   (owner and generation match the turn row), not on this call being the one
+   that closes the turn. So a turn this owner already closed (for example
+   `interrupted` by `maybeInterruptRuntime`) still gets its settled entries
+   saved, while a stale owner's write is still rejected. Otherwise: The service holds those entries and writes them in the
    **same** `appendBatchWithRuntimeChanges` call that closes the turn, as a new
    `conversationEntries` change applied after `closedTurns`. The turn close is
    owner- and generation-fenced (`closeRuntimeTurnStmt`, which throws
@@ -139,9 +146,9 @@ told about it.
 7. **Interrupt settles.** `abort()` resolves `prompt()`, so an interrupted turn
    reaches the settled point and its aborted assistant entry is saved (Pi
    drops it from requests; fact 5). When the turn was already closed
-   `interrupted` by `maybeInterruptRuntime`, the normal close loses ownership
-   and the entries wait for the next settled turn, as on any rollback. A
-   deliberate interrupt is never reported to the model as cut off.
+   `interrupted` by `maybeInterruptRuntime`, the ownership fence (step 4)
+   still saves its entries, including messages steered into it. A deliberate
+   interrupt is never reported to the model as cut off.
 
 The steer path's second runtime task (#245) runs no Pi turn of its own, so it
 yields no settled event. The owning task's settled event includes the steered
@@ -252,7 +259,10 @@ Real Pi with the faux provider (D3), through the events service unless noted:
 - **Overlapping runs:** an interrupt followed by a new message while the old
   turn's close is still pending keeps the handle held until both release.
 - **Interrupt is not an unclean end:** after an interrupt and eviction, the
-  rebuild adds no cut-off note.
+  rebuild adds no cut-off note. This includes a paused owner with a message
+  steered into it before the interrupt.
+- **Cursor endpoint:** a release after a newer run has appended entries
+  advances the cursor only to the released checkpoint's endpoint.
 - **Undispatched and pending messages:** an image-only message, and a message
   whose turn is still pending at rebuild, produce no cut-off note.
 - **Notes don't pile up:** two rebuilds in a row leave one workspace note.
@@ -340,4 +350,11 @@ Plus store unit tests: idempotent append, ordering, isolation by session.
     event store using `textFromContent`, excluding pending and interrupted
     triggers (both reviewers).
   - Notes accumulated across rebuilds → idempotent.
+- **Focused Codex pass on that revision, 2026-10-08:**
+  - `release(true)` must advance only to the endpoint captured at settlement
+    → specified, monotonic;
+  - a deliberately interrupted turn could lose its entries (and look like a
+    cut-off for messages steered into it) because its normal close fails the
+    ownership check → the conversation write is fenced on turn ownership, not
+    on closing the turn.
 
