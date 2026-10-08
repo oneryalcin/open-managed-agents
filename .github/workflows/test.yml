@@ -1,0 +1,34 @@
+name: Test suite
+
+# The full typecheck + vitest suite on every PR. Other workflows run only
+# targeted tests; this is what makes a green check mean "the suite passed".
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.18.0"
+          cache: npm
+      - run: npm ci
+      # The runner has Docker, so the live sandbox tests run too; give them
+      # the pinned default image instead of the local-dev oma-sandbox:dev tag.
+      - name: Pull the pinned sandbox image
+        run: |
+          set -euo pipefail
+          image="$(sed -n 's/.*"\(ghcr.io[^"]*\)".*/\1/p' src/control-plane/sessions/pi/sandbox/image.ts)"
+          test -n "$image"
+          docker pull "$image"
+          echo "OMA_TEST_SANDBOX_IMAGE=$image" >> "$GITHUB_ENV"
+      - run: npm run build:package
+      - run: make check
