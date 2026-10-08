@@ -148,11 +148,7 @@ class FakeQueuedSession {
 
   constructor(private readonly gate: Promise<void>) {}
 
-  async prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void> {
-    if (opts?.streamingBehavior === "steer" && this.running) {
-      this.steered.push(text);
-      return;
-    }
+  async prompt(text: string): Promise<void> {
     this.emit({ type: "agent_start" });
     this.emitAssistant(text);
     await this.gate;
@@ -162,13 +158,11 @@ class FakeQueuedSession {
     this.emit({ type: "agent_end", messages: [], willRetry: false });
   }
 
-  get isStreaming(): boolean {
-    return this.running;
-  }
-
-  async steer(text: string): Promise<void> {
-    this.steered.push(text);
-  }
+  readonly agent = {
+    steer: (message: { content: Array<{ text: string }> }): void => {
+      this.steered.push(message.content[0]!.text);
+    },
+  };
 
   async abort(): Promise<void> {}
 

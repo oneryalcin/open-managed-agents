@@ -40,8 +40,7 @@ const sdk = vi.hoisted(() => {
       });
     }
 
-    readonly isStreaming = false;
-    async steer(): Promise<void> {}
+    readonly agent = { steer(): void {} };
 
     async abort(): Promise<void> {}
 

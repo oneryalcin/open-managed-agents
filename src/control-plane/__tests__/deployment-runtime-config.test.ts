@@ -656,8 +656,7 @@ class FakeSession implements PiRuntimeSession {
     });
   }
 
-  readonly isStreaming = false;
-  async steer(_text: string): Promise<void> {}
+  readonly agent = { steer(): void {} };
 
   async abort(): Promise<void> {}
 

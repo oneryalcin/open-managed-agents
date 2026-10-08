@@ -67,8 +67,7 @@ const sdk = vi.hoisted(() => {
       this.emit({ type: "agent_end", messages: [], willRetry: false });
     }
 
-    readonly isStreaming = false;
-    async steer(): Promise<void> {}
+    readonly agent = { steer(): void {} };
 
     async abort(): Promise<void> {}
 
