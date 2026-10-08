@@ -6,13 +6,16 @@ Design, 2026-10-08. Not started. Implements stage 1 of
 [ADR 0018](../adrs/0018-session-durability-and-parking.md) and fixes #265. It is
 an M2 item in [0145](0145-road-to-external-testers.md).
 
-**Revised after review:** a Codex adversarial pass and an independent review
-with real-Pi experiments. The first draft drained "everything Pi has appended
-so far" into each event batch, which can save the conversation *ahead* of the
-event log, and acknowledged entries before commit. The revision uses
-watermarked, commit-acknowledged checkpoints, hands over the unsaved tail
-before disposal, and drops blanket tool-result repair. The review log at the
-end records each finding.
+**Revised twice after review.** Two Codex adversarial passes and an
+independent real-Pi review took apart the first two designs. Both saved the
+conversation *during* a turn, alongside the event batches (first a plain
+drain, then watermarked checkpoints). Every version had to thread through the
+runner's event queue, its gating and coalescing of tool events, disposal, and
+turn ownership. Each fix exposed another race in that machinery, the same
+territory as #260. This version saves the conversation **only when a turn has
+fully settled**, inside the turn-close transaction that is already fenced by
+turn ownership. It trades away mid-turn crash fidelity for a design with no
+in-flight state. The review log at the end records each finding.
 
 ## Problem
 
@@ -25,8 +28,9 @@ full history, so the client and the model disagree.
 ## Goal and non-goals
 
 **Goal:** after eviction or restart, the model sees the conversation it would
-have seen without one. After a crash, any gap is bounded and the model is told
-about it.
+have seen without one. After a crash mid-turn, the in-progress turn is
+missing from the conversation (bounded to that one turn), and the model is
+told about it.
 
 **Non-goals (later ADR 0018 stages):**
 - the workspace filesystem across sandbox disposal (stage 2);
@@ -47,7 +51,8 @@ about it.
 3. **Write order.** `AgentSession._handleAgentEvent` notifies listeners and
    *then* appends the `message_end` entry, with no `await` in between. Pi does
    **not** wait for OMA: OMA's listener only queues, so Pi can run ahead of the
-   events service by several events. That's why checkpoints need watermarks.
+   events service by several events. That's why the design saves only at
+   settled points, never mid-turn.
 4. **Context building.** `buildSessionContext()` respects compaction.
 5. **The provider request is normalised.** pi-ai's `transformMessages` drops
    aborted and errored assistant messages and fills in `"No result provided"`
@@ -70,87 +75,99 @@ about it.
 
 - Add `session_conversation_entries` to the **event store's** database, keyed
   by `(workspace_id, session_id, seq)`. Columns: `entry_id` (unique per
-  session), `entry_json`, `pi_version`, `created_at`. The Pi header is the
-  first row.
+  session), `entry_json`, `turn_id` (the turn whose settlement saved it),
+  `pi_version`, `created_at`. The Pi header is the first row.
 - Append is idempotent on `(workspace_id, session_id, entry_id)`.
 - `deleteForSession` removes the conversation with the events. Archive keeps
   both.
 - Durable mode and memory mode work unchanged. Memory mode survives idle
   eviction but not a restart.
 
-### Checkpoints: watermarked, committed with the event batch, acknowledged after
+### Checkpoint: once per settled turn, in the fenced turn-close transaction
 
-1. **Watermark per queued event.** When the runner's listener queues a Pi
-   event, it records `w` = how many entries Pi had at that moment. Entries
-   below `w` were appended before the event was emitted, so they belong to
-   earlier events. Internal OMA events get the same watermark when queued.
-2. **Checkpoint up to the committing batch's watermark.** When the service
-   commits a batch for an event with watermark `w`, it includes the
-   *unacknowledged* entries below `w` in the same transaction. The entry for
-   the event itself is saved with the next batch. So **the stored conversation
-   is never ahead of the event log**, and lags it by at most one message.
-3. **Acknowledge after commit.** The runner keeps an `acked` index per handle.
-   It advances only when the service reports a successful commit. A rolled-back
-   transaction (including `RuntimeTurnOwnershipLostError`) leaves the entries
-   unacknowledged, and the next checkpoint offers them again; idempotent append
-   makes repeats harmless.
-4. **One hook for every commit path.** The entries ride on
-   `RuntimeTurnEventCommit` and are written inside
-   `appendBatchWithRuntimeChangesInTransaction`. That covers the plain batch
-   call, the `…AndCompleteIdempotency` variant, and the durable coordinator's
-   own transaction (`deployment-runtime-event-coordinator.ts`). The tool-action
-   collaborators' persist paths are included.
-5. **Tail before disposal.** Entries appended after a turn's last event (for
-   example auto-compaction after `agent_end`, which runs inside `prompt()`)
-   have no later batch to ride on. Two cases:
-   - when the turn completes normally, the runner yields a final internal
-     `oma.conversation_tail` event with the watermark set to "all entries", and
-     the service commits it in the turn-close transaction;
-   - when the runner disposes a handle (`closeWhenIdle`, hard error,
-     interrupt, eviction), it first flushes the unacknowledged tail to a
-     conversation sink, a direct store write outside any event batch. This
-     is safe because the turn has ended and no event remains that could be
-     ahead of it.
-   - **Stated exception:** if a batch failed (SQLite error or ownership lost)
-     and the turn then ended, the flush saves entries whose event rows were
-     rolled back. On that failure path the conversation keeps what the model
-     actually saw rather than staying strictly behind the event log. The
-     client sees the turn's `session.error`.
+1. **Settled point.** `runOnSession` finishes only after `await run`, that is
+   after Pi's `prompt()` has resolved, including post-run compaction and any
+   steered continuation. Its queue is drained by then. So when the runner's
+   generator is about to finish normally, Pi has no in-flight work and every
+   event has been yielded.
+2. **Settled event.** At that point, before the existing `closeWhenIdle`
+   eviction, the runner yields one internal `oma.conversation_settled` event.
+   It carries the entries appended since the last *acknowledged* checkpoint and
+   an `ack()` callback.
+3. **Fenced write.** The service holds those entries and writes them in the
+   **same** `appendBatchWithRuntimeChanges` call that closes the turn, as a new
+   `conversationEntries` change applied after `closedTurns`. The turn close is
+   owner- and generation-fenced (`closeRuntimeTurnStmt`, which throws
+   `RuntimeTurnOwnershipLostError`), so the conversation commits only if this
+   owner legitimately closes the turn. A closed or deleted session is skipped,
+   as turn close already is.
+4. **Acknowledge after commit.** The service calls `ack()` only after the
+   transaction commits. If it rolls back, the runner keeps the entries and
+   offers them again with the next settled turn of that handle.
+5. **Nothing else writes.** No checkpoint happens mid-turn, on disposal, on
+   hard error, on interrupt-driven eviction, or on `close()`. Those paths
+   don't reach a settled point, so their turn is not saved (see "Crash and
+   failure behaviour").
+
+The steer path's second runtime task (#245) runs no Pi turn of its own, so it
+yields no settled event. The owning task's settled event includes the steered
+messages.
+
+### Why no in-flight state
+
+- Never ahead of the event log: the checkpoint commits with the turn close,
+  after all of the turn's event rows.
+- No stale owner writes: the write sits inside the ownership-fenced close.
+- No disposal race: idle eviction only touches non-running handles, and those
+  have already settled and checkpointed; other disposals write nothing.
+- No watermarks, coalescing or gating accounting.
+
+### Crash and failure behaviour
+
+If a turn does not settle normally (process crash, hard runtime error,
+ownership loss, close mid-turn), the stored conversation ends at the previous
+settled turn. The event log still has that turn's rows and its terminal
+`session.error`. On the next rebuild the model would not see that turn's user
+message or partial work, so rebuild adds the D2 note, quoting the unanswered
+user message(s).
+
+A paused `requires_action` turn has not settled, so a restart loses its
+progress. That is unchanged from today and is ADR 0018 stage 3.
 
 ### Rebuild
 
-- On a cache miss, `getOrCreateHandle` loads the stored entries. If there are
+- On a cache miss, `getOrCreateHandle` loads stored entries. If there are
   any, it builds the Pi session from `SessionManager.inMemory(cwd, undefined,
-  entries)` and sets `acked` to the loaded count.
-- No blanket tool-result repair (Pi fact 5). For **unclean ends**, the rebuild
-  adds a note (decision D2). An unclean end is a last assistant message with
-  unanswered tool calls, or a trailing user message with no reply (a turn
-  closed after a crash).
+  entries)`, and the acknowledged count is the loaded count.
+- **Unclean end:** user messages persisted after the turn of the last stored
+  checkpoint and before the turn being started. These are found from the event
+  log by `turn_id` order, so no extra state is needed. When there are any, the
+  rebuild adds the D2 note.
+- No tool-result repair (Pi fact 5).
 
 ## Decisions needed
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
-| D1 | Checkpoint consistency | (a) watermarked checkpoints in the event-batch transaction, acknowledged after commit, plus the tail rules; (b) the runner writes on its own, outside event transactions | **(a):** the only option where the conversation can never be ahead of the event log. Cost: one optional field on `RuntimeTurnEventCommit`, a watermark per queued event, and a commit acknowledgement |
-| D2 | Tell the model when continuity is incomplete? | (a) on rebuild, add a hidden custom message: always "the sandbox was recreated; files from earlier may be gone" (until stage 2), plus, after an unclean end, "the previous turn was cut off by a restart; tool calls without results may or may not have completed, so check before repeating them"; (b) say nothing | **(a).** Without it, Pi fact 6 lets the model believe a completed tool failed and repeat it (for example a second `git push`). The note is model context, not a wire event; PARITY records it as a temporary divergence |
+| D1 | When to save the conversation | (a) once per settled turn, in the ownership-fenced turn-close transaction; (b) during the turn, alongside event batches, with watermarks and commit acknowledgement | **(a).** No in-flight state, so none of the queue, coalescing, disposal or ownership races that two review rounds found in (b). Cost: a crash mid-turn loses that turn from the conversation, covered by the D2 note |
+| D2 | Tell the model when continuity is incomplete? | (a) on rebuild, add a hidden custom message: always "the sandbox was recreated; files from earlier may be gone" (until stage 2), plus, after an unclean end, "your previous turn was cut off by an error or restart before it finished. The user had asked: <message>. Its partial work, including tool calls, may or may not have taken effect; check before repeating anything"; (b) say nothing | **(a).** Without it, the model loses the interrupted request entirely and may repeat side effects. The note is model context, not a wire event; PARITY records it as a temporary divergence |
 | D3 | How tests reach Pi's faux provider | (a) dev dependency `@earendil-works/pi-ai` pinned to the exact version Pi already uses (0.85.1, in the lockfile); (b) the nested import path; (c) fakes only | **(a):** real-Pi tests without network and with no new third-party code. Note `registerProvider` needs an `apiKey` |
 
-Rejected alternative to D2's unclean-end note: rebuild the completed tool's
-real result from the event log. That needs the Pi-to-public tool id mapping
-(today only in memory) persisted, plus converting event payloads back into
-Pi's result format. It's a lot of machinery for a crash-only window, and
-stage 3 reworks tool waits anyway.
+Rejected alternative to D2's unclean-end note: rebuild the interrupted turn
+from the event log. That needs the Pi-to-public tool id mapping (today only in
+memory) persisted, plus converting event payloads back into Pi messages. It's
+a lot of machinery for a crash-only window, and stage 3 reworks turn
+persistence anyway.
 
 ## Slices
 
 1. **Store:** the table, idempotent append, list, delete with events, and the
-   `RuntimeTurnEventCommit` field written in
-   `appendBatchWithRuntimeChangesInTransaction`. Unit tests.
-2. **Checkpoints:** runner watermarks, the acknowledgement API, service
-   wiring on every commit path, the tail event and the disposal flush.
+   `conversationEntries` change applied after `closedTurns` in the same
+   transaction. Unit tests.
+2. **Settled checkpoint:** the runner's settled event with `ack`, and the
+   service writing it in the turn-close call.
 3. **Rebuild:** seed on cache miss, unclean-end detection, and the D2 notes.
-4. **Docs:** close #265; changelog; PARITY divergences (D2 notes, and the two
-   pre-existing ones below).
+4. **Docs:** close #265; changelog; PARITY divergences.
 
 ## Tests (each fails for one reason)
 
@@ -160,23 +177,24 @@ Real Pi with the faux provider (D3), through the events service unless noted:
   earlier user and assistant messages.
 - **Restart:** a new service and runner on the same file-backed store rebuild
   the conversation.
-- **Never ahead:** with the service stalled on one event while Pi runs ahead
-  (an awaited output-index call), a simulated crash leaves no stored entry
-  beyond the last committed batch's watermark.
-- **Rollback:** an event batch whose transaction fails (ownership lost) leaves
-  its entries unacknowledged, and a later checkpoint stores them.
-- **Tail:** auto-compaction entries appended after `agent_end` are stored,
-  both for a normal turn end and when `closeWhenIdle` disposes the handle.
-- **Hard error:** entries up to the failure are stored when the runner evicts
-  on error.
-- **Dropped batch:** a closed or deleted session gets no conversation rows.
+- **Settled only:** no conversation rows exist for a turn while it is still
+  running (gate the faux model mid-turn and inspect the store).
+- **Post-run work included:** entries Pi appends after `agent_end` (auto
+  compaction) are in the settled checkpoint.
+- **Steered message included:** a message steered into a running turn is in
+  that turn's checkpoint.
+- **Fenced:** when the turn close throws `RuntimeTurnOwnershipLostError`, no
+  conversation rows are written and the entries are offered again on the next
+  settled turn.
+- **Closed or deleted session:** no conversation rows are written.
 - **Delete:** deleting a session removes its conversation rows.
-- **Unclean end:** a stored conversation ending in an unanswered tool call,
-  and one ending in an unanswered user message, rebuild with the D2 note.
-  Assert on `transformMessages` output, not "the provider accepted it": faux
-  never calls `transformMessages`.
-- **Write order (Pi fact 3):** pin that the `message_end` entry exists after
-  the listener returns, so a Pi change to the order fails loudly.
+- **Unclean end:** after a turn that ends in a hard error, the next rebuild's
+  model context contains the D2 note quoting the unanswered user message.
+  Assert on the seeded messages (or `transformMessages` output), not on the
+  faux provider accepting the request, because faux never calls
+  `transformMessages`.
+- **Workspace note:** a rebuild into a fresh sandbox includes the D2 workspace
+  note, and a session that was never evicted does not.
 
 Plus store unit tests: idempotent append, ordering, isolation by session.
 
@@ -218,3 +236,14 @@ Plus store unit tests: idempotent append, ordering, isolation by session.
   - two PARITY divergences.
   - It also judged the first draft's invariant sound; that assumed the service
     keeps pace with Pi, which fact 3 rules out, so the watermark change stands.
+- **Codex adversarial, second pass on the watermark design, 2026-10-08:**
+  - coalesced permission/MCP events carry watermarks that cover sibling tool
+    calls whose public events are not committed;
+  - the disposal flush let a stale owner write after ownership loss;
+  - disposal is not a settled point (post-run compaction runs after
+    `agent_end`; hard-error eviction can happen while `prompt` still runs).
+
+  Response: replaced in-turn checkpointing with one checkpoint per settled
+  turn inside the fenced turn-close transaction. That removes all three
+  classes rather than patching each one.
+
