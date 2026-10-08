@@ -2,7 +2,9 @@
 
 ## Status
 
-Design accepted 2026-10-08 (decisions below). Implementation not started. Implements stage 1 of
+Implemented 2026-10-08 in four PRs: #269 (store), #270 (settled checkpoint),
+#271 (rebuild), and slice 3b (unfinished-turn detection, continuity notes,
+docs). Design accepted the same day (decisions below). Implements stage 1 of
 [ADR 0018](../adrs/0018-session-durability-and-parking.md) and fixes #265. It is
 an M2 item in [0145](0145-road-to-external-testers.md).
 

@@ -22,6 +22,7 @@ import type {
   PendingRuntimeActionRecord,
   PendingRuntimeTurnRecord,
   PersistedSessionEvent,
+  LoadedConversation,
   RuntimeConversationCheckpoint,
   RuntimeTurnRecoveryClaim,
   SessionEventRecordPage,
@@ -29,6 +30,8 @@ import type {
   StoredConversationEntry,
 } from "./types.ts";
 import type { RequestIdempotencyKey } from "../request-idempotency.ts";
+import type { ManagedAgentsContentBlock } from "../../types/events.ts";
+import { unfinishedUserMessages } from "./conversation-coverage.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
@@ -56,6 +59,7 @@ CREATE TABLE IF NOT EXISTS pending_runtime_turns (
   updated_at TEXT NOT NULL,
   completed_at TEXT,
   terminalized_at TEXT,
+  close_reason TEXT,
   PRIMARY KEY (workspace_id, session_id, turn_id)
 );
 -- Closed turns are retained as history (UPDATE, not DELETE), so live-turn
@@ -215,6 +219,8 @@ export class EventStore implements SessionEventStore {
   private readonly deleteForSessionStmt: StatementSync;
   private readonly turnOwnedByStmt: StatementSync;
   private readonly turnClosedByStmt: StatementSync;
+  private readonly turnsForSessionStmt: StatementSync;
+  private readonly userMessagesForSessionStmt: StatementSync;
   private readonly insertConversationEntryStmt: StatementSync;
   private readonly listConversationEntriesStmt: StatementSync;
   private readonly deleteConversationForSessionStmt: StatementSync;
@@ -258,6 +264,7 @@ export class EventStore implements SessionEventStore {
     this.db.exec(SCHEMA);
     ensureWorkspaceIdColumn(this.db);
     ensureOpenModelRequestStartIdsColumn(this.db);
+    ensureRuntimeTurnCloseReasonColumn(this.db);
     ensureIdempotencyResourceColumns(this.db);
     this.db.exec(INDEXES);
     this.appendStmt = this.db.prepare(
@@ -271,6 +278,15 @@ export class EventStore implements SessionEventStore {
       `SELECT 1 FROM pending_runtime_turns
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
          AND owner_id = ? AND owner_generation = ?`,
+    );
+    this.turnsForSessionStmt = this.db.prepare(
+      `SELECT state, trigger_event_ids, close_reason FROM pending_runtime_turns
+       WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.userMessagesForSessionStmt = this.db.prepare(
+      `SELECT id, payload FROM events
+       WHERE workspace_id = ? AND session_id = ? AND type = 'user.message'
+       ORDER BY id`,
     );
     this.turnClosedByStmt = this.db.prepare(
       `SELECT 1 FROM pending_runtime_turns
@@ -407,7 +423,8 @@ export class EventStore implements SessionEventStore {
            updated_at = ?,
            open_model_request_start_ids = '[]',
            completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END,
-           terminalized_at = CASE WHEN ? = 'terminalized' THEN COALESCE(terminalized_at, ?) ELSE terminalized_at END
+           terminalized_at = CASE WHEN ? = 'terminalized' THEN COALESCE(terminalized_at, ?) ELSE terminalized_at END,
+           close_reason = COALESCE(close_reason, ?)
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
          AND state NOT IN ('completed', 'terminalized')
          AND (? IS NULL OR (owner_id = ? AND owner_generation = ?))`,
@@ -995,6 +1012,7 @@ export class EventStore implements SessionEventStore {
         turn.now,
         turn.state,
         turn.now,
+        turn.reason,
         turn.workspaceId,
         turn.sessionId,
         turn.turnId,
@@ -1075,6 +1093,31 @@ export class EventStore implements SessionEventStore {
         checkpoint.sessionId,
       );
     }
+  }
+
+  loadConversation(workspaceId: WorkspaceId, sessionId: string): LoadedConversation {
+    const entries = this.listConversationEntries(workspaceId, sessionId);
+    const turns = (
+      this.turnsForSessionStmt.all(workspaceId, sessionId) as Array<{
+        state: string;
+        trigger_event_ids: string;
+        close_reason: string | null;
+      }>
+    ).map((row) => ({
+      state: row.state,
+      triggerEventIds: JSON.parse(row.trigger_event_ids) as string[],
+      closeReason: row.close_reason,
+    }));
+    const userEvents = (
+      this.userMessagesForSessionStmt.all(workspaceId, sessionId) as Array<{
+        id: string;
+        payload: string;
+      }>
+    ).map((row) => ({
+      id: row.id,
+      content: ((JSON.parse(row.payload) as { content?: ManagedAgentsContentBlock[] }).content ?? []),
+    }));
+    return { entries, unfinished: unfinishedUserMessages({ userEvents, turns, stored: entries }) };
   }
 
   listConversationEntries(
@@ -1371,6 +1414,16 @@ function ensureOpenModelRequestStartIdsColumn(db: DatabaseSync): void {
   db.exec(
     "ALTER TABLE pending_runtime_turns ADD COLUMN open_model_request_start_ids TEXT NOT NULL DEFAULT '[]'",
   );
+}
+
+// Why a turn closed (plan 0147): a deliberately interrupted turn is not
+// reported to the model as cut off. Older rows have NULL.
+function ensureRuntimeTurnCloseReasonColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(pending_runtime_turns)").all() as Array<{
+    name: string;
+  }>;
+  if (columns.some((column) => column.name === "close_reason")) return;
+  db.exec("ALTER TABLE pending_runtime_turns ADD COLUMN close_reason TEXT");
 }
 
 function ensureIdempotencyResourceColumns(db: DatabaseSync): void {

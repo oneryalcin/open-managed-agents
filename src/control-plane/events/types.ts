@@ -238,6 +238,17 @@ export interface RuntimeConversationCheckpoint {
   now: string;
 }
 
+/** A user message sent to Pi whose turn never settled (plan 0147). */
+export interface UnfinishedUserMessage {
+  eventId: string;
+  text: string;
+}
+
+export interface LoadedConversation {
+  entries: StoredConversationEntry[];
+  unfinished: UnfinishedUserMessage[];
+}
+
 export interface StoredConversationEntry {
   entryId: string;
   json: string;
@@ -283,6 +294,11 @@ export interface SessionEventStore {
     ownerId: string;
     ownerGeneration: number;
   }): boolean;
+  /**
+   * A session's saved conversation plus the user messages whose turns never
+   * settled, for rebuilding its Pi session (plan 0147).
+   */
+  loadConversation(workspaceId: WorkspaceId, sessionId: string): LoadedConversation;
   /** A session's saved Pi conversation, in append order (plan 0147). */
   listConversationEntries(
     workspaceId: WorkspaceId,

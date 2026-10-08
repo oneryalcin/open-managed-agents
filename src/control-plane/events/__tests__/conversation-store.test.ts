@@ -236,6 +236,34 @@ describe("conversation store", () => {
     expect(ids(store)).toEqual([]);
   });
 
+  it("records why a turn closed, so a deliberate interrupt is not reported as unfinished", () => {
+    const store = EventStore.open(":memory:");
+    const now = new Date().toISOString();
+    const message: PersistedSessionEvent = {
+      id: "sevt_interrupted",
+      workspace_id: WORKSPACE_ID,
+      session_id: SESSION_ID,
+      type: "user.message",
+      processed_at: now,
+      payload: { content: [{ type: "text", text: "stop me" }] },
+      created_at: now,
+    };
+    store.appendBatchWithRuntimeChanges([message], {
+      acceptedTurns: [{
+        workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID, ownerId: "owner_a",
+        ownerGeneration: 1, leaseExpiresAt: now, triggerEventIds: [message.id], now,
+      }],
+    });
+    store.appendBatchWithRuntimeChanges([], {
+      closedTurns: [{
+        workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID, ownerId: "owner_a",
+        ownerGeneration: 1, reason: "interrupted", state: "terminalized", now,
+      }],
+    });
+
+    expect(store.loadConversation(WORKSPACE_ID, SESSION_ID).unfinished).toEqual([]);
+  });
+
   it("keeps the conversation across a reopen of a file-backed store", () => {
     const dir = mkdtempSync(join(tmpdir(), "oma-conversation-"));
     try {
