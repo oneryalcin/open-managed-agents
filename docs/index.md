@@ -98,6 +98,10 @@ Agents product parity remains tracked in [PARITY.md](../PARITY.md).
   `npx` command to an authenticated first-session screen in three minutes,
   with a guided terminal flow, no secret leakage, and separate cold-image
   accounting.
+- [Durable conversation](plans/0147-durable-conversation.md) — ADR 0018
+  stage 1 (#265): save the Pi conversation once per settled turn, inside the
+  ownership-fenced turn close, and rebuild it after eviction or restart, with
+  notes to the model when continuity is incomplete.
 - [events/service.ts god-class split](plans/0146-events-service-split.md) —
   #164: shared `PendingActionStore` (Slice 1) and the custom-tool and
   tool-confirmation collaborators (Slice 2), both landed; M2's first item in
