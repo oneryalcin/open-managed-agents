@@ -799,7 +799,16 @@ export class PiSessionRunner implements RuntimeEventRunner {
   // session with no memory.
   private conversationSeed(workspaceId: WorkspaceId, sessionId: string): PiConversationSeed {
     return (this.conversation?.listConversationEntries(workspaceId, sessionId) ?? []).map(
-      (row) => JSON.parse(row.json) as PiConversationSeed[number],
+      (row) => {
+        try {
+          return JSON.parse(row.json) as PiConversationSeed[number];
+        } catch (error) {
+          throw new Error(
+            `Saved conversation entry ${row.entryId} of session ${sessionId} is not valid JSON`,
+            { cause: error },
+          );
+        }
+      },
     );
   }
 
@@ -909,6 +918,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
         let seed: PiConversationSeed = [];
         let mcp: PreparedMcp = EMPTY_MCP;
         try {
+          // Before any sandbox or MCP work: a corrupt saved conversation should
+          // fail without building and tearing those down on every retry.
+          seed = this.conversationSeed(workspaceId, sessionId);
           try {
             sandbox = await sandboxProviderFactory?.(
               workspaceId,
@@ -948,7 +960,6 @@ export class PiSessionRunner implements RuntimeEventRunner {
             }
           }
           assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
-          seed = this.conversationSeed(workspaceId, sessionId);
           session =
             this.sessionFactory === undefined
               ? await this.createPiSession(
