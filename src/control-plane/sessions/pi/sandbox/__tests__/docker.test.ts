@@ -265,6 +265,8 @@ describe("Docker sandbox provider command construction", () => {
       "exec",
       "--user",
       "0:0",
+      "--workdir",
+      "/",
       "container",
       "sh",
       "-c",

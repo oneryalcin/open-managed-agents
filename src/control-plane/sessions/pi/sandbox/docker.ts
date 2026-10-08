@@ -1004,10 +1004,15 @@ export function buildDockerNormalizeUploadsArgs(
   containerName: string,
   uploadsPath: string,
 ): string[] {
+  // --workdir /: the container workdir is /workspace (mode 700, uid 65534) and
+  // root has no CAP_DAC_OVERRIDE under --cap-drop ALL, so GNU find in the OMA
+  // image fails to save/restore a /workspace cwd.
   return [
     "exec",
     "--user",
     "0:0",
+    "--workdir",
+    "/",
     containerName,
     "sh",
     "-c",
@@ -1018,7 +1023,7 @@ export function buildDockerNormalizeUploadsArgs(
 }
 
 export function buildDockerNormalizeSkillsArgs(containerName: string, skillsPath: string): string[] {
-  return ["exec", "--user", "0:0", containerName, "sh", "-c", "chown -R 0:0 \"$1\" && find \"$1\" -type d -exec chmod 755 {} + && find \"$1\" -type f -exec chmod 644 {} + && find \"$1\" -path '*/scripts/*' -type f -exec chmod 755 {} +", "sh", skillsPath];
+  return ["exec", "--user", "0:0", "--workdir", "/", containerName, "sh", "-c", "chown -R 0:0 \"$1\" && find \"$1\" -type d -exec chmod 755 {} + && find \"$1\" -type f -exec chmod 644 {} + && find \"$1\" -path '*/scripts/*' -type f -exec chmod 755 {} +", "sh", skillsPath];
 }
 
 export function buildDockerExecShellArgs(
