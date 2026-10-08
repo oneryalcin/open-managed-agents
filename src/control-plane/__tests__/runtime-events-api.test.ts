@@ -1,3 +1,4 @@
+import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import { describe, expect, it } from "vitest";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
@@ -365,6 +366,37 @@ describe("Runtime events API", () => {
     await expect(outputs.json()).resolves.toMatchObject({ data: [] });
   });
 
+  it("does not retain settle waiters for deletes that time out on stalled post-idle work", async () => {
+    const runner = new DelayedOutputCollectingRunner([]);
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+    await fixture.app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.message", content: [{ type: "text", text: "stall" }] }],
+      }),
+    });
+    await runner.collectionStarted;
+    await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc`,
+      (body) => body.data.some((event) => event.type === "session.status_idle"),
+    );
+
+    // Collection never finishes; every retried delete times out. Without
+    // cleanup each one left a callback behind until the task ended.
+    for (let i = 0; i < 20; i += 1) {
+      await fixture.sessionEvents.waitForPostIdleRuntimeSettle(DEFAULT_WORKSPACE_ID, session.id, 1);
+    }
+    const waiters = (fixture.sessionEvents as unknown as {
+      runtimeSettledWaiters: Map<string, unknown[]>;
+    }).runtimeSettledWaiters;
+    expect([...waiters.values()].flat()).toHaveLength(0);
+
+    runner.releaseCollection();
+  });
+
   it("interrupts the local runner when runtime turn ownership is lost", async () => {
     const runner = new InterruptTrackingRunner();
     const fixture = makeFixture(runner, {
@@ -554,6 +586,7 @@ function makeFixture(
 ): {
   app: ReturnType<typeof createControlPlaneApp>;
   broadcaster: SessionEventBroadcaster;
+  sessionEvents: DefaultSessionEventsService;
 } {
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
@@ -578,6 +611,7 @@ function makeFixture(
   });
   return {
     broadcaster,
+    sessionEvents,
     app: createControlPlaneApp({
       agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),

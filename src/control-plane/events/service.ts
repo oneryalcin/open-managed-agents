@@ -802,13 +802,20 @@ export class DefaultSessionEventsService implements SessionEventsService {
     if (!this.idlePublishedRuntimeTasks.has(key)) return;
     if (this.activeRuntimeTaskCount(workspaceId, sessionId) === 0) return;
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, timeoutMs);
+      // One cleanup for both outcomes: a timed-out waiter must not stay
+      // registered while post-idle work is stalled, or retried deletes leak.
+      const settle = () => {
+        clearTimeout(timer);
+        const waiters = this.runtimeSettledWaiters.get(key);
+        const index = waiters?.indexOf(settle) ?? -1;
+        if (index >= 0) waiters!.splice(index, 1);
+        if (waiters?.length === 0) this.runtimeSettledWaiters.delete(key);
+        resolve();
+      };
+      const timer = setTimeout(settle, timeoutMs);
       timer.unref?.();
       const waiters = this.runtimeSettledWaiters.get(key) ?? [];
-      waiters.push(() => {
-        clearTimeout(timer);
-        resolve();
-      });
+      waiters.push(settle);
       this.runtimeSettledWaiters.set(key, waiters);
     });
   }
@@ -1304,8 +1311,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     }
     this.activeRuntimeTasks.delete(key);
     this.idlePublishedRuntimeTasks.delete(key);
-    for (const resolve of this.runtimeSettledWaiters.get(key) ?? []) resolve();
-    this.runtimeSettledWaiters.delete(key);
+    for (const settle of [...(this.runtimeSettledWaiters.get(key) ?? [])]) settle();
     this.interruptedCustomToolActions.delete(key);
     this.interruptedToolConfirmations.delete(key);
     this.retireLifecycleGuardsIfIdle(workspaceId, sessionId);
