@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createBestEffortRuntimeEventCoordinator } from "../deployment-runtime-event-coordinator.ts";
 import { SessionEventBroadcaster } from "../events/broadcaster.ts";
@@ -21,13 +24,22 @@ const WS = "wrk_default";
 async function harness(opts: {
   wrapStore?: (store: EventStore) => EventStore;
   runner?: RuntimeEventRunner;
+  idleTtlMs?: number;
+  /** File-backed stores, to model a restart; a fresh session row is created only once. */
+  paths?: { events: string; sessions: string; sessionId: string };
+  pi?: RealPi;
 } = {}) {
-  const pi = await createRealPi();
-  const realStore = EventStore.open(":memory:");
+  const pi = opts.pi ?? await createRealPi();
+  const realStore = EventStore.open(opts.paths?.events ?? ":memory:");
   const eventStore = opts.wrapStore ? opts.wrapStore(realStore) : realStore;
-  const sessionStore = SqliteSessionStore.open(":memory:");
+  const sessionStore = SqliteSessionStore.open(opts.paths?.sessions ?? ":memory:");
   const runner =
-    opts.runner ?? new PiSessionRunner({ sessionFactory: pi.sessionFactory, idleTtlMs: 0 });
+    opts.runner ??
+    new PiSessionRunner({
+      sessionFactory: pi.sessionFactory,
+      idleTtlMs: opts.idleTtlMs ?? 0,
+      conversation: realStore,
+    });
   const service = new DefaultSessionEventsService(
     eventStore,
     sessionStore,
@@ -41,9 +53,9 @@ async function harness(opts: {
       }),
     },
   );
-  const sessionId = `sesn_${Math.random().toString(16).slice(2)}`;
+  const sessionId = opts.paths?.sessionId ?? `sesn_${Math.random().toString(16).slice(2)}`;
   const now = new Date().toISOString();
-  sessionStore.create({
+  if (!sessionStore.retrieve(WS, sessionId)) sessionStore.create({
     row: {
       id: sessionId,
       workspace_id: WS,
@@ -77,6 +89,11 @@ async function harness(opts: {
       return [`${entry.message.role}:${textOf(entry.message.content)}`];
     });
   return { pi, service, runner, realStore, sessionId, send, idles, stored };
+}
+
+/** The most recent model request's messages, as "role:text". */
+function lastRequest(pi: RealPi): string[] {
+  return pi.requests[pi.requests.length - 1] ?? [];
 }
 
 describe("conversation checkpoint per settled turn", () => {
@@ -284,6 +301,73 @@ describe("conversation checkpoint per settled turn", () => {
 
 // Refuses batches carrying a conversation checkpoint while `shouldReject()`
 // says so: "close" only those that also close a turn, "any" every one.
+describe("conversation rebuild (plan 0147 slice 3a)", () => {
+  it("rebuilds the conversation after idle eviction", async () => {
+    const h = await harness({ idleTtlMs: 20 });
+    h.pi.core.setResponses([
+      h.pi.faux.fauxAssistantMessage("Nice to meet you, Ada."),
+      h.pi.faux.fauxAssistantMessage("Your name is Ada."),
+    ]);
+    h.send("My name is Ada.");
+    await waitFor(() => h.stored().length === 2);
+    await waitFor(() => (h.runner as unknown as { sessions: Map<string, unknown> }).sessions.size === 0);
+
+    h.send("What is my name?");
+    await waitFor(() => h.pi.core.state.callCount === 2);
+
+    expect({ rebuilt: h.pi.created.count, request: lastRequest(h.pi) }).toEqual({
+      rebuilt: 2,
+      request: ["user:My name is Ada.", "assistant:Nice to meet you, Ada.", "user:What is my name?"],
+    });
+  });
+
+  it("fails loudly when a rebuilt session does not contain its saved conversation", async () => {
+    // A factory that ignores the seed would otherwise start with no memory and
+    // silently skip every later checkpoint.
+    const pi = await createRealPi();
+    const ignoresSeed = { ...pi, sessionFactory: (ws: string, sid: string) => pi.sessionFactory(ws, sid, []) };
+    const h = await harness({ idleTtlMs: 20, pi: ignoresSeed });
+    h.pi.core.setResponses([h.pi.faux.fauxAssistantMessage("one")]);
+    h.send("first");
+    await waitFor(() => h.stored().length === 2);
+    await waitFor(() => (h.runner as unknown as { sessions: Map<string, unknown> }).sessions.size === 0);
+
+    h.send("second");
+    await waitFor(() => h.realStore.list(WS, h.sessionId).some((event) => event.type === "session.error"));
+
+    expect(h.pi.core.state.callCount).toBe(1);
+  });
+
+  it("rebuilds the conversation after a restart on durable stores", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-rebuild-"));
+    try {
+      const paths = {
+        events: join(dir, "events.sqlite"),
+        sessions: join(dir, "sessions.sqlite"),
+        sessionId: "sesn_restart",
+      };
+      const before = await harness({ paths });
+      before.pi.core.setResponses([before.pi.faux.fauxAssistantMessage("Noted: blue.")]);
+      before.send("My favourite colour is blue.");
+      await waitFor(() => before.stored().length === 2);
+
+      const after = await harness({ paths }); // new runner, service and Pi
+      after.pi.core.setResponses([after.pi.faux.fauxAssistantMessage("Blue.")]);
+      after.send("What is my favourite colour?");
+      await waitFor(() => after.pi.core.state.callCount === 1);
+
+      expect(lastRequest(after.pi)).toEqual([
+        "user:My favourite colour is blue.",
+        "assistant:Noted: blue.",
+        "user:What is my favourite colour?",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+});
+
 function rejectingCheckpointWrites(shouldReject: () => boolean, which: "close" | "any") {
   return (store: EventStore): EventStore =>
     new Proxy(store, {

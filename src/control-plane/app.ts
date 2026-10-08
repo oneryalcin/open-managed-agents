@@ -958,6 +958,8 @@ export async function createDeploymentControlPlane(
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
     modelCatalog,
+    // Rebuild evicted or restarted sessions from their saved conversation.
+    conversation: stores.events,
     agentRevision: createStoreBackedAgentRevisionProvider({
       sessions: stores.sessions,
       agents: stores.agents,
