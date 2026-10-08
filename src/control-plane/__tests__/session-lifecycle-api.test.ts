@@ -16,6 +16,7 @@ import type {
   RuntimeCustomToolUseEvent,
   RuntimeEventRunner,
   RuntimeEventTranslator,
+  RuntimeToolPermissionUseEvent,
   SessionEventBroadcaster as SessionEventBroadcasterContract,
 } from "../events/types.ts";
 import { SqliteSessionStore } from "../sessions/store.ts";
@@ -547,6 +548,59 @@ describe("session lifecycle API", () => {
     expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
   });
 
+  // The tool-action collaborators guard their own persists with the service's
+  // closed/deleted sets (#164 plan 0146): a late emission is dropped quietly.
+  // Without the guard the store refuses the write, the tool use is rejected
+  // back to the runtime as an error, and the turn fails instead.
+  it("quietly drops a custom tool use the runtime emits after archive", async () => {
+    const rejections: string[] = [];
+    const runner = new LateEmissionRunner({
+      type: "oma.custom_tool_use",
+      piToolCallId: "toolu_late_custom",
+      name: "ask_user",
+      input: { question: "still there?" },
+      bindCustomToolUseId: () => {},
+      rejectCustomToolUse: (error) => rejections.push(error.message),
+    } satisfies RuntimeCustomToolUseEvent);
+    const { eventStore, service, sessionId } = createRuntimeFailureHarness(runner);
+
+    service.send("wrk_default", sessionId, {
+      events: [{ type: "user.message", content: [{ type: "text", text: "start" }] }],
+    });
+    await runner.started;
+    await service.archiveSession("wrk_default", sessionId);
+    await waitFor(() => runner.emitted);
+
+    expect({
+      types: eventStore.list("wrk_default", sessionId).map((event) => event.type),
+      rejections,
+    }).toEqual({ types: ["user.message", "session.status_terminated"], rejections: [] });
+  });
+
+  it("quietly drops an ask-gated tool use the runtime emits after delete", async () => {
+    const rejections: string[] = [];
+    const runner = new LateEmissionRunner({
+      type: "oma.tool_permission_use",
+      piToolCallId: "toolu_late_bash",
+      name: "bash",
+      input: { command: "ls" },
+      evaluatedPermission: "ask",
+      bindToolUseId: () => {},
+      rejectToolUse: (error) => rejections.push(error.message),
+    } satisfies RuntimeToolPermissionUseEvent);
+    const { eventStore, service, sessionId } = createRuntimeFailureHarness(runner);
+
+    service.send("wrk_default", sessionId, {
+      events: [{ type: "user.message", content: [{ type: "text", text: "start" }] }],
+    });
+    await runner.started;
+    await service.deleteSession("wrk_default", sessionId);
+    await waitFor(() => runner.emitted);
+
+    expect({ events: eventStore.list("wrk_default", sessionId), rejections })
+      .toEqual({ events: [], rejections: [] });
+  });
+
   it("allows terminated sessions and rejects rescheduling sessions at archive preflight", () => {
     const terminated = createGuardHarness({ status: "terminated" });
     const archivedTerminated = terminated.service.archiveSessionRowAfterPreflight(
@@ -583,7 +637,7 @@ describe("session lifecycle API", () => {
     const runner = new ClaimingRunner();
     const { broadcaster, eventStore, service, sessionId, store } =
       createArchiveGuardHarness({ runner });
-    guardState(service).pendingCustomToolActions.entries.set(sessionScopeKey("wrk_default", sessionId), {
+    guardState(service).customTools.pendingCustomToolActions.entries.set(sessionScopeKey("wrk_default", sessionId), {
       workspaceId: "wrk_default",
       ids: ["sevt_pending_tool"],
       timer: undefined,
@@ -612,7 +666,7 @@ describe("session lifecycle API", () => {
         ),
       ).toBe(false);
       expect(
-        guardState(service).pendingCustomToolActions.entries.get(
+        guardState(service).customTools.pendingCustomToolActions.entries.get(
           sessionScopeKey("wrk_default", sessionId),
         )?.ids,
       ).toEqual(["sevt_pending_tool"]);
@@ -735,15 +789,17 @@ interface GuardState {
   closedSessions: Set<string>;
   deletedSessions: Set<string>;
   activeRuntimeTasks: Map<string, number>;
-  pendingCustomToolActions: {
-    entries: Map<
-      string,
-      {
-        workspaceId: WorkspaceId;
-        ids: string[];
-        timer: ReturnType<typeof setTimeout> | undefined;
-      }
-    >;
+  customTools: {
+    pendingCustomToolActions: {
+      entries: Map<
+        string,
+        {
+          workspaceId: WorkspaceId;
+          ids: string[];
+          timer: ReturnType<typeof setTimeout> | undefined;
+        }
+      >;
+    };
   };
 }
 
@@ -841,16 +897,17 @@ function createLifecycleFixture(opts: {
   };
 }
 
-function createRuntimeFailureHarness(): {
+function createRuntimeFailureHarness<R extends RuntimeEventRunner = ThrowingAfterCloseRunner>(
+  runner: R = new ThrowingAfterCloseRunner() as unknown as R,
+): {
   eventStore: EventStore;
-  runner: ThrowingAfterCloseRunner;
+  runner: R;
   service: DefaultSessionEventsService;
   sessionId: string;
 } {
   const sessionId = `sesn_${Math.random().toString(16).slice(2)}`;
   const eventStore = EventStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
-  const runner = new ThrowingAfterCloseRunner();
   const service = new DefaultSessionEventsService(
     eventStore,
     sessionStore,
@@ -1181,6 +1238,43 @@ class ThrowingAfterCloseRunner implements RuntimeEventRunner {
 
   async closeSession(): Promise<void> {
     this.resume?.();
+  }
+}
+
+// Waits until archive/delete closes the runtime, then emits one more event,
+// as a runtime that was mid-tool-call would.
+class LateEmissionRunner implements RuntimeEventRunner {
+  readonly started: Promise<void>;
+  emitted = false;
+  private markStarted: (() => void) | undefined;
+  private resume: (() => void) | undefined;
+
+  constructor(private readonly late: unknown) {
+    this.started = new Promise<void>((resolve) => {
+      this.markStarted = resolve;
+    });
+  }
+
+  async *runUserMessage(): AsyncIterable<unknown> {
+    await new Promise<void>((resolve) => {
+      this.resume = resolve;
+      this.markStarted?.();
+    });
+    try {
+      yield this.late;
+    } finally {
+      // Set even if persisting the late event throws, so a broken guard fails
+      // the event-list assertion instead of timing out.
+      this.emitted = true;
+    }
+  }
+
+  async closeSession(): Promise<void> {
+    this.resume?.();
+  }
+
+  customToolNames(): ReadonlySet<string> {
+    return new Set(["ask_user"]);
   }
 }
 
