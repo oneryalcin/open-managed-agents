@@ -579,6 +579,21 @@ export interface RuntimeMcpConnectionFailedEvent {
   retryStatus: "retrying" | "exhausted" | "terminal";
 }
 
+/**
+ * Yielded once by the runner when the Pi run that owns a turn has settled
+ * (plan 0147): `entries` are the Pi conversation entries appended since the
+ * last acknowledged checkpoint. The service must call `release` exactly once
+ * on every exit: `true` only after the checkpoint committed, which advances
+ * the runner's cursor to `endpoint`; `false` otherwise, keeping the entries
+ * for the next settled turn.
+ */
+export interface RuntimeConversationSettledEvent {
+  type: "oma.conversation_settled";
+  entries: readonly ConversationEntryRecord[];
+  piVersion: string;
+  release: (committed: boolean) => void;
+}
+
 export type RuntimeInternalEvent =
   | RuntimeCustomToolUseEvent
   | RuntimeToolPermissionUseEvent

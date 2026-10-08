@@ -5,6 +5,7 @@ import type { EventDraft } from "./persist.ts";
 import type {
   PendingRuntimeActionRecord,
   RuntimeCustomToolUseEvent,
+  RuntimeConversationSettledEvent,
   RuntimeMcpConnectionFailedEvent,
   RuntimeMcpToolResultEvent,
   RuntimeMcpToolUseEvent,
@@ -164,6 +165,18 @@ export function isRuntimeMcpToolResultEvent(
     typeof event.mcpToolUseId === "string" &&
     Array.isArray(event.content) &&
     typeof event.isError === "boolean"
+  );
+}
+
+export function isRuntimeConversationSettledEvent(
+  event: unknown,
+): event is RuntimeConversationSettledEvent {
+  if (!isObjectRecord(event)) return false;
+  return (
+    event.type === "oma.conversation_settled" &&
+    Array.isArray(event.entries) &&
+    typeof event.piVersion === "string" &&
+    typeof event.release === "function"
   );
 }
 

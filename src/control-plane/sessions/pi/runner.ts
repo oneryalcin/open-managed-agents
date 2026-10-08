@@ -7,7 +7,10 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { PiModelCatalog } from "../../models/catalog.ts";
+import {
+  PINNED_PI_MODEL_RUNTIME_VERSION,
+  type PiModelCatalog,
+} from "../../models/catalog.ts";
 import {
   InMemoryAuthStorageBackend,
   InMemoryModelsStore,
@@ -15,6 +18,7 @@ import {
 } from "../../models/credential-store.ts";
 import type {
   RuntimeEventRunner,
+  RuntimeConversationSettledEvent,
   RuntimeInternalEvent,
   RuntimeMcpConnectionFailedEvent,
   RuntimeMcpToolWithModelEndEvent,
@@ -78,6 +82,15 @@ export interface PiRuntimeSession {
   // semantics. AgentSession.steer() would expand "/skill:<name>" first, so
   // queue on the agent directly: verbatim, and it never starts a turn.
   readonly agent: { steer(message: PiUserMessage): void };
+  /**
+   * Pi's session log (header plus append-only entries), read when a turn
+   * settles to checkpoint the conversation (plan 0147). Absent only in test
+   * fakes that do not exercise checkpointing.
+   */
+  readonly sessionManager?: {
+    getHeader(): { id: string } | null;
+    getEntries(): ReadonlyArray<{ id: string }>;
+  };
   abort(): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
   dispose(): void;
@@ -132,6 +145,16 @@ interface RuntimeHandle {
   session: PiRuntimeSession;
   sandbox: SandboxProvider | undefined;
   running: boolean;
+  /**
+   * One token per run that started a fresh prompt and may still checkpoint
+   * its conversation (plan 0147). Idle eviction, closeWhenIdle eviction,
+   * handle replacement and close() wait while any is outstanding, so a
+   * handle is never rebuilt from a store that lacks a pending checkpoint.
+   */
+  holds: Set<symbol>;
+  holdWaiters: Array<() => void>;
+  /** How many of [header, ...entries] the store has acknowledged. */
+  conversationAcked: number;
   needsFreshPromptAfterInterrupt: boolean;
   closeWhenIdle: boolean;
   lastUsedAt: number;
@@ -456,6 +479,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
       if (handle.running) {
         handle.closeWhenIdle = true;
         this.scheduleEviction(sessionId, handle);
+      } else if (handle.holds.size > 0) {
+        // Evicted by releaseHold once its pending checkpoint is released.
+        handle.closeWhenIdle = true;
       } else {
         this.evict(sessionId, handle);
       }
@@ -515,6 +541,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
       return;
     }
     handle.needsFreshPromptAfterInterrupt = false;
+    const hold = Symbol("turn");
+    handle.holds.add(hold);
+    let settledEmitted = false;
 
     const queue: unknown[] = [];
     const gatedEvents: unknown[] = [];
@@ -711,11 +740,18 @@ export class PiSessionRunner implements RuntimeEventRunner {
           "Sandboxed builtin tool execution ended without validation",
         );
       }
-      if (handle.closeWhenIdle) {
-        this.evict(sessionId, handle);
-      } else {
-        this.touch(sessionId, handle);
+      // Pi's prompt() has resolved, post-run work included: the turn has
+      // settled. Only the run that actually owned it checkpoints; the loser
+      // of the prompt race steered its message into the winner's run.
+      if (!queuedOnRunningTurn) {
+        const settled = this.conversationSettledEvent(sessionId, handle, hold);
+        if (settled) {
+          settledEmitted = true;
+          yield settled;
+        }
       }
+      // A closeWhenIdle handle is evicted once every hold is released.
+      if (!handle.closeWhenIdle) this.touch(sessionId, handle);
     } catch (error) {
       this.evict(sessionId, handle);
       throw error;
@@ -725,6 +761,50 @@ export class PiSessionRunner implements RuntimeEventRunner {
       }
       stop();
       signal?.removeEventListener("abort", onAbort);
+      // Once yielded, the settled event's release() belongs to the service.
+      if (!settledEmitted) this.releaseHold(sessionId, handle, hold);
+    }
+  }
+
+  private conversationSettledEvent(
+    sessionId: string,
+    handle: RuntimeHandle,
+    hold: symbol,
+  ): RuntimeConversationSettledEvent | undefined {
+    const manager = handle.session.sessionManager;
+    if (manager === undefined) return undefined;
+    const header = manager.getHeader();
+    const all = [...(header === null ? [] : [header]), ...manager.getEntries()];
+    // Captured now: a newer run may append before this checkpoint commits.
+    const endpoint = all.length;
+    let released = false;
+    return {
+      type: "oma.conversation_settled",
+      entries: all.slice(handle.conversationAcked).map((entry) => ({
+        entryId: entry.id,
+        json: JSON.stringify(entry),
+      })),
+      piVersion: PINNED_PI_MODEL_RUNTIME_VERSION,
+      release: (committed) => {
+        if (released) return;
+        released = true;
+        if (committed) {
+          handle.conversationAcked = Math.max(handle.conversationAcked, endpoint);
+        }
+        this.releaseHold(sessionId, handle, hold);
+      },
+    };
+  }
+
+  private releaseHold(sessionId: string, handle: RuntimeHandle, hold: symbol): void {
+    if (!handle.holds.delete(hold) || handle.holds.size > 0) return;
+    for (const resume of handle.holdWaiters.splice(0)) resume();
+    if (
+      handle.closeWhenIdle &&
+      !handle.running &&
+      this.sessions.get(sessionId) === handle
+    ) {
+      this.evict(sessionId, handle);
     }
   }
 
@@ -741,11 +821,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
     }
     const existing = this.sessions.get(sessionId);
     if (existing) {
-      if (existing.closeWhenIdle && !existing.running) {
-        this.evict(sessionId, existing);
-      } else {
-        return existing;
+      if (!(existing.closeWhenIdle && !existing.running)) return existing;
+      // Don't replace a handle whose last turn may still be checkpointing:
+      // the new one would rebuild from a store that lacks it.
+      if (existing.holds.size > 0) {
+        await new Promise<void>((resume) => existing.holdWaiters.push(resume));
       }
+      if (this.sessions.get(sessionId) === existing) this.evict(sessionId, existing);
+      if (this.closed) throw new Error("PiSessionRunner is closed");
     }
 
     const pending = this.pendingSessions.get(sessionId);
@@ -853,6 +936,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
           session,
           sandbox,
           running: false,
+          holds: new Set(),
+          holdWaiters: [],
+          conversationAcked: 0,
           needsFreshPromptAfterInterrupt: false,
           // Retrying MCP failures use fresh-handle mechanics: dispose at
           // idle so the NEXT turn re-runs connect/discovery (plan 0122 §4.6).
@@ -1255,7 +1341,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     if (handle.timer) clearTimeout(handle.timer);
     if (this.idleTtlMs <= 0) return;
     handle.timer = setTimeout(() => {
-      if (handle.running) {
+      if (handle.running || handle.holds.size > 0) {
         this.scheduleEviction(sessionId, handle);
         return;
       }

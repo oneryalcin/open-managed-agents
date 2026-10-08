@@ -38,6 +38,8 @@ import type {
   ListSessionEventsOptions,
   PendingRuntimeActionRecord,
   PendingRuntimeTurnRecord,
+  RuntimeConversationCheckpoint,
+  RuntimeConversationSettledEvent,
   RuntimeEventRunner,
   RuntimeEventTranslator,
   PersistedSessionEvent,
@@ -73,6 +75,7 @@ import {
   toSendResponseEvent,
 } from "./request.ts";
 import {
+  isRuntimeConversationSettledEvent,
   hasTerminalIdleDraft,
   isRuntimeCustomToolUseEvent,
   isRuntimeMcpConnectionFailedEvent,
@@ -1230,6 +1233,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           sessionId,
           prompt,
         );
+        let settled: RuntimeConversationSettledEvent | undefined;
         try {
           this.markRuntimeTurnState(
             workspaceId,
@@ -1246,6 +1250,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
             { signal },
           );
           for await (const piEvent of source) {
+            if (isRuntimeConversationSettledEvent(piEvent)) {
+              settled = piEvent;
+              continue;
+            }
             if (isRuntimeCustomToolUseEvent(piEvent)) {
               this.customTools.persistCustomToolUse(
                 workspaceId,
@@ -1462,16 +1470,18 @@ export class DefaultSessionEventsService implements SessionEventsService {
               );
             }
           }
-          this.closeRuntimeTurnWithSyntheticSpanEnds(
+          this.closeSettledRuntimeTurn(
             workspaceId,
             sessionId,
             prompt,
             activeOpenModelRequestStartIds,
-            "completed",
-            "completed",
+            settled,
           );
         } finally {
           stopRenewing();
+          // Every exit releases the runner's hold; a committed checkpoint
+          // already released with true, so this is a no-op then.
+          settled?.release(false);
         }
         activePrompt = undefined;
         activeOpenModelRequestStartIds = [];
@@ -1716,6 +1726,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     ownerGeneration: number | undefined,
     state: "completed" | "terminalized",
     reason: "completed" | "terminalized" | "interrupted" | "archived" | "deleted",
+    conversation?: RuntimeConversationCheckpoint,
   ): void {
     this.events.appendBatchWithRuntimeChanges([], {
       closedTurns: [
@@ -1730,7 +1741,61 @@ export class DefaultSessionEventsService implements SessionEventsService {
           now: new Date().toISOString(),
         },
       ],
+      ...(conversation === undefined ? {} : { conversationCheckpoints: [conversation] }),
     });
+  }
+
+  // Plan 0147: a settled turn's conversation commits in the same transaction
+  // as the turn close. If this owner already closed the turn (an interrupt),
+  // the close throws and the checkpoint is written alone, still fenced on
+  // turn ownership; a stale owner's checkpoint is rejected either way.
+  private closeSettledRuntimeTurn(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    prompt: RuntimePrompt,
+    openModelRequestStartIds: readonly string[],
+    settled: RuntimeConversationSettledEvent | undefined,
+  ): void {
+    // No session-lifecycle check: a deleted session's turn rows are gone, so
+    // the ownership fence refuses it, and an archive ends the run before it
+    // can settle.
+    const conversation =
+      settled === undefined || settled.entries.length === 0
+        ? undefined
+        : {
+            workspaceId,
+            sessionId,
+            turnId: prompt.turnId,
+            ownerId: prompt.ownerId,
+            ownerGeneration: prompt.ownerGeneration,
+            piVersion: settled.piVersion,
+            entries: settled.entries,
+            now: new Date().toISOString(),
+          };
+    try {
+      this.closeRuntimeTurnWithSyntheticSpanEnds(
+        workspaceId,
+        sessionId,
+        prompt,
+        openModelRequestStartIds,
+        "completed",
+        "completed",
+        conversation,
+      );
+    } catch (error) {
+      if (conversation !== undefined && error instanceof RuntimeTurnOwnershipLostError) {
+        try {
+          this.events.appendBatchWithRuntimeChanges([], {
+            conversationCheckpoints: [conversation],
+          });
+          settled?.release(true);
+        } catch {
+          // A stale owner: the entries stay unacknowledged.
+        }
+      }
+      throw error;
+    }
+    settled?.release(true);
   }
 
   private closeRuntimeTurnWithSyntheticSpanEnds(
@@ -1740,6 +1805,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     openModelRequestStartIds: readonly string[],
     state: "completed" | "terminalized",
     reason: "completed" | "terminalized" | "interrupted" | "archived" | "deleted",
+    conversation?: RuntimeConversationCheckpoint,
   ): void {
     if (openModelRequestStartIds.length === 0) {
       this.closeRuntimeTurn(
@@ -1750,6 +1816,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         prompt.ownerGeneration,
         state,
         reason,
+        conversation,
       );
       return;
     }
@@ -1778,6 +1845,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
           now,
         },
       ],
+      ...(conversation === undefined ? {} : { conversationCheckpoints: [conversation] }),
     });
   }
 
