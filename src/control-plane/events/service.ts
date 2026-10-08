@@ -1799,15 +1799,20 @@ export class DefaultSessionEventsService implements SessionEventsService {
         conversation,
       );
     } catch (error) {
-      if (conversation !== undefined && error instanceof RuntimeTurnOwnershipLostError) {
-        try {
+      // This owner's own interrupt already closed the turn: expected, not an
+      // ownership loss. Save the checkpoint alone and return, so the session
+      // is not interrupted again (a newer turn may be running by now).
+      if (
+        error instanceof RuntimeTurnOwnershipLostError &&
+        this.events.isRuntimeTurnClosedBy({ workspaceId, sessionId, ...prompt })
+      ) {
+        if (conversation !== undefined) {
           this.events.appendBatchWithRuntimeChanges([], {
             conversationCheckpoints: [conversation],
           });
-          settled?.release(true);
-        } catch {
-          // A stale owner: the entries stay unacknowledged.
         }
+        settled?.release(true);
+        return;
       }
       throw error;
     }

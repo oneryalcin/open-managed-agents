@@ -134,38 +134,32 @@ describe("conversation checkpoint per settled turn", () => {
     ]);
   });
 
-  it("saves the checkpoint alone when the close fails but the turn is still this owner's", async () => {
-    // Models an interrupt that already closed the turn: the completed close
-    // throws, and the checkpoint is written on its own, fenced on ownership.
-    let rejectCloses = 1;
-    const h = await harness({ wrapStore: rejectingCheckpointWrites(() => rejectCloses-- > 0, "close") });
-    h.pi.core.setResponses([h.pi.faux.fauxAssistantMessage("one")]);
+  it("releases without committing when a checkpoint is refused for an open turn", async () => {
+    // A refusal on a turn that is still open is a genuine ownership loss:
+    // the cursor must not advance (the runner re-offers the entries).
+    const released: boolean[] = [];
+    const runner: RuntimeEventRunner = {
+      async *runUserMessage() {
+        yield { type: "agent_start" };
+        yield {
+          type: "oma.conversation_settled",
+          entries: [{ entryId: "hdr", json: "{}" }],
+          piVersion: "0.85.1",
+          release: (committed: boolean) => {
+            if (released.length === 0) released.push(committed);
+          },
+        };
+      },
+      async interruptSession() {},
+    };
+    let rejections = 1;
+    const h = await harness({ runner, wrapStore: rejectingCheckpointWrites(() => rejections-- > 0, "any") });
 
-    h.send("first");
-    await waitFor(() => h.stored().length === 2);
+    h.send("work");
+    await waitFor(() => released.length === 1);
 
-    expect(h.stored()).toEqual(["user:first", "assistant:one"]);
-  });
-
-  it("offers entries again on the next settled turn when a stale owner's checkpoint is refused", async () => {
-    // Both the close and the checkpoint-only write are refused once.
-    let rejections = 2;
-    const h = await harness({ wrapStore: rejectingCheckpointWrites(() => rejections-- > 0, "any") });
-    h.pi.core.setResponses([
-      h.pi.faux.fauxAssistantMessage("one"),
-      h.pi.faux.fauxAssistantMessage("two"),
-    ]);
-
-    h.send("first");
-    await waitFor(() => h.idles() >= 1 && rejections <= 0);
-    const afterRefusal = h.stored();
-    h.send("second");
-    await waitFor(() => h.stored().length === 4);
-
-    expect({ afterRefusal, final: h.stored() }).toEqual({
-      afterRefusal: [],
-      final: ["user:first", "assistant:one", "user:second", "assistant:two"],
-    });
+    expect({ released, stored: h.realStore.listConversationEntries(WS, h.sessionId) })
+      .toEqual({ released: [false], stored: [] });
   });
 
   it("keeps draining after this owner's interrupt closed the turn, then saves the settled conversation", async () => {
@@ -217,6 +211,53 @@ describe("conversation checkpoint per settled turn", () => {
       stored: h.realStore.listConversationEntries(WS, h.sessionId).map((row) => row.entryId),
       released,
     }).toEqual({ stored: ["hdr", "e1"], released: [true] });
+  });
+
+  it("does not interrupt the session after saving an interrupted turn's conversation", async () => {
+    // A newer turn may already be running when the interrupted one settles.
+    const resume = deferred<void>();
+    const interrupted: string[] = [];
+    let settledReleased = false;
+    const runner: RuntimeEventRunner = {
+      async *runUserMessage() {
+        yield { type: "agent_start" };
+        await resume.promise;
+        yield { type: "agent_end", messages: [] };
+        yield {
+          type: "oma.conversation_settled",
+          entries: [{ entryId: "hdr", json: "{}" }],
+          piVersion: "0.85.1",
+          release: () => {
+            settledReleased = true;
+          },
+        };
+      },
+      async interruptSession(_workspaceId: string, sessionId: string) {
+        interrupted.push(sessionId);
+      },
+    };
+    const h = await harness({ runner });
+
+    h.send("work");
+    await waitFor(() => h.realStore.listPendingRuntimeTurns(WS).some((turn) => turn.state === "running"));
+    const turn = h.realStore.listPendingRuntimeTurns(WS)[0]!;
+    h.realStore.appendBatchWithRuntimeChanges([], {
+      closedTurns: [{
+        workspaceId: WS,
+        sessionId: h.sessionId,
+        turnId: turn.turn_id,
+        ownerId: turn.owner_id,
+        ownerGeneration: turn.owner_generation,
+        reason: "interrupted",
+        state: "terminalized",
+        now: new Date().toISOString(),
+      }],
+    });
+    resume.resolve();
+    await waitFor(() => settledReleased);
+    await delay(50);
+
+    expect(interrupted).toEqual([]);
   });
 
   it("saves nothing for a session archived before the turn settles", async () => {
