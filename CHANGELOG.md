@@ -36,6 +36,10 @@ nothing a first tester touches should lie about state or leak credentials.
 
 ### Known issues
 
+- **The model forgets the conversation after 15 idle minutes or a restart**
+  (#265). The conversation is held only in memory, and the session continues
+  in a fresh sandbox without its earlier files. The event log still shows the
+  full history. Fix planned in ADR 0018 stage 1.
 - Only connect MCP servers you trust: on a first-time MCP OAuth connect the
   MCP server chooses the authorization server (#257).
 - A message sent in narrow windows around a turn's start or end can wait
