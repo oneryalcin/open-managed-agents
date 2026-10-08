@@ -1,3 +1,4 @@
+import { DEFAULT_WORKSPACE_ID } from "../workspace.ts";
 import { describe, expect, it } from "vitest";
 import type { ManagedAgentsAgent } from "../../types/agents.ts";
 import type { ManagedAgentsEnvironment } from "../../types/environments.ts";
@@ -311,7 +312,7 @@ describe("Runtime events API", () => {
     expect(deletedDownload.status).toBe(404);
   });
 
-  it("blocks delete during output collection, then cleans up once the turn settles", async () => {
+  it("waits out post-idle output collection on delete instead of rejecting a session that reported idle", async () => {
     const runner = new DelayedOutputCollectingRunner([
       {
         relativePath: "late.txt",
@@ -334,28 +335,28 @@ describe("Runtime events API", () => {
     });
     expect(send.status).toBe(200);
     await runner.collectionStarted;
-
-    // The turn is still running (output collection is mid-flight), so hosted
-    // rejects the delete (probe 38). Because the guard refuses any delete while
-    // the runtime task is live, a delete can never run concurrently with output
-    // indexing — the resurrection race is unreachable, not merely cleaned up after.
-    const rejected = await fixture.app.request(`/v1/sessions/${session.id}`, {
-      method: "DELETE",
-    });
-    expect(rejected.status).toBe(400);
-
-    runner.releaseCollection();
-    await runner.collectionFinished;
+    // Output collection runs after the terminal idle is already published, so
+    // a client that waited for idle and then deletes lands in this window.
     await eventuallyList(
       fixture.app,
       `/v1/sessions/${session.id}/events?order=asc`,
-      (body) =>
-        body.data.some((event) => event.type === "session.status_idle"),
+      (body) => body.data.some((event) => event.type === "session.status_idle"),
     );
 
-    const deleted = await fixture.app.request(`/v1/sessions/${session.id}`, {
-      method: "DELETE",
+    // The delete waits for the runtime to settle rather than racing output
+    // indexing (or rejecting a session the API already reported idle).
+    let settled = false;
+    const deleting = Promise.resolve(
+      fixture.app.request(`/v1/sessions/${session.id}`, { method: "DELETE" }),
+    ).then((response) => {
+      settled = true;
+      return response;
     });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(settled).toBe(false);
+
+    runner.releaseCollection();
+    const deleted = await deleting;
     expect(deleted.status).toBe(200);
 
     const outputs = await fixture.app.request(
@@ -364,6 +365,73 @@ describe("Runtime events API", () => {
     expect(outputs.status).toBe(200);
     await expect(outputs.json()).resolves.toMatchObject({ data: [] });
   });
+
+  it("does not retain settle waiters for deletes that time out on stalled post-idle work", async () => {
+    const runner = new DelayedOutputCollectingRunner([]);
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+    await fixture.app.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.message", content: [{ type: "text", text: "stall" }] }],
+      }),
+    });
+    await runner.collectionStarted;
+    await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc`,
+      (body) => body.data.some((event) => event.type === "session.status_idle"),
+    );
+
+    // Collection never finishes; every retried delete times out. Without
+    // cleanup each one left a callback behind until the task ended.
+    for (let i = 0; i < 20; i += 1) {
+      await fixture.sessionEvents.waitForPostIdleRuntimeSettle(DEFAULT_WORKSPACE_ID, session.id, 1);
+    }
+    const waiters = (fixture.sessionEvents as unknown as {
+      runtimeSettledWaiters: Map<string, unknown[]>;
+    }).runtimeSettledWaiters;
+    expect([...waiters.values()].flat()).toHaveLength(0);
+
+    runner.releaseCollection();
+  });
+
+  it("does not make a delete wait when another turn is still genuinely running", async () => {
+    // Two overlapping runtime tasks: turn 0 reaches idle and finishes while
+    // turn 1 is still running. The session is running, so DELETE must get the
+    // hosted 400 promptly instead of waiting out the post-idle timeout.
+    const runner = new GatedTurnRunner();
+    const fixture = makeFixture(runner);
+    const session = await setupSession(fixture.app);
+    const send = (text: string) =>
+      fixture.app.request(`/v1/sessions/${session.id}/events`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ events: [{ type: "user.message", content: [{ type: "text", text }] }] }),
+      });
+    await send("first");
+    await runner.started(0);
+    await send("second");
+    await runner.started(1);
+
+    runner.finishTurn(0);
+    await eventuallyList(
+      fixture.app,
+      `/v1/sessions/${session.id}/events?order=asc`,
+      (body) => body.data.some((event) => event.type === "session.status_idle"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const startedAt = Date.now();
+    const deleted = await fixture.app.request(`/v1/sessions/${session.id}`, { method: "DELETE" });
+
+    expect({ status: deleted.status, prompt: Date.now() - startedAt < 2_000 }).toEqual({
+      status: 400,
+      prompt: true,
+    });
+    runner.finishTurn(1);
+  }, 20_000);
 
   it("interrupts the local runner when runtime turn ownership is lost", async () => {
     const runner = new InterruptTrackingRunner();
@@ -512,6 +580,47 @@ class UnpairedStartRunner implements RuntimeEventRunner {
   }
 }
 
+// Each turn waits on its own gate before finishing, so a test can hold one
+// turn running while another completes.
+class GatedTurnRunner extends FakeRunner {
+  private readonly gates: Array<ReturnType<typeof deferred<void>>> = [];
+  private readonly turnStarted = new Map<number, ReturnType<typeof deferred<void>>>();
+  private turns = 0;
+
+  started(turn: number): Promise<void> {
+    return this.startedGate(turn).promise;
+  }
+
+  finishTurn(turn: number): void {
+    this.gate(turn).resolve();
+  }
+
+  override async *runUserMessage(
+    workspaceId: string,
+    sessionId: string,
+    text: string,
+  ): AsyncIterable<unknown> {
+    const turn = this.turns++;
+    this.startedGate(turn).resolve();
+    await this.gate(turn).promise;
+    yield* super.runUserMessage(workspaceId, sessionId, text);
+  }
+
+  async collectSessionOutputs(): Promise<RuntimeSessionOutputCollection> {
+    return { kind: "collected", files: [] };
+  }
+
+  private gate(turn: number) {
+    this.gates[turn] ??= deferred<void>();
+    return this.gates[turn]!;
+  }
+
+  private startedGate(turn: number) {
+    if (!this.turnStarted.has(turn)) this.turnStarted.set(turn, deferred<void>());
+    return this.turnStarted.get(turn)!;
+  }
+}
+
 class OutputCollectingRunner extends FakeRunner {
   collectCount = 0;
 
@@ -554,6 +663,7 @@ function makeFixture(
 ): {
   app: ReturnType<typeof createControlPlaneApp>;
   broadcaster: SessionEventBroadcaster;
+  sessionEvents: DefaultSessionEventsService;
 } {
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
@@ -578,6 +688,7 @@ function makeFixture(
   });
   return {
     broadcaster,
+    sessionEvents,
     app: createControlPlaneApp({
       agents: new DefaultAgentService(agentStore, undefined),
       environments: new DefaultEnvironmentService(environmentStore),
@@ -590,6 +701,8 @@ function makeFixture(
         {
           assertDeletable: (workspaceId, sessionId) =>
             sessionEvents.assertSessionDeletable(workspaceId, sessionId),
+          awaitDeletable: (workspaceId, sessionId) =>
+            sessionEvents.waitForPostIdleRuntimeSettle(workspaceId, sessionId),
         },
       ),
       sessionEvents,

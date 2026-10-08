@@ -104,6 +104,8 @@ export interface DefaultSessionServiceOptions {
    * runtime.
    */
   assertDeletable: (workspaceId: WorkspaceId, sessionId: string) => void;
+  /** Awaited before assertDeletable: lets post-idle runtime work settle. */
+  awaitDeletable?: (workspaceId: WorkspaceId, sessionId: string) => Promise<void>;
   maxActiveSessionsPerWorkspace?: number;
   maxFileResources?: number;
   maxMountedBytes?: number;
@@ -150,6 +152,9 @@ export class DefaultSessionService implements SessionService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ) => void;
+  private readonly awaitDeletable:
+    | ((workspaceId: WorkspaceId, sessionId: string) => Promise<void>)
+    | undefined;
   private readonly idempotencyLedger: RequestIdempotencyLedger | undefined;
   private readonly createSessionRowsWithIdempotency:
     | ((
@@ -186,6 +191,7 @@ export class DefaultSessionService implements SessionService {
       );
     }
     this.assertDeletable = opts.assertDeletable;
+    this.awaitDeletable = opts.awaitDeletable;
     this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
     this.onAdmissionRejected = opts.onAdmissionRejected;
     this.modelAvailability = opts.modelAvailability;
@@ -565,6 +571,9 @@ export class DefaultSessionService implements SessionService {
     // Domain-owned liveness invariant: reject deleting a running session before
     // any row/file mutation, so no caller (route or internal) can tear down a
     // live runtime. Synchronous, so it runs in the same tick as the row removal.
+    // A session that already reported idle may still be collecting outputs;
+    // let that settle first so a client deleting after idle is not rejected.
+    await this.awaitDeletable?.(workspaceId, sessionId);
     this.assertDeletable(workspaceId, sessionId);
     const result =
       this.deleteSessionRows?.(workspaceId, sessionId) ??

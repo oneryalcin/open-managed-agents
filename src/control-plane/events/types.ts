@@ -327,6 +327,10 @@ export interface SessionEventsService {
     workspaceId: WorkspaceId,
     sessionId: string,
   ): SessionRow;
+  waitForPostIdleRuntimeSettle(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): Promise<void>;
   assertSessionDeletable(
     workspaceId: WorkspaceId,
     sessionId: string,
