@@ -64,7 +64,7 @@ wire-compatible spec events to add by default.
 
 | Event type | OMA status | Current behavior / owner |
 |---|---|---|
-| `user.message` | Implemented | Accepted by `POST /v1/sessions/{id}/events`, persisted, listed, streamed, and used to start runtime turns. |
+| `user.message` | Implemented | Accepted by `POST /v1/sessions/{id}/events`, persisted, listed, streamed, and used to start runtime turns. A message sent while a turn runs is steered into that turn at the next model-request boundary (one running/idle pair), matching hosted for a message sent while a tool runs (probe 70; not probed during a pending tool confirmation). Difference: OMA persists it at send time, hosted at delivery time. |
 | `user.interrupt` | Implemented | Accepted by `POST /events`; aborts active runtime turns and retires pending waits. |
 | `user.custom_tool_result` | Implemented | Accepted by `POST /events` with `custom_tool_use_id`; resumes pending custom-tool waits. |
 | `user.tool_confirmation` | Implemented | Accepted by `POST /events` with `tool_use_id`; resolves ask-gated builtin tool confirmations. |

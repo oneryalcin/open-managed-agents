@@ -67,7 +67,7 @@ const sdk = vi.hoisted(() => {
       this.emit({ type: "agent_end", messages: [], willRetry: false });
     }
 
-    async followUp(): Promise<void> {}
+    async steer(): Promise<void> {}
 
     async abort(): Promise<void> {}
 

@@ -142,7 +142,7 @@ class FakeQueuedSessionFactory {
 }
 
 class FakeQueuedSession {
-  readonly followUps: string[] = [];
+  readonly steered: string[] = [];
   private readonly listeners = new Set<(event: unknown) => void>();
   running = false;
 
@@ -152,14 +152,14 @@ class FakeQueuedSession {
     this.emit({ type: "agent_start" });
     this.emitAssistant(text);
     await this.gate;
-    for (const followUp of this.followUps) {
-      this.emitAssistant(followUp);
+    for (const steered of this.steered) {
+      this.emitAssistant(steered);
     }
     this.emit({ type: "agent_end", messages: [], willRetry: false });
   }
 
-  async followUp(text: string): Promise<void> {
-    this.followUps.push(text);
+  async steer(text: string): Promise<void> {
+    this.steered.push(text);
   }
 
   async abort(): Promise<void> {}
