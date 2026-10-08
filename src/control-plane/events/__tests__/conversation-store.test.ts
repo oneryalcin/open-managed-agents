@@ -119,6 +119,39 @@ describe("conversation store", () => {
       .toEqual({ events: [], conversation: [] });
   });
 
+  it("rejects the old generation after the same owner reclaims its turn", () => {
+    const store = EventStore.open(":memory:");
+    acceptTurn(store);
+    const now = new Date().toISOString();
+    store.claimAcceptedRuntimeTurnForRecovery({
+      workspaceId: WORKSPACE_ID,
+      sessionId: SESSION_ID,
+      turnId: TURN_ID,
+      ownerId: "owner_a",
+      leaseExpiresAt: now,
+      now,
+    });
+
+    expect(() =>
+      store.appendBatchWithRuntimeChanges([], {
+        conversationCheckpoints: [checkpoint([entry("e1")], { ownerGeneration: 1 })],
+      }),
+    ).toThrow(RuntimeTurnOwnershipLostError);
+  });
+
+  it("raises instead of silently dropping an entry that violates a constraint", () => {
+    const store = EventStore.open(":memory:");
+    acceptTurn(store);
+
+    expect(() =>
+      store.appendBatchWithRuntimeChanges([], {
+        conversationCheckpoints: [
+          checkpoint([entry("e1"), { entryId: "e2", json: null as unknown as string }]),
+        ],
+      }),
+    ).toThrow();
+  });
+
   it("still saves for a turn this owner has already closed", () => {
     const store = EventStore.open(":memory:");
     acceptTurn(store);

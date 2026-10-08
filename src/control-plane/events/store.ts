@@ -271,14 +271,16 @@ export class EventStore implements SessionEventStore {
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
          AND owner_id = ? AND owner_generation = ?`,
     );
-    // Idempotent on entry_id: re-offering an already-saved entry is a no-op
-    // and does not consume a seq.
+    // Idempotent on entry_id only: re-offering an already-saved entry is a
+    // no-op and does not consume a seq. Any other constraint violation still
+    // raises, so a durability write never drops a row silently.
     this.insertConversationEntryStmt = this.db.prepare(
-      `INSERT OR IGNORE INTO session_conversation_entries
+      `INSERT INTO session_conversation_entries
          (workspace_id, session_id, seq, entry_id, entry_json, turn_id, pi_version, created_at)
        SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?
        FROM session_conversation_entries
-       WHERE workspace_id = ? AND session_id = ?`,
+       WHERE workspace_id = ? AND session_id = ?
+       ON CONFLICT (workspace_id, session_id, entry_id) DO NOTHING`,
     );
     this.listConversationEntriesStmt = this.db.prepare(
       `SELECT entry_id, entry_json, turn_id, pi_version
