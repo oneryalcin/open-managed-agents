@@ -549,15 +549,18 @@ describe("session lifecycle API", () => {
   });
 
   // The tool-action collaborators guard their own persists with the service's
-  // closed/deleted sets (#164 plan 0146): a late emission must not write.
-  it("drops a custom tool use the runtime emits after archive", async () => {
+  // closed/deleted sets (#164 plan 0146): a late emission is dropped quietly.
+  // Without the guard the store refuses the write, the tool use is rejected
+  // back to the runtime as an error, and the turn fails instead.
+  it("quietly drops a custom tool use the runtime emits after archive", async () => {
+    const rejections: string[] = [];
     const runner = new LateEmissionRunner({
       type: "oma.custom_tool_use",
       piToolCallId: "toolu_late_custom",
       name: "ask_user",
       input: { question: "still there?" },
       bindCustomToolUseId: () => {},
-      rejectCustomToolUse: () => {},
+      rejectCustomToolUse: (error) => rejections.push(error.message),
     } satisfies RuntimeCustomToolUseEvent);
     const { eventStore, service, sessionId } = createRuntimeFailureHarness(runner);
 
@@ -568,11 +571,14 @@ describe("session lifecycle API", () => {
     await service.archiveSession("wrk_default", sessionId);
     await waitFor(() => runner.emitted);
 
-    expect(eventStore.list("wrk_default", sessionId).map((event) => event.type))
-      .toEqual(["user.message", "session.status_terminated"]);
+    expect({
+      types: eventStore.list("wrk_default", sessionId).map((event) => event.type),
+      rejections,
+    }).toEqual({ types: ["user.message", "session.status_terminated"], rejections: [] });
   });
 
-  it("drops an ask-gated tool use the runtime emits after delete", async () => {
+  it("quietly drops an ask-gated tool use the runtime emits after delete", async () => {
+    const rejections: string[] = [];
     const runner = new LateEmissionRunner({
       type: "oma.tool_permission_use",
       piToolCallId: "toolu_late_bash",
@@ -580,7 +586,7 @@ describe("session lifecycle API", () => {
       input: { command: "ls" },
       evaluatedPermission: "ask",
       bindToolUseId: () => {},
-      rejectToolUse: () => {},
+      rejectToolUse: (error) => rejections.push(error.message),
     } satisfies RuntimeToolPermissionUseEvent);
     const { eventStore, service, sessionId } = createRuntimeFailureHarness(runner);
 
@@ -591,7 +597,8 @@ describe("session lifecycle API", () => {
     await service.deleteSession("wrk_default", sessionId);
     await waitFor(() => runner.emitted);
 
-    expect(eventStore.list("wrk_default", sessionId)).toEqual([]);
+    expect({ events: eventStore.list("wrk_default", sessionId), rejections })
+      .toEqual({ events: [], rejections: [] });
   });
 
   it("allows terminated sessions and rejects rescheduling sessions at archive preflight", () => {
@@ -1253,8 +1260,13 @@ class LateEmissionRunner implements RuntimeEventRunner {
       this.resume = resolve;
       this.markStarted?.();
     });
-    yield this.late;
-    this.emitted = true;
+    try {
+      yield this.late;
+    } finally {
+      // Set even if persisting the late event throws, so a broken guard fails
+      // the event-list assertion instead of timing out.
+      this.emitted = true;
+    }
   }
 
   async closeSession(): Promise<void> {

@@ -1812,10 +1812,6 @@ export class DefaultSessionEventsService implements SessionEventsService {
     persistAndPublish(this.events, this.broadcaster, rows);
   }
 
-  // ── MCP persistence (plan 0122 §4.4/§4.5) — mirrors the tool-permission
-  // pair: sevt_* id bound on persist (before the tool executes), ask-path
-  // opens a tool_confirmation action, allow-path continues running.
-
   private hasPendingRuntimeActions(
     workspaceId: WorkspaceId,
     sessionId: string,
