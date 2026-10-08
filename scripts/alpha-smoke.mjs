@@ -226,9 +226,17 @@ async function main() {
   if (state.fixture !== undefined) ok("Observed exact custom provider/model routing across both model requests");
 
   step("Best-effort cleanup");
-  await bestEffort(() => requestJson(baseUrl, apiKey, `/v1/sessions/${session.id}`, { method: "DELETE" }));
+  let deleteError;
+  try {
+    await requestJson(baseUrl, apiKey, `/v1/sessions/${session.id}`, { method: "DELETE" });
+  } catch (error) {
+    deleteError = error;
+  }
   await bestEffort(() => requestJson(baseUrl, apiKey, `/v1/agents/${agent.id}/archive`, { method: "POST" }));
   if (egressSmoke) {
+    // The egress smoke asserts teardown, so a failed delete is the first thing
+    // to know when resources remain; elsewhere cleanup stays best-effort.
+    if (deleteError !== undefined) fail(`Session delete failed: ${deleteError.message}`);
     await assertNoSessionDockerResources(session.id);
     ok("No session sandbox, sidecar, or internal network remained after delete");
   }
@@ -360,6 +368,34 @@ async function startTemporaryOma(sandboxProvider, model, localFixtureBaseUrl, eg
   throw new Error(`Timed out waiting for OMA startup logs.\n${logs.trim()}`);
 }
 
+// Which leftover is it: the sandbox or the egress sidecar, and was it still
+// running or being created? Distinguishes "teardown never ran" from
+// "something was created after delete".
+function describeSessionDockerResources(sessionId) {
+  const filter = `label=open-managed-agents.session-id=${sessionId}`;
+  const ids = (resource) => {
+    const args = resource === "container" ? ["ps", "-aq", "--filter", filter] : ["network", "ls", "-q", "--filter", filter];
+    return spawnSync("docker", args, { encoding: "utf8" }).stdout.split("\n").filter(Boolean);
+  };
+  const inspect = (args) => {
+    const result = spawnSync("docker", args, { encoding: "utf8" });
+    return result.status === 0 ? result.stdout.trim() : `inspect failed: ${(result.stderr || "").trim()}`;
+  };
+  const containerFormat = [
+    '{{if index .Config.Labels "open-managed-agents.egress-sidecar"}}egress-sidecar{{else}}sandbox{{end}}',
+    "name={{.Name}}",
+    "status={{.State.Status}}",
+    "created={{.Created}}",
+    "started={{.State.StartedAt}}",
+    "finished={{.State.FinishedAt}}",
+  ].join(" ");
+  const lines = [
+    ...ids("container").map((id) => `  container ${id}: ${inspect(["inspect", "--format", containerFormat, id])}`),
+    ...ids("network").map((id) => `  network ${id}: ${inspect(["network", "inspect", "--format", "name={{.Name}} created={{.Created}}", id])}`),
+  ];
+  return `Leftover resources (checked at ${new Date().toISOString()}):\n${lines.join("\n")}`;
+}
+
 async function assertNoSessionDockerResources(sessionId) {
   const filters = ["container", "network"];
   const deadline = Date.now() + 10_000;
@@ -375,7 +411,9 @@ async function assertNoSessionDockerResources(sessionId) {
     }
     if (remaining.length === 0) return;
     if (Date.now() >= deadline) {
-      throw new Error(`Docker resources remain for ${sessionId}: ${remaining.join("; ")}`);
+      throw new Error(
+        `Docker resources remain for ${sessionId}: ${remaining.join("; ")}\n${describeSessionDockerResources(sessionId)}`,
+      );
     }
     await delay(100);
   }

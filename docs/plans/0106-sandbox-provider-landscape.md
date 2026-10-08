@@ -482,10 +482,11 @@ Recommendation:
 
 Treat as compatibility/hardening probes, not as the production isolation target.
 
-Probe status (2026-10-08, same note): rootless Podman 4.9.3 is not a drop-in.
-It rejects tmpfs `uid=`/`gid=`, the egress sidecar needs `--userns=keep-id`,
-`rm -f` waits 10 s, and the host needs a systemd user session. Rootless Docker
-was not probed.
+Probe status (2026-10-08, same note): rootless Podman 4.9.3 was not a drop-in
+(tmpfs `uid=`/`gid=` rejected, sidecar needed `--userns=keep-id`, `rm -f`
+waited 10 s). Since #236, `docker-local` detects Podman and handles all three;
+the live suite runs on Docker and rootless Podman in CI (`sandbox-live.yml`).
+The host still needs a systemd user session. Rootless Docker was not probed.
 
 ## Hosted Provider Matrix
 
