@@ -17,5 +17,10 @@ jobs:
         with:
           node-version: "24.18.0"
           cache: npm
+      - name: Check lockfile package ages (ADR 0017)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          node scripts/check-lockfile-age.mjs "origin/${{ github.base_ref }}"
       - run: npm ci
       - run: npm run package:verify

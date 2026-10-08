@@ -1,6 +1,6 @@
 # ADR 0006: One-time supply-chain quarantine override for Pi 0.75.4
 
-**Status:** Accepted, 2026-05-21
+**Status:** Accepted, 2026-05-21. The 30-day window is amended to 2 days by [ADR 0017](0017-supply-chain-min-release-age-2-days.md).
 
 ## Context
 
