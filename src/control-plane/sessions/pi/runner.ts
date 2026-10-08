@@ -587,11 +587,12 @@ export class PiSessionRunner implements RuntimeEventRunner {
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
           await handle.session.steer(text);
-          // Best effort for the losing prompt race: once Pi confirms this turn
-          // is queued on the running one, discard overlap events captured by this temporary
-          // subscriber. A pre-rejection event can still escape; in practice that
-          // should be limited to early status frames, while the winning prompt
-          // subscriber owns the full turn and follow-up output.
+          // Best effort for the losing prompt race: once Pi confirms this
+          // message is queued on the running turn, discard overlap events
+          // captured by this temporary subscriber. A pre-rejection event can
+          // still escape; in practice that should be limited to early status
+          // frames, while the winning prompt subscriber owns the full turn,
+          // including the steered message's output.
           queuedOnRunningTurn = true;
           queue.length = 0;
           return;
@@ -1294,7 +1295,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       await interrupt;
     } catch {
       // interruptSession callers observe abort errors; message delivery waits only
-      // for the abort window to close before deciding prompt vs follow-up.
+      // for the abort window to close before deciding prompt vs steer.
     }
   }
 
