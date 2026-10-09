@@ -41,7 +41,7 @@ export function withRuntimeView(
               ephemeral_5m_input_tokens: totals.cacheWriteTokens - totals.cacheWrite1hTokens,
             },
         active_seconds: active,
-        list_cost: listCost(totals?.costMicros ?? 0),
+        list_cost: listCost(totals === undefined ? 0 : totals.costMicros),
         server_tool_use: null,
       },
       stats: { ...session.stats, active_seconds: active },
