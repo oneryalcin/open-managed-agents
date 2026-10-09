@@ -1,6 +1,13 @@
 # docker compose up -> first boot prints the initial API key in the logs:
 #   docker compose logs oma | grep x-api-key
 # The console is served at http://127.0.0.1:4180/console
+#
+# This container has no sandbox provider: agents run, but builtin tools
+# (bash, read/write/edit, glob, grep) are unavailable and sessions with file
+# resources fail. For those, run OMA on the host instead: `oma up` (Docker sandboxes with the
+# egress sidecar) or `oma up --sandbox microsandbox`. The image deliberately
+# does not mount the host Docker socket, which would give it root on the host
+# (docs/dev-deployment.md, "Docker socket policy").
 services:
   oma:
     build: .

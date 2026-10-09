@@ -70,7 +70,7 @@ see what it cost.
 | Usage metering (0114 Arc D) | **Done** ([plan 0148](0148-usage-metering.md); #280, #285, console PR). Sessions report tokens, estimated model cost and active time; the console shows them |
 | Environment resource (packages / runtimes) | Environments are ~35% parity; decide the image/package story beyond the single coding image |
 | Session surface gaps | Update, overrides and `resources.*` (~65% parity); pick what a tester needs, defer the rest with honest 400s |
-| 0114 Arc A leftover | Compose + docs for docker-local egress in the container deployment (docker.sock, `OMA_EGRESS_SIDECAR_IMAGE`, `OMA_MASTER_KEY`) |
+| 0114 Arc A leftover | **Done, as docs** (2026-10-09): the container image stays socket-free and runs without a sandbox provider; compose and deployment docs say builtin tools need host-run `oma up`. Also #276: a container restarted after a crash boots again |
 
 ## M3 — hardening before external testers
 
