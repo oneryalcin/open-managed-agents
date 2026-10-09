@@ -102,8 +102,12 @@ function translateToolExecutionEnd(
     }
     // A control-plane tool can publish richer content than Pi carries (Pi's
     // tool results hold only text and images): web_fetch's document block.
-    if (isObject(event.result.details) && Array.isArray(event.result.details.omaToolResultContent)) {
-      payload.content = event.result.details.omaToolResultContent;
+    const details = event.result.details;
+    if (
+      isObject(details) &&
+      (Array.isArray(details.omaToolResultContent) || typeof details.omaToolResultContent === "string")
+    ) {
+      payload.content = details.omaToolResultContent;
     }
   }
 

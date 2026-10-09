@@ -115,6 +115,7 @@ import {
   createStoreBackedCustomToolsProvider,
 } from "./wiring.ts";
 import { createStoreBackedWebToolContext } from "./sessions/pi/web/context.ts";
+import { webSearchProviderFromEnv, type WebSearchEnv } from "./sessions/pi/web/search-provider.ts";
 import { createStoreBackedBuiltinToolAccessResolver } from "./sessions/pi/tool-permissions.ts";
 import {
   createStoreBackedMcpCredentialResolver,
@@ -250,7 +251,8 @@ export type DeploymentControlPlaneEnv =
   DeploymentAuthEnv &
   DeploymentAdmissionEnv &
   DeploymentObservabilityEnv &
-  ModelDeploymentEnv;
+  ModelDeploymentEnv &
+  WebSearchEnv;
 
 // 0113 D5: exactly two values; unset stays disabled for the currently allowed
 // rollout tiers but warns loudly; anything else fails construction.
@@ -961,6 +963,8 @@ export async function createDeploymentControlPlane(
       }
     },
   };
+  // Plan 0149: web_search is offered only with a configured provider.
+  const webSearch = webSearchProviderFromEnv(env);
   const runner = createDeploymentPiSessionRunner(runtimeConfig, {
     ...opts.runner,
     modelCatalog,
@@ -1013,6 +1017,7 @@ export async function createDeploymentControlPlane(
         environments: stores.environments,
         events: stores.events,
       }),
+      ...(webSearch === undefined ? {} : { search: webSearch }),
     },
     // Plan 0122 §4.6: always wired (disabled agents still get their
     // exhausted session.error), dialing gated by OMA_ENABLE_MCP.
@@ -1125,7 +1130,7 @@ export async function createDeploymentControlPlane(
       stores.agents,
       stores.skills,
       modelAvailability,
-      { webTools: ["web_fetch"] },
+      { webTools: webSearch === undefined ? ["web_fetch"] : ["web_fetch", "web_search"] },
     ),
     environments: new DefaultEnvironmentService(stores.environments, stores.sessions),
     environmentNetworking: environmentNetworkingCapability(runtimeConfig),

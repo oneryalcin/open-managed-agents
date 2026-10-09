@@ -29,7 +29,8 @@ export interface WebFetchToolOptions {
 
 /** Event content beyond what Pi carries; the translator publishes it. */
 export interface WebToolResultDetails {
-  omaToolResultContent: unknown[];
+  /** Blocks, or a string (web_search's results are a JSON string, as hosted). */
+  omaToolResultContent: unknown[] | string;
 }
 
 const USER_AGENT = "OpenManagedAgents-WebFetch/1.0";

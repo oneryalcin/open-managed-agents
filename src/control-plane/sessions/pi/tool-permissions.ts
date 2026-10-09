@@ -15,7 +15,7 @@ import type { WorkspaceId } from "../../workspace.ts";
 import type { SandboxedBuiltinToolName } from "./sandbox/provider.ts";
 
 /** Control-plane builtins (plan 0149): run by OMA itself, not the sandbox. */
-export type WebBuiltinToolName = "web_fetch";
+export type WebBuiltinToolName = "web_fetch" | "web_search";
 
 /** Builtins that go through the permission gate and builtin event flow. */
 export type GatedBuiltinToolName = SandboxedBuiltinToolName | WebBuiltinToolName;

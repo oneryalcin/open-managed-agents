@@ -581,6 +581,34 @@ the default `info`; and errors no longer print stack traces unless
 level that **ignores** `OMA_LOG_LEVEL` — turning down diagnostic noise can
 never silence the admin audit trail.
 
+## Web tools
+
+`web_fetch` and `web_search` run in the control plane, not the sandbox
+(plan 0149). Both only reach hosts in the session environment's
+`allowed_hosts`. A URL must have been shown in the conversation before
+`web_fetch` will read it, as on hosted. Where the sandbox has no egress (no
+provider, microsandbox, or docker-local without the sidecar), an environment
+with allowed hosts is accepted for agents that enable a web tool. The
+sandbox itself stays offline.
+
+`web_fetch` needs no configuration. `web_search` needs a search provider,
+otherwise it stays unavailable and agents that enable it get a 400:
+
+```bash
+OMA_WEB_SEARCH_PROVIDER=tavily
+OMA_WEB_SEARCH_API_KEY=tvly-...        # or OMA_WEB_SEARCH_API_KEY_FILE=/path
+```
+
+How the search provider fits the security model:
+- **Endpoint:** a fixed endpoint, reached through the SSRF-guarded fetch,
+  with redirects refused.
+- **The query leaves the deployment:** `allowed_hosts` limits the results,
+  not who receives the query, so the provider sees every query.
+- **The key never leaks back:** it is scrubbed from anything the provider
+  returns.
+
+An unknown provider, or a provider without a key, fails startup.
+
 ## MCP servers
 
 Design: [0122](plans/0122-mcp-connector.md) M1. Agents can declare remote MCP
