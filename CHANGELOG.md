@@ -1,26 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — capability release
 
-### Fixes
+The second release planned by [0145](docs/plans/0145-road-to-external-testers.md):
+an agent can do a realistic coding task end to end, and the operator can see
+what it cost.
 
-- **The model keeps the conversation across idle eviction and restarts**
-  (#265, plan 0147). Each settled turn is saved with the turn's close, and a
-  session missing from memory is rebuilt from it. When continuity is
-  incomplete, the model gets a hidden note: the sandbox was recreated (until
-  workspace files are kept), or a turn was cut off before it finished.
-- **Sessions can be renamed and their metadata edited** with
-  `POST /v1/sessions/{id}`, as hosted: `title`, and `metadata` as a patch (a
-  string upserts a key, null deletes it, `metadata: null` clears it). Changing
-  the agent's tools or MCP servers, the budget, or vaults mid-session is not
-  supported yet (400). Archived sessions cannot be updated. Session
-  metadata now enforces hosted's limits on create and update (at most 16
-  keys, keys up to 64 characters, values up to 512).
+### Behaviour changes
+
 - **`config.packages` is refused instead of silently ignored.** Environments
   asking for apt/npm/pip packages were accepted and nothing was installed.
   They are now a 400, at environment creation and when a session is created
   on an environment stored earlier. The sandbox image's bundled tools are
   listed in the error. Installing packages is planned after M2.
+- **Session status reports `running` while a turn runs** (#279). `GET` and
+  list of sessions said `idle` throughout a turn, because only termination was
+  stored on the session. Status now follows the session's latest status event
+  (`running`, `idle`, `rescheduling`, `terminated`), as hosted reports it.
+- **Sessions report usage and time** (plan 0148). `usage` was always `null`;
+  it now carries input, output and cache tokens (cache writes split into 5m
+  and 1h), `active_seconds`, and `list_cost` in cents, plus a new `stats`
+  object (`active_seconds`, `duration_seconds`). Cost is the model cost only,
+  estimated from the pinned Pi version's price table, and `null` when a model
+  has no known price. Totals are kept by database triggers, so listing
+  sessions stays fast with long histories. See PARITY.md for how this
+  differs from hosted.
+
+### Additions
+
 - **Agents can read the web with `web_fetch`** (plan 0149). It runs in the
   control plane, not the sandbox, and only reaches hosts in the session
   environment's `allowed_hosts` (https, the full policy including port and
@@ -42,14 +49,23 @@
   everything it returns. Search results count as shown for `web_fetch`.
   Successful searches count in `usage.server_tool_use.web_search_requests`
   (now always an object, as hosted; fetches count nothing, as hosted).
-- **Sessions report usage and time** (plan 0148). `usage` was always `null`;
-  it now carries input, output and cache tokens (cache writes split into 5m
-  and 1h), `active_seconds`, and `list_cost` in cents, plus a new `stats`
-  object (`active_seconds`, `duration_seconds`). Cost is the model cost only,
-  estimated from the pinned Pi version's price table, and `null` when a model
-  has no known price. Totals are kept by database triggers, so listing
-  sessions stays fast with long histories. See PARITY.md for how this
-  differs from hosted.
+- **Sessions can be renamed and their metadata edited** with
+  `POST /v1/sessions/{id}`, as hosted: `title`, and `metadata` as a patch (a
+  string upserts a key, null deletes it, `metadata: null` clears it). Changing
+  the agent's tools or MCP servers, the budget, or vaults mid-session is not
+  supported yet (400). Archived sessions cannot be updated. Session
+  metadata now enforces hosted's limits on create and update (at most 16
+  keys, keys up to 64 characters, values up to 512).
+- **The console shows each session's cost, tokens and active time**, in the
+  sessions list and the session header.
+
+### Fixes
+
+- **The model keeps the conversation across idle eviction and restarts**
+  (#265, plan 0147). Each settled turn is saved with the turn's close, and a
+  session missing from memory is rebuilt from it. When continuity is
+  incomplete, the model gets a hidden note: the sandbox was recreated (until
+  workspace files are kept), or a turn was cut off before it finished.
 - **A container restarted after a crash boots again** (#276). The appliance
   lock left by the crashed run named PID 1, which is also the restarted
   node's PID, so startup took the stale lock for a live one and refused to
@@ -58,13 +74,34 @@
   process dies, so no stale-lock guess is needed. A second OMA on the same
   database (another process, another container on the same volume, or a
   symlinked path) is still refused.
-- **Session status reports `running` while a turn runs** (#279). `GET` and
-  list of sessions said `idle` throughout a turn, because only termination was
-  stored on the session. Status now follows the session's latest status event
-  (`running`, `idle`, `rescheduling`, `terminated`), as hosted reports it.
 - **After a restart, a late tool result or confirmation is accepted at once**
   (#273). Previously it was refused as still owned for up to two minutes, and
   answering several waits of one turn in one request failed.
+
+### Known issues
+
+- **Allowed hosts do not give an offline sandbox a network.** Where the
+  sandbox has no egress (see above), `allowed_hosts` serve only the web tools;
+  `npm install` and similar commands in the sandbox still fail. Use host-run
+  `oma up` (docker-local with the egress sidecar) for sandbox networking.
+- **Sandbox files are not kept across idle eviction or a restart.** The
+  conversation is; the model is told its sandbox was recreated.
+- `web_search` is covered by tests with a stubbed provider; it has not
+  been exercised against live Tavily before this release.
+- After a restart, answering only some of a turn's pending waits ends the
+  turn and later answers to the others get 404 (#275). Fix planned in ADR
+  0018 stage 3.
+- An interrupt in the instant between a custom tool call and its
+  `requires_action` status can leave the session reporting `running` until
+  the next message (#283).
+- A session's sandbox rebuilt under a different provider is not re-checked
+  against the environment's networking (#298).
+- Only connect MCP servers you trust: on a first-time MCP OAuth connect the
+  MCP server chooses the authorization server (#257).
+- A message sent in narrow windows around a turn's start or end can wait
+  until the next message, or end the session's runtime (#260).
+- A steered message is recorded when sent, not when the model receives it,
+  and is lost if the process stops before delivery (#254).
 
 ## 0.2.0 — trust release
 

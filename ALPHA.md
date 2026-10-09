@@ -30,9 +30,9 @@ permission confirmations, skills, MCP, vault credentials, session pagination,
 and agent update/versioning.
 
 The public npm package is `open-managed-agents`; `0.1.2` was the first release
-whose published README leads with the one-command onboarding path, and `0.2.0`
-is the trust release from [0145](docs/plans/0145-road-to-external-testers.md)
-([CHANGELOG.md](CHANGELOG.md)). The
+whose published README leads with the one-command onboarding path, `0.2.0`
+was the trust release from [0145](docs/plans/0145-road-to-external-testers.md),
+and `0.3.0` is its capability release ([CHANGELOG.md](CHANGELOG.md)). The
 remaining alpha release gate is evidence: the packed-browser lane and at least
 three non-maintainer warm-path observations must prove the documented
 three-minute target without undocumented intervention. Source checkout remains
