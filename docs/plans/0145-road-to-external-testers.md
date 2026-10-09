@@ -122,8 +122,13 @@ when all of these hold:
   - `web_search` needs the operator to configure a provider
     (`OMA_WEB_SEARCH_PROVIDER=tavily` with a key). The provider sees every
     query.
-  - Where the sandbox has no egress, allowed hosts govern only the web tools:
-    `curl` inside the sandbox still has no network.
+  - **Allowed hosts do not give the sandbox a network unless the deployment
+    has sandbox egress** (`oma up`: docker-local with the egress sidecar).
+    Elsewhere (no sandbox provider, microsandbox, docker without the sidecar)
+    a session with `allowed_hosts` is accepted for its web tools, but
+    `npm install`, `pip install` or `curl` inside the sandbox still fail with
+    a network error. Before web tools, such a session was refused with a 400;
+    since agents enable `web_fetch` by default, it is now accepted.
   - **Agents created before web tools existed keep `web_fetch` off.** Their
     stored config says `enabled: false`, and editing them keeps it unless the
     toolset config enables `web_fetch` explicitly. Create a new agent, or
