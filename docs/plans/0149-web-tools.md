@@ -99,21 +99,46 @@ two hosted questions they raised. Changes are marked **(review)**.
   OMA's parser today, so there is no "any host" mode (the earlier `"any"`
   branch is gone).
 - **(review) Hosted's prior-context rule (probe 72).** A URL may be fetched
-  only if it was shown earlier in the session: in a user message, a
-  `web_search` result, or the text (including links) of a page fetched
-  earlier in the session. Otherwise the result is `url_not_in_prior_context`,
-  with hosted's wording. A near-match (http/https, `www.`, trailing slash)
-  fetches the shown URL with hosted's note. This is the main guard against a
-  prompt-injected model exfiltrating data in a URL to an allowed host, which
-  matters more in OMA: with no sandbox egress, `web_fetch` is the only way
-  out. The set of shown URLs is computed from the session's persisted events.
-- **(review) Other refusals:** a URL with userinfo or that looks like it
-  carries a credential (`url_not_allowed`), longer than 250 characters, or
-  non-`https`.
-- **(review) Redirects are followed, as hosted does:** at most 5 hops. Each
-  hop re-runs the policy check and the SSRF guard (a `redirect: "manual"`
-  variant of the guarded fetch, moved to `egress/guarded-fetch.ts`). A hop to
-  a host that is not allowed ends with `url_not_allowed`, naming the target.
+  only if it was shown earlier in the session. Otherwise the result is
+  `url_not_in_prior_context`, with hosted's wording. This is the main guard
+  against a prompt-injected model exfiltrating data in a URL to an allowed
+  host, which matters more in OMA: with no sandbox egress, `web_fetch` is the
+  only way out. The contract (tightened after the second review):
+  - **Shown sources**, read from persisted events:
+    - `user.message` text (the user's own intent, delivered or not);
+    - the text of successful `web_search` results;
+    - the converted text, links included, of successful `web_fetch`
+      results;
+    - `user.custom_tool_result` content, which the client supplies.
+  - **Not counted:**
+    - MCP tool results (a third-party server could plant URLs);
+    - error results;
+    - anything past a truncation cut (only the model-visible, capped text
+      counts).
+  - **Expiry:** URLs from a fetched page count for 30 minutes from that
+    fetch's `processed_at` (hosted: "for a while"). User messages, search
+    results and custom tool results don't expire. Because the rule reads
+    persisted times, a rebuilt session keeps the same answer.
+  - **Matching:** both URLs are canonicalized (lower-case scheme and host,
+    default port and fragment dropped, percent-encoding normalized), then
+    compared exactly. A near-match differing only by http/https, `www.` or a
+    trailing slash fetches the shown URL, with hosted's note.
+- **(review) One URL validator** for the initial URL, a near-match
+  substitute, and every redirect target, before any dial. It refuses:
+  - anything that isn't `https`, so a redirect cannot downgrade to http even
+    where a native policy entry allows http;
+  - userinfo, or a URL that looks like it carries a credential
+    (`url_not_allowed`);
+  - URLs longer than 250 characters;
+  - anything the full policy check refuses (protocol, port, `pathPrefix`);
+  - SSRF targets (private, metadata, IP literals).
+- **(review) Redirects are followed, as hosted does:** at most 5 hops,
+  relative `Location` resolved against the current URL, every hop through
+  the validator. A redirect target is exempt only from the prior-context
+  rule (hosted fetched `anthropic.com` → `www.anthropic.com`); a refused hop
+  ends with `url_not_allowed`, naming the target. Uses a
+  `redirect: "manual"` variant of the guarded fetch, moved to
+  `egress/guarded-fetch.ts`.
 
 **D4 (decided 2026-10-09): deployments without sandbox egress accept allowed
 hosts for web tools.** Today a session whose environment lists allowed hosts
@@ -202,6 +227,14 @@ provider.
   the search provider.
 - A URL never shown in the session is refused (`url_not_in_prior_context`); a
   near-match fetches the shown URL with the note.
+- A discarded steered message still counts as shown. A failed result, text
+  past a truncation cut, and an MCP result do not count. A page link expires
+  after 30 minutes, and the same answer holds after a restart.
+- A redirect to `http`, to a userinfo URL, to an over-long URL, or to a port or
+  path the policy refuses is not followed. A relative `Location` resolves
+  correctly.
+- D4: host-passthrough and native `credentials` stay rejected, and Docker and
+  microsandbox sandboxes keep `--network none` when web tools are enabled.
 - Userinfo, private, metadata and IP-literal targets are refused.
 - A nesting-bomb page returns `is_error` within the deadline. An interrupt
   terminates the worker. Oversized and slow bodies are cut off.
