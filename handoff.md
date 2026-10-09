@@ -396,7 +396,7 @@ they are intentionally no longer repeated here.
    starter graph are implemented. Onboarding-owned appliances can be reopened
    with a private local lifecycle record and fresh one-shot browser nonce, and
    a missing sandbox image has an explicit interactive/`--pull` recovery. The
-   public npm package is shipped as `open-managed-agents@0.2.0` (0145 trust
+   public npm package is shipped as `open-managed-agents@0.3.0` (0145 capability
    release; 0.1.2 was the first one-command README) and the registry's
    `latest` tag resolves to it. The remaining alpha evidence gates
    are the packed/public-package browser lane and at least three non-maintainer

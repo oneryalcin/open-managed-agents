@@ -71,6 +71,8 @@ see what it cost.
 | Environment resource (packages / runtimes) | **Decided 2026-10-10:** `config.packages` is refused with a 400 (it was silently ignored), and the error lists the image's bundled tools. Package installs are a post-M2 plan |
 | Session surface gaps | **Done (2026-10-10):** `POST /v1/sessions/{id}` updates the title and metadata; agent, budget and vault changes, `agent_with_overrides` and `resources.*` are honest 400s |
 | 0114 Arc A leftover | **Done, as docs** (2026-10-09): the container image stays socket-free and runs without a sandbox provider; compose and deployment docs say builtin tools need host-run `oma up`. Also #276: a container restarted after a crash boots again |
+| Release checklist | Version 0.3.0, changelog, `make npm-release-check`; publish and `make npm-release-verify` by the maintainer |
+| Tester-zero run on 0.3.0 | Not yet run (none was recorded for 0.2.0 either). Record timings and any manual intervention here |
 
 ## M3 — hardening before external testers
 
