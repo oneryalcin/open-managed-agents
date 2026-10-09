@@ -265,6 +265,44 @@ describe("usage totals across versions", () => {
     });
   });
 
+  it("counts a search call once, even with two successful results for it", () => {
+    const store = EventStore.open(":memory:");
+    const now = new Date().toISOString();
+    const event = (id: string, type: PersistedSessionEvent["type"], payload: PersistedSessionEvent["payload"]): PersistedSessionEvent => ({
+      id, workspace_id: WS, session_id: SESSION, type, processed_at: now, created_at: now, payload,
+    });
+    store.appendBatchWithRuntimeChanges([
+      event("sevt_use_dup", "agent.tool_use", { name: "web_search", input: { query: "q" } }),
+      event("sevt_res_1", "agent.tool_result", { tool_use_id: "sevt_use_dup", is_error: false, content: "[]" }),
+      event("sevt_res_2", "agent.tool_result", { tool_use_id: "sevt_use_dup", is_error: false, content: "[]" }),
+    ], {});
+
+    expect(usage(store)?.webSearchRequests).toBe(1);
+  });
+
+  it("adds and backfills the web search count on a database from before it existed", () => {
+    withFile((path) => {
+      const store = EventStore.open(path);
+      const now = new Date().toISOString();
+      const use: PersistedSessionEvent = {
+        id: "sevt_use_search", workspace_id: WS, session_id: SESSION, type: "agent.tool_use",
+        processed_at: now, created_at: now, payload: { name: "web_search", input: { query: "q" } },
+      };
+      const result: PersistedSessionEvent = {
+        id: "sevt_result_search", workspace_id: WS, session_id: SESSION, type: "agent.tool_result",
+        processed_at: now, created_at: now, payload: { tool_use_id: "sevt_use_search", is_error: false, content: "[]" },
+      };
+      store.appendBatchWithRuntimeChanges([use, result], {});
+      const raw = new DatabaseSync(path);
+      // The older schema: no counting trigger, no column.
+      raw.exec("DROP TRIGGER session_usage_web_search");
+      raw.exec("ALTER TABLE session_usage_totals DROP COLUMN web_search_requests");
+      raw.close();
+
+      expect(usage(EventStore.open(path))?.webSearchRequests).toBe(1);
+    });
+  });
+
   it("does not let a zero-token request's $0 stand in for a missing cost", () => {
     const store = EventStore.open(":memory:");
     const free = spanEnd({});
