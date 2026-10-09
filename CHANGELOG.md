@@ -9,6 +9,18 @@
   session missing from memory is rebuilt from it. When continuity is
   incomplete, the model gets a hidden note: the sandbox was recreated (until
   workspace files are kept), or a turn was cut off before it finished.
+- **Agents can read the web with `web_fetch`** (plan 0149). It runs in the
+  control plane, not the sandbox, and only reaches hosts in the session
+  environment's `allowed_hosts` (https, the full policy including port and
+  path). As on hosted, a URL must have been shown in the conversation first
+  (`url_not_in_prior_context`). Redirects are followed with every hop
+  re-checked, private and metadata addresses are refused, and pages are
+  converted to text in an isolated worker with memory and time limits. The
+  `always_ask` policy works through the usual confirmation flow. Where the
+  sandbox has no egress (no provider, microsandbox, or docker-local without
+  the sidecar), environments with allowed hosts are now accepted for agents
+  that enable `web_fetch`; the sandbox itself stays offline. `web_search`
+  is not available yet.
 - **Sessions report usage and time** (plan 0148). `usage` was always `null`;
   it now carries input, output and cache tokens (cache writes split into 5m
   and 1h), `active_seconds`, and `list_cost` in cents, plus a new `stats`

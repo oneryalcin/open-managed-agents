@@ -7,7 +7,7 @@ import type {
 } from "../../types/sessions.ts";
 import type { ManagedAgentsModelConfig } from "../../types/agents.ts";
 import { log } from "../logging.ts";
-import type { AgentStore } from "../agents/types.ts";
+import type { AgentRow, AgentStore } from "../agents/types.ts";
 import {
   EgressPolicyError,
   parseNetworkingConfig,
@@ -95,6 +95,12 @@ export interface SessionEgressCapability {
   canHonorNetworking: boolean;
   /** A SecretsStore exists (OMA_MASTER_KEY configured). */
   hasSecretsStore: boolean;
+  /**
+   * Control-plane web tools can use an environment's allowed hosts even
+   * though the sandbox gets no network (plan 0149 D4). False where the
+   * sandbox has the host's network (host-passthrough).
+   */
+  webToolsWithoutSandboxEgress?: boolean;
 }
 
 export interface DefaultSessionServiceOptions {
@@ -343,7 +349,7 @@ export class DefaultSessionService implements SessionService {
   // every present networking shape is parsed before any file/skill/runtime
   // preparation. Unsupported hosted networking and malformed legacy rows must
   // not silently turn into a --network none session.
-  private assertEgressHonorable(environment: EnvironmentRow): void {
+  private assertEgressHonorable(environment: EnvironmentRow, agent: Pick<AgentRow, "tools">): void {
     let policy;
     try {
       policy = parseNetworkingConfig(environment.config);
@@ -356,6 +362,20 @@ export class DefaultSessionService implements SessionService {
       throw error;
     }
     if (policy === undefined) return;
+    // D4: the allowed hosts govern only the control-plane web tools; the
+    // sandbox keeps --network none. Only the hosted {type: "limited",
+    // allowed_hosts} shape (its entries are the https-tagged ones): OMA's
+    // native allow/credentials shape describes sandbox egress. Only for an
+    // agent that can use web tools.
+    if (
+      this.egressCapability?.canHonorNetworking !== true &&
+      this.egressCapability?.webToolsWithoutSandboxEgress === true &&
+      policy.credentials.length === 0 &&
+      policy.allow.every((entry) => entry.protocol === "https") &&
+      resolveBuiltinToolAccessForAgent(agent, "web_fetch").enabled
+    ) {
+      return;
+    }
     if (this.egressCapability?.canHonorNetworking !== true) {
       throw invalidRequest(
         `Environment ${environment.id} grants network egress, but this deployment cannot honor it ` +
@@ -425,7 +445,7 @@ export class DefaultSessionService implements SessionService {
     }
     const environment = this.requireActiveEnvironment(workspaceId, req.environment_id);
     this.assertVaultsUsable(workspaceId, req.vault_ids ?? []);
-    this.assertEgressHonorable(environment);
+    this.assertEgressHonorable(environment, agent);
 
     const now = new Date().toISOString();
     const sessionId = newSessionId();

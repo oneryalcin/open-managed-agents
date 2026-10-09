@@ -337,6 +337,17 @@ goal because OMA's deployment model is intentionally different.
   recreated. A turn that never settled (crash, hard error) gets a hidden
   note quoting the unanswered request. Notes are model context only, never
   wire events. Hosted keeps both the files and the conversation.
+- 🔵 **`web_fetch` runs in the control plane; the sandbox may stay offline**
+  (plan 0149, probe 72). Event shapes, the allowlist scoping, the
+  prior-context rule and its near-match note follow hosted. Differences:
+  - where the sandbox has no egress (no provider, microsandbox, docker-local
+    without the sidecar), an environment's `allowed_hosts` govern `web_fetch`
+    only, while `curl` in the sandbox still fails; hosted applies them to both;
+  - links in a fetched page are made absolute;
+  - per-tool restrictions (`allowed_domains`, `blocked_domains`,
+    `url_sources`, `max_content_tokens`) are refused with a 400 until they are
+    supported;
+  - `web_search` is not available yet.
 - 🔵 **Session usage is a model-only estimate** (plan 0148) — `usage` and
   `stats` follow the hosted shape (probe 71). Token totals equal the sum of
   the public `span.model_request_end.model_usage`, as hosted. Differences:

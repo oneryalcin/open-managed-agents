@@ -662,6 +662,52 @@ describe("deployment runtime config", () => {
     expect(res.status).toBe(400);
   });
 
+  async function webSession(
+    env: Record<string, string>,
+    opts: { webFetch: boolean; networking?: Record<string, unknown> },
+  ): Promise<number> {
+    const app = await createDeploymentControlPlaneApp(env);
+    const agent = await requestJson<{ id: string }>(app, "", "/v1/agents", {
+      name: "Web agent",
+      model: "claude-opus-4-7",
+      tools: [{ type: "agent_toolset_20260401", configs: [{ name: "web_fetch", enabled: opts.webFetch }] }],
+    });
+    const environment = await requestJson<{ id: string }>(app, "", "/v1/environments", {
+      name: "Docs only",
+      config: { type: "cloud", networking: opts.networking ?? { type: "limited", allowed_hosts: ["docs.example.com"] } },
+    });
+    const res = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "anthropic-beta": MANAGED_AGENTS_BETA },
+      body: JSON.stringify({ agent: agent.id, environment_id: environment.id }),
+    });
+    return res.status;
+  }
+
+  it("D4: accepts allowed hosts for web_fetch where the sandbox has no egress (plan 0149)", async () => {
+    expect(await webSession({ OMA_SANDBOX_PROVIDER: "none" }, { webFetch: true })).toBe(200);
+  });
+
+  it("D4: still refuses allowed hosts when the agent has no web tool to use them", async () => {
+    expect(await webSession({ OMA_SANDBOX_PROVIDER: "none" }, { webFetch: false })).toBe(400);
+  });
+
+  it("D4: still refuses allowed hosts on host-passthrough, whose sandbox has the host network", async () => {
+    const root = mkdtempSync(join(tmpdir(), "oma-passthrough-"));
+    try {
+      const status = await webSession({
+        OMA_SANDBOX_PROVIDER: "host-passthrough",
+        OMA_UNSAFE_ALLOW_HOST_PASSTHROUGH: "true",
+        OMA_ALLOW_UNSAFE_HOST_PASSTHROUGH: "true",
+        OMA_HOST_PASSTHROUGH_WORKSPACE_ROOT: root,
+      }, { webFetch: true });
+
+      expect(status).toBe(400);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("deployment app reports a session as running while its turn runs (#279)", async () => {
     const session = new BlockingSession();
     const app = await createDeploymentControlPlaneApp(
