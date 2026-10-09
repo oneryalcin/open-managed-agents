@@ -66,6 +66,16 @@ describe("web document conversion", () => {
     expect(result.ok && [result.text.length, result.truncated]).toEqual([100, true]);
   });
 
+  it("caps converted HTML that expands far beyond its size", async () => {
+    // Nested blockquotes: each level prefixes every line, so a small page
+    // becomes megabytes of text. The cap is applied inside the worker.
+    const html = "<blockquote>".repeat(300) + "<p>line</p>".repeat(50) + "</blockquote>".repeat(300);
+
+    const result = await convertWebDocument(bytes(html), "text/html", { maxChars: 100 });
+
+    expect(result.ok && [result.text.length <= 100, result.truncated]).toEqual([true, true]);
+  });
+
   it("gives up on a page that takes too long to convert", async () => {
     // A nesting bomb: small, but turndown recurses through every level.
     const bomb = `<div>`.repeat(50_000) + "x" + `</div>`.repeat(50_000);

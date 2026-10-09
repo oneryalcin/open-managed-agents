@@ -47,8 +47,7 @@ export async function convertWebDocument(
   }
   const decoded = decode(body, charsetOf(contentType) ?? (html ? sniffMetaCharset(body) : undefined));
   if (!html) return capped(decoded, null, opts.maxChars);
-  const converted = await convertHtml(decoded, opts);
-  return converted.ok ? capped(converted.text, converted.title, opts.maxChars) : converted;
+  return convertHtml(decoded, opts);
 }
 
 function capped(text: string, title: string | null, maxChars = DEFAULT_MAX_CHARS): ConvertResult {
@@ -92,13 +91,17 @@ Promise.all([
   import(${JSON.stringify(turndownUrl)}).then((m) => m.default ?? m),
   import(${JSON.stringify(dominoUrl)}).then((m) => m.default ?? m),
 ]).then(([{ parentPort }, TurndownService, domino]) => {
-  parentPort.once("message", (html) => {
+  parentPort.once("message", ({ html, maxChars }) => {
     try {
       const document = domino.createDocument(html);
       const title = (document.title || "").replace(/\\s+/g, " ").trim().slice(0, 300) || null;
       const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
       td.remove(["head", "title", "script", "style", "noscript", "iframe", "svg", "nav", "header", "footer", "form"]);
-      parentPort.postMessage({ ok: true, text: td.turndown(document.body || document), title });
+      // Truncate here: a small hostile page can expand to millions of
+      // characters, which must not cross into the main thread.
+      const text = td.turndown(document.body || document).trim();
+      const truncated = text.length > maxChars;
+      parentPort.postMessage({ ok: true, text: truncated ? text.slice(0, maxChars) : text, title, truncated });
     } catch (error) {
       parentPort.postMessage({ ok: false, reason: String((error && error.message) || error) });
     }
@@ -107,7 +110,9 @@ Promise.all([
 });
 `;
 
-type HtmlResult = { ok: true; text: string; title: string | null } | Extract<ConvertResult, { ok: false }>;
+type HtmlResult =
+  | { ok: true; text: string; title: string | null; truncated: boolean }
+  | Extract<ConvertResult, { ok: false }>;
 
 const MAX_QUEUED = 16;
 let running = 0;
@@ -119,7 +124,7 @@ async function convertHtml(html: string, opts: ConvertOptions): Promise<HtmlResu
   const admitted = await admit(deadline, opts.signal);
   if (admitted !== true) return admitted;
   try {
-    return await runWorker(html, deadline, opts.signal);
+    return await runWorker(html, opts.maxChars ?? DEFAULT_MAX_CHARS, deadline, opts.signal);
   } finally {
     running -= 1;
     queue.shift()?.();
@@ -160,7 +165,12 @@ function admit(deadline: number, signal: AbortSignal | undefined): Promise<true 
   });
 }
 
-function runWorker(html: string, deadline: number, signal: AbortSignal | undefined): Promise<HtmlResult> {
+function runWorker(
+  html: string,
+  maxChars: number,
+  deadline: number,
+  signal: AbortSignal | undefined,
+): Promise<HtmlResult> {
   if (signal?.aborted) return Promise.resolve(aborted());
   return new Promise((resolve) => {
     const worker = new Worker(WORKER_SOURCE, {
@@ -182,14 +192,21 @@ function runWorker(html: string, deadline: number, signal: AbortSignal | undefin
     );
     const onAbort = () => finish(aborted());
     signal?.addEventListener("abort", onAbort, { once: true });
-    worker.on("message", (message: { ready?: boolean; ok?: boolean; text?: string; title?: string | null; reason?: string }) => {
+    worker.on("message", (message: {
+      ready?: boolean;
+      ok?: boolean;
+      text?: string;
+      title?: string | null;
+      truncated?: boolean;
+      reason?: string;
+    }) => {
       // The worker loads its modules asynchronously; send the page once it listens.
       if (message.ready) {
-        worker.postMessage(html);
+        worker.postMessage({ html, maxChars });
         return;
       }
       finish(message.ok
-        ? { ok: true, text: (message.text ?? "").trim(), title: message.title ?? null }
+        ? { ok: true, text: message.text ?? "", title: message.title ?? null, truncated: message.truncated === true }
         : { ok: false, code: "conversion_failed", reason: message.reason ?? "conversion failed" });
     });
     // Heap limit, stack overflow outside the try, or a crash.
