@@ -589,7 +589,10 @@ never silence the admin audit trail.
 `web_fetch` will read it, as on hosted. Where the sandbox has no egress (no
 provider, microsandbox, or docker-local without the sidecar), an environment
 with allowed hosts is accepted for agents that enable a web tool. The
-sandbox itself stays offline.
+sandbox itself stays offline. So listing `registry.npmjs.org` makes
+`web_fetch` able to read it, but `npm install` in the sandbox still fails;
+package installs in the sandbox need `oma up` (docker-local with the egress
+sidecar).
 
 `web_fetch` needs no configuration. `web_search` needs a search provider,
 otherwise it stays unavailable and agents that enable it get a 400:
