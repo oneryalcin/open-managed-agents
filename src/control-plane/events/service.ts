@@ -870,7 +870,11 @@ export class DefaultSessionEventsService implements SessionEventsService {
         });
         continue;
       }
+      // A wait for a tool result or confirmation stays open while the Pi
+      // session waiting on it may still exist. A previous process's session
+      // is gone, so the eventual answer could only end the turn: end it now.
       if (
+        takeOver === undefined &&
         turn.state === "paused" &&
         this.events.listRuntimeActionsForTurn(
           workspaceId,

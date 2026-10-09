@@ -519,6 +519,33 @@ describe("Custom tool API round trip", () => {
     ).toHaveLength(1);
   });
 
+  it("ends a custom tool wait left by a previous process at startup, before its lease expires", async () => {
+    const fixture = makeFixture(new FakeCustomToolRunner());
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask");
+    await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) =>
+        events.some(
+          (event) =>
+            event.type === "session.status_idle" &&
+            (event.stop_reason as { type?: unknown } | undefined)?.type ===
+              "requires_action",
+        ),
+    );
+
+    const recreated = fixture.recreate(new NoPendingCustomToolRunner());
+    fixture.service.recoverAllAbandonedRuntimeTurns({ takeOverPreviousOwners: true });
+
+    const final = await getEvents(recreated, session.id);
+    expect(final.at(-1)).toMatchObject({
+      type: "session.status_idle",
+      stop_reason: { type: "end_turn" },
+    });
+  });
+
   it("interrupt closes durable custom tool waits after restart", async () => {
     const fixture = makeFixture(new FakeCustomToolRunner());
     const session = await setupSession(fixture.app);
