@@ -187,6 +187,16 @@ describe("active seconds (store)", () => {
     expect(active([["idle", 0], ["running", 50]])).toBe(10);
   });
 
+  it("never rejects a status event over an unreadable time", () => {
+    // Metering must not be able to fail the event write it observes.
+    const store = EventStore.open(":memory:");
+    const bad = { ...status("idle", 0), created_at: "not-a-time" };
+
+    expect(() =>
+      store.appendBatchWithRuntimeChanges([status("running", 0), bad], {}),
+    ).not.toThrow();
+  });
+
   it("ignores an idle with no running before it", () => {
     expect(active([["idle", 5], ["running", 20], ["idle", 25]])).toBe(5);
   });

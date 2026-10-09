@@ -49,7 +49,9 @@ export function activeTimeState(
     if (running) {
       runningSince ??= at;
     } else if (runningSince !== null) {
-      activeMs += Math.max(0, Date.parse(at) - Date.parse(runningSince));
+      // An unreadable time adds nothing rather than failing the backfill.
+      const ms = Date.parse(at) - Date.parse(runningSince);
+      if (Number.isFinite(ms)) activeMs += Math.max(0, ms);
       runningSince = null;
     }
   }

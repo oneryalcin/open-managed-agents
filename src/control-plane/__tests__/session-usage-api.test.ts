@@ -6,6 +6,8 @@ import type { ManagedAgentsSession } from "../../types/sessions.ts";
 import type {
   RuntimeEventRunner,
   RuntimeToolPermissionUseEvent,
+  RuntimeMcpToolUseEvent,
+  RuntimeMcpToolWithModelEndEvent,
   RuntimeToolPermissionWithModelEndEvent,
 } from "../events/types.ts";
 
@@ -92,6 +94,37 @@ class PricedToolPermissionRunner implements RuntimeEventRunner {
   }
 }
 
+/** One model request that ends in an MCP tool call (denied, so nothing runs). */
+class PricedMcpToolRunner implements RuntimeEventRunner {
+  constructor(private readonly usage: Usage) {}
+
+  async *runUserMessage(): AsyncIterable<unknown> {
+    yield { type: "agent_start" };
+    yield modelStart();
+    yield {
+      type: "oma.mcp_tool_with_model_end",
+      messageEnd: {
+        type: "message_end",
+        message: modelMessage(this.usage, [
+          { type: "toolCall", id: "toolu_mcp", name: "docs__search", arguments: {} },
+        ]),
+      },
+      mcpToolUse: {
+        type: "oma.mcp_tool_use",
+        piToolCallId: "toolu_mcp",
+        mcpServerName: "docs",
+        name: "search",
+        input: {},
+        evaluatedPermission: "deny",
+        bindToolUseId: () => {},
+        rejectToolUse: () => {},
+      } satisfies RuntimeMcpToolUseEvent,
+      suppressedPiToolCallIds: [],
+    } satisfies RuntimeMcpToolWithModelEndEvent;
+    yield { type: "agent_end", messages: [] };
+  }
+}
+
 async function sessionAfterTurns(runner: RuntimeEventRunner, turns: number) {
   const app = createInMemoryControlPlaneApp({ runtime: { runner, translate: translatePiEvent } });
   const session = await setupSession(app);
@@ -138,6 +171,13 @@ describe("session usage API", () => {
   it("records the cost of a request that ends in a tool permission check", async () => {
     // Its span end is persisted by the tool-permission path, not the stream.
     const session = await sessionAfterTurns(new PricedToolPermissionRunner(PROBE_71[0]!), 1);
+
+    expect(session.usage.list_cost).toEqual({ amount: "4", currency: "USD" });
+  });
+
+  it("records the cost of a request that ends in an MCP tool call", async () => {
+    // Its span end is persisted by the MCP tool path.
+    const session = await sessionAfterTurns(new PricedMcpToolRunner(PROBE_71[0]!), 1);
 
     expect(session.usage.list_cost).toEqual({ amount: "4", currency: "USD" });
   });

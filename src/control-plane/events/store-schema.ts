@@ -261,7 +261,8 @@ function hasTable(db: DatabaseSync, name: string): boolean {
 // Active time follows activeTimeState: running opens an interval if none is
 // open; idle, rescheduled and terminated close it.
 const SESSION_USAGE_TRIGGERS = `
-CREATE TRIGGER IF NOT EXISTS session_usage_span_end
+DROP TRIGGER IF EXISTS session_usage_span_end;
+CREATE TRIGGER session_usage_span_end
 AFTER INSERT ON events WHEN NEW.type = 'span.model_request_end'
 BEGIN
   INSERT INTO session_usage_totals (
@@ -273,7 +274,7 @@ BEGIN
     COALESCE(json_extract(NEW.payload, '$.model_usage.output_tokens'), 0),
     COALESCE(json_extract(NEW.payload, '$.model_usage.cache_read_input_tokens'), 0),
     COALESCE(json_extract(NEW.payload, '$.model_usage.cache_creation_input_tokens'), 0),
-    ${SPAN_HAS_TOKENS("NEW.payload")})
+    ${spanHasTokens("NEW.payload")})
   ON CONFLICT (workspace_id, session_id) DO UPDATE SET
     span_count = span_count + 1,
     input_tokens = input_tokens + excluded.input_tokens,
@@ -283,7 +284,8 @@ BEGIN
     spans_with_tokens = spans_with_tokens + excluded.spans_with_tokens;
 END;
 
-CREATE TRIGGER IF NOT EXISTS session_usage_running
+DROP TRIGGER IF EXISTS session_usage_running;
+CREATE TRIGGER session_usage_running
 AFTER INSERT ON events WHEN NEW.type = 'session.status_running'
 BEGIN
   INSERT INTO session_usage_totals (workspace_id, session_id, running_since)
@@ -292,19 +294,21 @@ BEGIN
     running_since = COALESCE(running_since, excluded.running_since);
 END;
 
-CREATE TRIGGER IF NOT EXISTS session_usage_stopped
+DROP TRIGGER IF EXISTS session_usage_stopped;
+CREATE TRIGGER session_usage_stopped
 AFTER INSERT ON events WHEN NEW.type IN (
   'session.status_idle', 'session.status_rescheduled', 'session.status_terminated')
 BEGIN
   UPDATE session_usage_totals SET
-    active_ms = active_ms + MAX(0, CAST(ROUND(
-      (julianday(NEW.created_at) - julianday(running_since)) * 86400000) AS INTEGER)),
+    active_ms = active_ms + COALESCE(MAX(0, CAST(ROUND(
+      (julianday(NEW.created_at) - julianday(running_since)) * 86400000) AS INTEGER)), 0),
     running_since = NULL
   WHERE workspace_id = NEW.workspace_id AND session_id = NEW.session_id
     AND running_since IS NOT NULL;
 END;
 
-CREATE TRIGGER IF NOT EXISTS session_usage_cost
+DROP TRIGGER IF EXISTS session_usage_cost;
+CREATE TRIGGER session_usage_cost
 AFTER INSERT ON session_model_request_costs
 BEGIN
   UPDATE session_usage_totals SET
@@ -314,7 +318,7 @@ BEGIN
       NEW.cost_micros IS NOT NULL AND EXISTS (
         SELECT 1 FROM events e
         WHERE e.workspace_id = NEW.workspace_id AND e.id = NEW.span_event_id
-          AND ${SPAN_HAS_TOKENS("e.payload")}))
+          AND ${spanHasTokens("e.payload")}))
   WHERE workspace_id = NEW.workspace_id AND session_id = NEW.session_id;
 END;
 `;
@@ -322,7 +326,8 @@ END;
 // Deleting events forgets their cost rows, and a session's totals once its
 // last event is gone. In the database, so an older OMA's deletes clean up too.
 const SESSION_USAGE_DELETE_TRIGGER = `
-CREATE TRIGGER IF NOT EXISTS session_usage_event_deleted
+DROP TRIGGER IF EXISTS session_usage_event_deleted;
+CREATE TRIGGER session_usage_event_deleted
 AFTER DELETE ON events
 BEGIN
   DELETE FROM session_model_request_costs
@@ -335,13 +340,15 @@ BEGIN
 END;
 `;
 
-function SPAN_HAS_TOKENS(payload: string): string {
+function spanHasTokens(payload: string): string {
   return `(COALESCE(json_extract(${payload}, '$.model_usage.input_tokens'), 0) +
     COALESCE(json_extract(${payload}, '$.model_usage.output_tokens'), 0) +
     COALESCE(json_extract(${payload}, '$.model_usage.cache_read_input_tokens'), 0) +
     COALESCE(json_extract(${payload}, '$.model_usage.cache_creation_input_tokens'), 0) > 0)`;
 }
 
+// The triggers are dropped and recreated on every open, so a change to their
+// SQL reaches existing databases.
 // Created once, then backfilled from the existing history in the same
 // transaction (a crash cannot leave a half-filled table that later opens
 // would trust); triggers are created after the backfill so it counts nothing
@@ -377,8 +384,8 @@ function ensureSessionUsageTotals(db: DatabaseSync): void {
           SUM(COALESCE(json_extract(e.payload, '$.model_usage.cache_creation_input_tokens'), 0)),
           SUM(COALESCE(c.cache_write_1h_tokens, 0)),
           SUM(COALESCE(c.cost_micros, 0)),
-          SUM(${SPAN_HAS_TOKENS("e.payload")}),
-          SUM(${SPAN_HAS_TOKENS("e.payload")} AND c.cost_micros IS NOT NULL)
+          SUM(${spanHasTokens("e.payload")}),
+          SUM(${spanHasTokens("e.payload")} AND c.cost_micros IS NOT NULL)
         FROM events e
         LEFT JOIN session_model_request_costs c
           ON c.workspace_id = e.workspace_id AND c.span_event_id = e.id

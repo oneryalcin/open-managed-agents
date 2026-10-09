@@ -571,16 +571,16 @@ export class DefaultSessionService implements SessionService {
     if (!row) {
       throw notFound(`Session ${sessionId} not found`);
     }
-    return this.present(workspaceId, [toManagedSession(row)])[0]!;
+    return this.present(workspaceId, [row])[0]!;
   }
 
-  private present(
-    workspaceId: WorkspaceId,
-    sessions: ManagedAgentsSession[],
-  ): ManagedAgentsSession[] {
+  // One clock per response, so active_seconds never exceeds duration_seconds.
+  private present(workspaceId: WorkspaceId, rows: readonly SessionRow[]): ManagedAgentsSession[] {
+    const now = new Date();
+    const sessions = rows.map((row) => toManagedSession(row, now));
     return this.runtimeView === undefined
       ? sessions
-      : withRuntimeView(this.runtimeView, workspaceId, sessions);
+      : withRuntimeView(this.runtimeView, workspaceId, sessions, now);
   }
 
   async delete(
@@ -867,7 +867,7 @@ export class DefaultSessionService implements SessionService {
   ): SessionListPage<ManagedAgentsSession> {
     const page = this.store.list(workspaceId, opts);
     return {
-      data: this.present(workspaceId, page.data.map((row) => toManagedSession(row))),
+      data: this.present(workspaceId, page.data),
       next_page: page.next_page,
       prev_page: page.prev_page,
     };

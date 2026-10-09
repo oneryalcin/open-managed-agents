@@ -41,12 +41,17 @@ export function withRuntimeView(
               ephemeral_5m_input_tokens: totals.cacheWriteTokens - totals.cacheWrite1hTokens,
             },
         active_seconds: active,
-        list_cost: totals?.costMicros === null
-          ? null
-          : { amount: String(Math.round((totals?.costMicros ?? 0) / 10_000)), currency: "USD" },
+        list_cost: listCost(totals?.costMicros ?? 0),
         server_tool_use: null,
       },
       stats: { ...session.stats, active_seconds: active },
     };
   });
+}
+
+/** Cents, as hosted reports them; null when some request had no known price. */
+function listCost(costMicros: number | null): { amount: string; currency: "USD" } | null {
+  return costMicros === null
+    ? null
+    : { amount: String(Math.round(costMicros / 10_000)), currency: "USD" };
 }
