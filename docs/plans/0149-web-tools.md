@@ -2,6 +2,10 @@
 
 ## Status
 
+Implemented 2026-10-09: 1a #293, 1b #294, 1c #295, 1d #296, D4 #297,
+search #299, search usage #300, docs (this). Follow-up: #298 (re-check the
+environment against the provider on sandbox rebuild).
+
 Accepted 2026-10-09 after two Codex reviews, a Fable review and probe 72's
 edge run. Proposed 2026-10-09. An M2 item in [0145](0145-road-to-external-testers.md)
 (PARITY pre-v1 arc 3). Decisions D1–D3 made by the maintainer on 2026-10-09:
