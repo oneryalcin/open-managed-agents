@@ -17,6 +17,11 @@
   has no known price. Totals are kept by database triggers, so listing
   sessions stays fast with long histories. See PARITY.md for how this
   differs from hosted.
+- **A container restarted after a crash boots again** (#276). The appliance
+  lock left by the crashed run named PID 1, which is also the restarted
+  node's PID, so startup took the stale lock for a live one and refused to
+  boot until the file was deleted by hand. A lock naming this process's own
+  PID that this process does not hold is now treated as stale.
 - **Session status reports `running` while a turn runs** (#279). `GET` and
   list of sessions said `idle` throughout a turn, because only termination was
   stored on the session. Status now follows the session's latest status event

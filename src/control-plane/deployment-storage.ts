@@ -370,13 +370,20 @@ function normalizeEnvPath(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+// Locks this process holds. A lock file naming this process's pid that is not
+// in here was left by an earlier run that had the same pid: in a container,
+// node is PID 1 on every start (#276).
+const heldLocks = new Set<string>();
+
 function acquireStorageLock(sqlitePath: string, objectRoot: string): () => void {
   const lockPath = `${sqlitePath}.oma.lock`;
-  let fd = openLockFile(lockPath, objectRoot);
+  const fd = openLockFile(lockPath, objectRoot);
+  heldLocks.add(lockPath);
   let released = false;
   return () => {
     if (released) return;
     released = true;
+    heldLocks.delete(lockPath);
     closeSync(fd);
     unlinkIfExistsSync(lockPath);
   };
@@ -417,7 +424,9 @@ function createLockFile(lockPath: string, objectRoot: string): number {
 
 function removeStaleLock(lockPath: string): boolean {
   const pid = readLockPid(lockPath);
-  if (pid === undefined || isProcessRunning(pid)) return false;
+  if (pid === undefined) return false;
+  const stale = pid === process.pid ? !heldLocks.has(lockPath) : !isProcessRunning(pid);
+  if (!stale) return false;
   try {
     unlinkSync(lockPath);
     return true;

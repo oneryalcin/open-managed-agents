@@ -946,6 +946,27 @@ describe("deployment storage", () => {
     stores.close();
   });
 
+  it("recovers a stale lock that names this process's own pid (#276)", async () => {
+    // A container restarted after a crash: node is PID 1 again, and so is the
+    // lock its previous run left behind.
+    const paths = await durablePaths();
+    await writeFile(
+      `${paths.sqlitePath}.oma.lock`,
+      JSON.stringify({
+        pid: process.pid,
+        objectRoot: paths.objectRoot,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    expect(stores.mode).toBe("durable");
+    stores.close();
+  });
+
   it("constructs a durable secrets store when a master key is configured", async () => {
     const paths = await durablePaths();
     const stores = createDeploymentStoresFromEnv({
