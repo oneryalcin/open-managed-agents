@@ -112,18 +112,17 @@ function isFresh(processedAt: string | null, now: Date): boolean {
 
 // The URL exactly as shown always counts. Prose convenience only: a variant
 // without trailing sentence punctuation (. , ; :) also counts, as does one
-// without an unbalanced closing parenthesis ("(see https://x/y)"). Both come
+// without an unbalanced closing ), ] or } ("(see https://x/y)"). Both come
 // from text already in the context, not from the model; `!`, `?` and other
-// characters that can be URL data are never trimmed.
+// characters that can be URL data are never trimmed, and ] } ) inside a URL
+// do not end it.
 function absoluteUrls(text: string): string[] {
   const urls: string[] = [];
-  for (const match of text.matchAll(/https?:\/\/[^\s<>"'`\]}]+/g)) {
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"'`]+/g)) {
     let url = match[0];
     urls.push(url);
     for (;;) {
-      const trimmed = url.replace(/[.,;:]+$/, "");
-      const unbalanced = trimmed.endsWith(")") && count(trimmed, "(") < count(trimmed, ")");
-      const next = unbalanced ? trimmed.slice(0, -1) : trimmed;
+      const next = trimOnce(url);
       if (next === url) break;
       url = next;
       urls.push(url);
@@ -132,12 +131,42 @@ function absoluteUrls(text: string): string[] {
   return urls;
 }
 
+const CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
+function trimOnce(url: string): string {
+  const trimmed = url.replace(/[.,;:]+$/, "");
+  if (trimmed !== url) return trimmed;
+  const last = url.at(-1);
+  const opener = last === undefined ? undefined : CLOSERS[last];
+  if (opener !== undefined && count(url, opener) < count(url, last!)) return url.slice(0, -1);
+  return url;
+}
+
 function count(text: string, char: string): number {
   return text.split(char).length - 1;
 }
 
+/** Markdown link destinations, `](dest)`, with balanced parentheses kept. */
 function markdownLinks(text: string): string[] {
-  return [...text.matchAll(/\]\(([^)\s]+)\)/g)].map((m) => m[1]!);
+  const links: string[] = [];
+  let from = 0;
+  for (;;) {
+    const start = text.indexOf("](", from);
+    if (start < 0) return links;
+    let depth = 0;
+    let end = start + 2;
+    for (; end < text.length; end += 1) {
+      const char = text[end]!;
+      if (/\s/.test(char)) break;
+      if (char === "(") depth += 1;
+      else if (char === ")") {
+        if (depth === 0) break;
+        depth -= 1;
+      }
+    }
+    if (end > start + 2) links.push(text.slice(start + 2, end));
+    from = end;
+  }
 }
 
 function textOf(content: unknown): string {

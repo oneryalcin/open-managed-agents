@@ -130,4 +130,23 @@ describe("URLs shown in a session", () => {
 
     expect(match(events, "https://docs.example.com/z")?.kind).toBe("exact");
   });
+
+  it("keeps ] and } that are part of a URL", () => {
+    const shown = shownUrls([userMessage("https://docs.example.com/send?value=abc]secret")], new Date(T0));
+
+    expect([
+      matchShownUrl("https://docs.example.com/send?value=abc]secret", shown)?.kind,
+      matchShownUrl("https://docs.example.com/send?value=abc", shown),
+    ]).toEqual(["exact", undefined]);
+  });
+
+  it("reads a relative link with balanced parentheses in full", () => {
+    const events = fetchedPage("sevt_f9", "https://docs.example.com/", "See [page](guide_(advanced)).");
+    const shown = shownUrls(events, new Date(T0 + 60_000));
+
+    expect([
+      matchShownUrl("https://docs.example.com/guide_(advanced)", shown)?.kind,
+      matchShownUrl("https://docs.example.com/guide_(advanced", shown),
+    ]).toEqual(["exact", undefined]);
+  });
 });
