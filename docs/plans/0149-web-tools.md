@@ -5,7 +5,8 @@
 Proposed 2026-10-09. An M2 item in [0145](0145-road-to-external-testers.md)
 (PARITY pre-v1 arc 3). Decisions D1–D3 made by the maintainer on 2026-10-09:
 D1 (a), D2 (b), D3 (b). Revised after Codex and Fable review and probe 72's
-edge run; D4 is open.
+edge run; D4 decided the same day: accept allowed hosts for web tools where
+the sandbox has no egress.
 
 ## Problem
 
@@ -114,10 +115,16 @@ two hosted questions they raised. Changes are marked **(review)**.
   variant of the guarded fetch, moved to `egress/guarded-fetch.ts`). A hop to
   a host that is not allowed ends with `url_not_allowed`, naming the target.
 
-**(review) Deployments without sandbox egress (open decision D4).** Today a
-session whose environment lists allowed hosts is refused unless docker-local
-egress is configured (`assertEgressHonorable`). So as written, web tools
-could not run on a deployment without the sidecar.
+**D4 (decided 2026-10-09): deployments without sandbox egress accept allowed
+hosts for web tools.** Today a session whose environment lists allowed hosts
+is refused unless docker-local egress is configured (`assertEgressHonorable`).
+On a deployment without sandbox egress (no sandbox, microsandbox, or docker
+without the sidecar), such an environment is now accepted when its agent
+enables a web tool. The allowed hosts then govern `web_fetch` and
+`web_search` only, and the sandbox keeps `--network none`. This is a visible
+divergence: `curl` in the sandbox fails where `web_fetch` succeeds. It is
+stated in PARITY.md and the tester brief. Native policies with `credentials`
+are still refused there.
 
 **Fetching and converting.**
 - **(review) The worker is for isolation, not just fairness.** Measured:
