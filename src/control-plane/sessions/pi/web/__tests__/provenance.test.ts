@@ -169,4 +169,18 @@ describe("URLs shown in a session", () => {
       matchShownUrl("https://docs.example.com/xy", shown),
     ]).toEqual([undefined, undefined]);
   });
+
+  it("does not trim punctuation off a query value", () => {
+    expect(match([userMessage("https://docs.example.com/send?value=abc,")], "https://docs.example.com/send?value=abc")).toBeUndefined();
+  });
+
+  it("authorizes only the decoded target of an absolute markdown link", () => {
+    const events = fetchedPage("sevt_f12", "https://docs.example.com/", "[p](https://docs.example.com/guide\\)secret)");
+    const shown = shownUrls(events, new Date(T0 + 60_000));
+
+    expect([
+      matchShownUrl("https://docs.example.com/guide)secret", shown)?.kind,
+      matchShownUrl("https://docs.example.com/guide/)secret", shown),
+    ]).toEqual(["exact", undefined]);
+  });
 });

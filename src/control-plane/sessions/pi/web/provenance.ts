@@ -61,9 +61,11 @@ export function shownUrls(events: readonly ProvenanceEvent[], now: Date): ShownU
         for (const url of absoluteUrls(textOf(payload.content))) add(url);
       } else if (use?.name === "web_fetch" && isFresh(event.processed_at, now)) {
         const base = typeof use.input.url === "string" ? use.input.url : undefined;
-        const text = documentText(payload.content);
-        for (const url of absoluteUrls(text)) add(url);
-        if (base !== undefined) for (const href of markdownLinks(text)) add(href, base);
+        const { links, rest } = markdownLinks(documentText(payload.content));
+        // Markdown destinations count only as decoded; the bare scan skips
+        // their source text so an escape cannot yield a second URL.
+        for (const url of absoluteUrls(rest)) add(url);
+        for (const href of links) add(href, base);
       }
     }
   }
@@ -115,7 +117,9 @@ function isFresh(processedAt: string | null, now: Date): boolean {
 // without an unbalanced closing ), ] or } ("(see https://x/y)"). Both come
 // from text already in the context, not from the model; `!`, `?` and other
 // characters that can be URL data are never trimmed, and ] } ) inside a URL
-// do not end it.
+// do not end it. Quotes and angle brackets do end a bare URL: quoted URLs are
+// common, and a shorter URL taken from shown text is still the page's own
+// text, not something the model composed (the case this guard exists for).
 function absoluteUrls(text: string): string[] {
   const urls: string[] = [];
   for (const match of text.matchAll(/https?:\/\/[^\s<>"'`]+/g)) {
@@ -134,6 +138,8 @@ function absoluteUrls(text: string): string[] {
 const CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
 
 function trimOnce(url: string): string {
+  // Never inside a query: there, trailing punctuation can be the value.
+  if (url.includes("?")) return url;
   const trimmed = url.replace(/[.,;:]+$/, "");
   if (trimmed !== url) return trimmed;
   const last = url.at(-1);
@@ -150,12 +156,13 @@ function count(text: string, char: string): number {
  * Markdown link destinations, `](dest)`: backslash escapes decoded, balanced
  * parentheses kept, and only destinations with a real closing `)`.
  */
-function markdownLinks(text: string): string[] {
+function markdownLinks(text: string): { links: string[]; rest: string } {
   const links: string[] = [];
+  let rest = "";
   let from = 0;
   for (;;) {
     const start = text.indexOf("](", from);
-    if (start < 0) return links;
+    if (start < 0) return { links, rest: rest + text.slice(from) };
     let depth = 0;
     let destination = "";
     let closed = false;
@@ -183,8 +190,14 @@ function markdownLinks(text: string): string[] {
       }
       destination += char;
     }
-    if (closed && destination !== "") links.push(destination);
-    from = index;
+    if (closed && destination !== "") {
+      links.push(destination);
+      rest += text.slice(from, start) + " ";
+      from = index + 1;
+    } else {
+      rest += text.slice(from, index);
+      from = index;
+    }
   }
 }
 
