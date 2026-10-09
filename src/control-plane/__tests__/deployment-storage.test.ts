@@ -1,6 +1,6 @@
 import { chmodSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -989,6 +989,40 @@ describe("deployment storage", () => {
     expect(stores.mode).toBe("durable");
     stores.close();
   }, 20_000);
+
+  it("refuses to start while an older OMA holds the database by its pid lock", async () => {
+    // Mixed versions during an upgrade: the older binary only knows the pid file.
+    const paths = await durablePaths();
+    const older = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    try {
+      await writeFile(
+        `${paths.sqlitePath}.oma.lock`,
+        JSON.stringify({ pid: older.pid, objectRoot: paths.objectRoot, createdAt: new Date().toISOString() }),
+      );
+
+      expect(() => createDeploymentStoresFromEnv({
+        OMA_SQLITE_PATH: paths.sqlitePath,
+        OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+      })).toThrow("Durable storage database is already locked");
+    } finally {
+      older.kill("SIGKILL");
+    }
+  });
+
+  it("keeps the older pid lock in place while it owns the database", async () => {
+    // So an older binary started meanwhile refuses, as it always did.
+    const paths = await durablePaths();
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    try {
+      const legacy = JSON.parse(await readFile(`${paths.sqlitePath}.oma.lock`, "utf8")) as { pid: number };
+      expect(legacy.pid).toBe(process.pid);
+    } finally {
+      stores.close();
+    }
+  });
 
   it("refuses a second open of the same database through a symlinked directory", async () => {
     const paths = await durablePaths();

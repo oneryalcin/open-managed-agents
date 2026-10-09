@@ -2,8 +2,10 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -386,14 +388,53 @@ function acquireStorageLock(sqlitePath: string): () => void {
     if (isSqliteBusy(error)) throw lockedStorageError(lockPath);
     throw error;
   }
-  // The pid-file lock of earlier versions; ownership is the SQLite lock now.
-  unlinkIfExistsSync(`${sqlitePath}.oma.lock`);
+  // Older versions only know the pid file `<db>.oma.lock`. Honour a live
+  // older owner, and keep our own pid in that file while we own the database
+  // so an older binary started meanwhile refuses, as it always did. A pid file
+  // naming our own pid is a previous run's (a restarted container, #276).
+  const legacyPath = `${sqlitePath}.oma.lock`;
+  try {
+    const legacyPid = readLegacyLockPid(legacyPath);
+    if (legacyPid !== undefined && legacyPid !== process.pid && isProcessRunning(legacyPid)) {
+      throw lockedStorageError(legacyPath);
+    }
+    unlinkIfExistsSync(legacyPath);
+    // "wx": an older binary that created the file since we read it wins.
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+      { flag: "wx", mode: 0o600 },
+    );
+  } catch (error) {
+    lock.close();
+    if ((error as { code?: unknown }).code === "EEXIST") throw lockedStorageError(legacyPath);
+    throw error;
+  }
   let released = false;
   return () => {
     if (released) return;
     released = true;
+    if (readLegacyLockPid(legacyPath) === process.pid) unlinkIfExistsSync(legacyPath);
     lock.close();
   };
+}
+
+function readLegacyLockPid(lockPath: string): number | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: unknown };
+    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid) ? parsed.pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code === "EPERM";
+  }
 }
 
 function isSqliteBusy(error: unknown): boolean {
