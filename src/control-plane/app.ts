@@ -1158,6 +1158,8 @@ export async function createDeploymentControlPlane(
         egressCapability: {
           canHonorNetworking: runtimeConfig.egress !== undefined,
           hasSecretsStore: stores.secrets !== undefined,
+          webToolsWithoutSandboxEgress:
+            runtimeConfig.sandboxProviderSelection?.type !== "host-passthrough",
         },
         vaults: vaultService,
         deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,

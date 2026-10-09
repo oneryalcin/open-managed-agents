@@ -259,12 +259,13 @@ describe("fail-closed session-create gate", () => {
     plane.stores.close();
   });
 
-  it("rejects a non-empty hosted limited environment when egress cannot be honored", async () => {
+  it("rejects a non-empty hosted limited environment when egress cannot be honored and the agent has no web tool", async () => {
+    // With web_fetch enabled, plan 0149 D4 accepts it for the web tools only.
     const plane = await createDeploymentControlPlane({});
     const env = await createEnvironment(plane.app, {
       networking: { type: "limited", allowed_hosts: ["example.com"] },
     });
-    const res = await createSession(plane.app, env.id);
+    const res = await createSession(plane.app, env.id, { webFetch: false });
     expect(res.status).toBe(400);
     const body = (await res.json()) as ApiErrorBody;
     expect(body.error.message).toContain("cannot honor");
@@ -602,14 +603,17 @@ async function createEnvironment(
 async function createSession(
   app: TestApp,
   environmentId: string,
-  opts: { key?: string; resources?: unknown[] } = {},
+  opts: { key?: string; resources?: unknown[]; webFetch?: boolean } = {},
 ): Promise<Response> {
   const agentRes = await request(app, "/v1/agents", {
     method: "POST",
     body: {
       name: "egress wiring agent",
       model: "claude-opus-4-7",
-      tools: [{ type: "agent_toolset_20260401" }],
+      tools: [{
+        type: "agent_toolset_20260401",
+        ...(opts.webFetch === undefined ? {} : { configs: [{ name: "web_fetch", enabled: opts.webFetch }] }),
+      }],
     },
     key: opts.key,
   });
