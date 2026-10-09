@@ -213,6 +213,12 @@ export interface RuntimeTurnRecoveryClaim {
   ownerId: string;
   leaseExpiresAt: string;
   now: string;
+  /**
+   * Also claim a turn whose unexpired lease is held by exactly this owner.
+   * Only for the single-node startup sweep, where every other owner is a
+   * previous process that is gone (#273).
+   */
+  takeOverOwnerId?: string;
 }
 
 /** One Pi session entry (header or SessionEntry), serialized by the runner. */

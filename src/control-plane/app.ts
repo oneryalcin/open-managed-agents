@@ -1058,7 +1058,8 @@ export async function createDeploymentControlPlane(
           }),
     },
   );
-  sessionEvents.recoverAllAbandonedRuntimeTurns();
+  // Single-node: at startup every other owner is a previous process (#273).
+  sessionEvents.recoverAllAbandonedRuntimeTurns({ takeOverPreviousOwners: true });
   const consoleRoot = bundledConsoleRoot();
   const openapiRoot = bundledOpenApiDocsRoot();
   const adminAuth = adminKey === undefined ? undefined : createAdminAuth(adminKey);

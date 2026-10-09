@@ -462,7 +462,7 @@ export class EventStore implements SessionEventStore {
            updated_at = ?
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
          AND state = 'accepted'
-         AND (owner_id = ? OR lease_expires_at <= ?)`,
+         AND (owner_id = ? OR owner_id = ? OR lease_expires_at <= ?)`,
     );
     this.claimTerminalizingRuntimeTurnStmt = this.db.prepare(
       `UPDATE pending_runtime_turns
@@ -473,7 +473,7 @@ export class EventStore implements SessionEventStore {
            updated_at = ?
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
          AND state NOT IN ('completed', 'terminalized')
-         AND (owner_id = ? OR lease_expires_at <= ?)`,
+         AND (owner_id = ? OR owner_id = ? OR lease_expires_at <= ?)`,
     );
     this.retrieveRuntimeTurnStmt = this.db.prepare(
       `SELECT workspace_id, session_id, turn_id, owner_id, owner_generation,
@@ -838,6 +838,7 @@ export class EventStore implements SessionEventStore {
       claim.sessionId,
       claim.turnId,
       claim.ownerId,
+      claim.takeOverOwnerId ?? null,
       claim.now,
     );
     if (result.changes === 0) return undefined;
@@ -859,6 +860,7 @@ export class EventStore implements SessionEventStore {
       claim.sessionId,
       claim.turnId,
       claim.ownerId,
+      claim.takeOverOwnerId ?? null,
       claim.now,
     );
     if (result.changes === 0) return undefined;

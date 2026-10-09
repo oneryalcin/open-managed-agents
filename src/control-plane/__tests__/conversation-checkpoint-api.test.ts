@@ -406,6 +406,28 @@ describe("continuity notes on rebuild (plan 0147 slice 3b)", () => {
     }
   });
 
+  it("tells the first message after a restart about a turn whose lease has not expired", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-unfinished-"));
+    try {
+      const paths = { events: join(dir, "e.sqlite"), sessions: join(dir, "s.sqlite"), sessionId: "sesn_lease" };
+      const before = await harness({ paths });
+      before.pi.core.setResponses([async () => new Promise(() => {})]);
+      before.send("Deploy the app.");
+      await waitFor(() => before.pi.core.state.callCount === 1);
+      const after = await harness({ paths });
+      // As the app does at startup: the crashed turn's lease is still valid.
+      after.service.recoverAllAbandonedRuntimeTurns({ takeOverPreviousOwners: true });
+      after.pi.core.setResponses([after.pi.faux.fauxAssistantMessage("Checking.")]);
+
+      after.send("Are you there?");
+      await waitFor(() => after.pi.core.state.callCount === 1);
+
+      expect(lastRequest(after.pi).find((m) => m.includes("did not finish"))).toContain("> Deploy the app.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not repeat a cut-off note on later rebuilds", async () => {
     const dir = mkdtempSync(join(tmpdir(), "oma-unfinished-"));
     try {

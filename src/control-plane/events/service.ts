@@ -816,13 +816,20 @@ export class DefaultSessionEventsService implements SessionEventsService {
   // 0113 D7: restart recovery must cover every workspace with pending turns,
   // not just wrk_default — otherwise a restart silently abandons
   // non-default-workspace turns.
-  recoverAllAbandonedRuntimeTurns(): void {
+  /**
+   * `takeOverPreviousOwners`: only for the single-node startup sweep. Every
+   * pending turn owned by someone else then belongs to a previous process
+   * that is gone, so it is recovered now instead of after its lease expires;
+   * otherwise a message sent right after a restart would rebuild without the
+   * unfinished-turn note (#273). Later recovery passes keep the lease fence.
+   */
+  recoverAllAbandonedRuntimeTurns(opts: { takeOverPreviousOwners?: boolean } = {}): void {
     for (const workspaceId of this.events.listWorkspaceIdsWithPendingRuntimeTurns()) {
-      this.recoverAbandonedRuntimeTurns(workspaceId);
+      this.recoverAbandonedRuntimeTurns(workspaceId, opts.takeOverPreviousOwners === true);
     }
   }
 
-  recoverAbandonedRuntimeTurns(workspaceId: WorkspaceId): void {
+  recoverAbandonedRuntimeTurns(workspaceId: WorkspaceId, takeOverPreviousOwners = false): void {
     const turns = this.events.listPendingRuntimeTurns(workspaceId);
     let nextRetryAt: number | undefined;
     for (const turn of turns) {
@@ -830,7 +837,10 @@ export class DefaultSessionEventsService implements SessionEventsService {
       if (this.deletedSessions.has(sessionScopeKey(workspaceId, turn.session_id))) continue;
       if (!this.isRecoverableSession(workspaceId, turn.session_id)) continue;
       if (this.activeRuntimeTaskCount(workspaceId, turn.session_id) > 0) continue;
-      const retryDelayMs = runtimeLeaseRetryDelayMs(turn.lease_expires_at);
+      const takeOver =
+        takeOverPreviousOwners && turn.owner_id !== this.ownerId ? turn.owner_id : undefined;
+      const retryDelayMs =
+        takeOver === undefined ? runtimeLeaseRetryDelayMs(turn.lease_expires_at) : 0;
       if (retryDelayMs > 0) {
         const retryAt = Date.now() + retryDelayMs;
         nextRetryAt =
@@ -838,7 +848,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         continue;
       }
       if (turn.state === "accepted") {
-        const claimed = this.claimAcceptedTurn(turn);
+        const claimed = this.claimAcceptedTurn(turn, takeOver);
         if (!claimed) continue;
         const prompts = this.promptsFromAcceptedTurn(claimed);
         if (prompts.length === 0) {
@@ -870,7 +880,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ) {
         continue;
       }
-      const claimed = this.claimTurnForTerminalization(turn);
+      const claimed = this.claimTurnForTerminalization(turn, takeOver);
       if (!claimed) continue;
       this.terminalizeAbandonedRuntimeTurn(
         claimed,
@@ -923,11 +933,14 @@ export class DefaultSessionEventsService implements SessionEventsService {
     this.recoveryTimers.set(workspaceId, { dueAt: retryAt, timer });
   }
 
-  private claimAcceptedTurn(turn: {
-    workspace_id: WorkspaceId;
-    session_id: string;
-    turn_id: string;
-  }) {
+  private claimAcceptedTurn(
+    turn: {
+      workspace_id: WorkspaceId;
+      session_id: string;
+      turn_id: string;
+    },
+    takeOverOwnerId?: string,
+  ) {
     const now = new Date().toISOString();
     return this.events.claimAcceptedRuntimeTurnForRecovery({
       workspaceId: turn.workspace_id,
@@ -936,14 +949,18 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ownerId: this.ownerId,
       leaseExpiresAt: leaseExpiresAt(now, this.leaseTtlMs),
       now,
+      ...(takeOverOwnerId === undefined ? {} : { takeOverOwnerId }),
     });
   }
 
-  private claimTurnForTerminalization(turn: {
-    workspace_id: WorkspaceId;
-    session_id: string;
-    turn_id: string;
-  }) {
+  private claimTurnForTerminalization(
+    turn: {
+      workspace_id: WorkspaceId;
+      session_id: string;
+      turn_id: string;
+    },
+    takeOverOwnerId?: string,
+  ) {
     const now = new Date().toISOString();
     return this.events.claimRuntimeTurnForTerminalization({
       workspaceId: turn.workspace_id,
@@ -952,6 +969,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
       ownerId: this.ownerId,
       leaseExpiresAt: leaseExpiresAt(now, this.leaseTtlMs),
       now,
+      ...(takeOverOwnerId === undefined ? {} : { takeOverOwnerId }),
     });
   }
 
