@@ -17,6 +17,14 @@ describe("web document conversion", () => {
     expect(result.ok && [result.title, result.text]).toEqual(["Guide", "# Install\n\nRun `npm i`."]);
   });
 
+  it("collapses whitespace in the title", async () => {
+    const html = "<html><head><title>  A\n  spaced   title </title></head><body><p>x</p></body></html>";
+
+    const result = await convertWebDocument(bytes(html), "text/html");
+
+    expect(result.ok && result.title).toBe("A spaced title");
+  });
+
   it("passes plain text through unchanged", async () => {
     const result = await convertWebDocument(bytes("line 1\nline 2"), "text/plain");
 
@@ -75,5 +83,39 @@ describe("web document conversion", () => {
     const result = await convertWebDocument(bytes(bomb), "text/html", { signal: controller.signal });
 
     expect(result.ok ? "ok" : result.code).toBe("aborted");
+  });
+
+  it("keeps title extraction inside the deadline", async () => {
+    // Repeated unclosed <title> tags made a main-thread regex quadratic.
+    const html = "<title>".repeat(40_000) + "<p>x</p>";
+    const started = performance.now();
+
+    await convertWebDocument(bytes(html), "text/html", { deadlineMs: 500 });
+
+    expect(performance.now() - started).toBeLessThan(1_500);
+  });
+
+  it("stops a queued conversion when the caller aborts", async () => {
+    const bomb = bytes(`<div>`.repeat(50_000) + "x" + `</div>`.repeat(50_000));
+    const busy = [1, 2].map(() => convertWebDocument(bomb, "text/html", { deadlineMs: 2_000 }));
+    const controller = new AbortController();
+    const queued = convertWebDocument(bytes("<p>late</p>"), "text/html", { signal: controller.signal });
+    setTimeout(() => controller.abort(), 50);
+    const started = performance.now();
+
+    const result = await queued;
+
+    expect([result.ok ? "ok" : result.code, performance.now() - started < 1_000]).toEqual(["aborted", true]);
+    await Promise.all(busy);
+  });
+
+  it("counts time spent queued against the deadline", async () => {
+    const bomb = bytes(`<div>`.repeat(50_000) + "x" + `</div>`.repeat(50_000));
+    const busy = [1, 2].map(() => convertWebDocument(bomb, "text/html", { deadlineMs: 2_000 }));
+
+    const result = await convertWebDocument(bytes("<p>late</p>"), "text/html", { deadlineMs: 200 });
+
+    expect(result.ok ? "ok" : result.code).toBe("timeout");
+    await Promise.all(busy);
   });
 });

@@ -48,7 +48,7 @@ export async function convertWebDocument(
   const decoded = decode(body, charsetOf(contentType) ?? (html ? sniffMetaCharset(body) : undefined));
   if (!html) return capped(decoded, null, opts.maxChars);
   const converted = await convertHtml(decoded, opts);
-  return converted.ok ? capped(converted.text, titleOf(decoded), opts.maxChars) : converted;
+  return converted.ok ? capped(converted.text, converted.title, opts.maxChars) : converted;
 }
 
 function capped(text: string, title: string | null, maxChars = DEFAULT_MAX_CHARS): ConvertResult {
@@ -74,88 +74,122 @@ function decode(body: Uint8Array, charset: string | undefined): string {
   }
 }
 
-function titleOf(html: string): string | null {
-  const raw = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.trim();
-  if (!raw) return null;
-  return raw
-    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ");
-}
-
 // --- the worker --------------------------------------------------------------
 
-// A file URL: the worker loads it with import(), which works whether Node
+// File URLs: the worker loads them with import(), which works whether Node
 // runs the inline source as CommonJS (vitest) or as an ES module (plain node
-// in a "type": "module" package, where require does not exist).
-const turndownUrl = pathToFileURL(createRequire(import.meta.url).resolve("turndown")).href;
+// in a "type": "module" package, where require does not exist). domino is
+// turndown's own DOM; the worker parses once and takes the title from it, so
+// no HTML scanning happens on the main thread.
+const requireFromHere = createRequire(import.meta.url);
+const turndownPath = requireFromHere.resolve("turndown");
+const turndownUrl = pathToFileURL(turndownPath).href;
+const dominoUrl = pathToFileURL(createRequire(turndownPath).resolve("@mixmark-io/domino")).href;
 
 const WORKER_SOURCE = `
-Promise.all([import("node:worker_threads"), import(${JSON.stringify(turndownUrl)}).then((m) => m.default ?? m)])
-  .then(([{ parentPort }, TurndownService]) => {
-    parentPort.once("message", (html) => {
-      try {
-        const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
-        td.remove(["head", "title", "script", "style", "noscript", "iframe", "svg", "nav", "header", "footer", "form"]);
-        parentPort.postMessage({ ok: true, text: td.turndown(html) });
-      } catch (error) {
-        parentPort.postMessage({ ok: false, reason: String((error && error.message) || error) });
-      }
-    });
-    parentPort.postMessage({ ready: true });
+Promise.all([
+  import("node:worker_threads"),
+  import(${JSON.stringify(turndownUrl)}).then((m) => m.default ?? m),
+  import(${JSON.stringify(dominoUrl)}).then((m) => m.default ?? m),
+]).then(([{ parentPort }, TurndownService, domino]) => {
+  parentPort.once("message", (html) => {
+    try {
+      const document = domino.createDocument(html);
+      const title = (document.title || "").replace(/\\s+/g, " ").trim().slice(0, 300) || null;
+      const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
+      td.remove(["head", "title", "script", "style", "noscript", "iframe", "svg", "nav", "header", "footer", "form"]);
+      parentPort.postMessage({ ok: true, text: td.turndown(document.body || document), title });
+    } catch (error) {
+      parentPort.postMessage({ ok: false, reason: String((error && error.message) || error) });
+    }
   });
+  parentPort.postMessage({ ready: true });
+});
 `;
 
-let running = 0;
-const waiting: Array<() => void> = [];
+type HtmlResult = { ok: true; text: string; title: string | null } | Extract<ConvertResult, { ok: false }>;
 
-async function convertHtml(
-  html: string,
-  opts: ConvertOptions,
-): Promise<{ ok: true; text: string } | Extract<ConvertResult, { ok: false }>> {
-  if (opts.signal?.aborted) return aborted();
-  if (running >= MAX_WORKERS) await new Promise<void>((resolve) => waiting.push(resolve));
-  running += 1;
+const MAX_QUEUED = 16;
+let running = 0;
+const queue: Array<() => void> = [];
+
+async function convertHtml(html: string, opts: ConvertOptions): Promise<HtmlResult> {
+  // One deadline from the call, queue time included.
+  const deadline = Date.now() + (opts.deadlineMs ?? DEFAULT_DEADLINE_MS);
+  const admitted = await admit(deadline, opts.signal);
+  if (admitted !== true) return admitted;
   try {
-    return await runWorker(html, opts);
+    return await runWorker(html, deadline, opts.signal);
   } finally {
     running -= 1;
-    waiting.shift()?.();
+    queue.shift()?.();
   }
 }
 
-function runWorker(
-  html: string,
-  opts: ConvertOptions,
-): Promise<{ ok: true; text: string } | Extract<ConvertResult, { ok: false }>> {
-  if (opts.signal?.aborted) return Promise.resolve(aborted());
+/** A worker slot, or why the caller stopped waiting for one. */
+function admit(deadline: number, signal: AbortSignal | undefined): Promise<true | HtmlResult> {
+  if (signal?.aborted) return Promise.resolve(aborted());
+  if (running < MAX_WORKERS) {
+    running += 1;
+    return Promise.resolve(true);
+  }
+  if (queue.length >= MAX_QUEUED) {
+    return Promise.resolve({ ok: false, code: "conversion_failed", reason: "too many pages are being converted; try again" });
+  }
+  return new Promise((resolve) => {
+    const leave = (result: HtmlResult) => {
+      const index = queue.indexOf(enter);
+      if (index >= 0) queue.splice(index, 1);
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    const enter = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      running += 1;
+      resolve(true);
+    };
+    const onAbort = () => leave(aborted());
+    const timer = setTimeout(
+      () => leave({ ok: false, code: "timeout", reason: "the page took too long to convert" }),
+      Math.max(0, deadline - Date.now()),
+    );
+    signal?.addEventListener("abort", onAbort, { once: true });
+    queue.push(enter);
+  });
+}
+
+function runWorker(html: string, deadline: number, signal: AbortSignal | undefined): Promise<HtmlResult> {
+  if (signal?.aborted) return Promise.resolve(aborted());
   return new Promise((resolve) => {
     const worker = new Worker(WORKER_SOURCE, {
       eval: true,
       resourceLimits: { maxOldGenerationSizeMb: WORKER_HEAP_MB },
     });
     let settled = false;
-    const finish = (result: Parameters<typeof resolve>[0]) => {
+    const finish = (result: HtmlResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
       void worker.terminate();
       resolve(result);
     };
     const timer = setTimeout(
       () => finish({ ok: false, code: "timeout", reason: "the page took too long to convert" }),
-      opts.deadlineMs ?? DEFAULT_DEADLINE_MS,
+      Math.max(0, deadline - Date.now()),
     );
     const onAbort = () => finish(aborted());
-    opts.signal?.addEventListener("abort", onAbort, { once: true });
-    worker.on("message", (message: { ready?: boolean; ok?: boolean; text?: string; reason?: string }) => {
-      // The worker loads turndown asynchronously; send the page once it can listen.
+    signal?.addEventListener("abort", onAbort, { once: true });
+    worker.on("message", (message: { ready?: boolean; ok?: boolean; text?: string; title?: string | null; reason?: string }) => {
+      // The worker loads its modules asynchronously; send the page once it listens.
       if (message.ready) {
         worker.postMessage(html);
         return;
       }
       finish(message.ok
-        ? { ok: true, text: (message.text ?? "").trim() }
+        ? { ok: true, text: (message.text ?? "").trim(), title: message.title ?? null }
         : { ok: false, code: "conversion_failed", reason: message.reason ?? "conversion failed" });
     });
     // Heap limit, stack overflow outside the try, or a crash.
