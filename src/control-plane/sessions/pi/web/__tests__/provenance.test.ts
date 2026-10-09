@@ -159,4 +159,14 @@ describe("URLs shown in a session", () => {
       matchShownUrl("https://docs.example.com/guide/", shown),
     ]).toEqual(["exact", undefined]);
   });
+
+  it("decodes a backslash only before punctuation, as Markdown does", () => {
+    const events = fetchedPage("sevt_f11", "https://docs.example.com/", "[a](send?value=ab\\c) [b](x\\\ny)");
+    const shown = shownUrls(events, new Date(T0 + 60_000));
+
+    expect([
+      matchShownUrl("https://docs.example.com/send?value=abc", shown),
+      matchShownUrl("https://docs.example.com/xy", shown),
+    ]).toEqual([undefined, undefined]);
+  });
 });

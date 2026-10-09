@@ -162,10 +162,15 @@ function markdownLinks(text: string): string[] {
     let index = start + 2;
     for (; index < text.length; index += 1) {
       const char = text[index]!;
-      if (char === "\\" && index + 1 < text.length) {
-        destination += text[index + 1];
-        index += 1;
-        continue;
+      if (char === "\\") {
+        const next = text[index + 1];
+        // CommonMark: a backslash escapes ASCII punctuation only; before
+        // anything else it is a literal backslash.
+        if (next !== undefined && /[!-/:-@[-`{-~]/.test(next)) {
+          destination += next;
+          index += 1;
+          continue;
+        }
       }
       if (/\s/.test(char)) break;
       if (char === "(") depth += 1;
