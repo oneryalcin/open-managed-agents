@@ -9,6 +9,13 @@
   session missing from memory is rebuilt from it. When continuity is
   incomplete, the model gets a hidden note: the sandbox was recreated (until
   workspace files are kept), or a turn was cut off before it finished.
+- **Session status reports `running` while a turn runs** (#279). `GET` and
+  list of sessions said `idle` throughout a turn, because only termination was
+  stored on the session. Status now follows the session's latest status event
+  (`running`, `idle`, `rescheduling`, `terminated`), as hosted reports it.
+- **After a restart, a late tool result or confirmation is accepted at once**
+  (#273). Previously it was refused as still owned for up to two minutes, and
+  answering several waits of one turn in one request failed.
 
 ## 0.2.0 — trust release
 

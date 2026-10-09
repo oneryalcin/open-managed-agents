@@ -4,6 +4,7 @@ import type {
   ManagedAgentsDeletedSession,
   ManagedAgentsSession,
   ManagedAgentsSessionFileResource,
+  ManagedAgentsSessionStatus,
 } from "../../types/sessions.ts";
 import type { ManagedAgentsModelConfig } from "../../types/agents.ts";
 import { log } from "../logging.ts";
@@ -127,6 +128,14 @@ export interface DefaultSessionServiceOptions {
   /** 0121 C2: telemetry-only, fired when the active-sessions cap rejects. */
   onAdmissionRejected?: () => void;
   modelAvailability?: { assertReady(model: ManagedAgentsModelConfig): void };
+  /**
+   * Live status from each session's latest status event (#279). The row only
+   * records termination, so without this a running session reads as idle.
+   */
+  currentStatuses?: (
+    workspaceId: WorkspaceId,
+    sessionIds: readonly string[],
+  ) => ReadonlyMap<string, ManagedAgentsSessionStatus>;
 }
 
 export class DefaultSessionService implements SessionService {
@@ -165,6 +174,7 @@ export class DefaultSessionService implements SessionService {
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly onAdmissionRejected: (() => void) | undefined;
+  private readonly currentStatuses: DefaultSessionServiceOptions["currentStatuses"];
   private readonly modelAvailability:
     | { assertReady(model: ManagedAgentsModelConfig): void }
     | undefined;
@@ -195,6 +205,7 @@ export class DefaultSessionService implements SessionService {
     this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
     this.onAdmissionRejected = opts.onAdmissionRejected;
     this.modelAvailability = opts.modelAvailability;
+    this.currentStatuses = opts.currentStatuses;
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.egressCapability = opts.egressCapability;
@@ -561,7 +572,20 @@ export class DefaultSessionService implements SessionService {
     if (!row) {
       throw notFound(`Session ${sessionId} not found`);
     }
-    return toManagedSession(row);
+    return this.withCurrentStatus(workspaceId, [toManagedSession(row)])[0]!;
+  }
+
+  private withCurrentStatus(
+    workspaceId: WorkspaceId,
+    sessions: ManagedAgentsSession[],
+  ): ManagedAgentsSession[] {
+    const live = sessions.filter((session) => session.status !== "terminated");
+    if (this.currentStatuses === undefined || live.length === 0) return sessions;
+    const statuses = this.currentStatuses(workspaceId, live.map((session) => session.id));
+    return sessions.map((session) => {
+      const status = session.status === "terminated" ? undefined : statuses.get(session.id);
+      return status === undefined ? session : { ...session, status };
+    });
   }
 
   async delete(
@@ -848,7 +872,7 @@ export class DefaultSessionService implements SessionService {
   ): SessionListPage<ManagedAgentsSession> {
     const page = this.store.list(workspaceId, opts);
     return {
-      data: page.data.map(toManagedSession),
+      data: this.withCurrentStatus(workspaceId, page.data.map(toManagedSession)),
       next_page: page.next_page,
       prev_page: page.prev_page,
     };

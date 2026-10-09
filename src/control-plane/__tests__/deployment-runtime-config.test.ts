@@ -611,6 +611,31 @@ describe("deployment runtime config", () => {
       { type: "text", text: "runtime: hello" },
     ]);
   });
+  it("deployment app reports a session as running while its turn runs (#279)", async () => {
+    const session = new BlockingSession();
+    const app = await createDeploymentControlPlaneApp(
+      { OMA_SANDBOX_PROVIDER: "none" },
+      { runner: { sessionFactory: async () => session, idleTtlMs: 0 } },
+    );
+    const agent = await createAgent(app);
+    const environment = await createEnvironment(app);
+    const created = await createSession(app, {
+      agent: agent.id,
+      environment_id: environment.id,
+    });
+
+    await sendMessage(app, created.id, "work");
+    for (let i = 0; i < 100; i += 1) {
+      const events = await getEvents(app, created.id);
+      if (events.some((event) => event.type === "session.status_running")) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const res = await app.request(`/v1/sessions/${created.id}`);
+    const status = ((await res.json()) as ManagedAgentsSession).status;
+    session.release();
+
+    expect(status).toBe("running");
+  });
 });
 
 async function requestJson<T = unknown>(
@@ -673,8 +698,26 @@ class FakeSession implements PiRuntimeSession {
     return [];
   }
 
-  private emit(event: unknown): void {
+  protected emit(event: unknown): void {
     for (const listener of this.listeners) listener(event);
+  }
+}
+
+/** Starts a turn and holds it open until released. */
+class BlockingSession extends FakeSession {
+  private resume!: () => void;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.resume = resolve;
+  });
+
+  override async prompt(): Promise<void> {
+    this.emit({ type: "agent_start" });
+    await this.gate;
+    this.emit({ type: "agent_end", messages: [] });
+  }
+
+  release(): void {
+    this.resume();
   }
 }
 
