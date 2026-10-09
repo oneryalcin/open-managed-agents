@@ -114,6 +114,7 @@ import {
   createStoreBackedAgentRevisionProvider,
   createStoreBackedCustomToolsProvider,
 } from "./wiring.ts";
+import { createStoreBackedWebToolContext } from "./sessions/pi/web/context.ts";
 import { createStoreBackedBuiltinToolAccessResolver } from "./sessions/pi/tool-permissions.ts";
 import {
   createStoreBackedMcpCredentialResolver,
@@ -1004,6 +1005,15 @@ export async function createDeploymentControlPlane(
       sessions: stores.sessions,
       agents: stores.agents,
     }),
+    // Plan 0149: web_fetch runs in the control plane under the session
+    // environment's allowlist.
+    webTools: opts.runner?.webTools ?? {
+      context: createStoreBackedWebToolContext({
+        sessions: stores.sessions,
+        environments: stores.environments,
+        events: stores.events,
+      }),
+    },
     // Plan 0122 §4.6: always wired (disabled agents still get their
     // exhausted session.error), dialing gated by OMA_ENABLE_MCP.
     mcp: opts.runner?.mcp ?? {
@@ -1115,6 +1125,7 @@ export async function createDeploymentControlPlane(
       stores.agents,
       stores.skills,
       modelAvailability,
+      { webTools: ["web_fetch"] },
     ),
     environments: new DefaultEnvironmentService(stores.environments, stores.sessions),
     environmentNetworking: environmentNetworkingCapability(runtimeConfig),

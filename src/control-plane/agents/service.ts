@@ -43,7 +43,8 @@ const CMA_BUILTIN_TOOL_NAMES = [
   "write",
 ] as const;
 const CMA_PERMISSION_POLICY_TYPES = ["always_allow", "always_ask"] as const;
-const OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES = [
+/** Builtins this deployment may not run; see the service's `webTools` option. */
+const OMA_DEPLOYMENT_DEPENDENT_BUILTIN_TOOL_NAMES = [
   "web_fetch",
   "web_search",
 ] as const;
@@ -57,17 +58,28 @@ export interface AgentModelAvailability {
 const ACCEPT_ANY_MODEL: AgentModelAvailability = { assertAvailable: () => {} };
 
 export class DefaultAgentService implements AgentService {
+  private readonly unsupportedBuiltins: readonly string[];
+
   constructor(
     private readonly store: AgentStore,
     private readonly skills: Pick<SkillsStore, "getSkill" | "getVersion"> | undefined,
     private readonly models: AgentModelAvailability = ACCEPT_ANY_MODEL,
-  ) {}
+    /**
+     * Web tools the runtime provides (plan 0149). Others stay deployment
+     * disabled: omitted ones materialize as disabled, and enabling one is a 400.
+     */
+    opts: { webTools?: readonly ("web_fetch" | "web_search")[] } = {},
+  ) {
+    this.unsupportedBuiltins = OMA_DEPLOYMENT_DEPENDENT_BUILTIN_TOOL_NAMES.filter(
+      (name) => !(opts.webTools ?? []).includes(name),
+    );
+  }
 
   create(
     workspaceId: WorkspaceId,
     input: unknown,
   ): ManagedAgentsAgent {
-    const req = parseCreateAgent(input);
+    const req = parseCreateAgent(input, { unsupportedBuiltins: this.unsupportedBuiltins });
     const model = normalizeModel(req.model);
     this.models.assertAvailable(model);
     this.assertSkillAttachments(workspaceId, req.skills ?? []);
@@ -130,6 +142,7 @@ export class DefaultAgentService implements AgentService {
         : patch.multiagent,
     };
     const req = parseCreateAgent(mergedInput, {
+      unsupportedBuiltins: this.unsupportedBuiltins,
       allowUnsupportedMultiagent:
         patch.multiagent === undefined && current.multiagent !== null,
     });
@@ -274,7 +287,7 @@ function toManagedAgent(row: AgentRow): ManagedAgentsAgent {
 
 function parseCreateAgent(
   input: unknown,
-  opts: { allowUnsupportedMultiagent?: boolean } = {},
+  opts: { allowUnsupportedMultiagent?: boolean; unsupportedBuiltins: readonly string[] },
 ): CreateManagedAgentRequest {
   const obj = objectInput(input);
   if (
@@ -290,7 +303,7 @@ function parseCreateAgent(
   const system = nullableStringField(obj, "system");
   const description = nullableStringField(obj, "description");
   const model = modelField(obj);
-  const tools = toolArrayField(obj, "tools");
+  const tools = toolArrayField(obj, "tools", opts.unsupportedBuiltins);
   const skills = skillArrayField(obj, "skills");
   const mcpServers = mcpServerArrayField(obj, "mcp_servers");
   assertMcpServerToolsetCrossReferences(mcpServers, tools);
@@ -377,11 +390,12 @@ function modelField(obj: Record<string, unknown>): ManagedAgentsModel {
 function toolArrayField(
   obj: Record<string, unknown>,
   field: string,
+  unsupportedBuiltins: readonly string[],
 ): ManagedAgentsTool[] | undefined {
   const value = obj[field];
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw invalidRequest(`\`${field}\` must be an array`);
-  const tools = value.map(parseTool);
+  const tools = value.map((tool) => parseTool(tool, unsupportedBuiltins));
   const agentToolsetCount = tools.filter(
     (tool) => tool.type === "agent_toolset_20260401",
   ).length;
@@ -393,7 +407,7 @@ function toolArrayField(
   return tools;
 }
 
-function parseTool(value: unknown): ManagedAgentsTool {
+function parseTool(value: unknown, unsupportedBuiltins: readonly string[]): ManagedAgentsTool {
   const tool = jsonObjectField(value, "tools");
   const type = stringField(tool, "type", { required: true });
   if (type === "agent_toolset_20260401") {
@@ -415,7 +429,7 @@ function parseTool(value: unknown): ManagedAgentsTool {
     const builtinToolset = {
       type,
       ...defaultConfigSpread,
-      configs: materializeDeploymentBuiltinDefaults(explicitConfigs),
+      configs: materializeDeploymentBuiltinDefaults(explicitConfigs, unsupportedBuiltins),
     } as ManagedAgentsTool & {
       type: "agent_toolset_20260401";
       default_config: { enabled?: boolean };
@@ -424,7 +438,7 @@ function parseTool(value: unknown): ManagedAgentsTool {
     assertUnsupportedBuiltinToolsDisabled({
       default_config: builtinToolset.default_config,
       configs: explicitConfigs,
-    });
+    }, unsupportedBuiltins);
     return builtinToolset;
   }
   if (type === "mcp_toolset") {
@@ -762,12 +776,15 @@ function isCmaBuiltinToolName(value: string): boolean {
   return (CMA_BUILTIN_TOOL_NAMES as readonly string[]).includes(value);
 }
 
-function assertUnsupportedBuiltinToolsDisabled(toolset: {
-  default_config: { enabled?: boolean };
-  configs: ManagedAgentsToolConfig[];
-}): void {
+function assertUnsupportedBuiltinToolsDisabled(
+  toolset: {
+    default_config: { enabled?: boolean };
+    configs: ManagedAgentsToolConfig[];
+  },
+  unsupportedBuiltins: readonly string[],
+): void {
   const enabledByDefault = toolset.default_config.enabled ?? true;
-  for (const name of OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES) {
+  for (const name of unsupportedBuiltins) {
     const override = toolset.configs.find((config) => config.name === name);
     // Omitted unsupported tools use deployment defaults (disabled). An explicit
     // config opts into CMA inheritance and therefore follows default_config.
@@ -784,11 +801,12 @@ function assertUnsupportedBuiltinToolsDisabled(toolset: {
 
 function materializeDeploymentBuiltinDefaults(
   configs: ManagedAgentsToolConfig[],
+  unsupportedBuiltins: readonly string[],
 ): ManagedAgentsToolConfig[] {
   const names = new Set(configs.map((config) => config.name));
   return [
     ...configs,
-    ...OMA_UNSUPPORTED_BUILTIN_TOOL_NAMES
+    ...unsupportedBuiltins
       .filter((name) => !names.has(name))
       .map((name) => ({ name, enabled: false })),
   ];

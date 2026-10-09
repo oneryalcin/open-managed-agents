@@ -14,6 +14,12 @@ import type { SessionStore } from "../types.ts";
 import type { WorkspaceId } from "../../workspace.ts";
 import type { SandboxedBuiltinToolName } from "./sandbox/provider.ts";
 
+/** Control-plane builtins (plan 0149): run by OMA itself, not the sandbox. */
+export type WebBuiltinToolName = "web_fetch";
+
+/** Builtins that go through the permission gate and builtin event flow. */
+export type GatedBuiltinToolName = SandboxedBuiltinToolName | WebBuiltinToolName;
+
 export type BuiltinToolPermission = "allow" | "ask" | "deny";
 
 export interface BuiltinToolAccess {
@@ -24,7 +30,7 @@ export interface BuiltinToolAccess {
 export type BuiltinToolAccessResolver = (
   workspaceId: WorkspaceId,
   sessionId: string,
-  toolName: SandboxedBuiltinToolName,
+  toolName: GatedBuiltinToolName,
   opts?: { agentId?: string; agentVersion?: number },
 ) => BuiltinToolAccess;
 
@@ -72,7 +78,7 @@ export class PiToolPermissionBridge {
   access(
     workspaceId: WorkspaceId,
     sessionId: string,
-    toolName: SandboxedBuiltinToolName,
+    toolName: GatedBuiltinToolName,
   ): BuiltinToolAccess {
     return this.opts.access?.(workspaceId, sessionId, toolName) ?? DEFAULT_ACCESS;
   }
@@ -80,7 +86,7 @@ export class PiToolPermissionBridge {
   wrapTool(
     workspaceId: WorkspaceId,
     sessionId: string,
-    toolName: SandboxedBuiltinToolName,
+    toolName: GatedBuiltinToolName,
     tool: ToolDefinition<any, any, any>,
     getEmitter: () => ((event: RuntimeToolPermissionUseEvent) => void) | undefined,
   ): ToolDefinition<any, any, any> {
@@ -303,7 +309,7 @@ export class PiToolPermissionBridge {
   private async publishToolUse(opts: {
     workspaceId: WorkspaceId;
     sessionId: string;
-    toolName: SandboxedBuiltinToolName;
+    toolName: GatedBuiltinToolName;
     piToolCallId: string;
     input: JsonObject;
     permission: BuiltinToolPermission;
@@ -511,7 +517,7 @@ export function createStoreBackedBuiltinToolAccessResolver(opts: {
 
 export function resolveBuiltinToolAccessForAgent(
   agent: Pick<AgentRow, "tools">,
-  toolName: SandboxedBuiltinToolName,
+  toolName: GatedBuiltinToolName,
 ): BuiltinToolAccess {
   const toolsets = agent.tools.filter(
     (tool) => tool.type === "agent_toolset_20260401",

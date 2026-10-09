@@ -44,7 +44,9 @@ import {
 import {
   PiToolPermissionBridge,
   type BuiltinToolAccessResolver,
+  type GatedBuiltinToolName,
 } from "./tool-permissions.ts";
+import { createWebFetchTool, type WebFetchToolOptions, type WebToolContext } from "./web/fetch-tool.ts";
 import { McpConnection } from "./mcp/client.ts";
 import { createGuardedFetch, type GuardedFetch } from "../../egress/guarded-fetch.ts";
 import {
@@ -173,6 +175,12 @@ interface RuntimeHandle {
   customToolNames: Set<string>;
   /** MCP pi-names only, for the MCP-aware message-end coalescing matcher. */
   mcpToolNames: Set<string>;
+  /**
+   * Builtins that go through the permission gate and the builtin event flow:
+   * the sandbox's enabled tools plus enabled control-plane web tools (plan
+   * 0149). Drives message-end coalescing and tool-event gating.
+   */
+  gatedToolNames: ReadonlySet<string>;
   mcpConnections: readonly McpConnection[];
   /** Connect failures queued at build time; flushed at turn start (§4.2). */
   pendingMcpFailures: RuntimeMcpConnectionFailedEvent[];
@@ -325,6 +333,15 @@ export class PiSessionRunner implements RuntimeEventRunner {
       customToolTimeoutMs?: number;
       toolConfirmationTimeoutMs?: number;
       builtinToolAccess?: BuiltinToolAccessResolver;
+      /**
+       * Control-plane web tools (plan 0149). Absent = no web tools. `context`
+       * gives the session environment's egress policy and the session's
+       * events (for the prior-context rule).
+       */
+      webTools?: {
+        context: (workspaceId: WorkspaceId, sessionId: string) => Promise<WebToolContext>;
+        fetchResource?: WebFetchToolOptions["fetchResource"];
+      };
       /** 0121 C2 telemetry: sandbox lifecycle events. Must not throw. */
       onSandboxEvent?: (event: "created" | "disposed" | "error") => void;
       /** MCP connector (plan 0122 M1). Absent = fully inert. */
@@ -592,7 +609,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     const gatedEvents: unknown[] = [];
     const activeSandboxedToolCalls = new Map<
       string,
-      SandboxedBuiltinToolName
+      GatedBuiltinToolName
     >();
     let done = false;
     let failure: unknown;
@@ -610,7 +627,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       handle.emitInternal = (event) => {
         if (event.type === "oma.tool_permission_use") {
           const match = takeMessageEndForToolCall(
-            handle.sandbox,
+            handle.gatedToolNames,
             [gatedEvents, queue],
             event.piToolCallId,
           );
@@ -710,7 +727,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           continue;
         }
         const sandboxedToolCalls = sandboxedToolCallsInMessage(
-          handle.sandbox,
+          handle.gatedToolNames,
           event,
         );
         if (sandboxedToolCalls.length > 0) {
@@ -722,7 +739,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         }
 
         const sandboxedStart = sandboxedToolEvent(
-          handle.sandbox,
+          handle.gatedToolNames,
           event,
           "tool_execution_start",
         );
@@ -736,7 +753,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
         }
 
         const sandboxedEnd = sandboxedToolEvent(
-          handle.sandbox,
+          handle.gatedToolNames,
           event,
           "tool_execution_end",
         );
@@ -1014,7 +1031,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           assertRebuiltFromSeed(session, seed);
           assertActiveToolSurface(
             session,
-            this.enabledSandboxToolNames(workspaceId, sessionId, sandbox),
+            this.enabledGatedToolNames(workspaceId, sessionId, sandbox),
             customToolNames,
           );
         } catch (error) {
@@ -1045,6 +1062,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
           timer: undefined,
           customToolNames,
           mcpToolNames: mcp.toolNames,
+          gatedToolNames: this.enabledGatedToolNames(workspaceId, sessionId, sandbox),
           mcpConnections: mcp.connections,
           pendingMcpFailures: [...mcp.pendingFailures],
           mcpFailureEmittedServers: new Set(),
@@ -1294,8 +1312,10 @@ export class PiSessionRunner implements RuntimeEventRunner {
       this.opts.customTools?.(workspaceId, sessionId, context) ?? []
     ).map((tool) => tool.name);
     const sandboxTools = this.enabledSandboxTools(workspaceId, sessionId, sandbox);
+    const webTools = this.enabledWebTools(workspaceId, sessionId);
     const customTools: ToolDefinition<any, any, any>[] = [
       ...sandboxTools,
+      ...webTools,
       ...this.customToolBridge.createTools(
         workspaceId,
         sessionId,
@@ -1309,13 +1329,12 @@ export class PiSessionRunner implements RuntimeEventRunner {
       model,
       thinkingLevel: this.opts.thinkingLevel ?? "off",
       noTools: "builtin",
-      tools: sandbox
-        ? [
-            ...sandboxTools.map((tool) => tool.name),
-            ...customToolNames,
-            ...mcpToolNames,
-          ]
-        : [...customToolNames, ...mcpToolNames],
+      tools: [
+        ...sandboxTools.map((tool) => tool.name),
+        ...webTools.map((tool) => tool.name),
+        ...customToolNames,
+        ...mcpToolNames,
+      ],
       customTools,
       modelRuntime: modelCatalog.modelRuntime,
       sessionManager: seed.length === 0
@@ -1418,20 +1437,45 @@ export class PiSessionRunner implements RuntimeEventRunner {
     return out;
   }
 
-  private enabledSandboxToolNames(
+  private enabledWebTools(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+  ): ToolDefinition<any, any, any>[] {
+    const web = this.opts.webTools;
+    if (web === undefined) return [];
+    if (!this.toolPermissionBridge.access(workspaceId, sessionId, "web_fetch").enabled) return [];
+    const tool = createWebFetchTool({
+      context: () => web.context(workspaceId, sessionId),
+      ...(web.fetchResource === undefined ? {} : { fetchResource: web.fetchResource }),
+    });
+    return [
+      this.toolPermissionBridge.wrapTool(
+        workspaceId,
+        sessionId,
+        "web_fetch",
+        tool,
+        () => this.sessions.get(sessionId)?.emitInternal,
+      ),
+    ];
+  }
+
+  /** Enabled sandbox builtins plus enabled control-plane web tools. */
+  private enabledGatedToolNames(
     workspaceId: WorkspaceId,
     sessionId: string,
     sandbox: SandboxProvider | undefined,
-  ): ReadonlySet<SandboxedBuiltinToolName> {
-    if (!sandbox) return new Set();
-    const out = new Set<SandboxedBuiltinToolName>();
-    for (const toolName of sandbox.toolNames) {
-      const access = this.toolPermissionBridge.access(
-        workspaceId,
-        sessionId,
-        toolName,
-      );
-      if (access.enabled) out.add(toolName);
+  ): ReadonlySet<string> {
+    const out = new Set<string>();
+    for (const toolName of sandbox?.toolNames ?? []) {
+      if (this.toolPermissionBridge.access(workspaceId, sessionId, toolName).enabled) {
+        out.add(toolName);
+      }
+    }
+    if (
+      this.opts.webTools !== undefined &&
+      this.toolPermissionBridge.access(workspaceId, sessionId, "web_fetch").enabled
+    ) {
+      out.add("web_fetch");
     }
     return out;
   }
@@ -1523,7 +1567,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
 
 function assertActiveToolSurface(
   session: PiRuntimeSession,
-  sandboxToolNames: ReadonlySet<SandboxedBuiltinToolName>,
+  sandboxToolNames: ReadonlySet<string>,
   customToolNames: ReadonlySet<string>,
 ): void {
   if (typeof session.getActiveToolNames !== "function") {
@@ -1755,17 +1799,17 @@ export function takeMessageEndForMcpToolCall(
 }
 
 function sandboxedToolEvent(
-  sandbox: SandboxProvider | undefined,
+  gatedToolNames: ReadonlySet<string>,
   event: unknown,
   eventType: "tool_execution_start" | "tool_execution_end",
 ):
   | {
-      toolName: SandboxedBuiltinToolName;
+      toolName: GatedBuiltinToolName;
       toolCallId: string;
       isError: boolean;
     }
   | undefined {
-  if (!sandbox || typeof event !== "object" || event === null) return undefined;
+  if (gatedToolNames.size === 0 || typeof event !== "object" || event === null) return undefined;
   const typed = event as {
     type?: unknown;
     toolName?: unknown;
@@ -1775,25 +1819,25 @@ function sandboxedToolEvent(
   if (typed.type !== eventType) return undefined;
   if (typeof typed.toolName !== "string") return undefined;
   if (typeof typed.toolCallId !== "string") return undefined;
-  if (!sandbox.toolNames.has(typed.toolName as never)) return undefined;
+  if (!gatedToolNames.has(typed.toolName)) return undefined;
   return {
-    toolName: typed.toolName as SandboxedBuiltinToolName,
+    toolName: typed.toolName as GatedBuiltinToolName,
     toolCallId: typed.toolCallId,
     isError: typed.isError === true,
   };
 }
 
 function sandboxedToolCallsInMessage(
-  sandbox: SandboxProvider | undefined,
+  gatedToolNames: ReadonlySet<string>,
   event: unknown,
-): Array<{ toolName: SandboxedBuiltinToolName; toolCallId: string }> {
-  if (!sandbox || typeof event !== "object" || event === null) return [];
+): Array<{ toolName: GatedBuiltinToolName; toolCallId: string }> {
+  if (gatedToolNames.size === 0 || typeof event !== "object" || event === null) return [];
   const typed = event as { type?: unknown; message?: unknown };
   if (typed.type !== "message_end") return [];
   if (typeof typed.message !== "object" || typed.message === null) return [];
   const message = typed.message as { role?: unknown; content?: unknown };
   if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
-  const out: Array<{ toolName: SandboxedBuiltinToolName; toolCallId: string }> = [];
+  const out: Array<{ toolName: GatedBuiltinToolName; toolCallId: string }> = [];
   for (const block of message.content) {
     if (typeof block !== "object" || block === null) continue;
     const toolCall = block as { type?: unknown; id?: unknown; name?: unknown };
@@ -1801,9 +1845,9 @@ function sandboxedToolCallsInMessage(
     if (typeof toolCall.id !== "string" || typeof toolCall.name !== "string") {
       continue;
     }
-    if (!sandbox.toolNames.has(toolCall.name as never)) continue;
+    if (!gatedToolNames.has(toolCall.name)) continue;
     out.push({
-      toolName: toolCall.name as SandboxedBuiltinToolName,
+      toolName: toolCall.name as GatedBuiltinToolName,
       toolCallId: toolCall.id,
     });
   }
@@ -1811,14 +1855,14 @@ function sandboxedToolCallsInMessage(
 }
 
 function takeMessageEndForToolCall(
-  sandbox: SandboxProvider | undefined,
+  gatedToolNames: ReadonlySet<string>,
   eventQueues: unknown[][],
   piToolCallId: string,
 ): { event: unknown; suppressedPiToolCallIds: string[] } | undefined {
   for (const events of eventQueues) {
     let suppressedPiToolCallIds: string[] = [];
     const index = events.findIndex((event) => {
-      const calls = sandboxedToolCallsInMessage(sandbox, event);
+      const calls = sandboxedToolCallsInMessage(gatedToolNames, event);
       if (!calls.some((call) => call.toolCallId === piToolCallId)) return false;
       suppressedPiToolCallIds = calls.map((call) => call.toolCallId);
       return true;
@@ -1834,12 +1878,13 @@ function assertSandboxProviderHandledToolCall(opts: {
   sandbox: SandboxProvider | undefined;
   toolPermissionBridge: PiToolPermissionBridge;
   sessionId: string;
-  toolName: SandboxedBuiltinToolName;
+  toolName: GatedBuiltinToolName;
   toolCallId: string;
   isError: boolean;
 }): void {
-  if (!opts.sandbox) return;
-  if (opts.sandbox.invocations.toolCallIds[opts.toolName].has(opts.toolCallId)) {
+  // Control-plane tools (web_fetch) never invoke the sandbox.
+  if (!opts.sandbox?.toolNames.has(opts.toolName as SandboxedBuiltinToolName)) return;
+  if (opts.sandbox.invocations.toolCallIds[opts.toolName as SandboxedBuiltinToolName].has(opts.toolCallId)) {
     return;
   }
   if (
