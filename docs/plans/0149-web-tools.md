@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed 2026-10-09. An M2 item in [0145](0145-road-to-external-testers.md)
+Accepted 2026-10-09 after two Codex reviews, a Fable review and probe 72's
+edge run. Proposed 2026-10-09. An M2 item in [0145](0145-road-to-external-testers.md)
 (PARITY pre-v1 arc 3). Decisions D1–D3 made by the maintainer on 2026-10-09:
 D1 (a), D2 (b), D3 (b). Revised after Codex and Fable review and probe 72's
 edge run; D4 decided the same day: accept allowed hosts for web tools where
@@ -212,12 +213,29 @@ provider.
 
 ## Slices
 
-1. `web_fetch` (D1, D3): the host check, the guarded fetch, conversion, the
-   result shape, permissions, and tests against a local HTTPS fixture.
-2. `web_search` (D2): the provider interface, Tavily, domain scoping on
-   request and result, usage counting, and a credential-gated live smoke.
-3. Docs: PARITY.md, and the tester brief: web access follows the
-   environment's allowlist.
+1. **`web_fetch`**, in four reviewable PRs:
+   - **1a. Security core:**
+     - `findAllowEntry` exported from `egress/policy.ts` and shared with the
+       proxy;
+     - the one URL validator;
+     - the guarded fetch moved to `egress/guarded-fetch.ts`, with a
+       manual-redirect variant that follows up to 5 validated hops and has
+       streaming byte and time caps.
+     - Tests only, no tool yet.
+   - **1b. Conversion:** turndown in a bounded worker pool with memory,
+     deadline and abort limits; charset handling; output caps.
+   - **1c. Provenance:** the set of shown URLs from persisted events, with
+     expiry and near-match.
+   - **1d. The tool:**
+     - the shared control-plane-tool bridge with MCP;
+     - events, permissions, config parity;
+     - D4 admission;
+     - API tests against a local HTTPS fixture.
+2. **`web_search`** (D2): the provider interface, Tavily, domain scoping on
+   request and result, key scrubbing, usage counting, and a credential-gated
+   live smoke.
+3. **Docs:** PARITY.md, and the tester brief: web access follows the
+   environment's allowlist, and the sandbox stays offline under D4.
 
 ## Tests that prevent real bugs
 
