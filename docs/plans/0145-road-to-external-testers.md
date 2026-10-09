@@ -65,9 +65,9 @@ see what it cost.
 | Item | Notes |
 |---|---|
 | #164 split `events/service.ts` | **Done** (#262, #263; plan 0146). `service.ts` 3080 → 1847 lines |
-| Durable conversation ([ADR 0018](../adrs/0018-session-durability-and-parking.md) stage 1) | Today the model forgets the conversation after the 15-minute idle eviction or a restart. Persist Pi session entries per session and rebuild on any cache miss |
+| Durable conversation ([ADR 0018](../adrs/0018-session-durability-and-parking.md) stage 1) | **Done** (#269–#272, #274; plan 0147). The conversation survives the idle eviction and restarts; a cut-off turn is reported to the model |
 | Web tools (`web_fetch` / `web_search`) | PARITY pre-v1 arc 3: re-probe CMA shapes; decide which tools are honest to offer through the egress boundary |
-| Usage metering (0114 Arc D) | Sessions still return `usage: null`. Aggregate the span-level model usage already captured; surface it in the console |
+| Usage metering (0114 Arc D) | In progress: [plan 0148](0148-usage-metering.md). Sessions still return `usage: null`. Aggregate the span-level model usage already captured; surface it in the console |
 | Environment resource (packages / runtimes) | Environments are ~35% parity; decide the image/package story beyond the single coding image |
 | Session surface gaps | Update, overrides and `resources.*` (~65% parity); pick what a tester needs, defer the rest with honest 400s |
 | 0114 Arc A leftover | Compose + docs for docker-local egress in the container deployment (docker.sock, `OMA_EGRESS_SIDECAR_IMAGE`, `OMA_MASTER_KEY`) |

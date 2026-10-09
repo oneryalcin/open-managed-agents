@@ -98,6 +98,9 @@ Agents product parity remains tracked in [PARITY.md](../PARITY.md).
   `npx` command to an authenticated first-session screen in three minutes,
   with a guided terminal flow, no secret leakage, and separate cold-image
   accounting.
+- [Session usage metering](plans/0148-usage-metering.md) — fill session
+  `usage` and `stats` from per-request model usage (tokens, cache split, model
+  list cost in cents, active seconds), recorded with each span event.
 - [Durable conversation](plans/0147-durable-conversation.md) — ADR 0018
   stage 1 (#265): save the Pi conversation once per settled turn, inside the
   ownership-fenced turn close, and rebuild it after eviction or restart, with
