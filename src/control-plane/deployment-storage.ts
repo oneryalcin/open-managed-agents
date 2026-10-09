@@ -1,13 +1,9 @@
 import {
   chmodSync,
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
-  readFileSync,
   realpathSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -204,7 +200,7 @@ function createDurableDeploymentStores(
   mkdirSync(requestedObjectRoot, { recursive: true, mode: 0o700 });
   const resolvedObjectRoot = realpathSync(requestedObjectRoot);
   chmodSync(resolvedObjectRoot, 0o700);
-  const releaseLock = acquireStorageLock(resolvedSqlitePath, resolvedObjectRoot);
+  const releaseLock = acquireStorageLock(resolvedSqlitePath);
   try {
     const db = new DatabaseSync(resolvedSqlitePath);
     chmodSync(resolvedSqlitePath, 0o600);
@@ -370,93 +366,40 @@ function normalizeEnvPath(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-// Locks this process holds. A lock file naming this process's pid that is not
-// in here was left by an earlier run that had the same pid: in a container,
-// node is PID 1 on every start (#276).
-const heldLocks = new Set<string>();
-
-function acquireStorageLock(sqlitePath: string, objectRoot: string): () => void {
-  const lockPath = `${sqlitePath}.oma.lock`;
-  const fd = openLockFile(lockPath, objectRoot);
-  heldLocks.add(lockPath);
+// Exclusive ownership of a durable database (#276). An exclusive SQLite lock
+// on a side file: the kernel holds it (POSIX advisory lock), so it is
+// released when the owning process dies, whatever its pid, and SQLite refuses
+// a second connection in the same process too. No pid file and no staleness
+// guess: a container restarted after a crash is PID 1 again, which made the
+// old pid-file check refuse to boot. The file itself is never removed, since
+// unlinking a locked file would let a new opener lock a different inode.
+function acquireStorageLock(sqlitePath: string): () => void {
+  const lockPath = `${sqlitePath}.oma-lock`;
+  const lock = new DatabaseSync(lockPath);
+  try {
+    chmodSync(lockPath, 0o600);
+    lock.exec("PRAGMA locking_mode = EXCLUSIVE");
+    lock.exec("BEGIN EXCLUSIVE");
+    lock.exec("CREATE TABLE IF NOT EXISTS owner (pid INTEGER)");
+  } catch (error) {
+    lock.close();
+    if (isSqliteBusy(error)) throw lockedStorageError(lockPath);
+    throw error;
+  }
+  // The pid-file lock of earlier versions; ownership is the SQLite lock now.
+  unlinkIfExistsSync(`${sqlitePath}.oma.lock`);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    heldLocks.delete(lockPath);
-    closeSync(fd);
-    unlinkIfExistsSync(lockPath);
+    lock.close();
   };
 }
 
-function openLockFile(lockPath: string, objectRoot: string): number {
-  try {
-    return createLockFile(lockPath, objectRoot);
-  } catch (error) {
-    if ((error as { code?: unknown }).code === "EEXIST") {
-      if (removeStaleLock(lockPath)) {
-        return createLockFile(lockPath, objectRoot);
-      }
-      throw lockedStorageError(lockPath);
-    }
-    throw error;
-  }
-}
-
-function createLockFile(lockPath: string, objectRoot: string): number {
-  const fd = openSync(lockPath, "wx", 0o600);
-  try {
-    writeFileSync(
-      fd,
-      JSON.stringify({
-        pid: process.pid,
-        objectRoot,
-        createdAt: new Date().toISOString(),
-      }),
-    );
-    return fd;
-  } catch (error) {
-    closeSync(fd);
-    unlinkIfExistsSync(lockPath);
-    throw error;
-  }
-}
-
-function removeStaleLock(lockPath: string): boolean {
-  const pid = readLockPid(lockPath);
-  if (pid === undefined) return false;
-  const stale = pid === process.pid ? !heldLocks.has(lockPath) : !isProcessRunning(pid);
-  if (!stale) return false;
-  try {
-    unlinkSync(lockPath);
-    return true;
-  } catch (error) {
-    if ((error as { code?: unknown }).code === "ENOENT") return true;
-    throw error;
-  }
-}
-
-function readLockPid(lockPath: string): number | undefined {
-  if (!existsSync(lockPath)) return undefined;
-  try {
-    const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as {
-      pid?: unknown;
-    };
-    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid)
-      ? parsed.pid
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as { code?: unknown }).code === "EPERM";
-  }
+function isSqliteBusy(error: unknown): boolean {
+  const code = (error as { errcode?: unknown }).errcode;
+  // SQLITE_BUSY (5) and SQLITE_LOCKED (6), with or without extended codes.
+  return typeof code === "number" && ((code & 0xff) === 5 || (code & 0xff) === 6);
 }
 
 function lockedStorageError(lockPath: string): Error {
