@@ -72,4 +72,30 @@ describe("session update", () => {
 
     expect((await update(app, session.id, { title: "late" })).status).toBe(400);
   });
+
+  const sixteen = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`k${i}`, "v"]));
+
+  it("refuses a patch that would leave more than 16 metadata keys", async () => {
+    const { app, session } = await sessionWith(sixteen);
+
+    expect((await update(app, session.id, { metadata: { one_more: "v" } })).status).toBe(400);
+  });
+
+  it("allows replacing a key at the 16-key limit", async () => {
+    const { app, session } = await sessionWith(sixteen);
+
+    expect((await update(app, session.id, { metadata: { k0: null, replacement: "v" } })).status).toBe(200);
+  });
+
+  it("refuses metadata values longer than 512 characters at creation too", async () => {
+    const app = createInMemoryControlPlaneApp();
+    const session = await setupSession(app);
+    const res = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent: session.agent.id, environment_id: session.environment_id, metadata: { k: "x".repeat(513) } }),
+    });
+
+    expect(res.status).toBe(400);
+  });
 });

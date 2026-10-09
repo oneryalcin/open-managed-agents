@@ -34,7 +34,7 @@ import { RuntimeUnsupportedSessionFileResourcesError } from "../events/types.ts"
 import type { FileStorage, FileStorageRecord } from "../files/types.ts";
 import { newFileId, newSessionId, newSessionResourceId, newSessionSkillSnapshotId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
-import { parseCreateSession, parseAgentRef, parseUpdateSession } from "./request.ts";
+import { assertSessionMetadataLimits, parseCreateSession, parseAgentRef, parseUpdateSession } from "./request.ts";
 import type { VaultService } from "../vaults/types.ts";
 import type { SkillsStore } from "../skills/types.ts";
 import { resolveBuiltinToolAccessForAgent } from "./pi/tool-permissions.ts";
@@ -605,6 +605,7 @@ export class DefaultSessionService implements SessionService {
         else metadata[key] = value;
       }
     }
+    assertSessionMetadataLimits(metadata);
     const updated = this.store.updateDetails(workspaceId, sessionId, {
       title: patch.title === undefined ? current.title : patch.title,
       metadata,

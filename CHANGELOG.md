@@ -13,7 +13,9 @@
   `POST /v1/sessions/{id}`, as hosted: `title`, and `metadata` as a patch (a
   string upserts a key, null deletes it, `metadata: null` clears it). Changing
   the agent's tools or MCP servers, the budget, or vaults mid-session is not
-  supported yet (400). Archived sessions cannot be updated.
+  supported yet (400). Archived sessions cannot be updated. Session
+  metadata now enforces hosted's limits on create and update (at most 16
+  keys, keys up to 64 characters, values up to 512).
 - **`config.packages` is refused instead of silently ignored.** Environments
   asking for apt/npm/pip packages were accepted and nothing was installed.
   They are now a 400, at environment creation and when a session is created

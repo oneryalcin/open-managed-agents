@@ -200,7 +200,30 @@ function metadataField(
     }
     metadata[k] = v;
   }
+  assertSessionMetadataLimits(metadata);
   return metadata;
+}
+
+// Hosted's session metadata limits (SDK docs): at most 16 keys, keys up to 64
+// characters, values up to 512. Checked on create and on the merged result of
+// an update, so repeated patches cannot grow past them.
+const MAX_METADATA_KEYS = 16;
+const MAX_METADATA_KEY_LENGTH = 64;
+const MAX_METADATA_VALUE_LENGTH = 512;
+
+export function assertSessionMetadataLimits(metadata: Record<string, string>): void {
+  const entries = Object.entries(metadata);
+  if (entries.length > MAX_METADATA_KEYS) {
+    throw invalidRequest(`\`metadata\` may hold at most ${MAX_METADATA_KEYS} keys`);
+  }
+  for (const [key, value] of entries) {
+    if (key.length < 1 || key.length > MAX_METADATA_KEY_LENGTH) {
+      throw invalidRequest(`\`metadata\` keys must be 1-${MAX_METADATA_KEY_LENGTH} characters`);
+    }
+    if (value.length > MAX_METADATA_VALUE_LENGTH) {
+      throw invalidRequest(`\`metadata\` values must be at most ${MAX_METADATA_VALUE_LENGTH} characters`);
+    }
+  }
 }
 
 function resourcesField(
