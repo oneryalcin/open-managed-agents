@@ -9,6 +9,11 @@
   session missing from memory is rebuilt from it. When continuity is
   incomplete, the model gets a hidden note: the sandbox was recreated (until
   workspace files are kept), or a turn was cut off before it finished.
+- **`config.packages` is refused instead of silently ignored.** Environments
+  asking for apt/npm/pip packages were accepted and nothing was installed.
+  They are now a 400, at environment creation and when a session is created
+  on an environment stored earlier. The sandbox image's bundled tools are
+  listed in the error. Installing packages is planned after M2.
 - **Agents can read the web with `web_fetch`** (plan 0149). It runs in the
   control plane, not the sandbox, and only reaches hosts in the session
   environment's `allowed_hosts` (https, the full policy including port and

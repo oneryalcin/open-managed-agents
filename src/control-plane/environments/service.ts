@@ -110,6 +110,7 @@ function parseCreateEnvironment(input: unknown): CreateManagedEnvironmentRequest
   if (!isJsonValue(config)) {
     throw invalidRequest("`config` must be JSON-compatible");
   }
+  assertNoPackageRequests(config);
   let canonicalConfig: typeof config;
   try {
     // Validate before the row is built or handed to the store. This keeps
@@ -165,4 +166,19 @@ function stringField(
   if (typeof value === "string" && value.length > 0) return value;
   if (value === undefined && opts.required !== true) return "";
   throw invalidRequest(`\`${field}\` must be a non-empty string`);
+}
+
+export const PACKAGES_UNSUPPORTED_MESSAGE =
+  "`config.packages` is not supported by this deployment yet: packages are not installed. The sandbox image " +
+  "already includes Node.js/npm, Python/uv, Git, curl, jq, Bash, ripgrep and a basic native build toolchain.";
+
+/**
+ * Hosted installs `config.packages` at sandbox start; OMA does not yet, and
+ * accepting them silently would leave an agent expecting tools that are not
+ * there. Also checked at session creation, for environments stored earlier.
+ */
+export function assertNoPackageRequests(config: Record<string, unknown>): void {
+  if (config.packages !== undefined && config.packages !== null) {
+    throw invalidRequest(PACKAGES_UNSUPPORTED_MESSAGE);
+  }
 }
