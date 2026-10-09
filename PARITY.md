@@ -304,7 +304,11 @@ Known, roadmap-tracked. Leave until each is scheduled as its own arc. Grouped by
 
 ### Session / agent surface
 - ❌ **`agent_with_overrides` session form** — per-session `model`/`system`/`tools`/`mcp_servers`/`skills` override (`sessions.md:194`). No session-override surface at all. Tracked `0122`, `0126:648`.
-- ❌ **Session update** — `POST /v1/sessions/{id}` to change `agent.tools`/`agent.mcp_servers` mid-session (idle). No route. Tracked `0122:938`.
+- 🟡 **Session update** — `POST /v1/sessions/{id}` updates `title` and
+  `metadata` (a patch, as hosted) since 2026-10-10. Changing
+  `agent.tools`/`agent.mcp_servers` mid-session, `budget` and `vault_ids` is
+  refused with a 400 (it would mean rebuilding the live runtime). Tracked
+  `0122:938`.
 - ⏸️ **`sessions.resources.*`** — add/list/delete file mounts on a running session. Non-goal `docs/plans/0043-…:50`.
 
 ### Tools & credentials

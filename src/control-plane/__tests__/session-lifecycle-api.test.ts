@@ -1095,6 +1095,10 @@ class HookedSessionStore implements SessionStore {
     return this.rows.get(this.key(workspaceId, sessionId));
   }
 
+  updateDetails(): never {
+    throw new Error("session updates are not used by this test double");
+  }
+
   archive(
     workspaceId: WorkspaceId,
     sessionId: string,

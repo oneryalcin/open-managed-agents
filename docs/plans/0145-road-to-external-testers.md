@@ -69,7 +69,7 @@ see what it cost.
 | Web tools (`web_fetch` / `web_search`) | **Done** ([plan 0149](0149-web-tools.md), #293–#297, #299, #300): `web_fetch` in the control plane under the environment allowlist with hosted's prior-context rule; `web_search` through a configured provider (Tavily); searches counted in usage |
 | Usage metering (0114 Arc D) | **Done** ([plan 0148](0148-usage-metering.md); #280, #285, console PR). Sessions report tokens, estimated model cost and active time; the console shows them |
 | Environment resource (packages / runtimes) | **Decided 2026-10-10:** `config.packages` is refused with a 400 (it was silently ignored), and the error lists the image's bundled tools. Package installs are a post-M2 plan |
-| Session surface gaps | Update, overrides and `resources.*` (~65% parity); pick what a tester needs, defer the rest with honest 400s |
+| Session surface gaps | **Done (2026-10-10):** `POST /v1/sessions/{id}` updates the title and metadata; agent, budget and vault changes, `agent_with_overrides` and `resources.*` are honest 400s |
 | 0114 Arc A leftover | **Done, as docs** (2026-10-09): the container image stays socket-free and runs without a sandbox provider; compose and deployment docs say builtin tools need host-run `oma up`. Also #276: a container restarted after a crash boots again |
 
 ## M3 — hardening before external testers

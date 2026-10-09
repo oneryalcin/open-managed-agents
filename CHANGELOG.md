@@ -9,6 +9,11 @@
   session missing from memory is rebuilt from it. When continuity is
   incomplete, the model gets a hidden note: the sandbox was recreated (until
   workspace files are kept), or a turn was cut off before it finished.
+- **Sessions can be renamed and their metadata edited** with
+  `POST /v1/sessions/{id}`, as hosted: `title`, and `metadata` as a patch (a
+  string upserts a key, null deletes it, `metadata: null` clears it). Changing
+  the agent's tools or MCP servers, the budget, or vaults mid-session is not
+  supported yet (400). Archived sessions cannot be updated.
 - **`config.packages` is refused instead of silently ignored.** Environments
   asking for apt/npm/pip packages were accepted and nothing was installed.
   They are now a 400, at environment creation and when a session is created

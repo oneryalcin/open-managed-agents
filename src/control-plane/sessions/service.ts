@@ -34,7 +34,7 @@ import { RuntimeUnsupportedSessionFileResourcesError } from "../events/types.ts"
 import type { FileStorage, FileStorageRecord } from "../files/types.ts";
 import { newFileId, newSessionId, newSessionResourceId, newSessionSkillSnapshotId } from "../ids.ts";
 import type { WorkspaceId } from "../workspace.ts";
-import { parseCreateSession, parseAgentRef } from "./request.ts";
+import { parseCreateSession, parseAgentRef, parseUpdateSession } from "./request.ts";
 import type { VaultService } from "../vaults/types.ts";
 import type { SkillsStore } from "../skills/types.ts";
 import { resolveBuiltinToolAccessForAgent } from "./pi/tool-permissions.ts";
@@ -584,6 +584,35 @@ export class DefaultSessionService implements SessionService {
       throw invalidRequest("Vaults are not supported by this server.");
     }
     this.vaults.assertVaultsUsable(workspaceId, vaultIds);
+  }
+
+  update(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    input: unknown,
+  ): ManagedAgentsSession {
+    const patch = parseUpdateSession(input);
+    const current = this.store.retrieveAny(workspaceId, sessionId);
+    if (!current) throw notFound(`Session ${sessionId} not found`);
+    if (current.archived_at !== null) {
+      throw invalidRequest(`Session ${sessionId} is archived and cannot be updated`);
+    }
+    let metadata = { ...current.metadata };
+    if (patch.metadata === null) metadata = {};
+    else if (patch.metadata !== undefined) {
+      for (const [key, value] of Object.entries(patch.metadata)) {
+        if (value === null) delete metadata[key];
+        else metadata[key] = value;
+      }
+    }
+    const updated = this.store.updateDetails(workspaceId, sessionId, {
+      title: patch.title === undefined ? current.title : patch.title,
+      metadata,
+      updatedAt: new Date().toISOString(),
+    });
+    // Archived between the read and the write.
+    if (!updated) throw invalidRequest(`Session ${sessionId} is archived and cannot be updated`);
+    return this.present(workspaceId, [updated])[0]!;
   }
 
   retrieve(

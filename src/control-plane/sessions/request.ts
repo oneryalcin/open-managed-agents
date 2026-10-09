@@ -32,6 +32,53 @@ export function parseCreateSession(input: unknown): CreateManagedSessionRequest 
   };
 }
 
+export interface SessionDetailsUpdate {
+  /** undefined = keep; null = clear. */
+  title?: string | null;
+  /** undefined = keep; null = clear all; a value of null deletes that key. */
+  metadata?: Record<string, string | null> | null;
+}
+
+const MAX_SESSION_TITLE_LENGTH = 500;
+
+/**
+ * POST /v1/sessions/{id}. Hosted also updates `agent` (tools, MCP servers),
+ * `budget` and `vault_ids`; those are refused until OMA can apply them.
+ */
+export function parseUpdateSession(input: unknown): SessionDetailsUpdate {
+  const obj = objectInput(input);
+  for (const field of ["agent", "budget", "vault_ids"]) {
+    if (obj[field] !== undefined) {
+      throw invalidRequest(`\`${field}\` cannot be updated by this deployment yet; only \`title\` and \`metadata\` can`);
+    }
+  }
+  rejectUnknownFields(obj, ["title", "metadata", "agent", "budget", "vault_ids"]);
+  const update: SessionDetailsUpdate = {};
+  const title = nullableStringField(obj, "title");
+  if (title !== undefined) {
+    if (title !== null && (title.length < 1 || title.length > MAX_SESSION_TITLE_LENGTH)) {
+      throw invalidRequest(`\`title\` must be 1-${MAX_SESSION_TITLE_LENGTH} characters`);
+    }
+    update.title = title;
+  }
+  if (obj.metadata !== undefined) {
+    if (obj.metadata === null) {
+      update.metadata = null;
+    } else {
+      if (!isJsonObject(obj.metadata)) throw invalidRequest("`metadata` must be an object or null");
+      const patch: Record<string, string | null> = {};
+      for (const [key, value] of Object.entries(obj.metadata)) {
+        if (typeof value !== "string" && value !== null) {
+          throw invalidRequest("`metadata` values must be strings, or null to delete a key");
+        }
+        patch[key] = value;
+      }
+      update.metadata = patch;
+    }
+  }
+  return update;
+}
+
 function vaultIdsField(obj: Record<string, unknown>): string[] | undefined {
   const value = obj.vault_ids;
   if (value === undefined) return undefined;
