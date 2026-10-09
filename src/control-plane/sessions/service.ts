@@ -4,7 +4,6 @@ import type {
   ManagedAgentsDeletedSession,
   ManagedAgentsSession,
   ManagedAgentsSessionFileResource,
-  ManagedAgentsSessionStatus,
 } from "../../types/sessions.ts";
 import type { ManagedAgentsModelConfig } from "../../types/agents.ts";
 import { log } from "../logging.ts";
@@ -44,6 +43,7 @@ import {
   type SessionFileResourceMountInput,
 } from "./resources.ts";
 import { toManagedSession } from "./serialize.ts";
+import { withRuntimeView, type SessionRuntimeView } from "./runtime-view.ts";
 import type {
   ListSessionsOptions,
   CreateSessionIdempotencyCommit,
@@ -129,13 +129,10 @@ export interface DefaultSessionServiceOptions {
   onAdmissionRejected?: () => void;
   modelAvailability?: { assertReady(model: ManagedAgentsModelConfig): void };
   /**
-   * Live status from each session's latest status event (#279). The row only
-   * records termination, so without this a running session reads as idle.
+   * Live status, usage and active time from the event store (#279, plan
+   * 0148). Without it a running session reads idle and usage stays zero.
    */
-  currentStatuses?: (
-    workspaceId: WorkspaceId,
-    sessionIds: readonly string[],
-  ) => ReadonlyMap<string, ManagedAgentsSessionStatus>;
+  runtimeView?: SessionRuntimeView;
 }
 
 export class DefaultSessionService implements SessionService {
@@ -174,7 +171,7 @@ export class DefaultSessionService implements SessionService {
   private readonly pendingSnapshotCleanupRetryDelayMs: number;
   private readonly pendingSnapshotCleanupMaxAttempts: number;
   private readonly onAdmissionRejected: (() => void) | undefined;
-  private readonly currentStatuses: DefaultSessionServiceOptions["currentStatuses"];
+  private readonly runtimeView: SessionRuntimeView | undefined;
   private readonly modelAvailability:
     | { assertReady(model: ManagedAgentsModelConfig): void }
     | undefined;
@@ -205,7 +202,7 @@ export class DefaultSessionService implements SessionService {
     this.maxActiveSessionsPerWorkspace = opts.maxActiveSessionsPerWorkspace;
     this.onAdmissionRejected = opts.onAdmissionRejected;
     this.modelAvailability = opts.modelAvailability;
-    this.currentStatuses = opts.currentStatuses;
+    this.runtimeView = opts.runtimeView;
     this.maxFileResources = opts.maxFileResources ?? MAX_SESSION_FILE_RESOURCES;
     this.maxMountedBytes = opts.maxMountedBytes ?? MAX_SESSION_MOUNTED_BYTES;
     this.egressCapability = opts.egressCapability;
@@ -476,7 +473,6 @@ export class DefaultSessionService implements SessionService {
       created_at: now,
       updated_at: now,
       archived_at: null,
-      usage: null,
       resources,
     };
     const sessionSnapshots = snapshots.map((snapshot) => ({
@@ -512,7 +508,10 @@ export class DefaultSessionService implements SessionService {
         skillSnapshots: preparedSkills.skills.map((skill) => ({ ...skill, session_id: row.id })),
       };
       if (opts.idempotency && this.idempotencyLedger) {
-        const response = toManagedSession(row);
+        // One clock for the stored replay body and this response, so a
+        // replay returns exactly what the first call did (stats are timed).
+        const renderedAt = new Date();
+        const response = toManagedSession(row, renderedAt);
         const completion = idempotencyCompletion(
           workspaceId,
           opts.idempotency,
@@ -524,7 +523,7 @@ export class DefaultSessionService implements SessionService {
             this.idempotencyLedger?.completeIdempotencyInTransaction(completion);
           },
         });
-        return toManagedSession(created);
+        return toManagedSession(created, renderedAt);
       }
       return toManagedSession(this.store.create(record));
     } catch (error) {
@@ -572,20 +571,16 @@ export class DefaultSessionService implements SessionService {
     if (!row) {
       throw notFound(`Session ${sessionId} not found`);
     }
-    return this.withCurrentStatus(workspaceId, [toManagedSession(row)])[0]!;
+    return this.present(workspaceId, [toManagedSession(row)])[0]!;
   }
 
-  private withCurrentStatus(
+  private present(
     workspaceId: WorkspaceId,
     sessions: ManagedAgentsSession[],
   ): ManagedAgentsSession[] {
-    const live = sessions.filter((session) => session.status !== "terminated");
-    if (this.currentStatuses === undefined || live.length === 0) return sessions;
-    const statuses = this.currentStatuses(workspaceId, live.map((session) => session.id));
-    return sessions.map((session) => {
-      const status = session.status === "terminated" ? undefined : statuses.get(session.id);
-      return status === undefined ? session : { ...session, status };
-    });
+    return this.runtimeView === undefined
+      ? sessions
+      : withRuntimeView(this.runtimeView, workspaceId, sessions);
   }
 
   async delete(
@@ -872,7 +867,7 @@ export class DefaultSessionService implements SessionService {
   ): SessionListPage<ManagedAgentsSession> {
     const page = this.store.list(workspaceId, opts);
     return {
-      data: this.withCurrentStatus(workspaceId, page.data.map(toManagedSession)),
+      data: this.present(workspaceId, page.data.map((row) => toManagedSession(row))),
       next_page: page.next_page,
       prev_page: page.prev_page,
     };

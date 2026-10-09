@@ -556,7 +556,6 @@ function makeResolverFixture() {
       created_at: now,
       updated_at: now,
       archived_at: null,
-      usage: null,
       resources: [],
     };
     sessions.create({ row });

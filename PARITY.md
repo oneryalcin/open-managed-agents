@@ -337,6 +337,18 @@ goal because OMA's deployment model is intentionally different.
   recreated. A turn that never settled (crash, hard error) gets a hidden
   note quoting the unanswered request. Notes are model context only, never
   wire events. Hosted keeps both the files and the conversation.
+- 🔵 **Session usage is a model-only estimate** (plan 0148) — `usage` and
+  `stats` follow the hosted shape (probe 71). Token totals equal the sum of
+  the public `span.model_request_end.model_usage`, as hosted. Differences:
+  `list_cost` is the model cost only, estimated from the price table bundled
+  with the pinned Pi version (it can drift from Anthropic's list prices, and
+  is `null` when any request used a model with no known price), while hosted
+  also prices runtime on `active_seconds`. Pi prices the requested model when
+  a fallback answered. Cost is a lower bound when a request was cut off
+  mid-flight (interrupt, archive, crash): its span end has zero tokens.
+  Totals update after each model request, not at the end of the turn.
+  `server_tool_use` is `null` (no server-executed tools yet). Sessions
+  created before this change have tokens but `list_cost: null`.
 - 🔵 **Aborted assistant text** — the event stream shows an interrupted
   assistant's partial text as `agent.message`, but Pi drops aborted
   assistant messages from later model requests, so the model never sees it.

@@ -101,14 +101,29 @@ as active, which is acceptable and documented.
 `duration_seconds` runs from `created_at` to now, frozen at `archived_at` for
 an archived session.
 
-**Read.** One store call per page, `runtimeViewForSessions(workspaceId, ids)`,
-returns status (from #279), token sums, cost state and the status events for
-the walk. The session service gets it as an injected dependency; today it
-has no event-store reader. It fills `usage` and `stats` on create, retrieve,
-list and update. The dead `sessions.usage` column is left alone.
-`server_tool_use` is null until web tools exist. A load check over a session
-with thousands of turns confirms list stays in single-digit milliseconds;
-otherwise totals get maintained per session.
+**Read: totals kept by triggers (changed during implementation).** Summing at
+read time measured about 150 ms for a page of 20 sessions with 2000 turns
+each (tokens and the status walk, about 70 ms each), synchronous on every
+list poll. So the totals are kept per session in `session_usage_totals`, by
+SQLite triggers on `events` and `session_model_request_costs`:
+- span-end inserts add tokens and count spans with tokens;
+- cost inserts add cost and the 1h split, and count a span as priced only if
+  it used tokens, so a zero-token span's $0 cannot stand in for a missing cost;
+- status inserts keep `active_ms` and `running_since` by the walk below.
+
+Because the triggers live in the database, events written by an older OMA
+after a rollback still count. The table is backfilled once, in the
+transaction that creates it, and the triggers are created after the
+backfill. `list_cost` is null while spans with tokens outnumber priced ones.
+A list page now reads one row per session: about 9 ms for that page,
+almost all of it the #279 status lookup.
+
+The session service gets `runtimeView` (status from #279, usage, time) and
+fills `usage` and `stats` on create, retrieve and list. `duration_seconds`
+runs from `created_at` to now, frozen at `archived_at`. An idempotent create
+renders its response once, so a replay matches it exactly. The dead
+`sessions.usage` column is no longer read. `server_tool_use` is null until
+web tools exist.
 
 **Console.** The session list and detail show tokens and cost. The "not
 reported by the API" tooltip goes.
@@ -123,8 +138,9 @@ request.
 
 ## Slices
 
-0. **#279 (separate PR):** session status derived from status events.
-1. **Store and capture:** the cost table and its write on both span-end paths,
+0. **#279 (separate PR, #280, merged):** session status from status events.
+1. **Store and capture** (shipped together with slice 2, since only the API
+   makes capture testable as behaviour): the cost table and its write on both span-end paths,
    the token and cost read, and the time walk. Also move `events/store.ts`'s
    `ensure…` migrations into their own module (hygiene; this slice adds one).
 2. **API:** `usage` and `stats` on session responses, types, OpenAPI,

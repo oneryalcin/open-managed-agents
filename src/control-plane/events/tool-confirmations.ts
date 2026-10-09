@@ -13,6 +13,7 @@ import {
   spanModelRequestEndDraft,
   syntheticSpanModelRequestEndDrafts,
 } from "../sessions/pi/span-normalizer.ts";
+import { modelRequestCostChanges } from "./session-usage.ts";
 import {
   materializePersistedEvents,
   persistRuntimeChangesAndPublish,
@@ -306,6 +307,7 @@ export class ToolConfirmations {
                     now,
                   },
                 ],
+          modelRequestCosts: modelRequestCostChanges(remainingRows, event.messageEnd, now),
         },
       );
       if (permission.evaluatedPermission === "ask") {
@@ -459,6 +461,7 @@ export class ToolConfirmations {
                     now,
                   },
                 ],
+          modelRequestCosts: modelRequestCostChanges(remainingRows, event.messageEnd, now),
         },
       );
       if (mcpToolUse.evaluatedPermission === "ask") {

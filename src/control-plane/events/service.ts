@@ -25,6 +25,7 @@ import {
   spanModelRequestStartDraft,
   syntheticSpanModelRequestEndDrafts,
 } from "../sessions/pi/span-normalizer.ts";
+import { modelRequestCostChanges } from "./session-usage.ts";
 import {
   materializePersistedEvents,
   persistAndPublish,
@@ -1490,6 +1491,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
                       now,
                     },
                   ],
+                  modelRequestCosts: modelRequestCostChanges(rows, piEvent, now),
                 },
               });
               this.broadcaster.publishPersisted(rows);

@@ -25,7 +25,6 @@ export interface SessionRow {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
-  usage: null;
   resources: ManagedAgentsSessionFileResource[];
 }
 

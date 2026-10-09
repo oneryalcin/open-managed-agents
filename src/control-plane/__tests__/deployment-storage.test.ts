@@ -1041,7 +1041,6 @@ function sessionRow(id: string): SessionRow {
     created_at: now,
     updated_at: now,
     archived_at: null,
-    usage: null,
     resources: [],
   };
 }

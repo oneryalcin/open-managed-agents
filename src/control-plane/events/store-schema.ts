@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
+import { activeTimeState } from "./session-usage.ts";
 
 // The events database schema and its in-place migrations, run on every open.
 // Each migration is idempotent.
@@ -11,6 +12,7 @@ export function migrateEventStore(db: DatabaseSync): void {
   ensureConversationTurnsTable(db);
   ensureIdempotencyResourceColumns(db);
   db.exec(INDEXES);
+  ensureSessionUsageTotals(db);
 }
 
 const SCHEMA = `
@@ -94,9 +96,26 @@ CREATE TABLE IF NOT EXISTS session_conversation_entries (
   PRIMARY KEY (workspace_id, session_id, seq),
   UNIQUE (workspace_id, session_id, entry_id)
 );
+
+-- Plan 0148: what a span end's public model_usage lacks (Pi's cost and the
+-- 1h share of cache writes), one row per real span end. Tokens are summed
+-- from the span events themselves.
+CREATE TABLE IF NOT EXISTS session_model_request_costs (
+  workspace_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  span_event_id TEXT NOT NULL,
+  cost_micros INTEGER,
+  cache_write_1h_tokens INTEGER NOT NULL,
+  provider TEXT,
+  model_id TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, span_event_id)
+);
 `;
 
 const INDEXES = `
+CREATE INDEX IF NOT EXISTS session_model_request_costs_by_session
+  ON session_model_request_costs (workspace_id, session_id);
 CREATE INDEX IF NOT EXISTS events_by_workspace_session ON events (workspace_id, session_id, id);
 CREATE INDEX IF NOT EXISTS events_by_workspace_session_type ON events (workspace_id, session_id, type, id);
 CREATE INDEX IF NOT EXISTS pending_runtime_actions_by_turn
@@ -229,4 +248,161 @@ function hasTable(db: DatabaseSync, name: string): boolean {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
     .get(name) as { name: string } | undefined;
   return row !== undefined;
+}
+
+// Plan 0148: per-session usage totals, kept by triggers so a session list
+// reads one row per session instead of summing its whole history (about
+// 150 ms for 20 sessions of 2000 turns each). Triggers live in the database,
+// so events written by an older OMA (after a rollback) still count.
+//
+// list_cost is unknown while spans_with_tokens > priced_spans_with_tokens:
+// a cost row only counts as priced when its span used tokens, so a zero-token
+// span's $0 row cannot stand in for a missing cost elsewhere.
+// Active time follows activeTimeState: running opens an interval if none is
+// open; idle, rescheduled and terminated close it.
+const SESSION_USAGE_TRIGGERS = `
+CREATE TRIGGER IF NOT EXISTS session_usage_span_end
+AFTER INSERT ON events WHEN NEW.type = 'span.model_request_end'
+BEGIN
+  INSERT INTO session_usage_totals (
+    workspace_id, session_id, span_count, input_tokens, output_tokens,
+    cache_read_tokens, cache_write_tokens, spans_with_tokens)
+  VALUES (
+    NEW.workspace_id, NEW.session_id, 1,
+    COALESCE(json_extract(NEW.payload, '$.model_usage.input_tokens'), 0),
+    COALESCE(json_extract(NEW.payload, '$.model_usage.output_tokens'), 0),
+    COALESCE(json_extract(NEW.payload, '$.model_usage.cache_read_input_tokens'), 0),
+    COALESCE(json_extract(NEW.payload, '$.model_usage.cache_creation_input_tokens'), 0),
+    ${SPAN_HAS_TOKENS("NEW.payload")})
+  ON CONFLICT (workspace_id, session_id) DO UPDATE SET
+    span_count = span_count + 1,
+    input_tokens = input_tokens + excluded.input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+    cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+    spans_with_tokens = spans_with_tokens + excluded.spans_with_tokens;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_usage_running
+AFTER INSERT ON events WHEN NEW.type = 'session.status_running'
+BEGIN
+  INSERT INTO session_usage_totals (workspace_id, session_id, running_since)
+  VALUES (NEW.workspace_id, NEW.session_id, NEW.created_at)
+  ON CONFLICT (workspace_id, session_id) DO UPDATE SET
+    running_since = COALESCE(running_since, excluded.running_since);
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_usage_stopped
+AFTER INSERT ON events WHEN NEW.type IN (
+  'session.status_idle', 'session.status_rescheduled', 'session.status_terminated')
+BEGIN
+  UPDATE session_usage_totals SET
+    active_ms = active_ms + MAX(0, CAST(ROUND(
+      (julianday(NEW.created_at) - julianday(running_since)) * 86400000) AS INTEGER)),
+    running_since = NULL
+  WHERE workspace_id = NEW.workspace_id AND session_id = NEW.session_id
+    AND running_since IS NOT NULL;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_usage_cost
+AFTER INSERT ON session_model_request_costs
+BEGIN
+  UPDATE session_usage_totals SET
+    cost_micros = cost_micros + COALESCE(NEW.cost_micros, 0),
+    cache_write_1h_tokens = cache_write_1h_tokens + NEW.cache_write_1h_tokens,
+    priced_spans_with_tokens = priced_spans_with_tokens + (
+      NEW.cost_micros IS NOT NULL AND EXISTS (
+        SELECT 1 FROM events e
+        WHERE e.workspace_id = NEW.workspace_id AND e.id = NEW.span_event_id
+          AND ${SPAN_HAS_TOKENS("e.payload")}))
+  WHERE workspace_id = NEW.workspace_id AND session_id = NEW.session_id;
+END;
+`;
+
+function SPAN_HAS_TOKENS(payload: string): string {
+  return `(COALESCE(json_extract(${payload}, '$.model_usage.input_tokens'), 0) +
+    COALESCE(json_extract(${payload}, '$.model_usage.output_tokens'), 0) +
+    COALESCE(json_extract(${payload}, '$.model_usage.cache_read_input_tokens'), 0) +
+    COALESCE(json_extract(${payload}, '$.model_usage.cache_creation_input_tokens'), 0) > 0)`;
+}
+
+// Created once, then backfilled from the existing history in the same
+// transaction (a crash cannot leave a half-filled table that later opens
+// would trust); triggers are created after the backfill so it counts nothing
+// twice.
+function ensureSessionUsageTotals(db: DatabaseSync): void {
+  withSqliteTransaction(db, () => {
+    if (!hasTable(db, "session_usage_totals")) {
+      db.exec(`
+        CREATE TABLE session_usage_totals (
+          workspace_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          span_count INTEGER NOT NULL DEFAULT 0,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0,
+          cost_micros INTEGER NOT NULL DEFAULT 0,
+          spans_with_tokens INTEGER NOT NULL DEFAULT 0,
+          priced_spans_with_tokens INTEGER NOT NULL DEFAULT 0,
+          active_ms INTEGER NOT NULL DEFAULT 0,
+          running_since TEXT,
+          PRIMARY KEY (workspace_id, session_id)
+        );
+        INSERT INTO session_usage_totals (
+          workspace_id, session_id, span_count, input_tokens, output_tokens,
+          cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, cost_micros,
+          spans_with_tokens, priced_spans_with_tokens)
+        SELECT e.workspace_id, e.session_id, COUNT(*),
+          SUM(COALESCE(json_extract(e.payload, '$.model_usage.input_tokens'), 0)),
+          SUM(COALESCE(json_extract(e.payload, '$.model_usage.output_tokens'), 0)),
+          SUM(COALESCE(json_extract(e.payload, '$.model_usage.cache_read_input_tokens'), 0)),
+          SUM(COALESCE(json_extract(e.payload, '$.model_usage.cache_creation_input_tokens'), 0)),
+          SUM(COALESCE(c.cache_write_1h_tokens, 0)),
+          SUM(COALESCE(c.cost_micros, 0)),
+          SUM(${SPAN_HAS_TOKENS("e.payload")}),
+          SUM(${SPAN_HAS_TOKENS("e.payload")} AND c.cost_micros IS NOT NULL)
+        FROM events e
+        LEFT JOIN session_model_request_costs c
+          ON c.workspace_id = e.workspace_id AND c.span_event_id = e.id
+        WHERE e.type = 'span.model_request_end'
+        GROUP BY e.workspace_id, e.session_id;
+      `);
+      backfillActiveTime(db);
+    }
+    db.exec(SESSION_USAGE_TRIGGERS);
+  });
+}
+
+function backfillActiveTime(db: DatabaseSync): void {
+  const rows = db.prepare(
+    `SELECT workspace_id, session_id, type, created_at FROM events
+     WHERE type IN ('session.status_running', 'session.status_idle',
+                    'session.status_rescheduled', 'session.status_terminated')
+     ORDER BY workspace_id, session_id, rowid`,
+  ).iterate() as Iterable<{ workspace_id: string; session_id: string; type: string; created_at: string }>;
+  const upsert = db.prepare(
+    `INSERT INTO session_usage_totals (workspace_id, session_id, active_ms, running_since)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (workspace_id, session_id) DO UPDATE SET
+       active_ms = excluded.active_ms, running_since = excluded.running_since`,
+  );
+  let key: string | undefined;
+  let current: { workspaceId: string; sessionId: string; events: Array<[boolean, string]> } | undefined;
+  const flush = () => {
+    if (current === undefined) return;
+    const state = activeTimeState(current.events);
+    upsert.run(current.workspaceId, current.sessionId, state.activeMs, state.runningSince);
+  };
+  for (const row of rows) {
+    const rowKey = `${row.workspace_id}\u0000${row.session_id}`;
+    if (rowKey !== key) {
+      flush();
+      key = rowKey;
+      current = { workspaceId: row.workspace_id, sessionId: row.session_id, events: [] };
+    }
+    current!.events.push([row.type === "session.status_running", row.created_at]);
+  }
+  flush();
 }

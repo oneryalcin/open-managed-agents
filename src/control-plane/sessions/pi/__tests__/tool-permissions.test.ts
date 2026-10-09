@@ -276,7 +276,7 @@ function sessionRow(version: number): SessionRow {
     environment_id: "env_1", status: "idle", title: null, metadata: {},
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
-    archived_at: null, usage: null, resources: [],
+    archived_at: null, resources: [],
   };
 }
 
@@ -306,7 +306,6 @@ function fixture(
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     archived_at: null,
-    usage: null,
     resources: [],
   };
   const row: AgentRow = {

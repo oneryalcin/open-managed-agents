@@ -27,6 +27,7 @@ import type {
   RuntimeTurnRecoveryClaim,
   SessionEventRecordPage,
   SessionEventStore,
+  SessionUsageTotals,
   StoredConversationEntry,
 } from "./types.ts";
 import type { RequestIdempotencyKey } from "../request-idempotency.ts";
@@ -132,6 +133,10 @@ export class EventStore implements SessionEventStore {
   private readonly insertConversationEntryStmt: StatementSync;
   private readonly listConversationEntriesStmt: StatementSync;
   private readonly latestSessionStatusStmt: StatementSync;
+  private readonly insertModelRequestCostStmt: StatementSync;
+  private readonly sessionUsageStmt: StatementSync;
+  private readonly deleteUsageTotalsForSessionStmt: StatementSync;
+  private readonly deleteModelRequestCostsForSessionStmt: StatementSync;
   private readonly deleteConversationForSessionStmt: StatementSync;
   private readonly insertConversationTurnStmt: StatementSync;
   private readonly conversationTurnsStmt: StatementSync;
@@ -212,6 +217,24 @@ export class EventStore implements SessionEventStore {
        FROM session_conversation_entries
        WHERE workspace_id = ? AND session_id = ?
        ON CONFLICT (workspace_id, session_id, entry_id) DO NOTHING`,
+    );
+    this.insertModelRequestCostStmt = this.db.prepare(
+      `INSERT INTO session_model_request_costs
+         (workspace_id, session_id, span_event_id, cost_micros, cache_write_1h_tokens,
+          provider, model_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.sessionUsageStmt = this.db.prepare(
+      `SELECT span_count, input_tokens, output_tokens, cache_read_tokens,
+              cache_write_tokens, cache_write_1h_tokens, cost_micros,
+              spans_with_tokens, priced_spans_with_tokens, active_ms, running_since
+       FROM session_usage_totals WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.deleteUsageTotalsForSessionStmt = this.db.prepare(
+      `DELETE FROM session_usage_totals WHERE workspace_id = ? AND session_id = ?`,
+    );
+    this.deleteModelRequestCostsForSessionStmt = this.db.prepare(
+      `DELETE FROM session_model_request_costs WHERE workspace_id = ? AND session_id = ?`,
     );
     this.latestSessionStatusStmt = this.db.prepare(
       `SELECT type FROM events
@@ -622,6 +645,8 @@ export class EventStore implements SessionEventStore {
       this.deleteForSessionStmt.run(workspaceId, sessionId);
       this.deleteConversationForSessionStmt.run(workspaceId, sessionId);
       this.deleteConversationTurnsForSessionStmt.run(workspaceId, sessionId);
+      this.deleteModelRequestCostsForSessionStmt.run(workspaceId, sessionId);
+      this.deleteUsageTotalsForSessionStmt.run(workspaceId, sessionId);
       this.deleteIdempotencyKeysForSessionStmt.run(
         workspaceId,
         `/v1/sessions/${sessionId}/events`,
@@ -995,6 +1020,18 @@ export class EventStore implements SessionEventStore {
     for (const checkpoint of changes.conversationCheckpoints ?? []) {
       this.applyConversationCheckpoint(checkpoint);
     }
+    for (const cost of changes.modelRequestCosts ?? []) {
+      this.insertModelRequestCostStmt.run(
+        cost.workspaceId,
+        cost.sessionId,
+        cost.spanEventId,
+        cost.costMicros,
+        cost.cacheWrite1hTokens,
+        cost.provider,
+        cost.modelId,
+        cost.now,
+      );
+    }
   }
 
   isRuntimeTurnOwnedBy(fence: {
@@ -1013,6 +1050,41 @@ export class EventStore implements SessionEventStore {
         fence.ownerGeneration,
       ) !== undefined
     );
+  }
+
+  sessionUsage(
+    workspaceId: WorkspaceId,
+    sessionIds: readonly string[],
+  ): Map<string, SessionUsageTotals> {
+    const totals = new Map<string, SessionUsageTotals>();
+    for (const sessionId of sessionIds) {
+      const row = this.sessionUsageStmt.get(workspaceId, sessionId) as {
+        span_count: number;
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_tokens: number;
+        cache_write_tokens: number;
+        cache_write_1h_tokens: number;
+        cost_micros: number;
+        spans_with_tokens: number;
+        priced_spans_with_tokens: number;
+        active_ms: number;
+        running_since: string | null;
+      } | undefined;
+      if (row === undefined) continue;
+      totals.set(sessionId, {
+        spanCount: row.span_count,
+        inputTokens: row.input_tokens,
+        outputTokens: row.output_tokens,
+        cacheReadTokens: row.cache_read_tokens,
+        cacheWriteTokens: row.cache_write_tokens,
+        cacheWrite1hTokens: row.cache_write_1h_tokens,
+        costMicros: row.spans_with_tokens > row.priced_spans_with_tokens ? null : row.cost_micros,
+        activeMs: row.active_ms,
+        runningSince: row.running_since,
+      });
+    }
+    return totals;
   }
 
   latestSessionStatuses(
