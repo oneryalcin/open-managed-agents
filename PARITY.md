@@ -316,6 +316,8 @@ Known, roadmap-tracked. Leave until each is scheduled as its own arc. Grouped by
 - ❌ **Environment provisioning richness beyond the pre-v1 image story** —
   `config.packages` (apt/npm/pip), resource tiers, preinstalled tool catalogs,
   and hosted-style disk sizing remain separate post-v1 breadth.
+  `config.packages` is refused with a 400 (2026-10-10) rather than accepted
+  and ignored. Installing packages is planned after M2.
 
 ---
 

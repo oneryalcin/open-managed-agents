@@ -38,6 +38,7 @@ import { parseCreateSession, parseAgentRef } from "./request.ts";
 import type { VaultService } from "../vaults/types.ts";
 import type { SkillsStore } from "../skills/types.ts";
 import { resolveBuiltinToolAccessForAgent } from "./pi/tool-permissions.ts";
+import { assertNoPackageRequests } from "../environments/service.ts";
 import {
   normalizeSessionFileResources,
   type SessionFileResourceMountInput,
@@ -446,6 +447,7 @@ export class DefaultSessionService implements SessionService {
     }
     const environment = this.requireActiveEnvironment(workspaceId, req.environment_id);
     this.assertVaultsUsable(workspaceId, req.vault_ids ?? []);
+    assertNoPackageRequests(environment.config);
     this.assertEgressHonorable(environment, agent);
 
     const now = new Date().toISOString();

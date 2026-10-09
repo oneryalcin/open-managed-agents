@@ -201,6 +201,34 @@ describe("createSessionEgressBundleResolver", () => {
 });
 
 describe("fail-closed session-create gate", () => {
+  it("refuses an environment that asks for packages it cannot install", async () => {
+    const plane = await createDeploymentControlPlane({});
+    const res = await request(plane.app, "/v1/environments", {
+      method: "POST",
+      body: { name: "With packages", config: { type: "cloud", packages: { pip: ["requests"] } } },
+    });
+
+    expect(res.status).toBe(400);
+    plane.stores.close();
+  });
+
+  it("refuses a session on an environment stored with packages before they were refused", async () => {
+    const plane = await createDeploymentControlPlane({});
+    const now = new Date().toISOString();
+    const stored = plane.stores.environments.create({
+      row: {
+        id: "env_with_packages", workspace_id: "wrk_default", type: "environment", name: "Old",
+        config: { type: "cloud", packages: { pip: ["requests"] } }, metadata: {},
+        created_at: now, updated_at: now, archived_at: null,
+      },
+    });
+
+    const res = await createSession(plane.app, stored.id);
+
+    expect(res.status).toBe(400);
+    plane.stores.close();
+  });
+
   it("rejects an egress-granting environment when the deployment cannot honor it", async () => {
     const plane = await createDeploymentControlPlane({});
     const env = await createEnvironment(plane.app, {
