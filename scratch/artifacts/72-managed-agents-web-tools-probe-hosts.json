@@ -1,0 +1,620 @@
+{
+  "allowed_hosts": [
+    "example.com",
+    "www.anthropic.com"
+  ],
+  "fetch_allow": {
+    "agent_tools": [
+      {
+        "configs": [
+          {
+            "allowed_domains": null,
+            "blocked_domains": null,
+            "enabled": true,
+            "max_content_tokens": null,
+            "name": "web_fetch",
+            "permission_policy": {
+              "type": "always_allow"
+            },
+            "type": "web_fetch",
+            "url_sources": null
+          },
+          {
+            "allowed_domains": null,
+            "blocked_domains": null,
+            "enabled": true,
+            "name": "web_search",
+            "permission_policy": {
+              "type": "always_allow"
+            },
+            "type": "web_search",
+            "user_location": null
+          }
+        ],
+        "default_config": {
+          "enabled": false,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "events": [
+      {
+        "keys": [],
+        "type": "session.status_running"
+      },
+      {
+        "keys": [
+          "agent_name",
+          "session_thread_id"
+        ],
+        "type": "session.thread_status_running"
+      },
+      {
+        "content": [
+          {
+            "text": "Use web_fetch exactly once on https://example.com and reply with the page's <h1> text only.",
+            "type": "text"
+          }
+        ],
+        "keys": [],
+        "type": "user.message"
+      },
+      {
+        "keys": [],
+        "type": "span.model_request_start"
+      },
+      {
+        "input": {
+          "url": "https://example.com"
+        },
+        "keys": [
+          "evaluated_permission",
+          "evaluation",
+          "session_thread_id"
+        ],
+        "name": "web_fetch",
+        "type": "agent.tool_use"
+      },
+      {
+        "keys": [
+          "is_error",
+          "model_request_start_id",
+          "model_usage"
+        ],
+        "type": "span.model_request_end"
+      },
+      {
+        "content": [
+          {
+            "context": null,
+            "source": {
+              "data": "---\nmeta-viewport: width=device-width,initial-scale=1\ntitle: Example Domain\n---\n\nThis domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.",
+              "media_type": "text/plain",
+              "type": "text"
+            },
+            "title": "Example Domain",
+            "type": "document"
+          }
+        ],
+        "keys": [
+          "is_error",
+          "tool_use_id"
+        ],
+        "type": "agent.tool_result"
+      },
+      {
+        "keys": [],
+        "type": "span.model_request_start"
+      },
+      {
+        "content": [
+          {
+            "text": "Example Domain",
+            "type": "text"
+          }
+        ],
+        "keys": [],
+        "type": "agent.message"
+      },
+      {
+        "keys": [
+          "is_error",
+          "model_request_start_id",
+          "model_usage"
+        ],
+        "type": "span.model_request_end"
+      },
+      {
+        "keys": [
+          "agent_name",
+          "session_thread_id",
+          "stop_details"
+        ],
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.thread_status_idle"
+      },
+      {
+        "keys": [
+          "budget",
+          "usage"
+        ],
+        "type": "session.usage"
+      },
+      {
+        "keys": [
+          "stop_details"
+        ],
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.status_idle"
+      }
+    ],
+    "last_idle": {
+      "id": "sevt_0113j5fWcCftE2xTnSYEGLmc",
+      "processed_at": "datetime.datetime(2026, 10, 9, 17, 37, 17, 300064, tzinfo=TzInfo(0))",
+      "stop_details": null,
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.status_idle"
+    },
+    "usage": {
+      "active_seconds": 2.485,
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 136
+      },
+      "cache_read_input_tokens": 5793,
+      "input_tokens": 4,
+      "list_cost": {
+        "amount": "0",
+        "currency": "USD"
+      },
+      "output_tokens": 60,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0
+      }
+    }
+  },
+  "fetch_ask": {
+    "after_confirm_idle": {
+      "id": "sevt_012JRKeLC4kLDbmD6Jo6SqCY",
+      "processed_at": "datetime.datetime(2026, 10, 9, 17, 37, 34, 795159, tzinfo=TzInfo(0))",
+      "stop_details": null,
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.status_idle"
+    },
+    "agent_tools": [
+      {
+        "configs": [
+          {
+            "allowed_domains": null,
+            "blocked_domains": null,
+            "enabled": true,
+            "max_content_tokens": null,
+            "name": "web_fetch",
+            "permission_policy": {
+              "type": "always_ask"
+            },
+            "type": "web_fetch",
+            "url_sources": null
+          },
+          {
+            "allowed_domains": null,
+            "blocked_domains": null,
+            "enabled": true,
+            "name": "web_search",
+            "permission_policy": {
+              "type": "always_ask"
+            },
+            "type": "web_search",
+            "user_location": null
+          }
+        ],
+        "default_config": {
+          "enabled": false,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "events": [
+      {
+        "keys": [],
+        "type": "session.status_running"
+      },
+      {
+        "keys": [
+          "agent_name",
+          "session_thread_id"
+        ],
+        "type": "session.thread_status_running"
+      },
+      {
+        "content": [
+          {
+            "text": "Use web_fetch exactly once on https://example.com and reply with the page's <h1> text only.",
+            "type": "text"
+          }
+        ],
+        "keys": [],
+        "type": "user.message"
+      },
+      {
+        "keys": [],
+        "type": "span.model_request_start"
+      },
+      {
+        "keys": [],
+        "type": "agent.thinking"
+      },
+      {
+        "input": {
+          "url": "https://example.com"
+        },
+        "keys": [
+          "evaluated_permission",
+          "evaluation",
+          "session_thread_id"
+        ],
+        "name": "web_fetch",
+        "type": "agent.tool_use"
+      },
+      {
+        "keys": [
+          "is_error",
+          "model_request_start_id",
+          "model_usage"
+        ],
+        "type": "span.model_request_end"
+      },
+      {
+        "keys": [
+          "agent_name",
+          "session_thread_id",
+          "stop_details"
+        ],
+        "stop_reason": {
+          "event_ids": [
+            "sevt_019bcV5DgnvH7ehXsWCuUYHo"
+          ],
+          "type": "requires_action"
+        },
+        "type": "session.thread_status_idle"
+      },
+      {
+        "keys": [
+          "budget",
+          "usage"
+        ],
+        "type": "session.usage"
+      },
+      {
+        "keys": [
+          "stop_details"
+        ],
+        "stop_reason": {
+          "event_ids": [
+            "sevt_019bcV5DgnvH7ehXsWCuUYHo"
+          ],
+          "type": "requires_action"
+        },
+        "type": "session.status_idle"
+      },
+      {
+        "keys": [
+          "deny_message",
+          "session_thread_id",
+          "tool_use_id"
+        ],
+        "result": "allow",
+        "type": "user.tool_confirmation"
+      },
+      {
+        "keys": [],
+        "type": "session.status_running"
+      },
+      {
+        "keys": [
+          "agent_name",
+          "session_thread_id"
+        ],
+        "type": "session.thread_status_running"
+      },
+      {
+        "content": [
+          {
+            "context": null,
+            "source": {
+              "data": "---\nmeta-viewport: width=device-width,initial-scale=1\ntitle: Example Domain\n---\n\nThis domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.",
+              "media_type": "text/plain",
+              "type": "text"
+            },
+            "title": "Example Domain",
+            "type": "document"
+          }
+        ],
+        "keys": [
+          "is_error",
+          "tool_use_id"
+        ],
+        "type": "agent.tool_result"
+      },
+      {
+        "keys": [],
+        "type": "span.model_request_start"
+      },
+      {
+        "content": [
+          {
+            "text": "Example Domain",
+            "type": "text"
+          }
+        ],
+        "keys": [],
+        "type": "agent.message"
+      },
+      {
+        "keys": [
+          "is_error",
+          "model_request_start_id",
+          "model_usage"
+        ],
+        "type": "span.model_request_end"
+      },
+      {
+        "keys": [
+          "agent_name",
+          "session_thread_id",
+          "stop_details"
+        ],
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.thread_status_idle"
+      },
+      {
+        "keys": [
+          "budget",
+          "usage"
+        ],
+        "type": "session.usage"
+      },
+      {
+        "keys": [
+          "stop_details"
+        ],
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.status_idle"
+      }
+    ],
+    "last_idle": {
+      "id": "sevt_01MgAPnHXeLAThiqzGr1EYEd",
+      "processed_at": "datetime.datetime(2026, 10, 9, 17, 37, 32, 150705, tzinfo=TzInfo(0))",
+      "stop_details": null,
+      "stop_reason": {
+        "event_ids": [
+          "sevt_019bcV5DgnvH7ehXsWCuUYHo"
+        ],
+        "type": "requires_action"
+      },
+      "type": "session.status_idle"
+    },
+    "pending_before_confirm": [
+      {
+        "input": {
+          "url": "https://example.com"
+        },
+        "keys": [
+          "evaluated_permission",
+          "evaluation",
+          "session_thread_id"
+        ],
+        "name": "web_fetch",
+        "type": "agent.tool_use"
+      }
+    ],
+    "usage": {
+      "active_seconds": 2.734,
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 201
+      },
+      "cache_read_input_tokens": 5738,
+      "input_tokens": 4,
+      "list_cost": {
+        "amount": "0",
+        "currency": "USD"
+      },
+      "output_tokens": 69,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0
+      }
+    }
+  },
+  "model": "claude-sonnet-5",
+  "run_id": "1791567433-97984",
+  "search_allow": {
+    "agent_tools": [
+      {
+        "configs": [
+          {
+            "allowed_domains": null,
+            "blocked_domains": null,
+            "enabled": true,
+            "max_content_tokens": null,
+            "name": "web_fetch",
+            "permission_policy": {
+              "type": "always_allow"
+            },
+            "type": "web_fetch",
+            "url_sources": null
+          },
+          {
+            "allowed_domains": null,
+            "blocked_domains": null,
+            "enabled": true,
+            "name": "web_search",
+            "permission_policy": {
+              "type": "always_allow"
+            },
+            "type": "web_search",
+            "user_location": null
+          }
+        ],
+        "default_config": {
+          "enabled": false,
+          "permission_policy": {
+            "type": "always_allow"
+          }
+        },
+        "type": "agent_toolset_20260401"
+      }
+    ],
+    "events": [
+      {
+        "keys": [],
+        "type": "session.status_running"
+      },
+      {
+        "keys": [
+          "agent_name",
+          "session_thread_id"
+        ],
+        "type": "session.thread_status_running"
+      },
+      {
+        "content": [
+          {
+            "text": "Use web_search exactly once for: Anthropic Claude Managed Agents. Reply with the first result's title and URL only.",
+            "type": "text"
+          }
+        ],
+        "keys": [],
+        "type": "user.message"
+      },
+      {
+        "keys": [],
+        "type": "span.model_request_start"
+      },
+      {
+        "input": {
+          "query": "Anthropic Claude Managed Agents"
+        },
+        "keys": [
+          "evaluated_permission",
+          "evaluation",
+          "session_thread_id"
+        ],
+        "name": "web_search",
+        "type": "agent.tool_use"
+      },
+      {
+        "keys": [
+          "is_error",
+          "model_request_start_id",
+          "model_usage"
+        ],
+        "type": "span.model_request_end"
+      },
+      {
+        "content": "[{\"citations\": {\"enabled\": true}, \"content\": [{\"text\": \"So we built Managed Agents: a hosted service in the Claude Platform that runs long-horizon agents on your behalf through a small set of interfaces meant to outlast any particular implementation\\u2014including the ones we run today.\", \"type\": \"text\"}, {\"text\": \"Harnesses encode assumptions that go stale as models improve. Managed Agents\\u2014our hosted service for long-horizon agent work\\u2014is built around interfaces that stay stable as harnesses change. Get started with Claude Managed Agents by following our docs. A running topic on the...<clipped>",
+        "keys": [
+          "is_error",
+          "tool_use_id"
+        ],
+        "type": "agent.tool_result"
+      },
+      {
+        "keys": [],
+        "type": "span.model_request_start"
+      },
+      {
+        "content": [
+          {
+            "text": "**Title:** Scaling Managed Agents: Decoupling the brain from the hands \\ Anthropic\n**URL:** https://www.anthropic.com/engineering/managed-agents",
+            "type": "text"
+          }
+        ],
+        "keys": [],
+        "type": "agent.message"
+      },
+      {
+        "keys": [
+          "is_error",
+          "model_request_start_id",
+          "model_usage"
+        ],
+        "type": "span.model_request_end"
+      },
+      {
+        "keys": [
+          "agent_name",
+          "session_thread_id",
+          "stop_details"
+        ],
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.thread_status_idle"
+      },
+      {
+        "keys": [
+          "budget",
+          "usage"
+        ],
+        "type": "session.usage"
+      },
+      {
+        "keys": [
+          "stop_details"
+        ],
+        "stop_reason": {
+          "type": "end_turn"
+        },
+        "type": "session.status_idle"
+      }
+    ],
+    "last_idle": {
+      "id": "sevt_01SJnx5V39DKsdsEBQvAJqU4",
+      "processed_at": "datetime.datetime(2026, 10, 9, 17, 37, 25, 38156, tzinfo=TzInfo(0))",
+      "stop_details": null,
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "type": "session.status_idle"
+    },
+    "usage": {
+      "active_seconds": 3.226,
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 13497
+      },
+      "cache_read_input_tokens": 4761,
+      "input_tokens": 4,
+      "list_cost": {
+        "amount": "5",
+        "currency": "USD"
+      },
+      "output_tokens": 123,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 1
+      }
+    }
+  }
+}
