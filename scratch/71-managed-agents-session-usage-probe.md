@@ -27,7 +27,9 @@ Artifact: [`artifacts/71-managed-agents-session-usage-probe.json`](artifacts/71-
   `active_seconds` updates live while running and stops at idle.
 - **Cumulative** across turns. `sessions.list` items carry the same `usage`.
 - `list_cost.amount` is **integer minor units** (cents) as a string, priced at
-  public list rates and, per the API reference, including runtime cost priced
-  on `active_seconds` ("5" = $0.05 after turn 1, unchanged after a tiny turn 2).
+  public list rates ("5" = $0.05 after turn 1, unchanged after a tiny turn 2).
+  The API reference says it includes runtime priced on `active_seconds`, but
+  model-only rates already give about 5 cents for turn 1, so the runtime part
+  was not visible here.
 - The API reference also documents `session.stats` (`active_seconds`,
   `duration_seconds`) and `session.budget` (`max_list_cost`), not in OMA yet.

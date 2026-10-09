@@ -25,7 +25,9 @@ the M2 goal.
   `ephemeral_1h_input_tokens`; spans report only the total.
 - Tokens and cost change when a turn ends. `active_seconds` grows while running.
 - `list_cost.amount` is an integer string in cents at public list rates, and
-  includes runtime priced on `active_seconds`. `list_cost` and
+  per the API reference includes runtime priced on `active_seconds` (Pi's
+  model-only rates already give 5 cents for probe 71's turn 1, so the runtime part
+  was not visible there). `list_cost` and
   `server_tool_use` are documented as absent until tracking is available.
 - `sessions.list` items carry the same `usage`.
 - The reference also has `session.stats` (`active_seconds`,
@@ -34,80 +36,132 @@ the M2 goal.
 ## Decisions (2026-10-09)
 
 - **D1 `list_cost` = model cost only.** The sum of Pi's per-request list-price
-  cost, converted to cents. It is **null when any request in the session had no
-  known price**: Pi reports zero rates for custom and local models, and a fake
-  `$0` would be worse than no number. OMA is self-hosted, so runtime is not
-  priced; PARITY.md says so.
+  cost, in cents. It is **null when any request in the session had no known
+  price**: Pi reports zero rates for custom and local models, and a fake `$0`
+  would be worse than no number. OMA is self-hosted, so runtime is not priced.
 - **D2 totals update per model request**, not per turn. A long running turn
-  shows its cost climbing. At idle the values match what hosted would show.
-  PARITY.md notes the difference.
+  shows its cost climbing. At idle, token totals match what hosted would show;
+  cost differs by hosted's runtime component.
 - **D3 time stats included:** `usage.active_seconds`, `stats.active_seconds`
-  (equal: OMA runs one thread per session) and `stats.duration_seconds`,
-  derived from the status events already stored.
+  (equal: one thread per session) and `stats.duration_seconds`.
+- **D4 a request cut off mid-flight counts as recorded** (decided after
+  review). An interrupt, an archive or a crash closes an open request with a
+  synthetic zero-token span end, and Pi's late usage for it is dropped by the
+  ownership fence. Such a request counts as zero tokens and $0, consistent with
+  the public spans. PARITY.md says cost is a lower bound when requests were cut
+  off. Capturing Pi's late usage would mean reopening the drain path that
+  plan 0147 had to back out of.
+- **D5 #279 first.** `GET /v1/sessions/:id` reports `idle` while a turn runs,
+  because nothing updates the row's status. It is fixed before this plan, by
+  deriving status from the session's `session.status_*` events, and this
+  plan's time stats reuse that walk.
 
 ## Design
 
-**Capture, in the event store, in the same transaction as the span event.**
+**Tokens come from the public spans; only what spans lack is stored.**
 
-- New table `session_model_usage` in the events database, one row per
-  `span.model_request_end`: workspace, session, span event id, input, output,
-  cache read, cache write 5m, cache write 1h, `cost_micros` (nullable).
-- The store derives the token columns from the span row itself whenever it
-  persists a `span.model_request_end`, on every path (live, tool-confirmation,
-  synthetic span ends from terminalization). So token totals always equal the
-  sum of the public spans, the way hosted's do, and no path can forget them.
-- Pi-only extras (cost and the 1h cache split) are not on the public span.
-  They come through a new `EventStoreRuntimeChanges.modelRequestCosts`, keyed
-  by `model_request_start_id`, from Pi's `message_end` (`usage.cost.total`,
-  `usage.cacheWrite1h`). A span end with no matching extra gets
-  `cost_micros = NULL`, so the session's `list_cost` turns null instead of
-  under-counting. Synthetic span ends (zero tokens) count as priced at zero.
-- "Unpriced": Pi's `cost.total` is 0 while the request used tokens.
-- Migration: create the table and backfill it from existing span events in
-  one transaction (same pattern as `ensureConversationTurnsTable`). Backfilled
-  rows have `cost_micros = NULL` and all cache writes as 5m, so sessions from
-  before this change show tokens but `list_cost: null`.
+- `span.model_request_end.model_usage` already has every token field, so
+  token totals are read as `SUM(json_extract(payload, '$.model_usage.…'))`
+  over the session's span ends. They equal the sum of the public spans by
+  construction, on every path, with nothing to backfill. A rollback and
+  re-upgrade cannot lose them.
+- New table `session_model_request_costs`, keyed by the **span-end event id**:
+  workspace, session, `cost_micros` (nullable), `cache_write_1h`, `provider`,
+  `model_id`. Written in the same batch as the span event, on the two paths
+  that persist real Pi span ends (the runner stream and the tool-confirmation
+  permission-use path, which has two call sites). The service knows the
+  span-end row id after `materializePersistedEvents`, and passes
+  `EventStoreRuntimeChanges.modelRequestCosts`.
+- Unpriced, decided at write time from Pi's float: tokens > 0 and
+  `!(Number.isFinite(cost.total) && cost.total > 0)` gives `cost_micros =
+  NULL`. Never re-derived from `cost_micros == 0`, since a tiny aborted
+  request legitimately rounds to 0. A NaN appears for a custom model that
+  declares only tiered rates.
+- `list_cost` is null iff some span end with tokens > 0 has no cost row or a
+  NULL cost. That covers unpriced models, spans written by an older OMA (no
+  cost row), and any path that forgot to pass the cost. Zero-token span ends
+  (synthetic closures, requests that failed before `message_start`) cost 0
+  and need no row.
+- `cache_creation`: `null` until the session has a span end. Otherwise
+  `ephemeral_1h_input_tokens` is the sum of `cache_write_1h` and
+  `ephemeral_5m_input_tokens` is the span cache writes minus that. Span ends
+  with no cost row count all of their cache writes as 5m.
+- `provider` and `model_id` make a null cost diagnosable and allow repricing
+  later.
+- No backfill and no startup scan. `deleteForSession` deletes the cost rows.
 
-**Read.**
+**Time, by walking the status events.** For each session, walk its
+`session.status_*` events in id order. `running` opens an interval if none is
+open. `idle` (any stop reason), `rescheduled` and `terminated` close it.
+Closers with nothing open are ignored. An interval still open at read time
+adds `now - opened_at`, unless the session is terminated. So a
+`requires_action` wait and a retry backoff do not count, and an archive
+mid-run closes the interval at termination. A crash-to-recovery gap counts
+as active, which is acceptable and documented.
+`duration_seconds` runs from `created_at` to now, frozen at `archived_at` for
+an archived session.
 
-- `SessionEventStore.usageForSessions(workspaceId, sessionIds)`: one grouped
-  `SUM` over `session_model_usage`, plus active seconds from the
-  `session.status_running` / `session.status_idle` events (pairs in log order;
-  a session still running adds `now - last running`). Uses the existing
-  `events_by_workspace_session_type` index.
-- The session service fills `usage` and `stats` on retrieve, list, create and
-  update from that call (list: one call per page, not per session).
-- `list_cost`: `{amount: String(round(sum_micros / 10_000)), currency: "USD"}`,
-  or null as above. `server_tool_use`: null, since OMA has no server tools
-  yet. The web tools item can fill it later.
-- Types, OpenAPI document and SDK-shape tests are updated; `usage: null` goes away.
+**Read.** One store call per page, `runtimeViewForSessions(workspaceId, ids)`,
+returns status (from #279), token sums, cost state and the status events for
+the walk. The session service gets it as an injected dependency; today it
+has no event-store reader. It fills `usage` and `stats` on create, retrieve,
+list and update. The dead `sessions.usage` column is left alone.
+`server_tool_use` is null until web tools exist. A load check over a session
+with thousands of turns confirms list stays in single-digit milliseconds;
+otherwise totals get maintained per session.
 
-**Console.** The session list and detail show tokens (in / out / cache) and
-cost. The tooltip saying "Session-level usage is not reported by the API" goes.
+**Console.** The session list and detail show tokens and cost. The "not
+reported by the API" tooltip goes.
+
+**PARITY.md.** Cost is model-only, priced at Pi's rates, not Anthropic's
+list prices. Pi prices the requested model when a fallback serves the
+request. Cost is a lower bound when requests were cut off. Totals update per
+request.
 
 ## Slices
 
-1. **Store and capture:** the table, the migration with backfill, derivation from
-   span rows, `modelRequestCosts` on all three span-end paths (runner
-   stream, tool-confirmation x2), and store tests.
-2. **API:** `usage` and `stats` on session responses, types, OpenAPI, PARITY.md,
-   and a real-Pi API test (faux provider with usage and cost) that checks the
-   session totals equal the sum of the spans after two turns.
+0. **#279 (separate PR):** session status derived from status events.
+1. **Store and capture:** the cost table and its write on both span-end paths,
+   the token and cost read, and the time walk. Also move `events/store.ts`'s
+   `ensure…` migrations into their own module (hygiene; this slice adds one).
+2. **API:** `usage` and `stats` on session responses, types, OpenAPI,
+   PARITY.md, and a real-Pi API test.
 3. **Console:** list and detail display.
 
 ## Tests that prevent real bugs
 
-- Totals equal the sum of the public spans after a tool turn plus a second
-  turn (the hosted invariant).
-- A session with one unpriced request reports `list_cost: null`, not a partial sum.
-- A span end persisted through the tool-confirmation path still records its
-  cost (otherwise confirmations silently null `list_cost`).
-- A pre-existing database is backfilled: tokens are present, `list_cost` is null.
-- `active_seconds` covers a running turn live and stops at idle; an
-  interrupted or terminalized turn still closes its interval.
-- A deleted session's usage rows go with it.
+- After a tool turn plus a second turn, the totals equal the sum of the
+  public spans, and `list_cost` matches Pi's rates. Probe 71's turn 1 at
+  `claude-sonnet-5` rates gives "5".
+- One unpriced request makes `list_cost` null; a NaN cost does too.
+- A span end persisted through the tool-confirmation path records its cost.
+- Spans with no cost row, as written by an older OMA, give tokens and a null
+  `list_cost`.
+- Archiving a running session stops `active_seconds` from growing.
+  `requires_action` and `running → running` sequences are counted once.
+- Deleting a session removes its cost rows.
 
 ## Out of scope
 
 `session.budget` and spend limits, workspace-level aggregation, runtime
-pricing, and `server_tool_use` (until web tools).
+pricing, `server_tool_use` (until web tools), and capturing late usage for
+cut-off requests (D4).
+
+## Review log
+
+- **Codex adversarial (plan, 2026-10-09):**
+  - Synthetic ends are not proof of zero cost: decided by D4.
+  - An existence-only backfill loses rows after a rollback: removed, since
+    tokens are now read from the spans.
+  - Archive leaves an interval open: fixed by the state walk.
+  - List replays history: accepted with the load check above as the guard.
+- **Fable (plan, 2026-10-09):**
+  - The time derivation needs a state walk: adopted.
+  - Token columns and the backfill are unnecessary: removed.
+  - Key the cost row by span-end id: adopted.
+  - Spell out the unpriced rule (decide at write time, NaN, zero-token):
+    adopted.
+  - Define `duration_seconds` and `cache_creation`: done.
+  - Name the read dependency: done.
+  - Record provider and model: adopted.
+  - Found #279 along the way.
