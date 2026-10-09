@@ -312,6 +312,13 @@ CREATE TRIGGER session_usage_web_search
 AFTER INSERT ON events WHEN NEW.type = 'agent.tool_result'
   AND COALESCE(json_extract(NEW.payload, '$.is_error'), 0) = 0
   AND EXISTS (${webSearchUse("NEW")})
+  -- Once per call: a replayed or duplicate result does not count again.
+  AND NOT EXISTS (
+    SELECT 1 FROM events earlier
+    WHERE earlier.workspace_id = NEW.workspace_id AND earlier.session_id = NEW.session_id
+      AND earlier.type = 'agent.tool_result' AND earlier.id <> NEW.id
+      AND json_extract(earlier.payload, '$.tool_use_id') = json_extract(NEW.payload, '$.tool_use_id')
+      AND COALESCE(json_extract(earlier.payload, '$.is_error'), 0) = 0)
 BEGIN
   INSERT INTO session_usage_totals (workspace_id, session_id, web_search_requests)
   VALUES (NEW.workspace_id, NEW.session_id, 1)
@@ -429,7 +436,7 @@ function ensureSessionUsageTotals(db: DatabaseSync): void {
 function backfillWebSearchRequests(db: DatabaseSync): void {
   db.exec(`
     INSERT INTO session_usage_totals (workspace_id, session_id, web_search_requests)
-    SELECT r.workspace_id, r.session_id, COUNT(*) FROM events r
+    SELECT r.workspace_id, r.session_id, COUNT(DISTINCT json_extract(r.payload, '$.tool_use_id')) FROM events r
     WHERE r.type = 'agent.tool_result'
       AND COALESCE(json_extract(r.payload, '$.is_error'), 0) = 0
       AND EXISTS (${webSearchUse("r")})

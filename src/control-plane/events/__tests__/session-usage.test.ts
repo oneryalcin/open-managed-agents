@@ -265,6 +265,21 @@ describe("usage totals across versions", () => {
     });
   });
 
+  it("counts a search call once, even with two successful results for it", () => {
+    const store = EventStore.open(":memory:");
+    const now = new Date().toISOString();
+    const event = (id: string, type: PersistedSessionEvent["type"], payload: Record<string, unknown>): PersistedSessionEvent => ({
+      id, workspace_id: WS, session_id: SESSION, type, processed_at: now, created_at: now, payload,
+    });
+    store.appendBatchWithRuntimeChanges([
+      event("sevt_use_dup", "agent.tool_use", { name: "web_search", input: { query: "q" } }),
+      event("sevt_res_1", "agent.tool_result", { tool_use_id: "sevt_use_dup", is_error: false, content: "[]" }),
+      event("sevt_res_2", "agent.tool_result", { tool_use_id: "sevt_use_dup", is_error: false, content: "[]" }),
+    ], {});
+
+    expect(usage(store)?.webSearchRequests).toBe(1);
+  });
+
   it("adds and backfills the web search count on a database from before it existed", () => {
     withFile((path) => {
       const store = EventStore.open(path);
