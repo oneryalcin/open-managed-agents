@@ -109,6 +109,12 @@ when all of these hold:
   send the browser to its own login page. Reauthorize is bound to the
   connect-time authorization server and token endpoint (#242, #257);
   credentials connected before 0.2.0 must be reconnected to reauthorize.
+  Once usage metering ships (plan 0148): **session cost is an estimate from
+  the price table bundled with the pinned Pi version**, not Anthropic's live
+  prices. A price change or a model that Pi version does not know makes it
+  drift or show as unknown until Pi is upgraded (#249). It prices the
+  requested model even when a fallback answered, and it is a lower bound when
+  a request was cut off mid-flight.
 
 ## Deferred to post-v1
 

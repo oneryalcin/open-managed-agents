@@ -113,7 +113,10 @@ otherwise totals get maintained per session.
 **Console.** The session list and detail show tokens and cost. The "not
 reported by the API" tooltip goes.
 
-**PARITY.md.** Cost is model-only, priced at Pi's rates, not Anthropic's
+**PARITY.md and the tester brief (0145).** Cost is an estimate from the price
+table bundled with the pinned Pi version (0.85.1): it can drift from
+Anthropic's prices, or be unknown for a newer model, until Pi is upgraded
+(#249). Cost is model-only, priced at Pi's rates, not Anthropic's
 list prices. Pi prices the requested model when a fallback serves the
 request. Cost is a lower bound when requests were cut off. Totals update per
 request.
