@@ -76,9 +76,11 @@ export function sessionsRoutes(
   app.post("/:id/archive", async (c) => {
     const sessionId = c.req.param("id");
     events.archiveSessionRowAfterPreflight(workspaceIdFrom(c), sessionId);
+    // Rendered like retrieve (final usage and stats), before the cleanup
+    // await: an archived session is deletable, so it may be gone after it.
+    const archived = service.retrieve(workspaceIdFrom(c), sessionId);
     await events.archiveSession(workspaceIdFrom(c), sessionId);
-    // Rendered like retrieve, so the final usage and stats are included.
-    return c.json(service.retrieve(workspaceIdFrom(c), sessionId), 200);
+    return c.json(archived, 200);
   });
 
   app.delete("/:id", async (c) => {

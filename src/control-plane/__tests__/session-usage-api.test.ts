@@ -182,6 +182,26 @@ describe("session usage API", () => {
     expect(session.usage.list_cost).toEqual({ amount: "4", currency: "USD" });
   });
 
+  it("still answers an archive whose session is deleted while cleanup runs", async () => {
+    let releaseClose!: () => void;
+    const closing = new Promise<void>((resolve) => { releaseClose = resolve; });
+    const runner = new PricedRunner(PROBE_71);
+    let closes = 0;
+    // Only the archive's cleanup waits; the delete's goes straight through.
+    Object.assign(runner, { closeSession: () => (closes++ === 0 ? closing : Promise.resolve()) });
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: translatePiEvent },
+    });
+    const session = await setupSession(app);
+
+    const archive = app.request(`/v1/sessions/${session.id}/archive`, { method: "POST" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const deleted = await app.request(`/v1/sessions/${session.id}`, { method: "DELETE" });
+    releaseClose();
+
+    expect([deleted.status, (await archive).status]).toEqual([200, 200]);
+  });
+
   it("reports the session's final usage in the archive response", async () => {
     const app = createInMemoryControlPlaneApp({
       runtime: { runner: new PricedRunner(PROBE_71), translate: translatePiEvent },
