@@ -152,21 +152,30 @@ function count(text: string, char: string): number {
   return text.split(char).length - 1;
 }
 
+interface MarkdownLinkSpan {
+  /** Index just after `](`. */
+  start: number;
+  /** Index of the closing `)`. */
+  end: number;
+  /** The destination with backslash escapes decoded. */
+  destination: string;
+}
+
 /**
- * Markdown link destinations, `](dest)`: backslash escapes decoded, balanced
- * parentheses kept, and only destinations with a real closing `)`.
+ * Markdown link destinations, `](dest)`: backslash escapes decoded (ASCII
+ * punctuation only, as CommonMark), balanced parentheses kept, and only
+ * destinations with a real closing `)`.
  */
-function markdownLinks(text: string): { links: string[]; rest: string } {
-  const links: string[] = [];
-  let rest = "";
+function* markdownLinkSpans(text: string): Generator<MarkdownLinkSpan> {
   let from = 0;
   for (;;) {
-    const start = text.indexOf("](", from);
-    if (start < 0) return { links, rest: rest + text.slice(from) };
+    const open = text.indexOf("](", from);
+    if (open < 0) return;
+    const start = open + 2;
     let depth = 0;
     let destination = "";
-    let closed = false;
-    let index = start + 2;
+    let end = -1;
+    let index = start;
     for (; index < text.length; index += 1) {
       const char = text[index]!;
       if (char === "\\") {
@@ -183,22 +192,52 @@ function markdownLinks(text: string): { links: string[]; rest: string } {
       if (char === "(") depth += 1;
       else if (char === ")") {
         if (depth === 0) {
-          closed = true;
+          end = index;
           break;
         }
         depth -= 1;
       }
       destination += char;
     }
-    if (closed && destination !== "") {
-      links.push(destination);
-      rest += text.slice(from, start) + " ";
-      from = index + 1;
-    } else {
-      rest += text.slice(from, index);
-      from = index;
-    }
+    if (end >= 0 && destination !== "") yield { start, end, destination };
+    from = end >= 0 ? end + 1 : index;
   }
+}
+
+/** Destinations, and the text with their spans removed (for the bare scan). */
+function markdownLinks(text: string): { links: string[]; rest: string } {
+  const links: string[] = [];
+  let rest = "";
+  let from = 0;
+  for (const span of markdownLinkSpans(text)) {
+    links.push(span.destination);
+    rest += text.slice(from, span.start - 2) + " ";
+    from = span.end + 1;
+  }
+  return { links, rest: rest + text.slice(from) };
+}
+
+/**
+ * Rewrite relative link destinations as absolute URLs against `base` (the URL
+ * actually fetched, after redirects). Parentheses are backslash-escaped so
+ * the link reads back as the same URL.
+ */
+export function absolutizeMarkdownLinks(text: string, base: string): string {
+  let out = "";
+  let from = 0;
+  for (const span of markdownLinkSpans(text)) {
+    let absolute: string | undefined;
+    try {
+      const url = new URL(span.destination, base);
+      if (url.protocol === "https:" || url.protocol === "http:") absolute = url.href;
+    } catch {
+      absolute = undefined;
+    }
+    if (absolute === undefined || absolute === span.destination) continue;
+    out += text.slice(from, span.start) + absolute.replace(/[()\\]/g, (c) => `\\${c}`);
+    from = span.end;
+  }
+  return out + text.slice(from);
 }
 
 function textOf(content: unknown): string {

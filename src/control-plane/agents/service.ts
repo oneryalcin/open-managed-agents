@@ -43,6 +43,13 @@ const CMA_BUILTIN_TOOL_NAMES = [
   "write",
 ] as const;
 const CMA_PERMISSION_POLICY_TYPES = ["always_allow", "always_ask"] as const;
+const WEB_TOOL_RESTRICTION_FIELDS = [
+  "allowed_domains",
+  "blocked_domains",
+  "url_sources",
+  "max_content_tokens",
+  "user_location",
+] as const;
 /** Builtins this deployment may not run; see the service's `webTools` option. */
 const OMA_DEPLOYMENT_DEPENDENT_BUILTIN_TOOL_NAMES = [
   "web_fetch",
@@ -749,6 +756,17 @@ function optionalToolConfigsSpread(
       throw invalidRequest(
         `\`configs[].name\` "${name}" is not a valid value; expected one of ${CMA_BUILTIN_TOOL_NAMES.join(", ")}`,
       );
+    }
+    // Hosted's per-tool web restrictions (plan 0149). Not honoured yet, so
+    // refuse them: silently dropping a restriction would widen access.
+    if (opts.builtin && (name === "web_fetch" || name === "web_search")) {
+      for (const key of WEB_TOOL_RESTRICTION_FIELDS) {
+        if (config[key] !== undefined && config[key] !== null) {
+          throw invalidRequest(
+            `\`configs[].${key}\` on \`${name}\` is not supported by this deployment yet; use the environment's allowed_hosts`,
+          );
+        }
+      }
     }
     return {
       name,

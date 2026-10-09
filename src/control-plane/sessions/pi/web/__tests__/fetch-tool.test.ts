@@ -96,4 +96,23 @@ describe("web_fetch tool", () => {
     await expect(run("https://docs.example.com/missing", { policy, events: [userSaid("https://docs.example.com/missing")] }, web))
       .rejects.toThrow("http_404");
   });
+
+  it("makes page links absolute against the URL actually fetched, after redirects", async () => {
+    const tool = createWebFetchTool({
+      context: async () => ({ policy, events: [userSaid("https://docs.example.com/start")] }),
+      fetchResource: async (url, options) => {
+        const check = options.validate(url);
+        if (!check.ok) return { ok: false, code: check.code, reason: check.reason, url };
+        return {
+          ok: true, finalUrl: "https://docs.example.com/docs/index", status: 200, contentType: "text/html",
+          body: new TextEncoder().encode('<p><a href="next">Next</a></p>'), truncated: false,
+        };
+      },
+    });
+
+    const result = await tool.execute("toolu_1", { url: "https://docs.example.com/start" }, undefined, undefined, undefined as never);
+    const first = result.content[0];
+
+    expect(first?.type === "text" ? first.text : "").toBe("[Next](https://docs.example.com/docs/next)");
+  });
 });

@@ -1015,6 +1015,13 @@ export class PiSessionRunner implements RuntimeEventRunner {
             }
           }
           assertNoSandboxCustomToolNameCollision(sandbox, customToolNames);
+          // Pi registers tools last-write-wins: a custom web_fetch would
+          // silently replace the permission-wrapped builtin.
+          for (const name of this.enabledGatedToolNames(workspaceId, sessionId, undefined)) {
+            if (customToolNames.has(name)) {
+              throw new Error(`Custom tool name conflicts with control-plane builtin: ${name}`);
+            }
+          }
           session =
             this.sessionFactory === undefined
               ? await this.createPiSession(

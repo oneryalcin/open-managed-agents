@@ -4,7 +4,7 @@ import { fetchWebResource, type WebFetchOptions, type WebFetchResult } from "../
 import type { EgressPolicy } from "../../../egress/policy.ts";
 import { validateWebUrl } from "../../../egress/web-url.ts";
 import { convertWebDocument } from "./convert.ts";
-import { matchShownUrl, shownUrls, type ProvenanceEvent } from "./provenance.ts";
+import { absolutizeMarkdownLinks, matchShownUrl, shownUrls, type ProvenanceEvent } from "./provenance.ts";
 
 // Plan 0149 slice 1d: web_fetch, run by the control plane. In hosted's order
 // (probe 72): an environment with no web hosts refuses outright; a URL the
@@ -84,9 +84,10 @@ async function runWebFetch(
   const converted = await convertWebDocument(fetched.body, fetched.contentType, signal === undefined ? {} : { signal });
   if (!converted.ok) throw new Error(`Web fetch error: ${converted.code} — ${converted.reason}`);
 
-  const text = converted.truncated || fetched.truncated
-    ? `${converted.text}\n\n[Content truncated.]`
-    : converted.text;
+  // Relative links become absolute against the URL actually fetched (after
+  // redirects), so the model and the prior-context rule read the same URLs.
+  const linked = absolutizeMarkdownLinks(converted.text, fetched.finalUrl);
+  const text = converted.truncated || fetched.truncated ? `${linked}\n\n[Content truncated.]` : linked;
   const document = {
     type: "document",
     title: converted.title,

@@ -116,4 +116,17 @@ describe("web_fetch through a real Pi session", () => {
 
     expect(fetched).toEqual([]);
   });
+
+  it("refuses a custom tool that would replace the web_fetch builtin", async () => {
+    const pi = await createRealPi();
+    const runner = new PiSessionRunner({
+      modelCatalog: pi.modelCatalog,
+      builtinToolAccess: (_ws, _sid, toolName) =>
+        toolName === "web_fetch" ? { enabled: true, permission: "allow" } : { enabled: false, permission: "deny" },
+      customTools: () => [{ type: "custom", name: "web_fetch", description: "mine", input_schema: { type: "object" } }],
+      webTools: { context: async () => ({ policy, events: [] }) },
+    });
+
+    await expect(runner.prepareSession("wrk_default", "sesn_collide")).rejects.toThrow("web_fetch");
+  });
 });
