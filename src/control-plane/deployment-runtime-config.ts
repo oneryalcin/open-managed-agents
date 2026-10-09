@@ -236,6 +236,12 @@ export function createDeploymentPiSessionRunner(
     ...runnerOpts,
     sandboxProviderSelection: config.sandboxProviderSelection,
     sandboxProviderSelectionOptions: selectionOptions,
+    // A rebuilt session gets a fresh container (docker-local, microsandbox);
+    // host-passthrough keeps the host directory and "none" has no workspace.
+    // Plan 0147 D2.
+    rebuildRecreatesWorkspace:
+      config.sandboxProviderSelection?.type === "docker-local" ||
+      config.sandboxProviderSelection?.type === "microsandbox-local",
   });
 }
 

@@ -330,6 +330,16 @@ goal because OMA's deployment model is intentionally different.
 - 🔵 **Rate limits** — CMA's fixed organization tiers vs OMA's
   operator-configurable per-workspace admission limits. Preserve the compatible
   429/529 envelope; do not imitate hosted numeric quotas by default.
+- 🔵 **Rebuilt sessions get hidden continuity notes** (plan 0147, temporary)
+  — after idle eviction or a restart, OMA rebuilds the model's conversation
+  from its saved log. Until ADR 0018 stage 2 keeps workspace files, a rebuild
+  on docker-local or microsandbox adds a hidden note that the sandbox was
+  recreated. A turn that never settled (crash, hard error) gets a hidden
+  note quoting the unanswered request. Notes are model context only, never
+  wire events. Hosted keeps both the files and the conversation.
+- 🔵 **Aborted assistant text** — the event stream shows an interrupted
+  assistant's partial text as `agent.message`, but Pi drops aborted
+  assistant messages from later model requests, so the model never sees it.
 - 🔵 **Sandbox and egress policy** — preserve OMA's fail-closed provider
   selection, stronger default Docker isolation, and boundary secret injection
   even where the implementation is not byte-for-byte hosted behavior.

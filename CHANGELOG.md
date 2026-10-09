@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **The model keeps the conversation across idle eviction and restarts**
+  (#265, plan 0147). Each settled turn is saved with the turn's close, and a
+  session missing from memory is rebuilt from it. When continuity is
+  incomplete, the model gets a hidden note: the sandbox was recreated (until
+  workspace files are kept), or a turn was cut off before it finished.
+
 ## 0.2.0 — trust release
 
 The first release planned by [0145](docs/plans/0145-road-to-external-testers.md):

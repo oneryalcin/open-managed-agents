@@ -25,6 +25,7 @@ async function harness(opts: {
   wrapStore?: (store: EventStore) => EventStore;
   runner?: RuntimeEventRunner;
   idleTtlMs?: number;
+  rebuildRecreatesWorkspace?: boolean;
   /** File-backed stores, to model a restart; a fresh session row is created only once. */
   paths?: { events: string; sessions: string; sessionId: string };
   pi?: RealPi;
@@ -39,6 +40,7 @@ async function harness(opts: {
       sessionFactory: pi.sessionFactory,
       idleTtlMs: opts.idleTtlMs ?? 0,
       conversation: realStore,
+      rebuildRecreatesWorkspace: opts.rebuildRecreatesWorkspace ?? false,
     });
   const service = new DefaultSessionEventsService(
     eventStore,
@@ -161,6 +163,7 @@ describe("conversation checkpoint per settled turn", () => {
         yield {
           type: "oma.conversation_settled",
           entries: [{ entryId: "hdr", json: "{}" }],
+          turnIds: [],
           piVersion: "0.85.1",
           release: (committed: boolean) => {
             if (released.length === 0) released.push(committed);
@@ -196,6 +199,7 @@ describe("conversation checkpoint per settled turn", () => {
         yield {
           type: "oma.conversation_settled",
           entries: [{ entryId: "hdr", json: "{}" }, { entryId: "e1", json: "{}" }],
+          turnIds: [],
           piVersion: "0.85.1",
           // Idempotent, first call wins, as the runner's is.
           release: (committed: boolean) => {
@@ -243,6 +247,7 @@ describe("conversation checkpoint per settled turn", () => {
         yield {
           type: "oma.conversation_settled",
           entries: [{ entryId: "hdr", json: "{}" }],
+          turnIds: [],
           piVersion: "0.85.1",
           release: () => {
             settledReleased = true;
@@ -366,6 +371,165 @@ describe("conversation rebuild (plan 0147 slice 3a)", () => {
     }
   });
 
+});
+
+describe("continuity notes on rebuild (plan 0147 slice 3b)", () => {
+  const evicted = (h: Awaited<ReturnType<typeof harness>>) =>
+    (h.runner as unknown as { sessions: Map<string, unknown> }).sessions.size === 0;
+
+  it("tells the model about a turn that was cut off before it settled", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-unfinished-"));
+    try {
+      const paths = { events: join(dir, "e.sqlite"), sessions: join(dir, "s.sqlite"), sessionId: "sesn_cut" };
+      const before = await harness({ paths });
+      before.pi.core.setResponses([async () => new Promise(() => {})]); // never answers
+      before.send("Deploy the app.");
+      await waitFor(() => before.pi.core.state.callCount === 1);
+      // Restart: recovery terminalizes the abandoned turn.
+      const after = await harness({ paths });
+      const turn = after.realStore.listPendingRuntimeTurns(WS)[0]!;
+      after.realStore.appendBatchWithRuntimeChanges([], {
+        closedTurns: [{
+          workspaceId: WS, sessionId: paths.sessionId, turnId: turn.turn_id,
+          ownerId: turn.owner_id, ownerGeneration: turn.owner_generation,
+          reason: "terminalized", state: "terminalized", now: new Date().toISOString(),
+        }],
+      });
+      after.pi.core.setResponses([after.pi.faux.fauxAssistantMessage("Checking.")]);
+
+      after.send("Are you there?");
+      await waitFor(() => after.pi.core.state.callCount === 1);
+
+      expect(lastRequest(after.pi).find((m) => m.includes("did not finish"))).toContain("> Deploy the app.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not repeat a cut-off note on later rebuilds", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-unfinished-"));
+    try {
+      const paths = { events: join(dir, "e.sqlite"), sessions: join(dir, "s.sqlite"), sessionId: "sesn_once" };
+      const before = await harness({ paths });
+      before.pi.core.setResponses([async () => new Promise(() => {})]);
+      before.send("Deploy the app.");
+      await waitFor(() => before.pi.core.state.callCount === 1);
+      const after = await harness({ paths, idleTtlMs: 20 });
+      const turn = after.realStore.listPendingRuntimeTurns(WS)[0]!;
+      after.realStore.appendBatchWithRuntimeChanges([], {
+        closedTurns: [{
+          workspaceId: WS, sessionId: paths.sessionId, turnId: turn.turn_id,
+          ownerId: turn.owner_id, ownerGeneration: turn.owner_generation,
+          reason: "terminalized", state: "terminalized", now: new Date().toISOString(),
+        }],
+      });
+      after.pi.core.setResponses([
+        after.pi.faux.fauxAssistantMessage("Checking."),
+        after.pi.faux.fauxAssistantMessage("Still here."),
+      ]);
+      after.send("Are you there?");
+      await waitFor(() => after.stored().length >= 2);
+      await waitFor(() => evicted(after));
+
+      after.send("And now?");
+      await waitFor(() => after.pi.core.state.callCount === 2);
+
+      expect(lastRequest(after.pi).filter((m) => m.includes("did not finish"))).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not report a message steered into a settled turn after a rebuild", async () => {
+    const h = await harness({ idleTtlMs: 20 });
+    const gate = deferred<void>();
+    h.pi.core.setResponses([
+      async () => {
+        await gate.promise;
+        return h.pi.faux.fauxAssistantMessage("first reply");
+      },
+      h.pi.faux.fauxAssistantMessage("steered reply"),
+      h.pi.faux.fauxAssistantMessage("third reply"),
+    ]);
+    h.send("first");
+    await waitFor(() => h.pi.core.state.callCount === 1);
+    h.send("steered");
+    gate.resolve();
+    await waitFor(() => h.stored().length === 4);
+    await waitFor(() => evicted(h));
+
+    h.send("third");
+    await waitFor(() => h.pi.core.state.callCount === 3);
+
+    expect(lastRequest(h.pi).some((m) => m.includes("did not finish"))).toBe(false);
+  });
+
+  it("recovers from a server-side failure mid-turn and tells the model that turn did not finish", async () => {
+    // A failure while the service persists the turn's events abandons the
+    // runner mid-turn; the session must not wedge on the dead run.
+    let failNext = true;
+    const h = await harness({
+      wrapStore: (store) =>
+        new Proxy(store, {
+          get(target, prop, receiver) {
+            if (prop !== "appendBatchWithRuntimeChanges") {
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            }
+            return (events: readonly PersistedSessionEvent[], changes: EventStoreRuntimeChanges) => {
+              if (failNext && events.some((event) => event.type === "agent.message")) {
+                failNext = false;
+                throw new Error("disk full");
+              }
+              return target.appendBatchWithRuntimeChanges(events, changes);
+            };
+          },
+        }),
+    });
+    h.pi.core.setResponses([
+      h.pi.faux.fauxAssistantMessage("lost reply"),
+      h.pi.faux.fauxAssistantMessage("ok"),
+    ]);
+    h.send("Deploy the app.");
+    await waitFor(() => !failNext && h.idles() >= 1);
+
+    h.send("Status?");
+    await waitFor(() => h.pi.core.state.callCount === 2);
+
+    expect(lastRequest(h.pi).find((m) => m.includes("did not finish"))).toContain("> Deploy the app.");
+  });
+
+  it("tells the model its sandbox was recreated when a rebuild gets a fresh workspace", async () => {
+    const h = await harness({ idleTtlMs: 20, rebuildRecreatesWorkspace: true });
+    h.pi.core.setResponses([
+      h.pi.faux.fauxAssistantMessage("Wrote notes.txt."),
+      h.pi.faux.fauxAssistantMessage("ok"),
+    ]);
+    h.send("Write notes.txt.");
+    await waitFor(() => h.stored().length === 2);
+    await waitFor(() => evicted(h));
+
+    h.send("Read notes.txt.");
+    await waitFor(() => h.pi.core.state.callCount === 2);
+
+    expect(lastRequest(h.pi).some((m) => m.includes("sandbox was recreated"))).toBe(true);
+  });
+
+  it("says nothing about the sandbox when a rebuild keeps the workspace", async () => {
+    const h = await harness({ idleTtlMs: 20, rebuildRecreatesWorkspace: false });
+    h.pi.core.setResponses([
+      h.pi.faux.fauxAssistantMessage("Wrote notes.txt."),
+      h.pi.faux.fauxAssistantMessage("ok"),
+    ]);
+    h.send("Write notes.txt.");
+    await waitFor(() => h.stored().length === 2);
+    await waitFor(() => evicted(h));
+
+    h.send("Read notes.txt.");
+    await waitFor(() => h.pi.core.state.callCount === 2);
+
+    expect(lastRequest(h.pi).some((m) => m.includes("sandbox was recreated"))).toBe(false);
+  });
 });
 
 function rejectingCheckpointWrites(shouldReject: () => boolean, which: "close" | "any") {

@@ -135,6 +135,48 @@ describe("PiSessionRunner conversation checkpoints (plan 0147)", () => {
     expect(factory.sessions).toHaveLength(1);
   });
 
+  it("records the owning turn and a turn steered into it as covered", async () => {
+    const gate = deferred<void>();
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }], promptGate: gate.promise });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const first = collect(runner.runUserMessage("wrk", "sesn_1", "one", { turnId: "turn_a" }));
+    await until(() => factory.sessions[0]?.running === true);
+    await collect(runner.runUserMessage("wrk", "sesn_1", "two", { turnId: "turn_b" }));
+    gate.resolve();
+
+    const [settled] = settledOf(await first);
+
+    expect(settled!.turnIds).toEqual(["turn_a", "turn_b"]);
+  });
+
+  it("keeps covered turns for the next checkpoint until one commits", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [first] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one", { turnId: "turn_a" })));
+    first!.release(false);
+    const [second] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "two", { turnId: "turn_b" })));
+    second!.release(true);
+
+    const [third] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "three", { turnId: "turn_c" })));
+
+    expect({ second: second!.turnIds, third: third!.turnIds })
+      .toEqual({ second: ["turn_a", "turn_b"], third: ["turn_c"] });
+  });
+
+  it("clears only the turns a committed checkpoint covered", async () => {
+    const factory = new FakeSessionFactory({ sessionLog: [{ id: "e1" }] });
+    const runner = new PiSessionRunner({ sessionFactory: () => factory.create(), idleTtlMs: 0 });
+    const [a] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "one", { turnId: "turn_a" })));
+    // B runs before A's checkpoint commits; its own checkpoint is then refused.
+    const [b] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "two", { turnId: "turn_b" })));
+    a!.release(true);
+    b!.release(false);
+
+    const [c] = settledOf(await collect(runner.runUserMessage("wrk", "sesn_1", "three", { turnId: "turn_c" })));
+
+    expect(c!.turnIds).toEqual(["turn_b", "turn_c"]);
+  });
+
   it("emits no checkpoint from the losing side of the prompt race and releases its hold", async () => {
     const factory = new FakeSessionFactory({
       sessionLog: [{ id: "e1" }],

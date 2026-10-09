@@ -235,7 +235,20 @@ export interface RuntimeConversationCheckpoint {
   ownerGeneration: number;
   piVersion: string;
   entries: readonly ConversationEntryRecord[];
+  /** Turns whose user messages these entries include (coverage provenance). */
+  coveredTurnIds: readonly string[];
   now: string;
+}
+
+/** A user message sent to Pi whose turn never settled (plan 0147). */
+export interface UnfinishedUserMessage {
+  eventId: string;
+  text: string;
+}
+
+export interface LoadedConversation {
+  entries: StoredConversationEntry[];
+  unfinished: UnfinishedUserMessage[];
 }
 
 export interface StoredConversationEntry {
@@ -283,6 +296,11 @@ export interface SessionEventStore {
     ownerId: string;
     ownerGeneration: number;
   }): boolean;
+  /**
+   * A session's saved conversation plus the user messages whose turns never
+   * settled, for rebuilding its Pi session (plan 0147).
+   */
+  loadConversation(workspaceId: WorkspaceId, sessionId: string): LoadedConversation;
   /** A session's saved Pi conversation, in append order (plan 0147). */
   listConversationEntries(
     workspaceId: WorkspaceId,
@@ -425,7 +443,11 @@ export interface RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
     text: string,
-    opts?: { signal?: AbortSignal },
+    opts?: {
+      signal?: AbortSignal;
+      /** The runtime turn this message started; checkpoints record it (plan 0147). */
+      turnId?: string;
+    },
   ): AsyncIterable<unknown>;
   claimCustomToolResult?(
     workspaceId: WorkspaceId,
@@ -613,6 +635,8 @@ export interface RuntimeMcpConnectionFailedEvent {
 export interface RuntimeConversationSettledEvent {
   type: "oma.conversation_settled";
   entries: readonly ConversationEntryRecord[];
+  /** Turns whose messages this settled run delivered: its own, plus steered. */
+  turnIds: readonly string[];
   piVersion: string;
   release: (committed: boolean) => void;
 }

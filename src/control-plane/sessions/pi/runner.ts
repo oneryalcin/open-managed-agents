@@ -7,6 +7,8 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
+import { UNFINISHED_TURN_NOTE } from "../../events/conversation-coverage.ts";
 import {
   PINNED_PI_MODEL_RUNTIME_VERSION,
   type PiModelCatalog,
@@ -21,6 +23,7 @@ import type {
   RuntimeConversationSettledEvent,
   RuntimeInternalEvent,
   SessionEventStore,
+  UnfinishedUserMessage,
   RuntimeMcpConnectionFailedEvent,
   RuntimeMcpToolWithModelEndEvent,
   RuntimeSessionFileMount,
@@ -160,6 +163,8 @@ interface RuntimeHandle {
   holdWaiters: Array<() => void>;
   /** How many of [header, ...entries] the store has acknowledged. */
   conversationAcked: number;
+  /** Turns delivered into this session but not yet in a committed checkpoint. */
+  unackedTurnIds: string[];
   needsFreshPromptAfterInterrupt: boolean;
   closeWhenIdle: boolean;
   lastUsedAt: number;
@@ -268,7 +273,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly now: () => number;
   private readonly sessionFactory: PiRuntimeSessionFactory | undefined;
   private readonly conversation:
-    | Pick<SessionEventStore, "listConversationEntries">
+    | Pick<SessionEventStore, "loadConversation">
     | undefined;
   private readonly mcpFetch: McpFetch;
   /**
@@ -303,7 +308,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
        * Saved conversations (plan 0147): a session missing from the cache
        * (idle eviction, restart) is rebuilt from its stored entries.
        */
-      conversation?: Pick<SessionEventStore, "listConversationEntries">;
+      conversation?: Pick<SessionEventStore, "loadConversation">;
+      /**
+       * Whether a rebuilt session gets a fresh sandbox without the earlier
+       * workspace files (docker-local, microsandbox: yes; host-passthrough:
+       * no). Rebuilds then tell the model (plan 0147 D2), until ADR 0018
+       * stage 2 keeps the files.
+       */
+      rebuildRecreatesWorkspace?: boolean;
       sandboxProviderFactory?: SandboxProviderFactory;
       sandboxProviderSelection?: SandboxProviderSelection;
       sandboxProviderSelectionOptions?: SandboxProviderSelectionResolverOptions;
@@ -352,9 +364,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
     workspaceId: WorkspaceId,
     sessionId: string,
     text: string,
-    opts: { signal?: AbortSignal } = {},
+    opts: { signal?: AbortSignal; turnId?: string } = {},
   ): AsyncIterable<unknown> {
-    return this.runOnSession(workspaceId, sessionId, text, opts.signal);
+    return this.runOnSession(workspaceId, sessionId, text, opts.signal, opts.turnId);
   }
 
   async prepareSession(
@@ -538,6 +550,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     sessionId: string,
     text: string,
     signal: AbortSignal | undefined,
+    turnId: string | undefined,
   ): AsyncIterable<unknown> {
     // Cross-request interrupt/message ordering: a message that arrives while
     // abort is settling waits and then starts a fresh post-interrupt turn.
@@ -548,6 +561,12 @@ export class PiSessionRunner implements RuntimeEventRunner {
       throw new Error("PiSessionRunner is closed");
     }
     this.touch(sessionId, handle);
+    // Whichever run delivers this message, its next settled checkpoint
+    // records the turn as covered (plan 0147). A steered message that an
+    // interrupt then clears from Pi's queue is counted as covered too: an
+    // interrupt is a deliberate stop, which is never reported as unfinished.
+    // A crash loses this in-memory list, so crash-lost turns stay uncovered.
+    if (turnId !== undefined) handle.unackedTurnIds.push(turnId);
 
     if (handle.running && !handle.needsFreshPromptAfterInterrupt) {
       try {
@@ -567,6 +586,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     // generator only later (e.g. after output indexing), by which time a newer
     // turn can have appended to the same Pi session log.
     let settledLog: Array<{ id: string }> | undefined;
+    let settledTurnIds: string[] = [];
 
     const queue: unknown[] = [];
     const gatedEvents: unknown[] = [];
@@ -648,6 +668,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       .prompt(text, { expandPromptTemplates: false })
       .then(() => {
         settledLog = conversationLog(handle.session);
+        settledTurnIds = [...handle.unackedTurnIds];
       })
       .catch(async (error) => {
         if (isAlreadyProcessing(error)) {
@@ -772,7 +793,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
       if (!queuedOnRunningTurn) {
         const settled = settledLog === undefined
           ? undefined
-          : this.conversationSettledEvent(sessionId, handle, hold, settledLog);
+          : this.conversationSettledEvent(sessionId, handle, hold, settledLog, settledTurnIds);
         if (settled) {
           settledEmitted = true;
           yield settled;
@@ -791,15 +812,25 @@ export class PiSessionRunner implements RuntimeEventRunner {
       signal?.removeEventListener("abort", onAbort);
       // Once yielded, the settled event's release() belongs to the service.
       if (!settledEmitted) this.releaseHold(sessionId, handle, hold);
+      // The consumer abandoned the turn before Pi settled (e.g. the service
+      // failed to persist its events). With the listener gone, agent_end is
+      // never seen and handle.running would stay true, so every later message
+      // would steer into a dead run. Evict: the next message rebuilds from the
+      // saved conversation.
+      if (!done && this.sessions.get(sessionId) === handle) {
+        this.evict(sessionId, handle);
+      }
     }
   }
 
   // Stored entries are what Pi appended, serialized by the settled checkpoint.
   // A corrupt row fails session creation rather than silently starting a
   // session with no memory.
-  private conversationSeed(workspaceId: WorkspaceId, sessionId: string): PiConversationSeed {
-    return (this.conversation?.listConversationEntries(workspaceId, sessionId) ?? []).map(
-      (row) => {
+  private loadSavedConversation(workspaceId: WorkspaceId, sessionId: string): SavedConversation {
+    const loaded = this.conversation?.loadConversation(workspaceId, sessionId);
+    if (loaded === undefined) return { entries: [], unfinished: [] };
+    return {
+      entries: loaded.entries.map((row) => {
         try {
           return JSON.parse(row.json) as PiConversationSeed[number];
         } catch (error) {
@@ -808,8 +839,9 @@ export class PiSessionRunner implements RuntimeEventRunner {
             { cause: error },
           );
         }
-      },
-    );
+      }),
+      unfinished: loaded.unfinished,
+    };
   }
 
   private conversationSettledEvent(
@@ -817,6 +849,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     handle: RuntimeHandle,
     hold: symbol,
     all: ReadonlyArray<{ id: string }>,
+    turnIds: readonly string[],
   ): RuntimeConversationSettledEvent {
     // A newer run may append before this checkpoint commits; the cursor only
     // ever advances to this settlement's endpoint.
@@ -828,12 +861,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
         entryId: entry.id,
         json: JSON.stringify(entry),
       })),
+      turnIds,
       piVersion: PINNED_PI_MODEL_RUNTIME_VERSION,
       release: (committed) => {
         if (released) return;
         released = true;
         if (committed) {
           handle.conversationAcked = Math.max(handle.conversationAcked, endpoint);
+          handle.unackedTurnIds = handle.unackedTurnIds.filter((id) => !turnIds.includes(id));
         }
         this.releaseHold(sessionId, handle, hold);
       },
@@ -916,11 +951,14 @@ export class PiSessionRunner implements RuntimeEventRunner {
         let sandbox: SandboxProvider | undefined;
         let session: PiRuntimeSession | undefined;
         let seed: PiConversationSeed = [];
+        let storedCount = 0;
         let mcp: PreparedMcp = EMPTY_MCP;
         try {
           // Before any sandbox or MCP work: a corrupt saved conversation should
           // fail without building and tearing those down on every retry.
-          seed = this.conversationSeed(workspaceId, sessionId);
+          const saved = this.loadSavedConversation(workspaceId, sessionId);
+          storedCount = saved.entries.length;
+          seed = [...saved.entries, ...continuityNotes(saved, this.opts.rebuildRecreatesWorkspace === true)];
           try {
             sandbox = await sandboxProviderFactory?.(
               workspaceId,
@@ -992,9 +1030,11 @@ export class PiSessionRunner implements RuntimeEventRunner {
           running: false,
           holds: new Set(),
           holdWaiters: [],
-          // Loaded entries are already stored; re-offering them would be a
-          // harmless no-op (idempotent append), so this only saves work.
-          conversationAcked: seed.length,
+          // Stored entries are already saved (re-offering them would be a
+          // harmless no-op). Continuity notes after them are not, so the next
+          // settled checkpoint saves them.
+          conversationAcked: storedCount,
+          unackedTurnIds: [],
           needsFreshPromptAfterInterrupt: false,
           // Retrying MCP failures use fresh-handle mechanics: dispose at
           // idle so the NEXT turn re-runs connect/discovery (plan 0122 §4.6).
@@ -1520,14 +1560,72 @@ function steerVerbatim(session: PiRuntimeSession, text: string): void {
   session.agent.steer({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
 }
 
+interface SavedConversation {
+  entries: PiConversationSeed;
+  unfinished: readonly UnfinishedUserMessage[];
+}
+
+const SANDBOX_RECREATED_NOTE = "oma.sandbox_recreated";
+
+/**
+ * Hidden notes for the model when continuity is incomplete (plan 0147 D2).
+ * They are Pi custom messages: the model sees them, the event stream does
+ * not. Saved with the next settled turn, so they are not repeated.
+ */
+function continuityNotes(
+  saved: SavedConversation,
+  recreatesWorkspace: boolean,
+): PiConversationSeed {
+  const notes: PiConversationSeed = [];
+  let parentId = (saved.entries.at(-1) as { id?: string } | undefined)?.id ?? null;
+  const add = (customType: string, content: string, details?: unknown) => {
+    const id = `oma-${randomUUID().slice(0, 8)}`;
+    notes.push({
+      type: "custom_message",
+      id,
+      parentId,
+      timestamp: new Date().toISOString(),
+      customType,
+      content,
+      display: false,
+      ...(details === undefined ? {} : { details }),
+    } as PiConversationSeed[number]);
+    parentId = id;
+  };
+  if (saved.unfinished.length > 0) {
+    add(
+      UNFINISHED_TURN_NOTE,
+      [
+        "Your previous turn did not finish: it was cut off by an error or a restart before it completed.",
+        "The user had asked:",
+        ...saved.unfinished.map((message) => `> ${message.text.replaceAll("\n", "\n> ")}`),
+        "Any tool calls from that turn may or may not have taken effect. Check before repeating anything.",
+      ].join("\n"),
+      { eventIds: saved.unfinished.map((message) => message.eventId) },
+    );
+  }
+  const last = saved.entries.at(-1) as { type?: string; customType?: string } | undefined;
+  const alreadyNoted =
+    last?.type === "custom_message" && last.customType === SANDBOX_RECREATED_NOTE;
+  if (recreatesWorkspace && saved.entries.length > 0 && !alreadyNoted) {
+    add(
+      SANDBOX_RECREATED_NOTE,
+      "This session's sandbox was recreated, so files created earlier in this session may no longer exist. Check before relying on them.",
+    );
+  }
+  return notes;
+}
+
 // The checkpoint cursor starts at the seed's length, so a session that did
 // not actually load its saved conversation would start with no memory and
 // silently skip every later checkpoint. Refuse it instead.
 function assertRebuiltFromSeed(session: PiRuntimeSession, seed: PiConversationSeed): void {
   if (seed.length === 0) return;
   const log = conversationLog(session) ?? [];
+  // With nothing saved yet the seed is only notes, and Pi adds a header first.
+  const offset = (seed[0] as { type?: unknown }).type === "session" ? 0 : 1;
   const seedIds = seed.map((entry) => (entry as { id?: unknown }).id);
-  if (!seedIds.every((id, index) => log[index]?.id === id)) {
+  if (!seedIds.every((id, index) => log[index + offset]?.id === id)) {
     throw new Error("Pi session was not rebuilt from its saved conversation");
   }
 }

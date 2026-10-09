@@ -1248,7 +1248,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             workspaceId,
             sessionId,
             prompt.text,
-            { signal },
+            { signal, turnId: prompt.turnId },
           );
           for await (const piEvent of source) {
             if (isRuntimeConversationSettledEvent(piEvent)) {
@@ -1776,7 +1776,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
     // the ownership fence refuses it, and an archive ends the run before it
     // can settle.
     const conversation =
-      settled === undefined || settled.entries.length === 0
+      settled === undefined || (settled.entries.length === 0 && settled.turnIds.length === 0)
         ? undefined
         : {
             workspaceId,
@@ -1786,6 +1786,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
             ownerGeneration: prompt.ownerGeneration,
             piVersion: settled.piVersion,
             entries: settled.entries,
+            coveredTurnIds: settled.turnIds,
             now: new Date().toISOString(),
           };
     try {

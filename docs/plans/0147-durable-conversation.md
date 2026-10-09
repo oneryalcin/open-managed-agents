@@ -2,7 +2,9 @@
 
 ## Status
 
-Design accepted 2026-10-08 (decisions below). Implementation not started. Implements stage 1 of
+Implemented 2026-10-08 in four PRs: #269 (store), #270 (settled checkpoint),
+#271 (rebuild), and slice 3b (unfinished-turn detection, continuity notes,
+docs). Design accepted the same day (decisions below). Implements stage 1 of
 [ADR 0018](../adrs/0018-session-durability-and-parking.md) and fixes #265. It is
 an M2 item in [0145](0145-road-to-external-testers.md).
 
@@ -187,27 +189,34 @@ progress. That is unchanged from today and is ADR 0018 stage 3.
 - On a cache miss, `getOrCreateHandle` loads stored entries. If there are
   any, it builds the Pi session from `SessionManager.inMemory(cwd, undefined,
   entries)`, and the acknowledged count is the loaded count.
-- **Unclean end, by content coverage rather than turn order.** The event store
-  computes it, because it has the event log and the turn ledger; the runner's
-  `getOrCreateHandle` has no trigger ids. The store's load call returns
-  `{ entries, uncovered }`.
-  - **Candidates:** `user.message` events that actually dispatched a prompt.
-    Their dispatched text is `textFromContent(content)` (text blocks joined
-    with newlines and trimmed). Image-only or whitespace-only messages never
-    reach Pi and are not candidates.
-  - **Excluded:** trigger events of turns still pending (they are about to be
-    delivered, including the one starting now), and of turns closed
-    `interrupted` (a deliberate interrupt).
-  - **Matching:** walk candidates and stored user entries in order, comparing
-    dispatched text. Candidates left unmatched are uncovered: their turn never
-    settled.
-  - Turn order would mislabel steered messages: they belong to the earlier
-    turn's checkpoint, not their own runtime turn. Duplicate texts still match
-    correctly because matching is in order.
-- **Notes are idempotent.** A D2 note is added through Pi's custom-message
+- **Unclean end, by turn identity (revised in slice 3b review).** Each
+  settled checkpoint records the turns whose messages it includes: the owning
+  turn and any turn whose message was steered into that run. The runner learns
+  each message's turn id from `runUserMessage` and tracks turns not yet in a
+  committed checkpoint, the same way it tracks entries. The event store's
+  `loadConversation` returns `{ entries, unfinished }`.
+  - **Unfinished:** a `user.message` that started a turn, whose turn is closed,
+    not closed `interrupted`, not covered by any checkpoint, and not already
+    reported by a saved note.
+  - The first version matched message *text* in order. Both Codex passes
+    showed it mislabels a lost "Deploy" followed by a completed "Deploy", and
+    assumes event-id order equals delivery order. Identity has neither
+    problem.
+  - Known edge: a message stranded in Pi's queue by the #260 race is counted
+    as covered by the run it was steered into, although it was not delivered.
+- **Notes are not repeated needlessly.** A D2 note is a Pi custom-message
   entry, which the model sees as a user message and the next checkpoint saves.
-  Rebuild skips a note when an identical one is already the last note entry,
-  so repeated rebuilds don't pile them up.
+  - The unfinished-turn note records the event ids it reported, and those are
+    never reported again.
+  - The sandbox note is added once per rebuild that really recreated the
+    sandbox, since each one loses files again. It is skipped when the last saved
+    entry is already that note (a rebuild with no turn since).
+- **Known delay (#273):** after a crash, the abandoned turn stays pending
+  until its lease expires, so a message sent in that window gets no
+  unfinished-turn note until the next eviction or restart.
+- **A server-side failure mid-turn evicts the runtime handle** (found in
+  review; it previously wedged the session, a bug that already existed in
+  `main`), so the next message rebuilds and gets the note.
 - No tool-result repair (Pi fact 5).
 
 ## Decisions
@@ -272,7 +281,8 @@ Real Pi with the faux provider (D3), through the events service unless noted:
   advances the cursor only to the released checkpoint's endpoint.
 - **Undispatched and pending messages:** an image-only message, and a message
   whose turn is still pending at rebuild, produce no cut-off note.
-- **Notes don't pile up:** two rebuilds in a row leave one workspace note.
+- **Notes aren't repeated:** an unfinished-turn note is not added again on a
+  later rebuild.
 - **Closed or deleted session:** no conversation rows are written.
 - **Delete:** deleting a session removes its conversation rows.
 - **Unclean end:** after a turn that ends in a hard error, the next rebuild's
