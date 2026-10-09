@@ -27,108 +27,16 @@ import type {
   RuntimeTurnRecoveryClaim,
   SessionEventRecordPage,
   SessionEventStore,
+  SessionUsageTotals,
   StoredConversationEntry,
 } from "./types.ts";
 import type { RequestIdempotencyKey } from "../request-idempotency.ts";
 import type { ManagedAgentsContentBlock } from "../../types/events.ts";
 import { unfinishedUserMessages } from "./conversation-coverage.ts";
+import { migrateEventStore } from "./store-schema.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import type { ManagedAgentsSessionStatus } from "../../types/sessions.ts";
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS events (
-  id           TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL DEFAULT 'wrk_default',
-  session_id   TEXT NOT NULL,
-  type         TEXT NOT NULL,
-  processed_at TEXT,
-  payload      TEXT NOT NULL,
-  created_at   TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS pending_runtime_turns (
-  workspace_id TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  turn_id TEXT NOT NULL,
-  owner_id TEXT NOT NULL,
-  owner_generation INTEGER NOT NULL,
-  lease_expires_at TEXT NOT NULL,
-  state TEXT NOT NULL,
-  trigger_event_ids TEXT NOT NULL,
-  open_model_request_start_ids TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  completed_at TEXT,
-  terminalized_at TEXT,
-  close_reason TEXT,
-  PRIMARY KEY (workspace_id, session_id, turn_id)
-);
--- Closed turns are retained as history (UPDATE, not DELETE), so live-turn
--- counts need a partial index or every /metrics scrape and /health check
--- scans all history (0121 C2 review, Codex-adv HIGH). Serves both the
--- workspace-scoped and unscoped counts.
-CREATE INDEX IF NOT EXISTS idx_runtime_turns_live
-ON pending_runtime_turns (workspace_id)
-WHERE state NOT IN ('completed', 'terminalized');
-CREATE TABLE IF NOT EXISTS pending_runtime_actions (
-  workspace_id TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  turn_id TEXT NOT NULL,
-  action_id TEXT NOT NULL,
-  action_type TEXT NOT NULL,
-  state TEXT NOT NULL,
-  acknowledged_at TEXT,
-  closed_at TEXT,
-  close_reason TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (workspace_id, session_id, action_id),
-  FOREIGN KEY (workspace_id, session_id, turn_id)
-    REFERENCES pending_runtime_turns(workspace_id, session_id, turn_id)
-);
-CREATE TABLE IF NOT EXISTS idempotency_keys (
-  workspace_id TEXT NOT NULL,
-  method TEXT NOT NULL,
-  concrete_path TEXT NOT NULL,
-  idempotency_key TEXT NOT NULL,
-  route_label TEXT NOT NULL,
-  fingerprint_sha256 TEXT NOT NULL,
-  status TEXT NOT NULL,
-  response_status INTEGER,
-  response_body TEXT,
-  resource_type TEXT,
-  resource_id TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  PRIMARY KEY (workspace_id, method, concrete_path, idempotency_key)
-);
--- A session's Pi conversation, saved once per settled turn (plan 0147), so it
--- can be rebuilt after idle eviction or a restart. Deleted with the events.
-CREATE TABLE IF NOT EXISTS session_conversation_entries (
-  workspace_id TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  entry_id TEXT NOT NULL,
-  entry_json TEXT NOT NULL,
-  turn_id TEXT NOT NULL,
-  pi_version TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (workspace_id, session_id, seq),
-  UNIQUE (workspace_id, session_id, entry_id)
-);
-`;
-
-const INDEXES = `
-CREATE INDEX IF NOT EXISTS events_by_workspace_session ON events (workspace_id, session_id, id);
-CREATE INDEX IF NOT EXISTS events_by_workspace_session_type ON events (workspace_id, session_id, type, id);
-CREATE INDEX IF NOT EXISTS pending_runtime_actions_by_turn
-  ON pending_runtime_actions (workspace_id, session_id, turn_id);
-CREATE INDEX IF NOT EXISTS idempotency_keys_by_status_expiry
-  ON idempotency_keys (status, expires_at);
-CREATE INDEX IF NOT EXISTS idempotency_keys_by_resource
-  ON idempotency_keys (workspace_id, resource_type, resource_id);
-`;
 
 interface EventRow {
   id: string;
@@ -225,6 +133,8 @@ export class EventStore implements SessionEventStore {
   private readonly insertConversationEntryStmt: StatementSync;
   private readonly listConversationEntriesStmt: StatementSync;
   private readonly latestSessionStatusStmt: StatementSync;
+  private readonly insertModelRequestCostStmt: StatementSync;
+  private readonly sessionUsageStmt: StatementSync;
   private readonly deleteConversationForSessionStmt: StatementSync;
   private readonly insertConversationTurnStmt: StatementSync;
   private readonly conversationTurnsStmt: StatementSync;
@@ -267,13 +177,7 @@ export class EventStore implements SessionEventStore {
 
   constructor(db: DatabaseSync) {
     this.db = db;
-    this.db.exec(SCHEMA);
-    ensureWorkspaceIdColumn(this.db);
-    ensureOpenModelRequestStartIdsColumn(this.db);
-    ensureRuntimeTurnCloseReasonColumn(this.db);
-    ensureConversationTurnsTable(this.db);
-    ensureIdempotencyResourceColumns(this.db);
-    this.db.exec(INDEXES);
+    migrateEventStore(this.db);
     this.appendStmt = this.db.prepare(
       `INSERT INTO events (id, workspace_id, session_id, type, processed_at, payload, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -311,6 +215,18 @@ export class EventStore implements SessionEventStore {
        FROM session_conversation_entries
        WHERE workspace_id = ? AND session_id = ?
        ON CONFLICT (workspace_id, session_id, entry_id) DO NOTHING`,
+    );
+    this.insertModelRequestCostStmt = this.db.prepare(
+      `INSERT INTO session_model_request_costs
+         (workspace_id, session_id, span_event_id, cost_micros, cache_write_1h_tokens,
+          provider, model_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.sessionUsageStmt = this.db.prepare(
+      `SELECT span_count, input_tokens, output_tokens, cache_read_tokens,
+              cache_write_tokens, cache_write_1h_tokens, cost_micros,
+              spans_with_tokens, priced_spans_with_tokens, active_ms, running_since
+       FROM session_usage_totals WHERE workspace_id = ? AND session_id = ?`,
     );
     this.latestSessionStatusStmt = this.db.prepare(
       `SELECT type FROM events
@@ -1094,6 +1010,18 @@ export class EventStore implements SessionEventStore {
     for (const checkpoint of changes.conversationCheckpoints ?? []) {
       this.applyConversationCheckpoint(checkpoint);
     }
+    for (const cost of changes.modelRequestCosts ?? []) {
+      this.insertModelRequestCostStmt.run(
+        cost.workspaceId,
+        cost.sessionId,
+        cost.spanEventId,
+        cost.costMicros,
+        cost.cacheWrite1hTokens,
+        cost.provider,
+        cost.modelId,
+        cost.now,
+      );
+    }
   }
 
   isRuntimeTurnOwnedBy(fence: {
@@ -1112,6 +1040,41 @@ export class EventStore implements SessionEventStore {
         fence.ownerGeneration,
       ) !== undefined
     );
+  }
+
+  sessionUsage(
+    workspaceId: WorkspaceId,
+    sessionIds: readonly string[],
+  ): Map<string, SessionUsageTotals> {
+    const totals = new Map<string, SessionUsageTotals>();
+    for (const sessionId of sessionIds) {
+      const row = this.sessionUsageStmt.get(workspaceId, sessionId) as {
+        span_count: number;
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_tokens: number;
+        cache_write_tokens: number;
+        cache_write_1h_tokens: number;
+        cost_micros: number;
+        spans_with_tokens: number;
+        priced_spans_with_tokens: number;
+        active_ms: number;
+        running_since: string | null;
+      } | undefined;
+      if (row === undefined) continue;
+      totals.set(sessionId, {
+        spanCount: row.span_count,
+        inputTokens: row.input_tokens,
+        outputTokens: row.output_tokens,
+        cacheReadTokens: row.cache_read_tokens,
+        cacheWriteTokens: row.cache_write_tokens,
+        cacheWrite1hTokens: row.cache_write_1h_tokens,
+        costMicros: row.spans_with_tokens > row.priced_spans_with_tokens ? null : row.cost_micros,
+        activeMs: row.active_ms,
+        runningSince: row.running_since,
+      });
+    }
+    return totals;
   }
 
   latestSessionStatuses(
@@ -1448,128 +1411,4 @@ function parseStringArray(value: string): string[] {
   return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
     ? parsed
     : [];
-}
-
-function ensureWorkspaceIdColumn(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(events)").all() as Array<{
-    name: string;
-  }>;
-  if (columns.some((column) => column.name === "workspace_id")) return;
-  const existing = db.prepare("SELECT COUNT(*) AS count FROM events").get() as {
-    count: number;
-  };
-  db.exec("BEGIN");
-  try {
-    db.exec(
-      "ALTER TABLE events ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'wrk_default'",
-    );
-    if (existing.count === 0) {
-      db.exec("COMMIT");
-      return;
-    }
-    if (hasTable(db, "sessions")) {
-      db.exec(`
-        UPDATE events
-        SET workspace_id = (
-          SELECT sessions.workspace_id
-          FROM sessions
-          WHERE sessions.id = events.session_id
-        )
-        WHERE EXISTS (
-          SELECT 1 FROM sessions WHERE sessions.id = events.session_id
-        )
-      `);
-      const unmapped = db.prepare(`
-        SELECT COUNT(*) AS count
-        FROM events
-        WHERE NOT EXISTS (
-          SELECT 1 FROM sessions WHERE sessions.id = events.session_id
-        )
-      `).get() as { count: number };
-      if (unmapped.count === 0) {
-        db.exec("COMMIT");
-        return;
-      }
-    }
-    throw new Error(
-      "Cannot automatically migrate legacy events without workspace_id; run an explicit workspace backfill first.",
-    );
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function ensureOpenModelRequestStartIdsColumn(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(pending_runtime_turns)").all() as Array<{
-    name: string;
-  }>;
-  if (
-    columns.some((column) => column.name === "open_model_request_start_ids")
-  ) {
-    return;
-  }
-  db.exec(
-    "ALTER TABLE pending_runtime_turns ADD COLUMN open_model_request_start_ids TEXT NOT NULL DEFAULT '[]'",
-  );
-}
-
-// Which runtime turns' user messages a saved checkpoint includes (plan 0147):
-// the settled turn and any steered into it. A closed turn missing here never
-// reached the saved conversation. When the table is first created, every turn
-// already closed is marked covered: those predate this tracking (0.2.0 and
-// earlier saved no conversation at all), so there is nothing honest to report
-// about them, and reporting them would tell the model its whole history was
-// cut off.
-// One transaction: a crash mid-backfill must not leave an existing but
-// incomplete table that later startups would treat as migrated.
-function ensureConversationTurnsTable(db: DatabaseSync): void {
-  withSqliteTransaction(db, () => {
-    const exists = db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_conversation_turns'")
-      .get();
-    if (exists !== undefined) return;
-    db.exec(`
-      CREATE TABLE session_conversation_turns (
-        workspace_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        turn_id TEXT NOT NULL,
-        PRIMARY KEY (workspace_id, session_id, turn_id)
-      );
-      INSERT OR IGNORE INTO session_conversation_turns (workspace_id, session_id, turn_id)
-        SELECT workspace_id, session_id, turn_id FROM pending_runtime_turns
-        WHERE state IN ('completed', 'terminalized');
-      INSERT OR IGNORE INTO session_conversation_turns (workspace_id, session_id, turn_id)
-        SELECT DISTINCT workspace_id, session_id, turn_id FROM session_conversation_entries;
-    `);
-  });
-}
-
-// Why a turn closed (plan 0147): a deliberately interrupted turn is not
-// reported to the model as cut off. Older rows have NULL.
-function ensureRuntimeTurnCloseReasonColumn(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(pending_runtime_turns)").all() as Array<{
-    name: string;
-  }>;
-  if (columns.some((column) => column.name === "close_reason")) return;
-  db.exec("ALTER TABLE pending_runtime_turns ADD COLUMN close_reason TEXT");
-}
-
-function ensureIdempotencyResourceColumns(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(idempotency_keys)").all() as Array<{
-    name: string;
-  }>;
-  if (!columns.some((column) => column.name === "resource_type")) {
-    db.exec("ALTER TABLE idempotency_keys ADD COLUMN resource_type TEXT");
-  }
-  if (!columns.some((column) => column.name === "resource_id")) {
-    db.exec("ALTER TABLE idempotency_keys ADD COLUMN resource_id TEXT");
-  }
-}
-
-function hasTable(db: DatabaseSync, name: string): boolean {
-  const row = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(name) as { name: string } | undefined;
-  return row !== undefined;
 }

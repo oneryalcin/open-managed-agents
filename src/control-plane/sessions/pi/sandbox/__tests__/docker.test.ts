@@ -1021,7 +1021,7 @@ describe("Wired egress session path (plan 0117e-4)", () => {
           id: sessionId, workspace_id: "wrk_default", type: "session",
           agent: { type: "agent", id: "agent_seed", version: 1 },
           environment_id: envId, status: "idle", title: null, metadata: {},
-          created_at: now, updated_at: now, archived_at: null, usage: null,
+          created_at: now, updated_at: now, archived_at: null,
           resources: [],
         },
       });

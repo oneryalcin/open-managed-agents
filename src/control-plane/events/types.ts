@@ -277,6 +277,37 @@ export interface EventStoreRuntimeChanges {
   closedTurns?: RuntimeTurnClosure[];
   /** Applied after closedTurns, in the same transaction. */
   conversationCheckpoints?: RuntimeConversationCheckpoint[];
+  /** Pi's cost for span ends in this batch (plan 0148). */
+  modelRequestCosts?: ModelRequestCostRecord[];
+}
+
+/** What a span end's public model_usage lacks, keyed by the span-end event. */
+export interface ModelRequestCostRecord {
+  workspaceId: WorkspaceId;
+  sessionId: string;
+  spanEventId: string;
+  /** Null: the request used tokens but its model had no known price. */
+  costMicros: number | null;
+  cacheWrite1hTokens: number;
+  provider: string | null;
+  modelId: string | null;
+  now: string;
+}
+
+/** A session's usage totals (plan 0148), kept by database triggers. */
+export interface SessionUsageTotals {
+  spanCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cacheWrite1hTokens: number;
+  /** Null when any span end with tokens has no known cost. */
+  costMicros: number | null;
+  /** Closed running intervals. */
+  activeMs: number;
+  /** Start of the running interval still open, if any. */
+  runningSince: string | null;
 }
 
 export interface SessionEventStore {
@@ -292,6 +323,11 @@ export interface SessionEventStore {
     ownerId: string;
     ownerGeneration: number;
   }): boolean;
+  /** Usage totals for the sessions that have any (plan 0148). */
+  sessionUsage(
+    workspaceId: WorkspaceId,
+    sessionIds: readonly string[],
+  ): Map<string, SessionUsageTotals>;
   /**
    * The status each session's latest `session.status_*` event reports, for
    * the sessions that have one (#279: the row is not updated while running).

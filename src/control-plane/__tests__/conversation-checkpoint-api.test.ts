@@ -70,7 +70,6 @@ async function harness(opts: {
       created_at: now,
       updated_at: now,
       archived_at: null,
-      usage: null,
       resources: [],
     },
   });

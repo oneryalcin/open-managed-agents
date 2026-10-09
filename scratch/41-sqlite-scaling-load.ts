@@ -451,7 +451,6 @@ function sessionRow(sessionId: string, index: number): SessionRow {
     created_at: now,
     updated_at: now,
     archived_at: null,
-    usage: null,
     resources: Array.from({ length: resourcesPerSession }, (_, resourceIndex) => ({
       id: `sesrsc_load_${index}_${resourceIndex}`,
       type: "file",

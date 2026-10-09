@@ -7,7 +7,6 @@ import {
 } from "../request-idempotency.ts";
 import { workspaceIdFrom, type ControlPlaneRouteEnv } from "../workspace.ts";
 import type { SessionEventsService } from "../events/types.ts";
-import { toManagedSession } from "./serialize.ts";
 import type { SessionService } from "./types.ts";
 
 type AppEnv = ControlPlaneRouteEnv;
@@ -76,12 +75,12 @@ export function sessionsRoutes(
 
   app.post("/:id/archive", async (c) => {
     const sessionId = c.req.param("id");
-    const row = events.archiveSessionRowAfterPreflight(
-      workspaceIdFrom(c),
-      sessionId,
-    );
+    events.archiveSessionRowAfterPreflight(workspaceIdFrom(c), sessionId);
+    // Rendered like retrieve (final usage and stats), before the cleanup
+    // await: an archived session is deletable, so it may be gone after it.
+    const archived = service.retrieve(workspaceIdFrom(c), sessionId);
     await events.archiveSession(workspaceIdFrom(c), sessionId);
-    return c.json(toManagedSession(row), 200);
+    return c.json(archived, 200);
   });
 
   app.delete("/:id", async (c) => {

@@ -1151,7 +1151,7 @@ export async function createDeploymentControlPlane(
         vaults: vaultService,
         deleteSessionRows: stores.sessionCoordinator.deleteSessionRows,
         idempotencyLedger: stores.events,
-        currentStatuses: stores.events.latestSessionStatuses.bind(stores.events),
+        runtimeView: stores.events,
         createSessionRowsWithIdempotency:
           stores.sessions.createAndCompleteIdempotency.bind(stores.sessions),
         ...(admission.maxActiveSessionsPerWorkspace === undefined
@@ -1306,7 +1306,7 @@ export function createInMemoryControlPlaneApp(
         skills: skillsStore,
         vaults: vaultService,
         idempotencyLedger: eventStore,
-        currentStatuses: eventStore.latestSessionStatuses.bind(eventStore),
+        runtimeView: eventStore,
         createSessionRowsWithIdempotency:
           sessionStore.createAndCompleteIdempotency.bind(sessionStore),
       },

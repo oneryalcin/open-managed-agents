@@ -57,8 +57,34 @@ export interface ManagedAgentsSession {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
-  usage: null;
+  usage: ManagedAgentsSessionUsage;
+  stats: ManagedAgentsSessionStats;
   resources: ManagedAgentsSessionFileResource[];
+}
+
+/** Cumulative usage (plan 0148; hosted shape, probe 71). */
+export interface ManagedAgentsSessionUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  /** Null until the session has made a model request. */
+  cache_creation: {
+    ephemeral_1h_input_tokens: number;
+    ephemeral_5m_input_tokens: number;
+  } | null;
+  active_seconds: number;
+  /**
+   * Model list cost in cents, estimated from Pi's price table. Null when a
+   * request used a model with no known price. OMA does not price runtime.
+   */
+  list_cost: { amount: string; currency: "USD" } | null;
+  /** OMA has no server-executed tools yet. */
+  server_tool_use: null;
+}
+
+export interface ManagedAgentsSessionStats {
+  active_seconds: number;
+  duration_seconds: number;
 }
 
 export interface ManagedAgentsDeletedSession {

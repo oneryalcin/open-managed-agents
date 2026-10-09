@@ -883,7 +883,6 @@ function createGuardHarness(
       created_at: now,
       updated_at: now,
       archived_at: null,
-      usage: null,
       resources: [],
     },
   });
@@ -971,7 +970,6 @@ function createRuntimeFailureHarness<R extends RuntimeEventRunner = ThrowingAfte
       created_at: now,
       updated_at: now,
       archived_at: null,
-      usage: null,
       resources: [],
     },
   });
@@ -1051,7 +1049,6 @@ function sessionRow(opts: {
     created_at: now,
     updated_at: now,
     archived_at: null,
-    usage: null,
     resources: [],
   };
 }

@@ -353,7 +353,7 @@ export class SqliteSessionStore implements SessionStore {
         s.created_at,
         s.updated_at,
         s.archived_at,
-        s.usage,
+        null, // usage: unused; computed from the event store (plan 0148)
       );
       for (const [position, resource] of s.resources.entries()) {
         this.insertResourceStmt.run(
@@ -681,8 +681,6 @@ export class SqliteSessionStore implements SessionStore {
       created_at: row.created_at,
       updated_at: row.updated_at,
       archived_at: row.archived_at,
-      // B.1 has no runtime usage source yet; Cycle C/D should deserialize this column.
-      usage: null,
       resources: this.resourcesBySessionStmt.all(
         row.workspace_id,
         row.id,

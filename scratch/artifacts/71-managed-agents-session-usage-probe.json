@@ -1,0 +1,761 @@
+{
+  "list_item_usage": {
+    "active_seconds": 17.191,
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 16676
+    },
+    "cache_read_input_tokens": 33261,
+    "input_tokens": 6,
+    "list_cost": {
+      "amount": "5",
+      "currency": "USD"
+    },
+    "output_tokens": 61,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    }
+  },
+  "model": "claude-sonnet-5",
+  "run_id": "1791544315-25996",
+  "turn1_samples": [
+    {
+      "status": "idle",
+      "t": 212025.0,
+      "usage": {
+        "active_seconds": 0.0,
+        "cache_creation": null,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212025.8,
+      "usage": {
+        "active_seconds": 0.877,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212026.5,
+      "usage": {
+        "active_seconds": 1.577,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212027.2,
+      "usage": {
+        "active_seconds": 2.27,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212027.9,
+      "usage": {
+        "active_seconds": 2.972,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212028.5,
+      "usage": {
+        "active_seconds": 3.651,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212029.3,
+      "usage": {
+        "active_seconds": 4.391,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212030.0,
+      "usage": {
+        "active_seconds": 5.1,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212030.7,
+      "usage": {
+        "active_seconds": 5.789,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212031.4,
+      "usage": {
+        "active_seconds": 6.505,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212032.1,
+      "usage": {
+        "active_seconds": 7.218,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212032.8,
+      "usage": {
+        "active_seconds": 7.89,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212033.5,
+      "usage": {
+        "active_seconds": 8.608,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212034.2,
+      "usage": {
+        "active_seconds": 9.344,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212035.0,
+      "usage": {
+        "active_seconds": 10.08,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212035.7,
+      "usage": {
+        "active_seconds": 10.806,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212036.5,
+      "usage": {
+        "active_seconds": 11.563,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212037.2,
+      "usage": {
+        "active_seconds": 12.259,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212037.9,
+      "usage": {
+        "active_seconds": 12.955,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212038.7,
+      "usage": {
+        "active_seconds": 13.677,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212039.4,
+      "usage": {
+        "active_seconds": 14.49,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212040.1,
+      "usage": {
+        "active_seconds": 15.22,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "list_cost": {
+          "amount": "0",
+          "currency": "USD"
+        },
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "idle",
+      "t": 212040.8,
+      "usage": {
+        "active_seconds": 15.775,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 16661
+        },
+        "cache_read_input_tokens": 16600,
+        "input_tokens": 4,
+        "list_cost": {
+          "amount": "5",
+          "currency": "USD"
+        },
+        "output_tokens": 58,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "after_idle_3s": true,
+      "usage": {
+        "active_seconds": 15.775,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 16661
+        },
+        "cache_read_input_tokens": 16600,
+        "input_tokens": 4,
+        "list_cost": {
+          "amount": "5",
+          "currency": "USD"
+        },
+        "output_tokens": 58,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    }
+  ],
+  "turn1_session_usage": {
+    "active_seconds": 15.775,
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 16661
+    },
+    "cache_read_input_tokens": 16600,
+    "input_tokens": 4,
+    "list_cost": {
+      "amount": "5",
+      "currency": "USD"
+    },
+    "output_tokens": 58,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    }
+  },
+  "turn1_span_sum": {
+    "cache_creation_input_tokens": 16661,
+    "cache_read_input_tokens": 16600,
+    "input_tokens": 4,
+    "output_tokens": 58
+  },
+  "turn1_spans": [
+    {
+      "cache_creation_input_tokens": 16600,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 2,
+      "output_tokens": 54,
+      "speed": null
+    },
+    {
+      "cache_creation_input_tokens": 61,
+      "cache_read_input_tokens": 16600,
+      "input_tokens": 2,
+      "output_tokens": 4,
+      "speed": null
+    }
+  ],
+  "turn2_samples": [
+    {
+      "status": "idle",
+      "t": 212045.1,
+      "usage": {
+        "active_seconds": 15.775,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 16661
+        },
+        "cache_read_input_tokens": 16600,
+        "input_tokens": 4,
+        "list_cost": {
+          "amount": "5",
+          "currency": "USD"
+        },
+        "output_tokens": 58,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212045.9,
+      "usage": {
+        "active_seconds": 16.528,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 16661
+        },
+        "cache_read_input_tokens": 16600,
+        "input_tokens": 4,
+        "list_cost": {
+          "amount": "5",
+          "currency": "USD"
+        },
+        "output_tokens": 58,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "running",
+      "t": 212046.5,
+      "usage": {
+        "active_seconds": 17.191,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 16676
+        },
+        "cache_read_input_tokens": 33261,
+        "input_tokens": 6,
+        "list_cost": {
+          "amount": "5",
+          "currency": "USD"
+        },
+        "output_tokens": 61,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "status": "idle",
+      "t": 212047.3,
+      "usage": {
+        "active_seconds": 17.191,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 16676
+        },
+        "cache_read_input_tokens": 33261,
+        "input_tokens": 6,
+        "list_cost": {
+          "amount": "5",
+          "currency": "USD"
+        },
+        "output_tokens": 61,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    },
+    {
+      "after_idle_3s": true,
+      "usage": {
+        "active_seconds": 17.191,
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 16676
+        },
+        "cache_read_input_tokens": 33261,
+        "input_tokens": 6,
+        "list_cost": {
+          "amount": "5",
+          "currency": "USD"
+        },
+        "output_tokens": 61,
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        }
+      }
+    }
+  ],
+  "turn2_session_usage": {
+    "active_seconds": 17.191,
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 16676
+    },
+    "cache_read_input_tokens": 33261,
+    "input_tokens": 6,
+    "list_cost": {
+      "amount": "5",
+      "currency": "USD"
+    },
+    "output_tokens": 61,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    }
+  },
+  "turn2_span_sum_all": {
+    "cache_creation_input_tokens": 16676,
+    "cache_read_input_tokens": 33261,
+    "input_tokens": 6,
+    "output_tokens": 61
+  },
+  "turn2_spans_all": [
+    {
+      "cache_creation_input_tokens": 16600,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 2,
+      "output_tokens": 54,
+      "speed": null
+    },
+    {
+      "cache_creation_input_tokens": 61,
+      "cache_read_input_tokens": 16600,
+      "input_tokens": 2,
+      "output_tokens": 4,
+      "speed": null
+    },
+    {
+      "cache_creation_input_tokens": 15,
+      "cache_read_input_tokens": 16661,
+      "input_tokens": 2,
+      "output_tokens": 3,
+      "speed": null
+    }
+  ],
+  "usage_at_create": {
+    "active_seconds": 0.0,
+    "cache_creation": null,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "list_cost": {
+      "amount": "0",
+      "currency": "USD"
+    },
+    "output_tokens": 0,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    }
+  }
+}

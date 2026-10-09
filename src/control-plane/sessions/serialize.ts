@@ -1,7 +1,11 @@
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
 import type { SessionRow } from "./types.ts";
 
-export function toManagedSession(row: SessionRow): ManagedAgentsSession {
+/**
+ * The session as stored. Usage starts at zero and stats from the row's times;
+ * the session service fills both from the event store (plan 0148).
+ */
+export function toManagedSession(row: SessionRow, now = new Date()): ManagedAgentsSession {
   return {
     id: row.id,
     type: row.type,
@@ -14,7 +18,16 @@ export function toManagedSession(row: SessionRow): ManagedAgentsSession {
     created_at: row.created_at,
     updated_at: row.updated_at,
     archived_at: row.archived_at,
-    usage: row.usage,
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation: null,
+      active_seconds: 0,
+      list_cost: { amount: "0", currency: "USD" },
+      server_tool_use: null,
+    },
+    stats: { active_seconds: 0, duration_seconds: durationSeconds(row, now) },
     resources: row.resources.map((resource) => ({
       id: resource.id,
       type: resource.type,
@@ -24,4 +37,13 @@ export function toManagedSession(row: SessionRow): ManagedAgentsSession {
       updated_at: resource.updated_at,
     })),
   };
+}
+
+/** From creation to now, frozen when the session was archived. */
+export function durationSeconds(
+  row: { created_at: string; archived_at: string | null },
+  now: Date,
+): number {
+  const end = row.archived_at === null ? now.getTime() : Date.parse(row.archived_at);
+  return Math.max(0, end - Date.parse(row.created_at)) / 1000;
 }

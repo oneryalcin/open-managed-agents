@@ -9,6 +9,14 @@
   session missing from memory is rebuilt from it. When continuity is
   incomplete, the model gets a hidden note: the sandbox was recreated (until
   workspace files are kept), or a turn was cut off before it finished.
+- **Sessions report usage and time** (plan 0148). `usage` was always `null`;
+  it now carries input, output and cache tokens (cache writes split into 5m
+  and 1h), `active_seconds`, and `list_cost` in cents, plus a new `stats`
+  object (`active_seconds`, `duration_seconds`). Cost is the model cost only,
+  estimated from the pinned Pi version's price table, and `null` when a model
+  has no known price. Totals are kept by database triggers, so listing
+  sessions stays fast with long histories. See PARITY.md for how this
+  differs from hosted.
 - **Session status reports `running` while a turn runs** (#279). `GET` and
   list of sessions said `idle` throughout a turn, because only termination was
   stored on the session. Status now follows the session's latest status event

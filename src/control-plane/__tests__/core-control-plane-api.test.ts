@@ -143,7 +143,15 @@ describe("Core control-plane API", () => {
       title: "String agent ref",
       metadata: { source: "test" },
       archived_at: null,
-      usage: null,
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation: null,
+        active_seconds: 0,
+        list_cost: { amount: "0", currency: "USD" },
+        server_tool_use: null,
+      },
     });
     expect(fromString).not.toHaveProperty("workspace_id");
 
@@ -155,7 +163,7 @@ describe("Core control-plane API", () => {
 
     const retrieveRes = await app.request(`/v1/sessions/${fromString.id}`);
     expect(retrieveRes.status).toBe(200);
-    await expect(retrieveRes.json()).resolves.toEqual(fromString);
+    expect(untimed(await retrieveRes.json())).toEqual(untimed(fromString));
   });
 
   it("pins explicit historical agent versions while bare IDs select latest", async () => {
@@ -253,7 +261,7 @@ describe("Core control-plane API", () => {
       `/v1/sessions?agent_id=${agent.id}&order=desc&limit=1&page=${nextDescPage.prev_page}`,
     );
     expect(backDescRes.status).toBe(200);
-    await expect(backDescRes.json()).resolves.toEqual(descPage);
+    expect(untimed(await backDescRes.json())).toEqual(untimed(descPage));
 
     const omittedRes = await app.request(
       `/v1/sessions?agent_id=${agent.id}&limit=10`,
@@ -262,7 +270,7 @@ describe("Core control-plane API", () => {
       `/v1/sessions?agent_id=${agent.id}&page=&limit=10`,
     );
     expect(emptyRes.status).toBe(200);
-    await expect(emptyRes.json()).resolves.toEqual(await omittedRes.json());
+    expect(untimed(await emptyRes.json())).toEqual(untimed(await omittedRes.json()));
 
     const ascRes = await app.request(
       `/v1/sessions?agent_id=${agent.id}&order=asc&limit=1`,
@@ -290,7 +298,7 @@ describe("Core control-plane API", () => {
     const backAscRes = await app.request(
       `/v1/sessions?agent_id=${agent.id}&order=asc&limit=1&page=${nextAscPage.prev_page}`,
     );
-    await expect(backAscRes.json()).resolves.toEqual(ascPage);
+    expect(untimed(await backAscRes.json())).toEqual(untimed(ascPage));
 
     await expectError(
       await app.request(`/v1/sessions?page=not-a-valid-cursor`),
@@ -411,7 +419,7 @@ describe("Core control-plane API", () => {
 
     const retrieveExistingRes = await app.request(`/v1/sessions/${existing.id}`);
     expect(retrieveExistingRes.status).toBe(200);
-    await expect(retrieveExistingRes.json()).resolves.toEqual(existing);
+    expect(untimed(await retrieveExistingRes.json())).toEqual(untimed(existing));
 
     await expectError(
       await app.request("/v1/sessions", {
@@ -669,4 +677,11 @@ function tamperSessionCursor(
   ) as Record<string, unknown>;
   mutate(payload);
   return `${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}.${signature}`;
+}
+
+/** Drops the time-dependent stats.duration_seconds, for comparing reads. */
+function untimed<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value), (key, field) =>
+    key === "duration_seconds" ? 0 : field,
+  ) as T;
 }
