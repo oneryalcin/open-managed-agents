@@ -372,6 +372,8 @@ export class DefaultSessionEventsService implements SessionEventsService {
           rowsByInput.get(event),
       ),
     );
+    // Custom-tool terminal rows are empty for a turn the confirmations closed
+    // (they run first), so the turn's single idle stays last.
     const persistedRows = [...rows, ...terminalRows, ...toolConfirmationTerminalRows];
     if (opts.idempotency) {
       persistRuntimeChangesCompleteIdempotencyAndPublish(

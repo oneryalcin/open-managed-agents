@@ -467,7 +467,8 @@ export class EventStore implements SessionEventStore {
     );
     // Re-claiming a turn this owner is already terminalizing keeps its
     // generation, so one batch answering several of its waits shares a
-    // single claim instead of fencing out its own close.
+    // single claim instead of fencing out its own close. Safe only while
+    // claim -> close runs synchronously in one send (no await between them).
     this.claimTerminalizingRuntimeTurnStmt = this.db.prepare(
       `UPDATE pending_runtime_turns
        SET owner_generation = CASE
