@@ -6,6 +6,20 @@ import { translatePiEvent, type EventDraft } from "../translator.ts";
 type Scenario = "simple_message" | "tool_call" | "tool_throw" | "abort";
 
 describe("Pi translator (Cycle C.1)", () => {
+  it("uses a tool's own event content when it supplies one (web_fetch's document block)", () => {
+    const document = { type: "document", title: "Guide", context: null, source: { type: "text", media_type: "text/plain", data: "# Guide" } };
+
+    const drafts = translatePiEvent({
+      type: "tool_execution_end",
+      toolCallId: "toolu_web",
+      toolName: "web_fetch",
+      isError: false,
+      result: { content: [{ type: "text", text: "# Guide" }], details: { omaToolResultContent: [document] } },
+    });
+
+    expect(drafts[0]?.payload.content).toEqual([document]);
+  });
+
   it("maps simple_message to assistant message + idle end_turn", () => {
     const drafts = translateScenario("simple_message");
     expect(types(drafts)).toEqual([

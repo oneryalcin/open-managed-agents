@@ -1042,6 +1042,23 @@ export class EventStore implements SessionEventStore {
     );
   }
 
+  listEventsOfTypes(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    types: readonly EventType[],
+  ): PersistedSessionEvent[] {
+    if (types.length === 0) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT id, workspace_id, session_id, type, processed_at, payload, created_at
+         FROM events
+         WHERE workspace_id = ? AND session_id = ? AND type IN (${types.map(() => "?").join(", ")})
+         ORDER BY rowid`,
+      )
+      .all(workspaceId, sessionId, ...types) as unknown as EventRow[];
+    return rows.map(deserialize);
+  }
+
   sessionUsage(
     workspaceId: WorkspaceId,
     sessionIds: readonly string[],

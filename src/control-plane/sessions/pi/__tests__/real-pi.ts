@@ -11,6 +11,7 @@ import {
   InMemoryModelsStore,
   OmaCredentialStore,
 } from "../../../models/credential-store.ts";
+import type { PiModelCatalog } from "../../../models/catalog.ts";
 import type { PiConversationSeed, PiRuntimeSession } from "../runner.ts";
 
 // Real Pi sessions driven by Pi's own faux model provider, for tests that
@@ -68,6 +69,11 @@ export interface RealPi {
     sessionId: string,
     seed: PiConversationSeed,
   ) => Promise<PiRuntimeSession>;
+  /**
+   * A model catalog serving only the faux model, for tests that need the
+   * runner's real session build (tools registered with Pi), not a factory.
+   */
+  modelCatalog: PiModelCatalog;
 }
 
 export async function createRealPi(): Promise<RealPi> {
@@ -112,7 +118,18 @@ export async function createRealPi(): Promise<RealPi> {
   const model = runtime.getModel("faux", "m");
   if (!model) throw new Error("faux model not registered");
   const created = { count: 0 };
+  const modelCatalog = {
+    defaultModel: { provider: "faux", id: "m" },
+    allowedProviders: new Set(["faux"]),
+    modelRuntime: runtime,
+    assertConfigSecurity: () => {},
+    resolve: () => model,
+    list: () => [model],
+    hasConfiguredAuth: () => true,
+    providerAuthMetadata: () => ({}),
+  } as unknown as PiModelCatalog;
   return {
+    modelCatalog,
     faux,
     core,
     requests,

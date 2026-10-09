@@ -323,6 +323,12 @@ export interface SessionEventStore {
     ownerId: string;
     ownerGeneration: number;
   }): boolean;
+  /** A session's events of the given types, in append order (plan 0149). */
+  listEventsOfTypes(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    types: readonly EventType[],
+  ): PersistedSessionEvent[];
   /** Usage totals for the sessions that have any (plan 0148). */
   sessionUsage(
     workspaceId: WorkspaceId,

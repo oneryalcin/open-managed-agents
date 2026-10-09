@@ -611,6 +611,57 @@ describe("deployment runtime config", () => {
       { type: "text", text: "runtime: hello" },
     ]);
   });
+  it("deployment app accepts agents that enable web_fetch (plan 0149)", async () => {
+    const app = await createDeploymentControlPlaneApp({ OMA_SANDBOX_PROVIDER: "none" });
+
+    const res = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Web agent",
+        model: "claude-opus-4-7",
+        tools: [{ type: "agent_toolset_20260401", configs: [{ name: "web_fetch", enabled: true }] }],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("deployment app refuses a web_fetch restriction it cannot honour", async () => {
+    const app = await createDeploymentControlPlaneApp({ OMA_SANDBOX_PROVIDER: "none" });
+
+    const res = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Restricted web agent",
+        model: "claude-opus-4-7",
+        tools: [{
+          type: "agent_toolset_20260401",
+          configs: [{ name: "web_fetch", enabled: true, allowed_domains: ["docs.example.com"] }],
+        }],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("deployment app still refuses agents that enable web_search", async () => {
+    const app = await createDeploymentControlPlaneApp({ OMA_SANDBOX_PROVIDER: "none" });
+
+    const res = await app.request("/v1/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Search agent",
+        model: "claude-opus-4-7",
+        tools: [{ type: "agent_toolset_20260401", configs: [{ name: "web_search", enabled: true }] }],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
   it("deployment app reports a session as running while its turn runs (#279)", async () => {
     const session = new BlockingSession();
     const app = await createDeploymentControlPlaneApp(
