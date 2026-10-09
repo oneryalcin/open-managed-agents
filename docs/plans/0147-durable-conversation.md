@@ -211,9 +211,17 @@ progress. That is unchanged from today and is ADR 0018 stage 3.
   - The sandbox note is added once per rebuild that really recreated the
     sandbox, since each one loses files again. It is skipped when the last saved
     entry is already that note (a rebuild with no turn since).
-- **Known delay (#273):** after a crash, the abandoned turn stays pending
-  until its lease expires, so a message sent in that window gets no
-  unfinished-turn note until the next eviction or restart.
+- **Restart within the lease (#273, fixed):** at startup the single-node
+  app recovers turns owned by previous processes immediately instead of after
+  their lease, by naming the dead owner in the claim. So the first message
+  after a restart already sees the abandoned turn closed and gets the note.
+  Turns waiting for a custom tool result or a confirmation stay open but are
+  adopted by the new process, so the late answer is recorded at once (and
+  then ends the turn, since the Pi session that was waiting is gone) instead
+  of being refused as still owned until the lease expires. Later recovery passes keep the full
+  lease fence. `close()` releases the appliance lock without draining running
+  turns; only process exit follows it in production, and a plane reopened in
+  the same process takes those turns over like a restart would.
 - **A server-side failure mid-turn evicts the runtime handle** (found in
   review; it previously wedged the session, a bug that already existed in
   `main`), so the next message rebuilds and gets the note.

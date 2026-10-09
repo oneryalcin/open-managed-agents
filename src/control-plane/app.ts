@@ -725,6 +725,11 @@ export async function createDeploymentControlPlaneApp(
 // so a caller that owns the process lifecycle (the appliance entrypoint,
 // tests that boot twice against one OMA_HOME) can close them and release the
 // .oma.lock instead of leaking them until process exit.
+//
+// close() stops owning; it does not drain running turns. A plane reopened
+// against the same OMA_HOME takes this one's turns over at startup (#273),
+// exactly as after a crash, so callers either exit after close() or, like the
+// restart tests, mean to simulate one.
 export async function createDeploymentControlPlane(
   env: DeploymentControlPlaneEnv = process.env,
   opts: DeploymentControlPlaneAppOptions = {},
@@ -1058,7 +1063,8 @@ export async function createDeploymentControlPlane(
           }),
     },
   );
-  sessionEvents.recoverAllAbandonedRuntimeTurns();
+  // Single-node: at startup every other owner is a previous process (#273).
+  sessionEvents.recoverAllAbandonedRuntimeTurns({ takeOverPreviousOwners: true });
   const consoleRoot = bundledConsoleRoot();
   const openapiRoot = bundledOpenApiDocsRoot();
   const adminAuth = adminKey === undefined ? undefined : createAdminAuth(adminKey);

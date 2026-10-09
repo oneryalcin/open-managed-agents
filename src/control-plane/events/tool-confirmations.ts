@@ -52,7 +52,7 @@ import {
   toolPermissionRuntimeChanges,
 } from "./tool-persistence.ts";
 import { PendingActionStore } from "./pending-actions.ts";
-import type { ToolActionDeps } from "./tool-action-deps.ts";
+import { closesTurn, type ToolActionDeps } from "./tool-action-deps.ts";
 
 export interface ToolConfirmationCommit {
   event: ManagedAgentsUserToolConfirmationEventInput;
@@ -118,8 +118,11 @@ export class ToolConfirmations {
     now: string,
     runtimeChanges: EventStoreRuntimeChanges,
   ): PersistedSessionEvent[] {
-    const terminalizedTurnIds = new Set<string>();
+    // Every confirmed tool use gets its result; each turn closes once, with
+    // one idle after all of them. Runs before the custom-tool terminalization,
+    // which then sees these turns already closed.
     const drafts: EventDraft[] = [];
+    let closedAny = false;
     for (const claim of claims) {
       if (!("action" in claim)) continue;
       const turn = claim.action.turn;
@@ -129,32 +132,37 @@ export class ToolConfirmations {
         actionId: claim.toolUseId,
         now,
       });
-      if (terminalizedTurnIds.has(claim.action.turn_id)) continue;
-      terminalizedTurnIds.add(claim.action.turn_id);
-      (runtimeChanges.closedTurns ??= []).push({
-        workspaceId,
-        sessionId,
-        turnId: claim.action.turn_id,
-        ownerId: turn.owner_id,
-        ownerGeneration: turn.owner_generation,
-        reason: "terminalized",
-        state: "terminalized",
-        now,
-      });
+      if (!closesTurn(runtimeChanges, claim.action.turn_id)) {
+        (runtimeChanges.closedTurns ??= []).push({
+          workspaceId,
+          sessionId,
+          turnId: claim.action.turn_id,
+          ownerId: turn.owner_id,
+          ownerGeneration: turn.owner_generation,
+          reason: "terminalized",
+          state: "terminalized",
+          now,
+        });
+        drafts.push(
+          ...syntheticSpanModelRequestEndDrafts(
+            turn.open_model_request_start_ids,
+          ),
+        );
+        closedAny = true;
+      }
       drafts.push(
-        ...syntheticSpanModelRequestEndDrafts(
-          turn.open_model_request_start_ids,
-        ),
         this.lostToolConfirmationResultDraft(
           workspaceId,
           sessionId,
           claim.toolUseId,
         ),
-        {
-          type: "session.status_idle",
-          payload: { stop_reason: { type: "end_turn" } },
-        },
       );
+    }
+    if (closedAny) {
+      drafts.push({
+        type: "session.status_idle",
+        payload: { stop_reason: { type: "end_turn" } },
+      });
     }
     if (drafts.length === 0) return [];
     return materializePersistedEvents(workspaceId, sessionId, drafts, now);

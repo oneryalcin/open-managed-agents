@@ -1,6 +1,7 @@
 import type { WorkspaceId } from "../workspace.ts";
 import type { EventDraft } from "./persist.ts";
 import type {
+  EventStoreRuntimeChanges,
   PendingRuntimeActionRecord,
   RuntimeEventRunner,
   RuntimeEventTranslator,
@@ -40,4 +41,9 @@ export interface ToolActionDeps {
     drafts: readonly EventDraft[],
   ) => void;
   flushPendingActions: (workspaceId: WorkspaceId, sessionId: string) => void;
+}
+
+/** Whether this batch already closes the turn (one close per turn). */
+export function closesTurn(changes: EventStoreRuntimeChanges, turnId: string): boolean {
+  return changes.closedTurns?.some((turn) => turn.turnId === turnId) === true;
 }

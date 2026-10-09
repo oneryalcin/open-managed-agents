@@ -249,6 +249,7 @@ export class EventStore implements SessionEventStore {
   private readonly updateRuntimeTurnOpenModelRequestStartsStmt: StatementSync;
   private readonly closeRuntimeTurnStmt: StatementSync;
   private readonly closeRuntimeActionsForTurnStmt: StatementSync;
+  private readonly adoptPausedRuntimeTurnStmt: StatementSync;
   private readonly claimAcceptedRuntimeTurnStmt: StatementSync;
   private readonly claimTerminalizingRuntimeTurnStmt: StatementSync;
   private readonly retrieveRuntimeTurnStmt: StatementSync;
@@ -462,18 +463,35 @@ export class EventStore implements SessionEventStore {
            updated_at = ?
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
          AND state = 'accepted'
-         AND (owner_id = ? OR lease_expires_at <= ?)`,
+         AND (owner_id = ? OR owner_id = ? OR lease_expires_at <= ?)`,
     );
+    // Re-claiming a turn this owner is already terminalizing keeps its
+    // generation, so one batch answering several of its waits shares a
+    // single claim instead of fencing out its own close. Safe only while
+    // claim -> close runs synchronously in one send (no await between them).
     this.claimTerminalizingRuntimeTurnStmt = this.db.prepare(
       `UPDATE pending_runtime_turns
-       SET owner_id = ?,
-           owner_generation = owner_generation + 1,
+       SET owner_generation = CASE
+             WHEN state = 'terminalizing' AND owner_id = ?1 THEN owner_generation
+             ELSE owner_generation + 1
+           END,
+           owner_id = ?1,
            lease_expires_at = ?,
            state = 'terminalizing',
            updated_at = ?
        WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
          AND state NOT IN ('completed', 'terminalized')
-         AND (owner_id = ? OR lease_expires_at <= ?)`,
+         AND (owner_id = ? OR owner_id = ? OR lease_expires_at <= ?)`,
+    );
+    this.adoptPausedRuntimeTurnStmt = this.db.prepare(
+      `UPDATE pending_runtime_turns
+       SET owner_id = ?,
+           owner_generation = owner_generation + 1,
+           lease_expires_at = ?,
+           updated_at = ?
+       WHERE workspace_id = ? AND session_id = ? AND turn_id = ?
+         AND state = 'paused'
+         AND owner_id = ?`,
     );
     this.retrieveRuntimeTurnStmt = this.db.prepare(
       `SELECT workspace_id, session_id, turn_id, owner_id, owner_generation,
@@ -838,6 +856,7 @@ export class EventStore implements SessionEventStore {
       claim.sessionId,
       claim.turnId,
       claim.ownerId,
+      claim.takeOverOwnerId ?? null,
       claim.now,
     );
     if (result.changes === 0) return undefined;
@@ -859,6 +878,7 @@ export class EventStore implements SessionEventStore {
       claim.sessionId,
       claim.turnId,
       claim.ownerId,
+      claim.takeOverOwnerId ?? null,
       claim.now,
     );
     if (result.changes === 0) return undefined;
@@ -867,6 +887,20 @@ export class EventStore implements SessionEventStore {
       claim.sessionId,
       claim.turnId,
     );
+  }
+
+  adoptPausedRuntimeTurn(
+    claim: RuntimeTurnRecoveryClaim & { takeOverOwnerId: string },
+  ): boolean {
+    return this.adoptPausedRuntimeTurnStmt.run(
+      claim.ownerId,
+      claim.leaseExpiresAt,
+      claim.now,
+      claim.workspaceId,
+      claim.sessionId,
+      claim.turnId,
+      claim.takeOverOwnerId,
+    ).changes > 0;
   }
 
   listRuntimeActionsForTurn(

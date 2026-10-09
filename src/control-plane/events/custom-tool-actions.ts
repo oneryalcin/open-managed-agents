@@ -37,7 +37,7 @@ import {
   toError,
 } from "./runtime-helpers.ts";
 import { PendingActionStore } from "./pending-actions.ts";
-import type { ToolActionDeps } from "./tool-action-deps.ts";
+import { closesTurn, type ToolActionDeps } from "./tool-action-deps.ts";
 
 export type CustomToolResultClaim =
   | {
@@ -95,7 +95,6 @@ export class CustomToolActions {
     now: string,
     runtimeChanges: EventStoreRuntimeChanges,
   ): PersistedSessionEvent[] {
-    const terminalizedTurnIds = new Set<string>();
     const drafts: EventDraft[] = [];
     for (const claim of claims) {
       if (claim.kind !== "terminalize") continue;
@@ -106,8 +105,7 @@ export class CustomToolActions {
         actionId: claim.customToolUseId,
         now,
       });
-      if (terminalizedTurnIds.has(claim.action.turn_id)) continue;
-      terminalizedTurnIds.add(claim.action.turn_id);
+      if (closesTurn(runtimeChanges, claim.action.turn_id)) continue;
       (runtimeChanges.closedTurns ??= []).push({
         workspaceId,
         sessionId,

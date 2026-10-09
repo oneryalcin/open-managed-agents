@@ -337,6 +337,42 @@ describe("conversation store", () => {
     }
   });
 
+  it("lets the startup sweep take over a named previous owner's unexpired turn", () => {
+    const store = EventStore.open(":memory:");
+    acceptTurn(store); // owner_a, lease = now (accepted state)
+    const now = new Date().toISOString();
+    const future = new Date(Date.now() + 120_000).toISOString();
+    store.claimAcceptedRuntimeTurnForRecovery({
+      workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID,
+      ownerId: "owner_a", leaseExpiresAt: future, now,
+    }); // owner_a now holds an unexpired lease
+
+    const claimed = store.claimRuntimeTurnForTerminalization({
+      workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID,
+      ownerId: "owner_b", leaseExpiresAt: future, now, takeOverOwnerId: "owner_a",
+    });
+
+    expect(claimed?.owner_id).toBe("owner_b");
+  });
+
+  it("still refuses an unexpired turn held by an owner that was not named for takeover", () => {
+    const store = EventStore.open(":memory:");
+    acceptTurn(store);
+    const now = new Date().toISOString();
+    const future = new Date(Date.now() + 120_000).toISOString();
+    store.claimAcceptedRuntimeTurnForRecovery({
+      workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID,
+      ownerId: "owner_a", leaseExpiresAt: future, now,
+    });
+
+    const claimed = store.claimRuntimeTurnForTerminalization({
+      workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: TURN_ID,
+      ownerId: "owner_b", leaseExpiresAt: future, now, takeOverOwnerId: "owner_x",
+    });
+
+    expect(claimed).toBeUndefined();
+  });
+
   it("keeps the conversation across a reopen of a file-backed store", () => {
     const dir = mkdtempSync(join(tmpdir(), "oma-conversation-"));
     try {
