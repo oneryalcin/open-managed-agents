@@ -43,11 +43,18 @@ export function shownUrls(events: readonly ProvenanceEvent[], now: Date): ShownU
   const toolUses = new Map<string, { name: unknown; input: Record<string, unknown> }>();
   for (const event of events) {
     const payload = event.payload;
-    if (event.type === "user.message" || event.type === "user.custom_tool_result") {
+    if (
+      event.type === "user.message" ||
+      (event.type === "user.custom_tool_result" && payload.is_error !== true)
+    ) {
       for (const url of absoluteUrls(textOf(payload.content))) add(url);
     } else if (event.type === "agent.tool_use") {
       const input = isRecord(payload.input) ? payload.input : {};
-      toolUses.set(event.id, { name: payload.name, input });
+      const use = { name: payload.name, input };
+      // Results reference either the public event id (calls the control
+      // plane publishes) or the payload's tool_use_id (Pi-translated calls).
+      toolUses.set(event.id, use);
+      if (typeof payload.tool_use_id === "string") toolUses.set(payload.tool_use_id, use);
     } else if (event.type === "agent.tool_result" && payload.is_error !== true) {
       const use = toolUses.get(String(payload.tool_use_id));
       if (use?.name === "web_search") {
@@ -103,8 +110,30 @@ function isFresh(processedAt: string | null, now: Date): boolean {
   return Number.isFinite(at) && now.getTime() - at <= PAGE_LINK_TTL_MS;
 }
 
+// The URL exactly as shown always counts. Prose convenience only: a variant
+// without trailing sentence punctuation (. , ; :) also counts, as does one
+// without an unbalanced closing parenthesis ("(see https://x/y)"). Both come
+// from text already in the context, not from the model; `!`, `?` and other
+// characters that can be URL data are never trimmed.
 function absoluteUrls(text: string): string[] {
-  return [...text.matchAll(/https?:\/\/[^\s<>"'`)\]}]+/g)].map((m) => m[0].replace(/[.,;:!?]+$/, ""));
+  const urls: string[] = [];
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"'`\]}]+/g)) {
+    let url = match[0];
+    urls.push(url);
+    for (;;) {
+      const trimmed = url.replace(/[.,;:]+$/, "");
+      const unbalanced = trimmed.endsWith(")") && count(trimmed, "(") < count(trimmed, ")");
+      const next = unbalanced ? trimmed.slice(0, -1) : trimmed;
+      if (next === url) break;
+      url = next;
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
+function count(text: string, char: string): number {
+  return text.split(char).length - 1;
 }
 
 function markdownLinks(text: string): string[] {

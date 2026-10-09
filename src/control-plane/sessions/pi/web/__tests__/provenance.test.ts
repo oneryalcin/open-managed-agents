@@ -102,4 +102,32 @@ describe("URLs shown in a session", () => {
   it("keeps trailing punctuation out of a URL in prose", () => {
     expect(match([userMessage("See https://docs.example.com/guide.")], "https://docs.example.com/guide")?.kind).toBe("exact");
   });
+
+  it("does not authorize a URL with punctuation trimmed off its query", () => {
+    expect(match([userMessage("https://docs.example.com/send?value=abc!")], "https://docs.example.com/send?value=abc")).toBeUndefined();
+  });
+
+  it("keeps balanced parentheses in a URL", () => {
+    const events = [userMessage("see https://en.wikipedia.org/wiki/Foo_(bar) for more")];
+
+    expect(match(events, "https://en.wikipedia.org/wiki/Foo_(bar)")?.kind).toBe("exact");
+  });
+
+  it("does not count a URL from a failed custom tool result", () => {
+    const events: ProvenanceEvent[] = [{
+      id: id(), type: "user.custom_tool_result", processed_at: at(0),
+      payload: { is_error: true, content: [{ type: "text", text: "failed at https://tracker.example.com/T-2" }] },
+    }];
+
+    expect(match(events, "https://tracker.example.com/T-2")).toBeUndefined();
+  });
+
+  it("pairs a result with its call by the call's tool_use_id, as the Pi translator records it", () => {
+    const events: ProvenanceEvent[] = [
+      { id: "sevt_server_assigned", type: "agent.tool_use", processed_at: at(0), payload: { name: "web_search", input: { query: "q" }, tool_use_id: "toolu_pi_1" } },
+      { id: id(), type: "agent.tool_result", processed_at: at(0), payload: { tool_use_id: "toolu_pi_1", is_error: false, content: JSON.stringify([{ source: "https://docs.example.com/z" }]) } },
+    ];
+
+    expect(match(events, "https://docs.example.com/z")?.kind).toBe("exact");
+  });
 });
