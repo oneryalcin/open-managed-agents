@@ -1,9 +1,7 @@
 import {
   chmodSync,
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
   realpathSync,
   unlinkSync,
@@ -204,7 +202,7 @@ function createDurableDeploymentStores(
   mkdirSync(requestedObjectRoot, { recursive: true, mode: 0o700 });
   const resolvedObjectRoot = realpathSync(requestedObjectRoot);
   chmodSync(resolvedObjectRoot, 0o700);
-  const releaseLock = acquireStorageLock(resolvedSqlitePath, resolvedObjectRoot);
+  const releaseLock = acquireStorageLock(resolvedSqlitePath);
   try {
     const db = new DatabaseSync(resolvedSqlitePath);
     chmodSync(resolvedSqlitePath, 0o600);
@@ -370,72 +368,76 @@ function normalizeEnvPath(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function acquireStorageLock(sqlitePath: string, objectRoot: string): () => void {
-  const lockPath = `${sqlitePath}.oma.lock`;
-  let fd = openLockFile(lockPath, objectRoot);
+// Exclusive ownership of a durable database (#276). An exclusive SQLite lock
+// on a side file: the kernel holds it (POSIX advisory lock), so it is
+// released when the owning process dies, whatever its pid, and SQLite refuses
+// a second connection in the same process too. No pid file and no staleness
+// guess: a container restarted after a crash is PID 1 again, which made the
+// old pid-file check refuse to boot. The file itself is never removed, since
+// unlinking a locked file would let a new opener lock a different inode.
+function acquireStorageLock(sqlitePath: string): () => void {
+  const lockPath = `${sqlitePath}.oma-lock`;
+  const lock = new DatabaseSync(lockPath);
+  try {
+    chmodSync(lockPath, 0o600);
+    lock.exec("PRAGMA locking_mode = EXCLUSIVE");
+    lock.exec("BEGIN EXCLUSIVE");
+    lock.exec("CREATE TABLE IF NOT EXISTS owner (pid INTEGER)");
+  } catch (error) {
+    lock.close();
+    if (isSqliteBusy(error)) throw lockedStorageError(lockPath);
+    throw error;
+  }
+  // Older versions only know the pid file `<db>.oma.lock`. Honour a live
+  // older owner, and keep our own pid in that file while we own the database
+  // so an older binary started meanwhile refuses, as it always did. A pid file
+  // naming our own pid is a previous run's (a restarted container, #276).
+  const legacyPath = `${sqlitePath}.oma.lock`;
+  try {
+    claimLegacyLock(legacyPath);
+  } catch (error) {
+    lock.close();
+    throw error;
+  }
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    closeSync(fd);
-    unlinkIfExistsSync(lockPath);
+    if (readLegacyLockPid(legacyPath) === process.pid) unlinkIfExistsSync(legacyPath);
+    lock.close();
   };
 }
 
-function openLockFile(lockPath: string, objectRoot: string): number {
-  try {
-    return createLockFile(lockPath, objectRoot);
-  } catch (error) {
-    if ((error as { code?: unknown }).code === "EEXIST") {
-      if (removeStaleLock(lockPath)) {
-        return createLockFile(lockPath, objectRoot);
+// Create first ("wx"), so an older binary creating its file at the same time
+// cannot have it removed. An existing file is reclaimed only when it names a
+// dead process or our own pid; an unreadable one is refused, as older
+// versions did. Two openers reclaiming the same stale file at once remains
+// the race older versions always had.
+function claimLegacyLock(legacyPath: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      writeFileSync(
+        legacyPath,
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+        { flag: "wx", mode: 0o600 },
+      );
+      return;
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "EEXIST" || attempt > 0) {
+        throw (error as { code?: unknown }).code === "EEXIST" ? lockedStorageError(legacyPath) : error;
       }
-      throw lockedStorageError(lockPath);
     }
-    throw error;
+    const pid = readLegacyLockPid(legacyPath);
+    const stale = pid !== undefined && (pid === process.pid || !isProcessRunning(pid));
+    if (!stale) throw lockedStorageError(legacyPath);
+    unlinkIfExistsSync(legacyPath);
   }
 }
 
-function createLockFile(lockPath: string, objectRoot: string): number {
-  const fd = openSync(lockPath, "wx", 0o600);
+function readLegacyLockPid(lockPath: string): number | undefined {
   try {
-    writeFileSync(
-      fd,
-      JSON.stringify({
-        pid: process.pid,
-        objectRoot,
-        createdAt: new Date().toISOString(),
-      }),
-    );
-    return fd;
-  } catch (error) {
-    closeSync(fd);
-    unlinkIfExistsSync(lockPath);
-    throw error;
-  }
-}
-
-function removeStaleLock(lockPath: string): boolean {
-  const pid = readLockPid(lockPath);
-  if (pid === undefined || isProcessRunning(pid)) return false;
-  try {
-    unlinkSync(lockPath);
-    return true;
-  } catch (error) {
-    if ((error as { code?: unknown }).code === "ENOENT") return true;
-    throw error;
-  }
-}
-
-function readLockPid(lockPath: string): number | undefined {
-  if (!existsSync(lockPath)) return undefined;
-  try {
-    const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as {
-      pid?: unknown;
-    };
-    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid)
-      ? parsed.pid
-      : undefined;
+    const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: unknown };
+    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid) ? parsed.pid : undefined;
   } catch {
     return undefined;
   }
@@ -448,6 +450,12 @@ function isProcessRunning(pid: number): boolean {
   } catch (error) {
     return (error as { code?: unknown }).code === "EPERM";
   }
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  const code = (error as { errcode?: unknown }).errcode;
+  // SQLITE_BUSY (5) and SQLITE_LOCKED (6), with or without extended codes.
+  return typeof code === "number" && ((code & 0xff) === 5 || (code & 0xff) === 6);
 }
 
 function lockedStorageError(lockPath: string): Error {

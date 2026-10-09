@@ -1,7 +1,9 @@
 import { chmodSync, existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { DefaultAgentService } from "../agents/service.ts";
@@ -946,6 +948,109 @@ describe("deployment storage", () => {
     stores.close();
   });
 
+  it("recovers a stale lock that names this process's own pid (#276)", async () => {
+    // A container restarted after a crash: node is PID 1 again, and so is the
+    // lock its previous run left behind.
+    const paths = await durablePaths();
+    await writeFile(
+      `${paths.sqlitePath}.oma.lock`,
+      JSON.stringify({
+        pid: process.pid,
+        objectRoot: paths.objectRoot,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    expect(stores.mode).toBe("durable");
+    stores.close();
+  });
+
+  it("refuses a second deployment process while the first is alive, and recovers once it dies", async () => {
+    const paths = await durablePaths();
+    const holder = await holdStoresInChildProcess(paths);
+    try {
+      expect(() => createDeploymentStoresFromEnv({
+        OMA_SQLITE_PATH: paths.sqlitePath,
+        OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+      })).toThrow("Durable storage database is already locked");
+    } finally {
+      holder.kill("SIGKILL");
+      await new Promise((resolve) => holder.once("exit", resolve));
+    }
+
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    expect(stores.mode).toBe("durable");
+    stores.close();
+  }, 20_000);
+
+  it("refuses to start while an older OMA holds the database by its pid lock", async () => {
+    // Mixed versions during an upgrade: the older binary only knows the pid file.
+    const paths = await durablePaths();
+    const older = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    try {
+      await writeFile(
+        `${paths.sqlitePath}.oma.lock`,
+        JSON.stringify({ pid: older.pid, objectRoot: paths.objectRoot, createdAt: new Date().toISOString() }),
+      );
+
+      expect(() => createDeploymentStoresFromEnv({
+        OMA_SQLITE_PATH: paths.sqlitePath,
+        OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+      })).toThrow("Durable storage database is already locked");
+    } finally {
+      older.kill("SIGKILL");
+    }
+  });
+
+  it("refuses an unreadable older pid lock rather than guess it is stale", async () => {
+    // An older binary between creating its lock file and writing its pid.
+    const paths = await durablePaths();
+    await writeFile(`${paths.sqlitePath}.oma.lock`, "");
+
+    expect(() => createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    })).toThrow("Durable storage database is already locked");
+  });
+
+  it("keeps the older pid lock in place while it owns the database", async () => {
+    // So an older binary started meanwhile refuses, as it always did.
+    const paths = await durablePaths();
+    const stores = createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    });
+    try {
+      const legacy = JSON.parse(await readFile(`${paths.sqlitePath}.oma.lock`, "utf8")) as { pid: number };
+      expect(legacy.pid).toBe(process.pid);
+    } finally {
+      stores.close();
+    }
+  });
+
+  it("refuses a second open of the same database through a symlinked directory", async () => {
+    const paths = await durablePaths();
+    const env = { OMA_SQLITE_PATH: paths.sqlitePath, OMA_FILE_STORAGE_ROOT: paths.objectRoot };
+    const stores = createDeploymentStoresFromEnv(env);
+    const alias = `${dirname(paths.sqlitePath)}-alias`;
+    await symlink(dirname(paths.sqlitePath), alias);
+    try {
+      expect(() => createDeploymentStoresFromEnv({
+        ...env,
+        OMA_SQLITE_PATH: join(alias, basename(paths.sqlitePath)),
+      })).toThrow("Durable storage database is already locked");
+    } finally {
+      stores.close();
+    }
+  });
+
   it("constructs a durable secrets store when a master key is configured", async () => {
     const paths = await durablePaths();
     const stores = createDeploymentStoresFromEnv({
@@ -1057,4 +1162,21 @@ async function textFrom(
 async function* delayedBytes(text: string): AsyncIterable<Uint8Array> {
   await new Promise((resolve) => setTimeout(resolve, 5));
   yield new TextEncoder().encode(text);
+}
+
+/** Another OMA process holding the durable stores, until killed. */
+async function holdStoresInChildProcess(paths: { sqlitePath: string; objectRoot: string }) {
+  const script = join(dirname(paths.sqlitePath), "hold-stores.ts");
+  await writeFile(script, `
+    import { createDeploymentStoresFromEnv } from ${JSON.stringify(fileURLToPath(new URL("../deployment-storage.ts", import.meta.url)))};
+    createDeploymentStoresFromEnv({ OMA_SQLITE_PATH: ${JSON.stringify(paths.sqlitePath)}, OMA_FILE_STORAGE_ROOT: ${JSON.stringify(paths.objectRoot)} });
+    console.log("held");
+    setInterval(() => {}, 1000);
+  `);
+  const child = spawn(process.execPath, ["--import", "tsx", script], { stdio: ["ignore", "pipe", "inherit"] });
+  await new Promise<void>((resolve, reject) => {
+    child.stdout!.on("data", (chunk: Buffer) => { if (chunk.toString().includes("held")) resolve(); });
+    child.once("exit", (code) => reject(new Error(`holder exited early (${code})`)));
+  });
+  return child;
 }
