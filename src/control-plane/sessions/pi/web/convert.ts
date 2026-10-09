@@ -123,12 +123,14 @@ async function convertHtml(html: string, opts: ConvertOptions): Promise<HtmlResu
   const deadline = Date.now() + (opts.deadlineMs ?? DEFAULT_DEADLINE_MS);
   const admitted = await admit(deadline, opts.signal);
   if (admitted !== true) return admitted;
-  try {
-    return await runWorker(html, opts.maxChars ?? DEFAULT_MAX_CHARS, deadline, opts.signal);
-  } finally {
+  const { result, exited } = runWorker(html, opts.maxChars ?? DEFAULT_MAX_CHARS, deadline, opts.signal);
+  // The slot is held until the worker has actually exited, not merely been
+  // asked to: otherwise rapid aborts pile up live workers past MAX_WORKERS.
+  void exited.then(() => {
     running -= 1;
     queue.shift()?.();
-  }
+  });
+  return result;
 }
 
 /** A worker slot, or why the caller stopped waiting for one. */
@@ -170,21 +172,25 @@ function runWorker(
   maxChars: number,
   deadline: number,
   signal: AbortSignal | undefined,
-): Promise<HtmlResult> {
-  if (signal?.aborted) return Promise.resolve(aborted());
-  return new Promise((resolve) => {
+): { result: Promise<HtmlResult>; exited: Promise<void> } {
+  if (signal?.aborted) return { result: Promise.resolve(aborted()), exited: Promise.resolve() };
+  let exited!: Promise<void>;
+  const result = new Promise<HtmlResult>((resolve) => {
     const worker = new Worker(WORKER_SOURCE, {
       eval: true,
       resourceLimits: { maxOldGenerationSizeMb: WORKER_HEAP_MB },
     });
     let settled = false;
-    const finish = (result: HtmlResult) => {
+    let markExited!: () => void;
+    exited = new Promise<void>((resolve) => { markExited = resolve; });
+    worker.once("exit", () => markExited());
+    const finish = (outcome: HtmlResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       void worker.terminate();
-      resolve(result);
+      resolve(outcome);
     };
     const timer = setTimeout(
       () => finish({ ok: false, code: "timeout", reason: "the page took too long to convert" }),
@@ -221,6 +227,7 @@ function runWorker(
       finish({ ok: false, code: "conversion_failed", reason: "the converter stopped unexpectedly" }),
     );
   });
+  return { result, exited };
 }
 
 function aborted(): Extract<ConvertResult, { ok: false }> {
