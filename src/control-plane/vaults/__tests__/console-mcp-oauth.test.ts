@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteSecretsStore } from "../../secrets/store.ts";
-import type { McpFetch } from "../../sessions/pi/mcp/fetch.ts";
+import type { GuardedFetch } from "../../egress/guarded-fetch.ts";
 import { DefaultVaultService } from "../service.ts";
 import { SqliteVaultStore } from "../store.ts";
 import {
@@ -356,7 +356,7 @@ function oauthFetch(opts: { registration?: boolean; tokenStatus?: number } = {})
         });
       }
       return new Response("not found", { status: 404 });
-    }) as McpFetch,
+    }) as GuardedFetch,
   };
   return state;
 }

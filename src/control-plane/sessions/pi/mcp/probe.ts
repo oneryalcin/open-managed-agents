@@ -3,7 +3,7 @@ import {
   knownSecretRepresentations,
   scrubKnownSecrets,
 } from "../../../logging.ts";
-import type { McpFetch } from "./fetch.ts";
+import type { GuardedFetch } from "../../../egress/guarded-fetch.ts";
 
 const PROBE_REQUEST_ID = 1;
 
@@ -23,7 +23,7 @@ export type McpInitializeProbeResult =
 export async function probeMcpInitialize(
   url: string,
   authorization: string | undefined,
-  fetch: McpFetch,
+  fetch: GuardedFetch,
   opts: {
     capBytes: number;
     timeoutMs: number;

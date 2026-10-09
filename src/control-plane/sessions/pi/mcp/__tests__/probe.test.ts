@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { probeMcpInitialize } from "../probe.ts";
-import type { McpFetch } from "../fetch.ts";
+import type { GuardedFetch } from "../../../../egress/guarded-fetch.ts";
 
 const RESULT = JSON.stringify({
   jsonrpc: "2.0",
@@ -23,7 +23,7 @@ describe("probeMcpInitialize", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    }) as McpFetch;
+    }) as GuardedFetch;
 
     await expect(
       probeMcpInitialize("https://mcp.example/mcp", "Bearer frozen-token", fetch, {
@@ -48,7 +48,7 @@ describe("probeMcpInitialize", () => {
       new Response(stream, {
         status: 200,
         headers: { "content-type": "text/event-stream" },
-      })) as McpFetch;
+      })) as GuardedFetch;
 
     const result = await probeMcpInitialize(
       "https://mcp.example/mcp",
@@ -70,7 +70,7 @@ describe("probeMcpInitialize", () => {
       new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -1 } }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      })) as McpFetch;
+      })) as GuardedFetch;
     await expect(
       probeMcpInitialize("https://mcp.example/mcp", undefined, fetch, {
         capBytes: 4096,
@@ -86,7 +86,7 @@ describe("probeMcpInitialize", () => {
       new Response(body, {
         status: 401,
         headers: { "content-type": "text/plain" },
-      })) as McpFetch;
+      })) as GuardedFetch;
     const result = await probeMcpInitialize(
       "https://mcp.example/mcp",
       `Bearer ${secret}`,
@@ -106,7 +106,7 @@ describe("probeMcpInitialize", () => {
       cancel() { cancelled = true; },
     });
     const fetch = vi.fn(async () =>
-      new Response(stream, { status: 500, headers: { "content-type": "text/plain" } })) as McpFetch;
+      new Response(stream, { status: 500, headers: { "content-type": "text/plain" } })) as GuardedFetch;
     const result = await probeMcpInitialize(
       "https://mcp.example/mcp",
       undefined,
@@ -131,7 +131,7 @@ describe("probeMcpInitialize", () => {
           "content-type": `text/plain; reflected=${secret}`,
           "content-length": String(Buffer.byteLength(body)),
         },
-      })) as McpFetch;
+      })) as GuardedFetch;
     const result = await probeMcpInitialize(
       "https://mcp.example/mcp",
       `Bearer ${secret}`,
@@ -154,7 +154,7 @@ describe("probeMcpInitialize", () => {
           "content-type": "text/plain",
           "content-length": String(Buffer.byteLength(body)),
         },
-      })) as McpFetch;
+      })) as GuardedFetch;
     const result = await probeMcpInitialize(
       "https://mcp.example/mcp",
       `Bearer ${secret}`,

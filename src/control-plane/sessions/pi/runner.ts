@@ -46,7 +46,7 @@ import {
   type BuiltinToolAccessResolver,
 } from "./tool-permissions.ts";
 import { McpConnection } from "./mcp/client.ts";
-import { createGuardedMcpFetch, type McpFetch } from "./mcp/fetch.ts";
+import { createGuardedFetch, type GuardedFetch } from "../../egress/guarded-fetch.ts";
 import {
   createMcpToolDefinitions,
   type McpCredentialBinding,
@@ -188,7 +188,7 @@ export interface PiMcpOptions {
   credentials?: McpCredentialResolver;
   access?: McpToolAccessResolver;
   /** Test seam (SSRF allowAddress) — production uses the guarded default. */
-  fetch?: McpFetch;
+  fetch?: GuardedFetch;
   operationTimeoutMs?: number;
   outputCapBytes?: number;
   /** Consecutive connect failures before exhausted (OMA policy, default 5). */
@@ -275,7 +275,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
   private readonly conversation:
     | Pick<SessionEventStore, "loadConversation">
     | undefined;
-  private readonly mcpFetch: McpFetch;
+  private readonly mcpFetch: GuardedFetch;
   /**
    * Consecutive connect failures per (session, server). Runner-level so the
    * count SURVIVES handle recreation — fresh-handle retry is the mechanism
@@ -339,7 +339,7 @@ export class PiSessionRunner implements RuntimeEventRunner {
     this.now = opts.now ?? Date.now;
     this.sessionFactory = opts.sessionFactory;
     this.conversation = opts.conversation;
-    this.mcpFetch = opts.mcp?.fetch ?? createGuardedMcpFetch();
+    this.mcpFetch = opts.mcp?.fetch ?? createGuardedFetch();
     this.customToolBridge = new PiCustomToolBridge({
       customTools: opts.customTools,
       timeoutMs: opts.customToolTimeoutMs,

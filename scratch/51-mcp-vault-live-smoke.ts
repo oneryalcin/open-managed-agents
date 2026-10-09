@@ -41,7 +41,7 @@ import { createBestEffortSessionOutputCoordinator } from "../src/control-plane/d
 import { createBestEffortRuntimeEventCoordinator } from "../src/control-plane/deployment-runtime-event-coordinator.ts";
 import { createControlPlaneApp, MANAGED_AGENTS_BETA } from "../src/control-plane/app.ts";
 import { PiSessionRunner } from "../src/control-plane/sessions/pi/runner.ts";
-import { createGuardedMcpFetch } from "../src/control-plane/sessions/pi/mcp/fetch.ts";
+import { createGuardedFetch } from "../src/control-plane/egress/guarded-fetch.ts";
 import {
   createStoreBackedMcpCredentialResolver,
   createStoreBackedMcpServersProvider,
@@ -94,7 +94,7 @@ const runner = new PiSessionRunner({
       sessions: sessionStore,
       agents: agentStore,
     }),
-    fetch: createGuardedMcpFetch({ allowAddress: () => true }),
+    fetch: createGuardedFetch({ allowAddress: () => true }),
     onConnection: (event) => console.log(`[mcp] connection: ${event}`),
     onToolCall: (outcome) => console.log(`[mcp] tool call: ${outcome}`),
   },

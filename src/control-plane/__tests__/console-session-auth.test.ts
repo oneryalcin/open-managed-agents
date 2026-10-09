@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeploymentControlPlane, MANAGED_AGENTS_BETA } from "../app.ts";
-import type { McpFetch } from "../sessions/pi/mcp/fetch.ts";
+import type { GuardedFetch } from "../egress/guarded-fetch.ts";
 import { generateAdminKey } from "../admin/auth.ts";
 import { ConsoleBootstrapService } from "../console/bootstrap.ts";
 
@@ -253,7 +253,7 @@ describe("console session authentication", () => {
   });
 });
 
-async function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapService; host?: string; mcpFetch?: McpFetch } = {}) {
+async function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapService; host?: string; mcpFetch?: GuardedFetch } = {}) {
   const root = mkdtempSync(join(tmpdir(), "oma-console-session-"));
   roots.push(root);
   return createDeploymentControlPlane({
@@ -276,7 +276,7 @@ async function makePlane(opts: { tls?: boolean; bootstrap?: ConsoleBootstrapServ
   });
 }
 
-function oauthConsoleFetch(): McpFetch {
+function oauthConsoleFetch(): GuardedFetch {
   return async (input, init) => {
     const url = new URL(input);
     if (url.hostname === "mcp.example.test" && url.pathname.includes(".well-known/oauth-protected-resource")) {
