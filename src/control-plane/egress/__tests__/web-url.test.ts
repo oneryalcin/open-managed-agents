@@ -75,6 +75,18 @@ describe("web URL validation", () => {
     expect(code("https://docs.example.com/x?q=ghp_0123456789abcdefghijABCDEFGHIJ012345")).toBe("url_not_allowed");
   });
 
+  it.each([
+    ["camelCase token parameter", "https://docs.example.com/x?accessToken=abc"],
+    ["generic key parameter", "https://docs.example.com/x?key=abc"],
+    ["Google API key value", "https://docs.example.com/x?q=AIzaSy012345678901234567890123456789012"],
+  ])("refuses a credential-looking URL: %s", (_name, url) => {
+    expect(code(url)).toBe("url_not_allowed");
+  });
+
+  it("does not throw on malformed percent-encoding", () => {
+    expect(code("https://docs.example.com/%?q=%FF")).toBe("ok");
+  });
+
   it("refuses a URL longer than 250 characters", () => {
     expect(code(`https://docs.example.com/${"a".repeat(240)}`)).toBe("url_too_long");
   });

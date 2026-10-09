@@ -38,13 +38,29 @@ export function validateWebUrl(raw: string, policy: EgressPolicy | undefined): W
   return { ok: true, url };
 }
 
-const CREDENTIAL_PARAM = /(?:^|[_-])(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|pwd|auth|signature|sig|credential)s?$/i;
-// Common provider token shapes (GitHub, Slack, OpenAI/Anthropic-style keys, AWS).
-const CREDENTIAL_VALUE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16})\b/;
+// Parameter names compared without case or separators (accessToken,
+// access_token and access-token are the same).
+const CREDENTIAL_PARAM =
+  /(?:apikey|accesskey|key|secret|token|password|passwd|pwd|auth|authorization|signature|sig|credentials?)$/;
+// Common provider token shapes: GitHub, Slack, OpenAI/Anthropic-style, AWS,
+// Google API keys.
+const CREDENTIAL_VALUE =
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})\b/;
 
 function looksLikeCredential(url: URL): boolean {
   for (const [name, value] of url.searchParams) {
-    if (CREDENTIAL_PARAM.test(name) && value !== "") return true;
+    const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (CREDENTIAL_PARAM.test(normalized) && value !== "") return true;
   }
-  return CREDENTIAL_VALUE.test(decodeURIComponent(url.pathname + url.search));
+  const raw = url.pathname + url.search;
+  return CREDENTIAL_VALUE.test(raw) || CREDENTIAL_VALUE.test(safeDecode(raw));
+}
+
+// WHATWG URLs may carry malformed escapes (`%`, `%FF`); never throw on them.
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

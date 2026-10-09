@@ -53,6 +53,14 @@ describe("guarded web fetch", () => {
     expect([result.ok ? "ok" : result.code, targetHits]).toEqual(["url_not_allowed", 0]);
   });
 
+  it("reports a malformed redirect Location instead of throwing", async () => {
+    const base = await serve((_req, res) => res.writeHead(302, { location: "https://[" }).end());
+
+    const result = await fetchWebResource(`${base}/`, { validate: allowAll, guard: allowLoopback });
+
+    expect(result.ok ? "ok" : result.code).toBe("invalid_url");
+  });
+
   it("gives up after five redirects", async () => {
     const base = await serve((req, res) => {
       const n = Number(req.url?.slice(1) ?? 0);

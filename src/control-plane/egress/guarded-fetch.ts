@@ -147,7 +147,12 @@ export async function fetchWebResource(
     : webDispatcher(opts.guard);
   let current = requested;
   for (let hop = 0; ; hop += 1) {
-    const check = opts.validate(current);
+    let check: WebUrlCheck;
+    try {
+      check = opts.validate(current);
+    } catch (error) {
+      return { ok: false, code: "invalid_url", reason: error instanceof Error ? error.message : String(error), url: current };
+    }
     if (!check.ok) return { ok: false, code: check.code, reason: check.reason, url: current };
     let response: Awaited<ReturnType<typeof undiciFetch>>;
     try {
@@ -167,7 +172,11 @@ export async function fetchWebResource(
       if (hop >= maxRedirects) {
         return { ok: false, code: "too_many_redirects", reason: `more than ${maxRedirects} redirects`, url: current };
       }
-      current = new URL(location, check.url).href;
+      try {
+        current = new URL(location, check.url).href;
+      } catch {
+        return { ok: false, code: "invalid_url", reason: `malformed redirect location: ${location.slice(0, 100)}`, url: current };
+      }
       continue;
     }
     try {
