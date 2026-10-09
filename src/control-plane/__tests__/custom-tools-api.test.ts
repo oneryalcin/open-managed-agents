@@ -519,12 +519,12 @@ describe("Custom tool API round trip", () => {
     ).toHaveLength(1);
   });
 
-  it("ends a custom tool wait left by a previous process at startup, before its lease expires", async () => {
+  it("accepts a late custom tool result left by a previous process before its lease expires", async () => {
     const fixture = makeFixture(new FakeCustomToolRunner());
     const session = await setupSession(fixture.app);
 
     await sendMessage(fixture.app, session.id, "ask");
-    await eventuallyEvents(
+    const waiting = await eventuallyEvents(
       fixture.app,
       session.id,
       (events) =>
@@ -535,15 +535,28 @@ describe("Custom tool API round trip", () => {
               "requires_action",
         ),
     );
+    const customUse = waiting.find(
+      (event) => event.type === "agent.custom_tool_use",
+    );
 
     const recreated = fixture.recreate(new NoPendingCustomToolRunner());
     fixture.service.recoverAllAbandonedRuntimeTurns({ takeOverPreviousOwners: true });
-
-    const final = await getEvents(recreated, session.id);
-    expect(final.at(-1)).toMatchObject({
-      type: "session.status_idle",
-      stop_reason: { type: "end_turn" },
+    const res = await recreated.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [
+          {
+            type: "user.custom_tool_result",
+            custom_tool_use_id: customUse?.id,
+            content: [{ type: "text", text: "late" }],
+            is_error: false,
+          },
+        ],
+      }),
     });
+
+    expect(res.status).toBe(200);
   });
 
   it("interrupt closes durable custom tool waits after restart", async () => {

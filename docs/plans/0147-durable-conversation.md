@@ -215,9 +215,10 @@ progress. That is unchanged from today and is ADR 0018 stage 3.
   app recovers turns owned by previous processes immediately instead of after
   their lease, by naming the dead owner in the claim. So the first message
   after a restart already sees the abandoned turn closed and gets the note.
-  This includes turns waiting for a custom tool result or a confirmation: the
-  Pi session that was waiting is gone, so they end at startup instead of
-  answering 409 until the lease expires. Later recovery passes keep the full
+  Turns waiting for a custom tool result or a confirmation stay open but are
+  adopted by the new process, so the late answer is recorded at once (and
+  then ends the turn, since the Pi session that was waiting is gone) instead
+  of being refused as still owned until the lease expires. Later recovery passes keep the full
   lease fence. `close()` releases the appliance lock without draining running
   turns; only process exit follows it in production, and a plane reopened in
   the same process takes those turns over like a restart would.

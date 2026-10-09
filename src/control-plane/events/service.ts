@@ -870,11 +870,7 @@ export class DefaultSessionEventsService implements SessionEventsService {
         });
         continue;
       }
-      // A wait for a tool result or confirmation stays open while the Pi
-      // session waiting on it may still exist. A previous process's session
-      // is gone, so the eventual answer could only end the turn: end it now.
       if (
-        takeOver === undefined &&
         turn.state === "paused" &&
         this.events.listRuntimeActionsForTurn(
           workspaceId,
@@ -882,6 +878,21 @@ export class DefaultSessionEventsService implements SessionEventsService {
           turn.turn_id,
         ).some((action) => action.state === "pending")
       ) {
+        // The wait stays open: its answer is still recorded (then ends the
+        // turn, as the Pi session is gone). Adopt it so that answer is not
+        // refused until the previous process's lease expires.
+        if (takeOver !== undefined) {
+          const now = new Date().toISOString();
+          this.events.adoptPausedRuntimeTurn({
+            workspaceId,
+            sessionId: turn.session_id,
+            turnId: turn.turn_id,
+            ownerId: this.ownerId,
+            leaseExpiresAt: leaseExpiresAt(now, this.leaseTtlMs),
+            now,
+            takeOverOwnerId: takeOver,
+          });
+        }
         continue;
       }
       const claimed = this.claimTurnForTerminalization(turn, takeOver);

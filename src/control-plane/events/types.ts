@@ -362,6 +362,13 @@ export interface SessionEventStore {
   claimRuntimeTurnForTerminalization(
     claim: RuntimeTurnRecoveryClaim,
   ): PendingRuntimeTurnRecord | undefined;
+  /**
+   * Take ownership of a paused turn from `takeOverOwnerId` without changing
+   * its state, so this process can resolve its open waits.
+   */
+  adoptPausedRuntimeTurn(
+    claim: RuntimeTurnRecoveryClaim & { takeOverOwnerId: string },
+  ): boolean;
   listRuntimeActionsForTurn(
     workspaceId: WorkspaceId,
     sessionId: string,

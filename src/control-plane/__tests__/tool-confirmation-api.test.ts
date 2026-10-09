@@ -550,6 +550,31 @@ describe("builtin tool confirmations", () => {
     });
   });
 
+  it("accepts a confirmation left by a previous process before its lease expires", async () => {
+    const fixture = makeSharedFixture(new FakeToolPermissionRunner("ask"));
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "write");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) => events.some((event) => event.type === "agent.tool_use"),
+    );
+    const toolUse = waiting.find((event) => event.type === "agent.tool_use");
+
+    const recreated = fixture.recreate(new NoPendingToolPermissionRunner());
+    fixture.service.recoverAllAbandonedRuntimeTurns({ takeOverPreviousOwners: true });
+    const res = await recreated.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{ type: "user.tool_confirmation", tool_use_id: toolUse?.id, result: "allow" }],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+  });
+
   it("does not emit stale requires_action when custom and builtin waits resolve in one batch", async () => {
     const runner = new MixedPendingRunner();
     const app = createInMemoryControlPlaneApp({
@@ -1095,7 +1120,9 @@ function makeSharedFixture(
   recreate: (nextRunner: RuntimeEventRunner) => ReturnType<typeof createControlPlaneApp>;
   eventStore: EventStore;
   runner: RuntimeEventRunner;
+  readonly service: DefaultSessionEventsService;
 } {
+  let service!: DefaultSessionEventsService;
   const agentStore = SqliteAgentStore.open(":memory:");
   const environmentStore = SqliteEnvironmentStore.open(":memory:");
   const sessionStore = SqliteSessionStore.open(":memory:");
@@ -1112,7 +1139,7 @@ function makeSharedFixture(
         undefined,
         { assertDeletable: () => {} },
       ),
-      sessionEvents: new DefaultSessionEventsService(
+      sessionEvents: (service = new DefaultSessionEventsService(
         eventStore,
         sessionStore,
         broadcaster,
@@ -1127,7 +1154,7 @@ function makeSharedFixture(
             ? {}
             : { leaseTtlMs: opts.leaseTtlMs }),
         },
-      ),
+      )),
     });
   };
   return {
@@ -1135,6 +1162,9 @@ function makeSharedFixture(
     recreate: makeApp,
     eventStore,
     runner,
+    get service() {
+      return service;
+    },
   };
 }
 
