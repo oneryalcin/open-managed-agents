@@ -1,4 +1,5 @@
-// SSRF-guarded fetch for control-plane MCP dials (plan 0122 §4.3).
+// SSRF-guarded fetch for control-plane dials: MCP (plan 0122 §4.3) and web
+// tools (plan 0149).
 //
 // Agent configs carry attacker-influenceable URLs and the control plane dials
 // them; without a guard, `http://169.254.169.254/` or the admin API would be
@@ -16,15 +17,15 @@ import {
   createPinnedLookup,
   isBlockedAddress,
   type PinnedLookupOptions,
-} from "../../../egress/ssrf.ts";
+} from "./ssrf.ts";
 
 /** Matches the MCP SDK's FetchLike. */
-export type McpFetch = (
+export type GuardedFetch = (
   url: string | URL,
   init?: RequestInit,
 ) => Promise<Response>;
 
-export function createGuardedMcpFetch(opts: PinnedLookupOptions = {}): McpFetch {
+export function createGuardedFetch(opts: PinnedLookupOptions = {}): GuardedFetch {
   const dispatcher = new Agent({
     connect: { lookup: ipv4FirstLookup(createPinnedLookup(opts)) },
   });

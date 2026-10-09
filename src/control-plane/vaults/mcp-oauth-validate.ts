@@ -1,5 +1,5 @@
 import { invalidRequest } from "../errors.ts";
-import type { McpFetch } from "../sessions/pi/mcp/fetch.ts";
+import type { GuardedFetch } from "../egress/guarded-fetch.ts";
 import {
   probeMcpInitialize,
   type McpInitializeProbeResult,
@@ -13,7 +13,7 @@ import type { VaultOauthRefreshState, VaultService } from "./types.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
 export interface McpOauthValidationDependencies {
-  fetch: McpFetch;
+  fetch: GuardedFetch;
   refresh: RefreshCoordinator;
   operationTimeoutMs: number;
   now?: () => Date;

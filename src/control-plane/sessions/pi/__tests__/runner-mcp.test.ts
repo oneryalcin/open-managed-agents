@@ -7,14 +7,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiSessionRunner } from "../runner.ts";
 import { McpConnection } from "../mcp/client.ts";
 import type { McpCredentialBinding } from "../mcp/credential.ts";
-import { createGuardedMcpFetch } from "../mcp/fetch.ts";
+import { createGuardedFetch } from "../../../egress/guarded-fetch.ts";
 import {
   echoTool,
   startMcpFixture,
   type McpFixture,
 } from "../mcp/__tests__/fixture.ts";
 
-const seamFetch = createGuardedMcpFetch({ allowAddress: () => true });
+const seamFetch = createGuardedFetch({ allowAddress: () => true });
 
 let fixture: McpFixture | undefined;
 let runner: PiSessionRunner | undefined;

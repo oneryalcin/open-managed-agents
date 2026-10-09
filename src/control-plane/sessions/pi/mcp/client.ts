@@ -6,7 +6,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { isJsonObject, type JsonObject } from "../../../../types/json.ts";
-import type { McpFetch } from "./fetch.ts";
+import type { GuardedFetch } from "../../../egress/guarded-fetch.ts";
 import {
   attachMcpAuthSnapshot,
   getMcpAuthSnapshot,
@@ -38,7 +38,7 @@ export interface McpServerDeclaration {
 }
 
 export interface McpConnectionOptions {
-  fetch: McpFetch;
+  fetch: GuardedFetch;
   credential?: McpCredentialBinding;
   /** Per-operation timeout (connect, listTools, callTool). */
   operationTimeoutMs?: number;
@@ -156,9 +156,9 @@ export class McpConnection {
 }
 
 function credentialFetch(
-  fetch: McpFetch,
+  fetch: GuardedFetch,
   credential: McpCredentialBinding | undefined,
-): McpFetch {
+): GuardedFetch {
   if (credential === undefined) return fetch;
   return async (url, init) => {
     const snapshot = await credential.authorize();

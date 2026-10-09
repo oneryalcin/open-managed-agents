@@ -1,7 +1,7 @@
 // Plan 0122 §4.3/§5 — SSRF property tests for the guarded MCP fetch.
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createGuardedMcpFetch } from "../fetch.ts";
+import { createGuardedFetch } from "../guarded-fetch.ts";
 
 let server: Server;
 let baseUrl: string;
@@ -39,9 +39,9 @@ async function fetchCauseCode(promise: Promise<Response>): Promise<unknown> {
   }
 }
 
-describe("createGuardedMcpFetch (plan 0122 §4.3)", () => {
+describe("createGuardedFetch (plan 0122 §4.3)", () => {
   it("blocks loopback targets with the guard active", async () => {
-    const guarded = createGuardedMcpFetch();
+    const guarded = createGuardedFetch();
     expect(await fetchCauseCode(guarded(`${baseUrl}/`))).toBe(
       "EGRESS_SSRF_BLOCKED",
     );
@@ -49,7 +49,7 @@ describe("createGuardedMcpFetch (plan 0122 §4.3)", () => {
   });
 
   it("reaches the fixture through the allowAddress test seam", async () => {
-    const guarded = createGuardedMcpFetch({ allowAddress: () => true });
+    const guarded = createGuardedFetch({ allowAddress: () => true });
     const response = await guarded(`${baseUrl}/`);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("ok");
@@ -60,7 +60,7 @@ describe("createGuardedMcpFetch (plan 0122 §4.3)", () => {
     // to a blocked range after the first check. The guard must run per
     // resolution, not once per hostname.
     let resolutions = 0;
-    const guarded = createGuardedMcpFetch({
+    const guarded = createGuardedFetch({
       allowAddress: () => {
         resolutions += 1;
         return resolutions === 1;
@@ -76,7 +76,7 @@ describe("createGuardedMcpFetch (plan 0122 §4.3)", () => {
   });
 
   it("refuses redirects even when the caller asks to follow them", async () => {
-    const guarded = createGuardedMcpFetch({ allowAddress: () => true });
+    const guarded = createGuardedFetch({ allowAddress: () => true });
     await expect(
       guarded(`${baseUrl}/redir`, { redirect: "follow" }),
     ).rejects.toThrow();
@@ -85,7 +85,7 @@ describe("createGuardedMcpFetch (plan 0122 §4.3)", () => {
   });
 
   it("guards GET requests identically (SSE channel uses the same fetch)", async () => {
-    const guarded = createGuardedMcpFetch();
+    const guarded = createGuardedFetch();
     expect(
       await fetchCauseCode(guarded(`${baseUrl}/sse`, { method: "GET" })),
     ).toBe("EGRESS_SSRF_BLOCKED");
@@ -102,7 +102,7 @@ describe("hostname path through the undici pinned-lookup dispatcher (review 0122
   }
 
   it("blocks a hostname resolving to loopback via the dispatcher lookup", async () => {
-    const guarded = createGuardedMcpFetch();
+    const guarded = createGuardedFetch();
     expect(await fetchCauseCode(guarded(`${localhostUrl()}/`))).toBe(
       "EGRESS_SSRF_BLOCKED",
     );
@@ -110,7 +110,7 @@ describe("hostname path through the undici pinned-lookup dispatcher (review 0122
   });
 
   it("reaches the fixture by hostname through the seam (lookup ran, SNI host preserved)", async () => {
-    const guarded = createGuardedMcpFetch({ allowAddress: () => true });
+    const guarded = createGuardedFetch({ allowAddress: () => true });
     const response = await guarded(`${localhostUrl()}/`, {
       headers: { connection: "close" },
     });
@@ -120,7 +120,7 @@ describe("hostname path through the undici pinned-lookup dispatcher (review 0122
 
   it("re-consults the guard per hostname resolution (rebinding, dispatcher path)", async () => {
     let resolutions = 0;
-    const guarded = createGuardedMcpFetch({
+    const guarded = createGuardedFetch({
       allowAddress: () => {
         resolutions += 1;
         return resolutions <= 2; // lookup sees v4+v6 candidates on call 1

@@ -17,7 +17,7 @@ import { SqliteSessionStore } from "../sessions/store.ts";
 import { DefaultVaultService } from "../vaults/service.ts";
 import { RefreshCoordinator } from "../vaults/oauth-refresh.ts";
 import { SqliteVaultStore, vaultSecretName } from "../vaults/store.ts";
-import type { McpFetch } from "../sessions/pi/mcp/fetch.ts";
+import type { GuardedFetch } from "../egress/guarded-fetch.ts";
 import { SqliteWorkspaceStore } from "../workspaces/store.ts";
 import type { ManagedAgentsSession } from "../../types/sessions.ts";
 import { createRawControlPlaneApp, MANAGED_AGENTS_BETA } from "./helpers.ts";
@@ -191,7 +191,7 @@ describe("vaults API", () => {
           error_description: `echo ${OAUTH_ACCESS}`,
         }),
         { status: 401, headers: { "content-type": "application/json" } },
-      )) as McpFetch;
+      )) as GuardedFetch;
     const fixture = makeVaultsFixture({ mcpFetch: fetch });
     const key = fixture.mintKey("wrk_default");
     const vault = await createVault(fixture.app, key);
@@ -264,7 +264,7 @@ describe("vaults API", () => {
       expected: { status: "unknown", refresh: { status: "not_attempted" }, probeStatus: null },
     },
   ])("$name", async ({ fetch, expected }) => {
-    const fixture = makeVaultsFixture({ mcpFetch: fetch as McpFetch });
+    const fixture = makeVaultsFixture({ mcpFetch: fetch as GuardedFetch });
     const key = fixture.mintKey("wrk_default");
     const vault = await createVault(fixture.app, key);
     const credential = await (await createOauthCredential(fixture.app, key, vault.id)).json() as {
@@ -308,7 +308,7 @@ describe("vaults API", () => {
         status: 401,
         headers: { "content-type": "application/json" },
       });
-    }) as McpFetch;
+    }) as GuardedFetch;
     const fixture = makeVaultsFixture({ mcpFetch: fetch });
     const key = fixture.mintKey("wrk_default");
     const vault = await createVault(fixture.app, key);
@@ -363,7 +363,7 @@ describe("vaults API", () => {
         status: 401,
         headers: { "content-type": "application/json" },
       });
-    }) as McpFetch;
+    }) as GuardedFetch;
     const fixture = makeVaultsFixture({ mcpFetch: fetch });
     const key = fixture.mintKey("wrk_default");
     const vault = await createVault(fixture.app, key);
@@ -425,7 +425,7 @@ describe("vaults API", () => {
           headers: { "content-type": "application/json" },
         },
       );
-    }) as McpFetch;
+    }) as GuardedFetch;
     const fixture = makeVaultsFixture({ mcpFetch: fetch });
     const key = fixture.mintKey("wrk_default");
     const vault = await createVault(fixture.app, key);
@@ -472,7 +472,7 @@ describe("vaults API", () => {
         status: 401,
         headers: { "content-type": "application/json" },
       });
-    }) as McpFetch;
+    }) as GuardedFetch;
     const fixture = makeVaultsFixture({ mcpFetch: fetch });
     const key = fixture.mintKey("wrk_default");
     const vault = await createVault(fixture.app, key);
@@ -537,7 +537,7 @@ describe("vaults API", () => {
         status: 401,
         headers: { "content-type": "application/json" },
       });
-    }) as McpFetch;
+    }) as GuardedFetch;
     const fixture = makeVaultsFixture({ mcpFetch: fetch });
     const key = fixture.mintKey("wrk_default");
     const vault = await createVault(fixture.app, key);
@@ -584,7 +584,7 @@ describe("vaults API", () => {
         status: 401,
         headers: { "content-type": "application/json" },
       });
-    }) as McpFetch;
+    }) as GuardedFetch;
     const fixture = makeVaultsFixture({ mcpFetch: fetch });
     const key = fixture.mintKey("wrk_default");
     const vault = await createVault(fixture.app, key);
@@ -1093,7 +1093,7 @@ describe("vaults API", () => {
 function makeVaultsFixture(
   opts: {
     secretsStore?: boolean;
-    mcpFetch?: McpFetch;
+    mcpFetch?: GuardedFetch;
     allowInsecureTokenEndpoint?: (url: URL) => boolean;
   } = {},
 ) {

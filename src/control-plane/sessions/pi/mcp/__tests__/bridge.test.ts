@@ -10,7 +10,7 @@ import type {
 } from "../../../../events/types.ts";
 import { PiToolPermissionBridge } from "../../tool-permissions.ts";
 import { McpConnection } from "../client.ts";
-import { createGuardedMcpFetch } from "../fetch.ts";
+import { createGuardedFetch } from "../../../../egress/guarded-fetch.ts";
 import {
   capContent,
   createMcpToolDefinitions,
@@ -27,7 +27,7 @@ import {
 } from "../credential.ts";
 import { echoTool, startMcpFixture, type McpFixture } from "./fixture.ts";
 
-const seamFetch = createGuardedMcpFetch({ allowAddress: () => true });
+const seamFetch = createGuardedFetch({ allowAddress: () => true });
 
 interface Recorded {
   uses: RuntimeMcpToolUseEvent[];

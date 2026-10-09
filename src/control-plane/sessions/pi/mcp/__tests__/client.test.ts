@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { McpConnection, isMcpAuthError } from "../client.ts";
 import type { McpCredentialBinding } from "../credential.ts";
-import { createGuardedMcpFetch } from "../fetch.ts";
+import { createGuardedFetch } from "../../../../egress/guarded-fetch.ts";
 import { echoTool, startMcpFixture, type McpFixture } from "./fixture.ts";
 
-const seamFetch = createGuardedMcpFetch({ allowAddress: () => true });
+const seamFetch = createGuardedFetch({ allowAddress: () => true });
 
 let fixture: McpFixture | undefined;
 afterEach(async () => {

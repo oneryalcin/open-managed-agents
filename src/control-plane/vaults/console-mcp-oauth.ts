@@ -11,7 +11,7 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { invalidRequest, notFound } from "../errors.ts";
-import type { McpFetch } from "../sessions/pi/mcp/fetch.ts";
+import type { GuardedFetch } from "../egress/guarded-fetch.ts";
 import type { WorkspaceId } from "../workspace.ts";
 import type { ManagedVaultCredential, VaultService } from "./types.ts";
 
@@ -78,7 +78,7 @@ export class ConsoleMcpOauthService {
 
   constructor(
     private readonly vaults: VaultService,
-    private readonly fetch: McpFetch,
+    private readonly fetch: GuardedFetch,
     private readonly opts: {
       now?: () => Date;
       flowTtlMs?: number;
@@ -272,7 +272,7 @@ export class ConsoleMcpOauthService {
     }
   }
 
-  private oauthFetch(onSafetyFailure: (error: ConsoleMcpOauthError) => void): McpFetch {
+  private oauthFetch(onSafetyFailure: (error: ConsoleMcpOauthError) => void): GuardedFetch {
     return boundedOauthFetch(
       this.fetch,
       {
@@ -573,10 +573,10 @@ function classifyOauthError(
 }
 
 function boundedOauthFetch(
-  inner: McpFetch,
+  inner: GuardedFetch,
   opts: { timeoutMs: number; maxBodyBytes: number },
   onSafetyFailure: (error: ConsoleMcpOauthError) => void,
-): McpFetch {
+): GuardedFetch {
   return async (url, init = {}) => {
     const timeout = new AbortController();
     const timer = setTimeout(() => {

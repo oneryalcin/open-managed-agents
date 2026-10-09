@@ -17,7 +17,7 @@ import type {
 import { translatePiEvent } from "../sessions/pi/translator.ts";
 import { PiToolPermissionBridge } from "../sessions/pi/tool-permissions.ts";
 import { McpConnection } from "../sessions/pi/mcp/client.ts";
-import { createGuardedMcpFetch } from "../sessions/pi/mcp/fetch.ts";
+import { createGuardedFetch } from "../egress/guarded-fetch.ts";
 import {
   createMcpToolDefinitions,
   type McpEmitter,
@@ -29,7 +29,7 @@ import {
 } from "../sessions/pi/mcp/__tests__/fixture.ts";
 import { STREAM_TEST_TIMEOUT_MS, hasTimedOut } from "./test-timeouts.ts";
 
-const seamFetch = createGuardedMcpFetch({ allowAddress: () => true });
+const seamFetch = createGuardedFetch({ allowAddress: () => true });
 
 type App = ReturnType<typeof createInMemoryControlPlaneApp>;
 

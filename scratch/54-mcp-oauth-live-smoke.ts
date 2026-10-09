@@ -15,7 +15,7 @@ import { z } from "zod";
 import { createDeploymentControlPlane, MANAGED_AGENTS_BETA } from "../src/control-plane/app.ts";
 import { generateMasterKey } from "../src/control-plane/secrets/master-key.ts";
 import { startMcpFixture } from "../src/control-plane/sessions/pi/mcp/__tests__/fixture.ts";
-import { createGuardedMcpFetch } from "../src/control-plane/sessions/pi/mcp/fetch.ts";
+import { createGuardedFetch } from "../src/control-plane/egress/guarded-fetch.ts";
 import { probeMcpInitialize } from "../src/control-plane/sessions/pi/mcp/probe.ts";
 import { RefreshCoordinator } from "../src/control-plane/vaults/oauth-refresh.ts";
 
@@ -128,7 +128,7 @@ const validMcp = await startMcpFixture([], { requireBearer: ACCESS[0] });
 const invalidMcp = await startMcpFixture([], { requireBearer: "never-valid" });
 const unknownMcp = await startMcpFixture([], { requireBearer: "never-valid" });
 
-const guardedFetch = createGuardedMcpFetch({ allowAddress: () => true });
+const guardedFetch = createGuardedFetch({ allowAddress: () => true });
 const home = mkdtempSync(join(tmpdir(), "oma-oauth-smoke-"));
 const plane = await createDeploymentControlPlane(
   {
