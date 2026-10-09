@@ -45,8 +45,11 @@ import {
   PiToolPermissionBridge,
   type BuiltinToolAccessResolver,
   type GatedBuiltinToolName,
+  type WebBuiltinToolName,
 } from "./tool-permissions.ts";
 import { createWebFetchTool, type WebFetchToolOptions, type WebToolContext } from "./web/fetch-tool.ts";
+import type { WebSearchProvider } from "./web/search-provider.ts";
+import { createWebSearchTool } from "./web/search-tool.ts";
 import { McpConnection } from "./mcp/client.ts";
 import { createGuardedFetch, type GuardedFetch } from "../../egress/guarded-fetch.ts";
 import {
@@ -341,6 +344,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
       webTools?: {
         context: (workspaceId: WorkspaceId, sessionId: string) => Promise<WebToolContext>;
         fetchResource?: WebFetchToolOptions["fetchResource"];
+        /** web_search is offered only when a provider is configured. */
+        search?: WebSearchProvider;
       };
       /** 0121 C2 telemetry: sandbox lifecycle events. Must not throw. */
       onSandboxEvent?: (event: "created" | "disposed" | "error") => void;
@@ -1450,20 +1455,33 @@ export class PiSessionRunner implements RuntimeEventRunner {
   ): ToolDefinition<any, any, any>[] {
     const web = this.opts.webTools;
     if (web === undefined) return [];
-    if (!this.toolPermissionBridge.access(workspaceId, sessionId, "web_fetch").enabled) return [];
-    const tool = createWebFetchTool({
-      context: () => web.context(workspaceId, sessionId),
-      ...(web.fetchResource === undefined ? {} : { fetchResource: web.fetchResource }),
-    });
-    return [
+    const context = () => web.context(workspaceId, sessionId);
+    const tools: Array<[WebBuiltinToolName, ToolDefinition<any, any, any>]> = [];
+    if (this.webToolEnabled(workspaceId, sessionId, "web_fetch")) {
+      tools.push(["web_fetch", createWebFetchTool({
+        context,
+        ...(web.fetchResource === undefined ? {} : { fetchResource: web.fetchResource }),
+      })]);
+    }
+    if (web.search !== undefined && this.webToolEnabled(workspaceId, sessionId, "web_search")) {
+      tools.push(["web_search", createWebSearchTool({ context, provider: web.search })]);
+    }
+    return tools.map(([name, tool]) =>
       this.toolPermissionBridge.wrapTool(
         workspaceId,
         sessionId,
-        "web_fetch",
+        name,
         tool,
         () => this.sessions.get(sessionId)?.emitInternal,
       ),
-    ];
+    );
+  }
+
+  /** A web tool the deployment provides and the session's agent enables. */
+  private webToolEnabled(workspaceId: WorkspaceId, sessionId: string, name: WebBuiltinToolName): boolean {
+    const web = this.opts.webTools;
+    if (web === undefined || (name === "web_search" && web.search === undefined)) return false;
+    return this.toolPermissionBridge.access(workspaceId, sessionId, name).enabled;
   }
 
   /** Enabled sandbox builtins plus enabled control-plane web tools. */
@@ -1478,11 +1496,8 @@ export class PiSessionRunner implements RuntimeEventRunner {
         out.add(toolName);
       }
     }
-    if (
-      this.opts.webTools !== undefined &&
-      this.toolPermissionBridge.access(workspaceId, sessionId, "web_fetch").enabled
-    ) {
-      out.add("web_fetch");
+    for (const name of ["web_fetch", "web_search"] as const) {
+      if (this.webToolEnabled(workspaceId, sessionId, name)) out.add(name);
     }
     return out;
   }

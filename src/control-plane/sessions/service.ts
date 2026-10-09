@@ -372,7 +372,8 @@ export class DefaultSessionService implements SessionService {
       this.egressCapability?.webToolsWithoutSandboxEgress === true &&
       policy.credentials.length === 0 &&
       policy.allow.every((entry) => entry.protocol === "https") &&
-      resolveBuiltinToolAccessForAgent(agent, "web_fetch").enabled
+      (resolveBuiltinToolAccessForAgent(agent, "web_fetch").enabled ||
+        resolveBuiltinToolAccessForAgent(agent, "web_search").enabled)
     ) {
       return;
     }

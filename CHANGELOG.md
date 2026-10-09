@@ -19,8 +19,13 @@
   `always_ask` policy works through the usual confirmation flow. Where the
   sandbox has no egress (no provider, microsandbox, or docker-local without
   the sidecar), environments with allowed hosts are now accepted for agents
-  that enable `web_fetch`; the sandbox itself stays offline. `web_search`
-  is not available yet.
+  that enable `web_fetch`; the sandbox itself stays offline.
+- **Agents can search the web with `web_search`** when a provider is
+  configured (`OMA_WEB_SEARCH_PROVIDER=tavily` and
+  `OMA_WEB_SEARCH_API_KEY`). Results come only from the environment's
+  allowed hosts (requested from the provider and re-checked), no query is
+  sent when no hosts are allowed, and the provider key is scrubbed from
+  everything it returns. Search results count as shown for `web_fetch`.
 - **Sessions report usage and time** (plan 0148). `usage` was always `null`;
   it now carries input, output and cache tokens (cache writes split into 5m
   and 1h), `active_seconds`, and `list_cost` in cents, plus a new `stats`

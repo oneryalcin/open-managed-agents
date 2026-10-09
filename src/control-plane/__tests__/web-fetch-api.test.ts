@@ -129,4 +129,44 @@ describe("web_fetch through a real Pi session", () => {
 
     await expect(runner.prepareSession("wrk_default", "sesn_collide")).rejects.toThrow("web_fetch");
   });
+
+  it("fetches a URL that an earlier web_search showed", async () => {
+    const pi = await createRealPi();
+    pi.core.setResponses([
+      pi.faux.fauxAssistantMessage([pi.faux.fauxToolCall("web_search", { query: "install guide" })], { stopReason: "toolUse" }),
+      pi.faux.fauxAssistantMessage([pi.faux.fauxToolCall("web_fetch", { url: "https://docs.example.com/install" })], { stopReason: "toolUse" }),
+      pi.faux.fauxAssistantMessage("done"),
+    ]);
+    let app!: ReturnType<typeof createInMemoryControlPlaneApp>;
+    const runner = new PiSessionRunner({
+      modelCatalog: pi.modelCatalog,
+      builtinToolAccess: (_ws, _sid, toolName) =>
+        toolName === "web_fetch" || toolName === "web_search"
+          ? { enabled: true, permission: "allow" }
+          : { enabled: false, permission: "deny" },
+      webTools: {
+        context: async (_ws, sessionId) => ({
+          policy,
+          events: (await listEvents(app, sessionId)).map((event) => ({
+            id: String(event.id), type: String(event.type),
+            processed_at: (event.processed_at as string | null) ?? null, payload: event,
+          })),
+        }),
+        search: { search: async () => [{ url: "https://docs.example.com/install", title: "Install", content: "how to" }] },
+        fetchResource: async (url, options) => {
+          const check = options.validate(url);
+          if (!check.ok) return { ok: false, code: check.code, reason: check.reason, url };
+          return { ok: true, finalUrl: url, status: 200, contentType: "text/html", body: new TextEncoder().encode(PAGE), truncated: false };
+        },
+      },
+    });
+    app = createInMemoryControlPlaneApp({ runtime: { runner, translate: translatePiEvent } });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "find the install guide and read it");
+    await waitFor(async () => typesOf(await listEvents(app, session.id)).includes("session.status_idle"));
+
+    const results = (await listEvents(app, session.id)).filter((event) => event.type === "agent.tool_result");
+
+    expect(results.map((result) => result.is_error)).toEqual([false, false]);
+  });
 });

@@ -347,7 +347,9 @@ goal because OMA's deployment model is intentionally different.
   - per-tool restrictions (`allowed_domains`, `blocked_domains`,
     `url_sources`, `max_content_tokens`) are refused with a 400 until they are
     supported;
-  - `web_search` is not available yet.
+  - `web_search` needs an operator-configured provider (Tavily), so results
+    come from that index rather than Anthropic's, and the provider sees
+    every query.
 - 🔵 **Session usage is a model-only estimate** (plan 0148) — `usage` and
   `stats` follow the hosted shape (probe 71). Token totals equal the sum of
   the public `span.model_request_end.model_usage`, as hosted. Differences:
