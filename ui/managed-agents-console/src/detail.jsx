@@ -609,8 +609,9 @@ function SessionDetail({ session, layout, go, onArchive, onDelete, onSessionStat
             <span className="dotsep">·</span>
             <Pill icon="folder">{fileCount} files</Pill>
             <span className="dotsep">·</span>
-            <span className="m" title="Session-level duration is not reported by the API. Per-request timing appears on model span events."><Icon name="clock" />{running ? 'running…' : s.dur}</span>
-            <span className="m" title="Session-level usage is not reported by the API. Per-request tokens appear on span.model_request_end.model_usage."><Icon name="layers" />{s.tokens}</span>
+            <span className="m" title="Time the agent spent running (usage.active_seconds)"><Icon name="clock" />{running ? 'running…' : s.dur}</span>
+            <span className="m" title="Tokens across the session's model requests (usage)"><Icon name="layers" />{s.tokens}</span>
+            <span className="m mono" title="Estimated model cost from the price table bundled with Pi; blank when a model's price is unknown. Runtime is not priced.">{s.cost}</span>
             <span className="m mono" style={{ color:'var(--faint)' }}>{s.id}</span>
           </div>
         </div>

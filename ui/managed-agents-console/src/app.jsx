@@ -31,6 +31,7 @@ function SessionsList({ sessions, openSession, onCreate, dataState = 'loaded', r
           <span className="th grow">Name</span>
           <span className="th" style={{ width:96 }}>Status</span>
           <span className="th" style={{ width:200 }}>Agent</span>
+          <span className="th" style={{ width:64 }} title="Estimated model cost (from the Pi price table)">Cost</span>
           <span className="th" style={{ width:64 }}>Created</span>
           <span className="th" style={{ width:20 }} />
         </div>
@@ -43,6 +44,7 @@ function SessionsList({ sessions, openSession, onCreate, dataState = 'loaded', r
               <St k={s.status} />{(s.requiresAction || s.confirm) && <NeedsAction />}
             </span>
             <span className="td" style={{ width:200 }}><Pill icon="bot">{s.agent}</Pill></span>
+            <span className="td mono" style={{ width:64, color:'var(--soft)' }}>{s.cost}</span>
             <span className="td mono" style={{ width:64, color:'var(--faint)' }}>{s.created}</span>
             <span className="td" style={{ width:20 }}><Kebab /></span>
           </div>
@@ -430,6 +432,7 @@ function App() {
         setRoute((current) => current.name === 'session' && current.session.id === session.id
           ? { name:'session', session:hydrated }
           : current);
+        onSessionStateChange(session.id, { cost:hydrated.cost, tokens:hydrated.tokens, dur:hydrated.dur });
       })
       .catch((error) => setRoute((current) => current.name === 'session' && current.session.id === session.id
         ? { name:'session', session:{ ...current.session, refreshError:error } }

@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed 2026-10-09. An M2 item in [0145](0145-road-to-external-testers.md)
+Implemented 2026-10-09: #280 (status, D5), #285 (store, capture, API),
+and the console PR. Proposed 2026-10-09. An M2 item in [0145](0145-road-to-external-testers.md)
 (0114 Arc D). Decisions D1–D3 below were made by the maintainer on 2026-10-09.
 
 ## Problem
@@ -145,7 +146,9 @@ request.
    `ensure…` migrations into their own module (hygiene; this slice adds one).
 2. **API:** `usage` and `stats` on session responses, types, OpenAPI,
    PARITY.md, and a real-Pi API test.
-3. **Console:** list and detail display.
+3. **Console:** list and detail display. Shipped: a Cost column in the
+   sessions list; active time, tokens and cost in the session header, refreshed
+   when an open session is rehydrated after a turn.
 
 ## Tests that prevent real bugs
 
