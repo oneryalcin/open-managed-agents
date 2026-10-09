@@ -146,7 +146,10 @@ function count(text: string, char: string): number {
   return text.split(char).length - 1;
 }
 
-/** Markdown link destinations, `](dest)`, with balanced parentheses kept. */
+/**
+ * Markdown link destinations, `](dest)`: backslash escapes decoded, balanced
+ * parentheses kept, and only destinations with a real closing `)`.
+ */
 function markdownLinks(text: string): string[] {
   const links: string[] = [];
   let from = 0;
@@ -154,18 +157,29 @@ function markdownLinks(text: string): string[] {
     const start = text.indexOf("](", from);
     if (start < 0) return links;
     let depth = 0;
-    let end = start + 2;
-    for (; end < text.length; end += 1) {
-      const char = text[end]!;
+    let destination = "";
+    let closed = false;
+    let index = start + 2;
+    for (; index < text.length; index += 1) {
+      const char = text[index]!;
+      if (char === "\\" && index + 1 < text.length) {
+        destination += text[index + 1];
+        index += 1;
+        continue;
+      }
       if (/\s/.test(char)) break;
       if (char === "(") depth += 1;
       else if (char === ")") {
-        if (depth === 0) break;
+        if (depth === 0) {
+          closed = true;
+          break;
+        }
         depth -= 1;
       }
+      destination += char;
     }
-    if (end > start + 2) links.push(text.slice(start + 2, end));
-    from = end;
+    if (closed && destination !== "") links.push(destination);
+    from = index;
   }
 }
 

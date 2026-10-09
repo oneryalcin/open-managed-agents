@@ -149,4 +149,14 @@ describe("URLs shown in a session", () => {
       matchShownUrl("https://docs.example.com/guide_(advanced", shown),
     ]).toEqual(["exact", undefined]);
   });
+
+  it("decodes an escaped parenthesis in a link target instead of ending there", () => {
+    const events = fetchedPage("sevt_f10", "https://docs.example.com/", "See [page](guide\\)secret).");
+    const shown = shownUrls(events, new Date(T0 + 60_000));
+
+    expect([
+      matchShownUrl("https://docs.example.com/guide)secret", shown)?.kind,
+      matchShownUrl("https://docs.example.com/guide/", shown),
+    ]).toEqual(["exact", undefined]);
+  });
 });
