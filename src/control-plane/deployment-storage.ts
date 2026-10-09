@@ -394,20 +394,9 @@ function acquireStorageLock(sqlitePath: string): () => void {
   // naming our own pid is a previous run's (a restarted container, #276).
   const legacyPath = `${sqlitePath}.oma.lock`;
   try {
-    const legacyPid = readLegacyLockPid(legacyPath);
-    if (legacyPid !== undefined && legacyPid !== process.pid && isProcessRunning(legacyPid)) {
-      throw lockedStorageError(legacyPath);
-    }
-    unlinkIfExistsSync(legacyPath);
-    // "wx": an older binary that created the file since we read it wins.
-    writeFileSync(
-      legacyPath,
-      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
-      { flag: "wx", mode: 0o600 },
-    );
+    claimLegacyLock(legacyPath);
   } catch (error) {
     lock.close();
-    if ((error as { code?: unknown }).code === "EEXIST") throw lockedStorageError(legacyPath);
     throw error;
   }
   let released = false;
@@ -417,6 +406,32 @@ function acquireStorageLock(sqlitePath: string): () => void {
     if (readLegacyLockPid(legacyPath) === process.pid) unlinkIfExistsSync(legacyPath);
     lock.close();
   };
+}
+
+// Create first ("wx"), so an older binary creating its file at the same time
+// cannot have it removed. An existing file is reclaimed only when it names a
+// dead process or our own pid; an unreadable one is refused, as older
+// versions did. Two openers reclaiming the same stale file at once remains
+// the race older versions always had.
+function claimLegacyLock(legacyPath: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      writeFileSync(
+        legacyPath,
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+        { flag: "wx", mode: 0o600 },
+      );
+      return;
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "EEXIST" || attempt > 0) {
+        throw (error as { code?: unknown }).code === "EEXIST" ? lockedStorageError(legacyPath) : error;
+      }
+    }
+    const pid = readLegacyLockPid(legacyPath);
+    const stale = pid !== undefined && (pid === process.pid || !isProcessRunning(pid));
+    if (!stale) throw lockedStorageError(legacyPath);
+    unlinkIfExistsSync(legacyPath);
+  }
 }
 
 function readLegacyLockPid(lockPath: string): number | undefined {

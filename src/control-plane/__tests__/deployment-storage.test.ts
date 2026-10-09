@@ -1009,6 +1009,17 @@ describe("deployment storage", () => {
     }
   });
 
+  it("refuses an unreadable older pid lock rather than guess it is stale", async () => {
+    // An older binary between creating its lock file and writing its pid.
+    const paths = await durablePaths();
+    await writeFile(`${paths.sqlitePath}.oma.lock`, "");
+
+    expect(() => createDeploymentStoresFromEnv({
+      OMA_SQLITE_PATH: paths.sqlitePath,
+      OMA_FILE_STORAGE_ROOT: paths.objectRoot,
+    })).toThrow("Durable storage database is already locked");
+  });
+
   it("keeps the older pid lock in place while it owns the database", async () => {
     // So an older binary started meanwhile refuses, as it always did.
     const paths = await durablePaths();
