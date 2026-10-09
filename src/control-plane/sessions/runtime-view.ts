@@ -42,7 +42,7 @@ export function withRuntimeView(
             },
         active_seconds: active,
         list_cost: listCost(totals === undefined ? 0 : totals.costMicros),
-        server_tool_use: null,
+        server_tool_use: { web_fetch_requests: 0, web_search_requests: totals?.webSearchRequests ?? 0 },
       },
       stats: { ...session.stats, active_seconds: active },
     };

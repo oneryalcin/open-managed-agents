@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryControlPlaneApp } from "./helpers.ts";
-import { listEvents, sendMessage, setupSession, waitFor } from "./api-helpers.ts";
+import { getSession, listEvents, sendMessage, setupSession, waitFor } from "./api-helpers.ts";
 import type { WebFetchOptions, WebFetchResult } from "../egress/guarded-fetch.ts";
 import { parseNetworkingConfig, type EgressPolicy } from "../egress/policy.ts";
 import { PiSessionRunner } from "../sessions/pi/runner.ts";
@@ -168,5 +168,38 @@ describe("web_fetch through a real Pi session", () => {
     const results = (await listEvents(app, session.id)).filter((event) => event.type === "agent.tool_result");
 
     expect(results.map((result) => result.is_error)).toEqual([false, false]);
+  });
+
+  async function searchOnce(hosts: string[] | undefined) {
+    const pi = await createRealPi();
+    pi.core.setResponses([
+      pi.faux.fauxAssistantMessage([pi.faux.fauxToolCall("web_search", { query: "guide" })], { stopReason: "toolUse" }),
+      pi.faux.fauxAssistantMessage("done"),
+    ]);
+    const runner = new PiSessionRunner({
+      modelCatalog: pi.modelCatalog,
+      builtinToolAccess: (_ws, _sid, toolName) =>
+        toolName === "web_search" ? { enabled: true, permission: "allow" } : { enabled: false, permission: "deny" },
+      webTools: {
+        context: async () => ({
+          policy: hosts === undefined ? undefined : parseNetworkingConfig({ networking: { type: "limited", allowed_hosts: hosts } }),
+          events: [],
+        }),
+        search: { search: async () => [{ url: "https://docs.example.com/a", title: "A", content: "x" }] },
+      },
+    });
+    const app = createInMemoryControlPlaneApp({ runtime: { runner, translate: translatePiEvent } });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "search");
+    await waitFor(async () => typesOf(await listEvents(app, session.id)).includes("session.status_idle"));
+    return (await getSession(app, session.id)).usage.server_tool_use;
+  }
+
+  it("counts a successful search in the session's usage, as hosted does", async () => {
+    expect(await searchOnce(["docs.example.com"])).toEqual({ web_fetch_requests: 0, web_search_requests: 1 });
+  });
+
+  it("does not count a refused search", async () => {
+    expect(await searchOnce(undefined)).toEqual({ web_fetch_requests: 0, web_search_requests: 0 });
   });
 });

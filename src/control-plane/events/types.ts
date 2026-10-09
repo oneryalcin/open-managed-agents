@@ -308,6 +308,8 @@ export interface SessionUsageTotals {
   activeMs: number;
   /** Start of the running interval still open, if any. */
   runningSince: string | null;
+  /** Successful web_search calls (plan 0149). */
+  webSearchRequests: number;
 }
 
 export interface SessionEventStore {

@@ -360,7 +360,8 @@ goal because OMA's deployment model is intentionally different.
   a fallback answered. Cost is a lower bound when a request was cut off
   mid-flight (interrupt, archive, crash): its span end has zero tokens.
   Totals update after each model request, not at the end of the turn.
-  `server_tool_use` is `null` (no server-executed tools yet). Sessions
+  `server_tool_use` counts successful `web_search` calls (plan 0149), as
+  hosted; `web_fetch_requests` stays 0, as hosted. Sessions
   created before this change have tokens but `list_cost: null`.
 - 🔵 **Aborted assistant text** — the event stream shows an interrupted
   assistant's partial text as `agent.message`, but Pi drops aborted

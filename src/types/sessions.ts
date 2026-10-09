@@ -78,8 +78,11 @@ export interface ManagedAgentsSessionUsage {
    * request used a model with no known price. OMA does not price runtime.
    */
   list_cost: { amount: string; currency: "USD" } | null;
-  /** OMA has no server-executed tools yet. */
-  server_tool_use: null;
+  /**
+   * Web tool calls (plan 0149). As on hosted, only searches count; a fetch
+   * leaves web_fetch_requests at 0.
+   */
+  server_tool_use: { web_fetch_requests: number; web_search_requests: number };
 }
 
 export interface ManagedAgentsSessionStats {

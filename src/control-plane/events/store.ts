@@ -225,7 +225,8 @@ export class EventStore implements SessionEventStore {
     this.sessionUsageStmt = this.db.prepare(
       `SELECT span_count, input_tokens, output_tokens, cache_read_tokens,
               cache_write_tokens, cache_write_1h_tokens, cost_micros,
-              spans_with_tokens, priced_spans_with_tokens, active_ms, running_since
+              spans_with_tokens, priced_spans_with_tokens, active_ms, running_since,
+              web_search_requests
        FROM session_usage_totals WHERE workspace_id = ? AND session_id = ?`,
     );
     this.latestSessionStatusStmt = this.db.prepare(
@@ -1077,6 +1078,7 @@ export class EventStore implements SessionEventStore {
         priced_spans_with_tokens: number;
         active_ms: number;
         running_since: string | null;
+        web_search_requests: number;
       } | undefined;
       if (row === undefined) continue;
       totals.set(sessionId, {
@@ -1089,6 +1091,7 @@ export class EventStore implements SessionEventStore {
         costMicros: row.spans_with_tokens > row.priced_spans_with_tokens ? null : row.cost_micros,
         activeMs: row.active_ms,
         runningSince: row.running_since,
+        webSearchRequests: row.web_search_requests,
       });
     }
     return totals;

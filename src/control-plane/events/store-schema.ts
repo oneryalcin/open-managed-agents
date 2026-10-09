@@ -307,6 +307,18 @@ BEGIN
     AND running_since IS NOT NULL;
 END;
 
+DROP TRIGGER IF EXISTS session_usage_web_search;
+CREATE TRIGGER session_usage_web_search
+AFTER INSERT ON events WHEN NEW.type = 'agent.tool_result'
+  AND COALESCE(json_extract(NEW.payload, '$.is_error'), 0) = 0
+  AND EXISTS (${webSearchUse("NEW")})
+BEGIN
+  INSERT INTO session_usage_totals (workspace_id, session_id, web_search_requests)
+  VALUES (NEW.workspace_id, NEW.session_id, 1)
+  ON CONFLICT (workspace_id, session_id) DO UPDATE SET
+    web_search_requests = web_search_requests + 1;
+END;
+
 DROP TRIGGER IF EXISTS session_usage_cost;
 CREATE TRIGGER session_usage_cost
 AFTER INSERT ON session_model_request_costs
@@ -340,6 +352,15 @@ BEGIN
 END;
 `;
 
+/** The agent.tool_use, named web_search, that a tool result answers. */
+function webSearchUse(result: string): string {
+  return `SELECT 1 FROM events u
+    WHERE u.workspace_id = ${result}.workspace_id
+      AND u.id = json_extract(${result}.payload, '$.tool_use_id')
+      AND u.type = 'agent.tool_use'
+      AND json_extract(u.payload, '$.name') = 'web_search'`;
+}
+
 function spanHasTokens(payload: string): string {
   return `(COALESCE(json_extract(${payload}, '$.model_usage.input_tokens'), 0) +
     COALESCE(json_extract(${payload}, '$.model_usage.output_tokens'), 0) +
@@ -371,6 +392,7 @@ function ensureSessionUsageTotals(db: DatabaseSync): void {
           priced_spans_with_tokens INTEGER NOT NULL DEFAULT 0,
           active_ms INTEGER NOT NULL DEFAULT 0,
           running_since TEXT,
+          web_search_requests INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY (workspace_id, session_id)
         );
         INSERT INTO session_usage_totals (
@@ -393,10 +415,33 @@ function ensureSessionUsageTotals(db: DatabaseSync): void {
         GROUP BY e.workspace_id, e.session_id;
       `);
       backfillActiveTime(db);
+      backfillWebSearchRequests(db);
+    } else if (!hasColumn(db, "session_usage_totals", "web_search_requests")) {
+      // Plan 0149: added after the table first shipped.
+      db.exec("ALTER TABLE session_usage_totals ADD COLUMN web_search_requests INTEGER NOT NULL DEFAULT 0");
+      backfillWebSearchRequests(db);
     }
     db.exec(SESSION_USAGE_TRIGGERS);
     db.exec(SESSION_USAGE_DELETE_TRIGGER);
   });
+}
+
+function backfillWebSearchRequests(db: DatabaseSync): void {
+  db.exec(`
+    INSERT INTO session_usage_totals (workspace_id, session_id, web_search_requests)
+    SELECT r.workspace_id, r.session_id, COUNT(*) FROM events r
+    WHERE r.type = 'agent.tool_result'
+      AND COALESCE(json_extract(r.payload, '$.is_error'), 0) = 0
+      AND EXISTS (${webSearchUse("r")})
+    GROUP BY r.workspace_id, r.session_id
+    ON CONFLICT (workspace_id, session_id) DO UPDATE SET
+      web_search_requests = excluded.web_search_requests;
+  `);
+}
+
+function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return columns.some((entry) => entry.name === column);
 }
 
 function backfillActiveTime(db: DatabaseSync): void {

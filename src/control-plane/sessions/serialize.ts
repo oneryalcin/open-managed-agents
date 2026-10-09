@@ -25,7 +25,7 @@ export function toManagedSession(row: SessionRow, now = new Date()): ManagedAgen
       cache_creation: null,
       active_seconds: 0,
       list_cost: { amount: "0", currency: "USD" },
-      server_tool_use: null,
+      server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 },
     },
     stats: { active_seconds: 0, duration_seconds: durationSeconds(row, now) },
     resources: row.resources.map((resource) => ({

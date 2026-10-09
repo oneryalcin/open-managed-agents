@@ -26,6 +26,8 @@
   allowed hosts (requested from the provider and re-checked), no query is
   sent when no hosts are allowed, and the provider key is scrubbed from
   everything it returns. Search results count as shown for `web_fetch`.
+  Successful searches count in `usage.server_tool_use.web_search_requests`
+  (now always an object, as hosted; fetches count nothing, as hosted).
 - **Sessions report usage and time** (plan 0148). `usage` was always `null`;
   it now carries input, output and cache tokens (cache writes split into 5m
   and 1h), `active_seconds`, and `list_cost` in cents, plus a new `stats`
