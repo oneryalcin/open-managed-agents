@@ -7,6 +7,22 @@ import type { PersistedSessionEvent } from "../types.ts";
 const WORKSPACE_ID = "wrk_default";
 
 describe("event store", () => {
+  it("takes a session's status from the last status event appended, even if its id sorts earlier", () => {
+    // A clock rewind across a restart makes a later event's time-ordered id
+    // sort before an earlier one's (#279 review).
+    const store = EventStore.open(":memory:");
+    const sessionId = "sesn_status_order";
+    const now = new Date().toISOString();
+    const status = (id: string, type: "session.status_running" | "session.status_idle"): PersistedSessionEvent => ({
+      id, workspace_id: WORKSPACE_ID, session_id: sessionId, type,
+      processed_at: now, payload: {}, created_at: now,
+    });
+    store.append(status("sevt_02", "session.status_running"));
+    store.append(status("sevt_01", "session.status_idle"));
+
+    expect(store.latestSessionStatuses(WORKSPACE_ID, [sessionId]).get(sessionId)).toBe("idle");
+  });
+
   it("keeps legacy list() default limit (1000) for afterId scans when limit is omitted", () => {
     const store = EventStore.open(":memory:");
     const sessionId = "sesn_store_test";

@@ -70,6 +70,22 @@ describe("session lifecycle API", () => {
     expect(status).toBe("running");
   });
 
+  it("reports a session as running once its message is accepted, before the runtime starts (#279)", async () => {
+    const runner = new DelayedRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: translatePiEvent },
+    });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "work");
+    await runner.started;
+
+    const res = await app.request(`/v1/sessions/${session.id}`);
+    const status = ((await res.json()) as ManagedAgentsSession).status;
+    runner.release();
+
+    expect(status).toBe("running");
+  });
+
   it("lists a session as running while its turn runs (#279)", async () => {
     const runner = new StartedThenBlockedRunner();
     const app = createInMemoryControlPlaneApp({

@@ -225,6 +225,7 @@ export class EventStore implements SessionEventStore {
   private readonly insertConversationEntryStmt: StatementSync;
   private readonly listConversationEntriesStmt: StatementSync;
   private readonly latestSessionStatusStmt: StatementSync;
+  private readonly acceptedTurnStmt: StatementSync;
   private readonly deleteConversationForSessionStmt: StatementSync;
   private readonly insertConversationTurnStmt: StatementSync;
   private readonly conversationTurnsStmt: StatementSync;
@@ -317,7 +318,13 @@ export class EventStore implements SessionEventStore {
        WHERE workspace_id = ? AND session_id = ?
          AND type IN ('session.status_running', 'session.status_idle',
                       'session.status_rescheduled', 'session.status_terminated')
-       ORDER BY id DESC LIMIT 1`,
+       ORDER BY rowid DESC LIMIT 1`,
+    );
+    this.acceptedTurnStmt = this.db.prepare(
+      `SELECT 1 FROM pending_runtime_turns
+       WHERE workspace_id = ? AND session_id = ?
+         AND state IN ('accepted', 'dispatching')
+       LIMIT 1`,
     );
     this.listConversationEntriesStmt = this.db.prepare(
       `SELECT entry_id, entry_json, turn_id, pi_version
@@ -1118,12 +1125,19 @@ export class EventStore implements SessionEventStore {
     workspaceId: WorkspaceId,
     sessionIds: readonly string[],
   ): Map<string, ManagedAgentsSessionStatus> {
+    // Rowid, not the time-ordered id: a clock rewind across a restart can make
+    // a later event's id sort first. Accepted work that has not emitted
+    // session.status_running yet (the sandbox may still be starting) counts as
+    // running. (A message steered into a turn paused on the client closes its
+    // own turn at once today; if #254 keeps it open, revisit this.)
     const statuses = new Map<string, ManagedAgentsSessionStatus>();
     for (const sessionId of sessionIds) {
       const row = this.latestSessionStatusStmt.get(workspaceId, sessionId) as
         | { type: string }
         | undefined;
-      const status = row === undefined ? undefined : STATUS_BY_EVENT_TYPE[row.type];
+      const latest = row === undefined ? undefined : STATUS_BY_EVENT_TYPE[row.type];
+      const accepted = this.acceptedTurnStmt.get(workspaceId, sessionId) !== undefined;
+      const status = accepted && latest !== "terminated" ? "running" : latest;
       if (status !== undefined) statuses.set(sessionId, status);
     }
     return statuses;
