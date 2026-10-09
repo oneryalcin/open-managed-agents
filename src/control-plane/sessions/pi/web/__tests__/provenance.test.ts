@@ -183,4 +183,10 @@ describe("URLs shown in a session", () => {
       matchShownUrl("https://docs.example.com/guide/)secret", shown),
     ]).toEqual(["exact", undefined]);
   });
+
+  it("reads the target of a link that has a title", () => {
+    const events = fetchedPage("sevt_f13", "https://docs.example.com/", 'See [p](https://docs.example.com/titled "A title").');
+
+    expect(match(events, "https://docs.example.com/titled")?.kind).toBe("exact");
+  });
 });

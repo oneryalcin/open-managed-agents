@@ -155,6 +155,8 @@ function count(text: string, char: string): number {
 interface MarkdownLinkSpan {
   /** Index just after `](`. */
   start: number;
+  /** Index just after the destination (before any title). */
+  destinationEnd: number;
   /** Index of the closing `)`. */
   end: number;
   /** The destination with backslash escapes decoded. */
@@ -188,7 +190,10 @@ function* markdownLinkSpans(text: string): Generator<MarkdownLinkSpan> {
           continue;
         }
       }
-      if (/\s/.test(char)) break;
+      if (/\s/.test(char)) {
+        if (depth === 0) end = closeAfterTitle(text, index);
+        break;
+      }
       if (char === "(") depth += 1;
       else if (char === ")") {
         if (depth === 0) {
@@ -199,9 +204,30 @@ function* markdownLinkSpans(text: string): Generator<MarkdownLinkSpan> {
       }
       destination += char;
     }
-    if (end >= 0 && destination !== "") yield { start, end, destination };
+    if (end >= 0 && destination !== "") {
+      yield { start, destinationEnd: Math.min(index, end), end, destination };
+    }
     from = end >= 0 ? end + 1 : index;
   }
+}
+
+/**
+ * After a destination: optional whitespace, an optional title ("…", '…' or
+ * (…)), optional whitespace, then `)`. Returns the index of that `)`, or -1.
+ */
+function closeAfterTitle(text: string, from: number): number {
+  let index = from;
+  while (index < text.length && /\s/.test(text[index]!)) index += 1;
+  const open = text[index];
+  const close = open === '"' ? '"' : open === "'" ? "'" : open === "(" ? ")" : undefined;
+  if (close !== undefined) {
+    index += 1;
+    while (index < text.length && text[index] !== close) index += text[index] === "\\" ? 2 : 1;
+    if (index >= text.length) return -1;
+    index += 1;
+    while (index < text.length && /\s/.test(text[index]!)) index += 1;
+  }
+  return text[index] === ")" ? index : -1;
 }
 
 /** Destinations, and the text with their spans removed (for the bare scan). */
@@ -235,7 +261,7 @@ export function absolutizeMarkdownLinks(text: string, base: string): string {
     }
     if (absolute === undefined || absolute === span.destination) continue;
     out += text.slice(from, span.start) + absolute.replace(/[()\\]/g, (c) => `\\${c}`);
-    from = span.end;
+    from = span.destinationEnd;
   }
   return out + text.slice(from);
 }

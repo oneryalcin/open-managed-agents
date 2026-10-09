@@ -115,4 +115,23 @@ describe("web_fetch tool", () => {
 
     expect(first?.type === "text" ? first.text : "").toBe("[Next](https://docs.example.com/docs/next)");
   });
+
+  it("keeps a link's title while making its target absolute", async () => {
+    const tool = createWebFetchTool({
+      context: async () => ({ policy, events: [userSaid("https://docs.example.com/start")] }),
+      fetchResource: async (url, options) => {
+        const check = options.validate(url);
+        if (!check.ok) return { ok: false, code: check.code, reason: check.reason, url };
+        return {
+          ok: true, finalUrl: "https://docs.example.com/docs/index", status: 200, contentType: "text/html",
+          body: new TextEncoder().encode('<p><a href="next" title="Next page">Next</a></p>'), truncated: false,
+        };
+      },
+    });
+
+    const result = await tool.execute("toolu_1", { url: "https://docs.example.com/start" }, undefined, undefined, undefined as never);
+    const first = result.content[0];
+
+    expect(first?.type === "text" ? first.text : "").toBe('[Next](https://docs.example.com/docs/next "Next page")');
+  });
 });
