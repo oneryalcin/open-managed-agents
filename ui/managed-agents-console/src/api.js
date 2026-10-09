@@ -654,15 +654,20 @@ export async function loadConsoleData() {
   return { agents, sessions, environments, files, models: modelsPage.data, networkingCatalog, vaults: vaultsPage.data, skills: skillsPage.data, warnings };
 }
 
-async function hydrateSession(session) {
-  const [eventsPage, filesPage] = await Promise.all([
+export async function hydrateSession(session) {
+  const [eventsPage, filesPage, fresh] = await Promise.all([
     fetchCursorPages(`/v1/sessions/${encodeURIComponent(session.id)}/events?order=asc`, { limit: EVENT_PAGE_LIMIT }),
     fetchFilePages(`/v1/files?scope_id=${encodeURIComponent(session.id)}`),
+    // Usage and time change with every turn (plan 0148).
+    request(`/v1/sessions/${encodeURIComponent(session.id)}`),
   ]);
   const sessionSignals = sessionSignalsFromEvents(eventsPage.data);
   const events = toUiEvents(eventsPage.data);
   return {
     ...session,
+    dur: activeTimeLabel(fresh.usage),
+    tokens: usageLabel(fresh.usage),
+    cost: costLabel(fresh.usage),
     ...sessionSignals,
     events,
     files: filesPage.data.map(toUiFile),
@@ -721,8 +726,9 @@ function toUiSession(session, agentNames) {
     env: session.environment_id,
     created: shortDate(session.created_at),
     updated: shortDate(session.updated_at),
-    dur: "—",
+    dur: activeTimeLabel(session.usage),
     tokens: usageLabel(session.usage),
+    cost: costLabel(session.usage),
     resources: Array.isArray(session.resources) ? session.resources.length : 0,
     requiresAction: stopReasonType(session.stop_reason) === "requires_action",
   };
@@ -974,9 +980,28 @@ function modelUsage(usage) {
   };
 }
 
+// Session usage (plan 0148). A server without it reports usage: null.
 function usageLabel(usage) {
   if (!usage) return "—";
-  return `${usage.input_tokens ?? 0} / ${usage.output_tokens ?? 0}`;
+  return `${numberLabel(usage.input_tokens ?? 0)} in · ${numberLabel(usage.output_tokens ?? 0)} out · ${numberLabel(usage.cache_read_input_tokens ?? 0)} cached`;
+}
+
+// list_cost is in cents; null when a model's price is unknown.
+function costLabel(usage) {
+  const cents = Number(usage?.list_cost?.amount);
+  if (!usage?.list_cost || !Number.isFinite(cents)) return "—";
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function activeTimeLabel(usage) {
+  if (!usage || typeof usage.active_seconds !== "number") return "—";
+  const total = Math.round(usage.active_seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
 }
 
 function toUiStatus(session) {

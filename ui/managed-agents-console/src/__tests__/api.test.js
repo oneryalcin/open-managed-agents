@@ -28,6 +28,7 @@ import {
   listEnvironmentNetworkingPresets,
   listVaultCredentials,
   listVaults,
+  hydrateSession,
   loadConsoleData,
   listModelCatalog,
   modelInputForSelection,
@@ -781,6 +782,93 @@ describe("workspace write capability", () => {
         custom:{ https_only:true, wildcard_matches_bare_domain:false },
       },
     });
+  });
+});
+
+describe("session usage in the console (plan 0148)", () => {
+  const usage = {
+    input_tokens:4,
+    output_tokens:58,
+    cache_read_input_tokens:16600,
+    cache_creation:{ ephemeral_1h_input_tokens:0, ephemeral_5m_input_tokens:16661 },
+    active_seconds:75.4,
+    list_cost:{ amount:"5", currency:"USD" },
+    server_tool_use:null,
+  };
+
+  async function loadOneSession(session) {
+    const page = (data) => JSON.stringify({ data, has_more:false, next_page:null });
+    vi.stubGlobal("fetch", vi.fn((url) => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(
+        url.startsWith("/v1/sessions") ? page([{
+          id:"sesn_usage",
+          type:"session",
+          agent:{ type:"agent", id:"agent_1", version:1 },
+          environment_id:"env_1",
+          status:"idle",
+          title:null,
+          created_at:"2026-10-09T10:00:00Z",
+          updated_at:"2026-10-09T10:00:00Z",
+          archived_at:null,
+          resources:[],
+          ...session,
+        }]) :
+        url.startsWith("/v1/environments/networking-presets") ? JSON.stringify({ deployment:{}, presets:[], custom:{} }) :
+        url.startsWith("/v1/files") ? JSON.stringify({ data:[], has_more:false, last_id:null }) :
+        page([]),
+      ),
+    })));
+    vi.stubGlobal("window", { location: { origin: "http://oma.local" } });
+    return (await loadConsoleData()).sessions[0];
+  }
+
+  it("shows the session's estimated cost in dollars", async () => {
+    const session = await loadOneSession({ usage, stats:{ active_seconds:75.4, duration_seconds:300 } });
+
+    expect(session.cost).toBe("$0.05");
+  });
+
+  it("shows no cost when a model's price is unknown", async () => {
+    const session = await loadOneSession({ usage:{ ...usage, list_cost:null } });
+
+    expect(session.cost).toBe("—");
+  });
+
+  it("shows input, output and cached tokens", async () => {
+    const session = await loadOneSession({ usage });
+
+    expect(session.tokens).toBe("4 in · 58 out · 16,600 cached");
+  });
+
+  it("shows how long the agent spent running", async () => {
+    const session = await loadOneSession({ usage, stats:{ active_seconds:75.4, duration_seconds:300 } });
+
+    expect(session.dur).toBe("1m 15s");
+  });
+
+  it("refreshes usage when an open session is rehydrated after a turn", async () => {
+    vi.stubGlobal("fetch", vi.fn((url) => Promise.resolve({
+      ok:true,
+      status:200,
+      text:() => Promise.resolve(
+        url.startsWith("/v1/sessions/sesn_usage/events") ? JSON.stringify({ data:[], has_more:false, next_page:null }) :
+        url.startsWith("/v1/sessions/sesn_usage") ? JSON.stringify({ id:"sesn_usage", status:"idle", usage, stats:{ active_seconds:75.4, duration_seconds:300 } }) :
+        JSON.stringify({ data:[], has_more:false, last_id:null }),
+      ),
+    })));
+    vi.stubGlobal("window", { location: { origin: "http://oma.local" } });
+
+    const hydrated = await hydrateSession({ id:"sesn_usage", cost:"$0.00" });
+
+    expect(hydrated.cost).toBe("$0.05");
+  });
+
+  it("keeps placeholders for a server that reports no usage", async () => {
+    const session = await loadOneSession({ usage:null });
+
+    expect([session.tokens, session.cost, session.dur]).toEqual(["—", "—", "—"]);
   });
 });
 
