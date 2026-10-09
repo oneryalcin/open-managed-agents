@@ -630,6 +630,40 @@ export function hostMatchesAllowPattern(pattern: string, host: string): boolean 
   return prefix.length > 0 && prefix.split(".").every(isHostnameLabel);
 }
 
+/**
+ * Whether a request URL is allowed by the policy: an allow entry for its host
+ * and effective port, then that entry's protocol and path prefix. The proxy's
+ * request filter and the control-plane web tools (plan 0149) share this.
+ */
+export function authorizeRequestUrl(
+  policy: EgressPolicy,
+  url: URL,
+): { allowed: true; entry: EgressAllowEntry } | { allowed: false; reason: string } {
+  const host = url.hostname.toLowerCase();
+  const port = url.port
+    ? Number.parseInt(url.port, 10)
+    : url.protocol === "https:"
+      ? 443
+      : 80;
+  const entry = policy.allow.find(
+    (candidate) => candidate.port === port && hostMatchesAllowPattern(candidate.host, host),
+  );
+  if (!entry) return { allowed: false, reason: `${host}:${port} is not allowlisted` };
+  if (entry.protocol !== undefined && url.protocol !== `${entry.protocol}:`) {
+    return {
+      allowed: false,
+      reason: `${host}:${port} requires ${entry.protocol.toUpperCase()} transport`,
+    };
+  }
+  if (entry.pathPrefix && !pathWithinPrefix(url.pathname, entry.pathPrefix)) {
+    return {
+      allowed: false,
+      reason: `path ${url.pathname} is outside the allowed prefix for ${host}`,
+    };
+  }
+  return { allowed: true, entry };
+}
+
 function isHostnameLabel(label: string): boolean {
   return (
     label.length >= 1 &&
@@ -678,24 +712,10 @@ function buildHooks(
         : url.protocol === "https:"
           ? 443
           : 80;
-      const entry = findAllow(host, port);
-      if (!entry) {
-        // The connection filter already gates hosts; this fires only if the
-        // two ever disagree. Fail closed.
-        return { action: "deny", reason: `${host}:${port} is not allowlisted` };
-      }
-      if (entry.protocol !== undefined && url.protocol !== `${entry.protocol}:`) {
-        return {
-          action: "deny",
-          reason: `${host}:${port} requires ${entry.protocol.toUpperCase()} transport`,
-        };
-      }
-      if (entry.pathPrefix && !pathWithinPrefix(url.pathname, entry.pathPrefix)) {
-        return {
-          action: "deny",
-          reason: `path ${url.pathname} is outside the allowed prefix for ${host}`,
-        };
-      }
+      // The connection filter already gates hosts; a host miss here fires
+      // only if the two ever disagree. Fail closed.
+      const authorized = authorizeRequestUrl(policy, url);
+      if (!authorized.allowed) return { action: "deny", reason: authorized.reason };
       // Sentinel scope enforcement (ADR 0016 §6): a request carrying a
       // sentinel ANYWHERE outside its grant's (host, port, path, method,
       // header) scope is denied — the agent cannot steer a granted

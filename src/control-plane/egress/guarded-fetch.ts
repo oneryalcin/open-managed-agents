@@ -18,6 +18,7 @@ import {
   isBlockedAddress,
   type PinnedLookupOptions,
 } from "./ssrf.ts";
+import type { WebUrlCheck } from "./web-url.ts";
 
 /** Matches the MCP SDK's FetchLike. */
 export type GuardedFetch = (
@@ -85,4 +86,163 @@ function assertLiteralHostAllowed(
     ),
     { code: "EGRESS_SSRF_BLOCKED" },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Web tools (plan 0149): a fetch that follows redirects itself, so every hop
+// goes through the caller's URL validator before it is dialed, and caps time
+// and bytes while streaming (Content-Length is not trusted).
+
+export interface WebFetchOptions {
+  /** Runs on the requested URL and on every redirect target, before dialing. */
+  validate: (raw: string) => WebUrlCheck;
+  /** Test-only SSRF escape hatch; never set in production. */
+  guard?: PinnedLookupOptions;
+  maxRedirects?: number;
+  maxBytes?: number;
+  /** Total time across all hops, including reading the body. */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+}
+
+export type WebFetchResult =
+  | {
+      ok: true;
+      finalUrl: string;
+      status: number;
+      contentType: string | null;
+      body: Uint8Array;
+      truncated: boolean;
+    }
+  | {
+      ok: false;
+      code:
+        | "url_not_allowed"
+        | "url_too_long"
+        | "invalid_url"
+        | "too_many_redirects"
+        | "timeout"
+        | "aborted"
+        | "fetch_failed";
+      reason: string;
+      url: string;
+    };
+
+const DEFAULT_MAX_REDIRECTS = 5;
+const DEFAULT_MAX_BYTES = 1_000_000;
+const DEFAULT_TIMEOUT_MS = 20_000;
+let sharedWebDispatcher: Agent | undefined;
+
+export async function fetchWebResource(
+  requested: string,
+  opts: WebFetchOptions,
+): Promise<WebFetchResult> {
+  const maxRedirects = opts.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const signal = opts.signal === undefined ? timeout : AbortSignal.any([opts.signal, timeout]);
+  const dispatcher = opts.guard === undefined
+    ? (sharedWebDispatcher ??= webDispatcher({}))
+    : webDispatcher(opts.guard);
+  let current = requested;
+  for (let hop = 0; ; hop += 1) {
+    const check = opts.validate(current);
+    if (!check.ok) return { ok: false, code: check.code, reason: check.reason, url: current };
+    let response: Awaited<ReturnType<typeof undiciFetch>>;
+    try {
+      assertLiteralHostAllowed(check.url, opts.guard ?? {});
+      response = await undiciFetch(check.url, {
+        dispatcher,
+        redirect: "manual",
+        signal,
+        ...(opts.headers === undefined ? {} : { headers: opts.headers }),
+      });
+    } catch (error) {
+      return failure(error, current, signal, opts.signal);
+    }
+    const location = response.headers.get("location");
+    if (response.status >= 300 && response.status < 400 && location !== null) {
+      await response.body?.cancel().catch(() => {});
+      if (hop >= maxRedirects) {
+        return { ok: false, code: "too_many_redirects", reason: `more than ${maxRedirects} redirects`, url: current };
+      }
+      current = new URL(location, check.url).href;
+      continue;
+    }
+    try {
+      const { body, truncated } = await readCapped(response.body, maxBytes);
+      return {
+        ok: true,
+        finalUrl: check.url.href,
+        status: response.status,
+        contentType: response.headers.get("content-type"),
+        body,
+        truncated,
+      };
+    } catch (error) {
+      return failure(error, current, signal, opts.signal);
+    }
+  }
+}
+
+function webDispatcher(guard: PinnedLookupOptions): Agent {
+  return new Agent({ connect: { lookup: ipv4FirstLookup(createPinnedLookup(guard)) } });
+}
+
+async function readCapped(
+  stream: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<{ body: Uint8Array; truncated: boolean }> {
+  if (stream === null) return { body: new Uint8Array(), truncated: false };
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return { body: concat(chunks, size), truncated: false };
+    const room = maxBytes - size;
+    if (value.byteLength >= room) {
+      chunks.push(value.subarray(0, room));
+      // Exactly full: truncated only if more would have followed.
+      const more = value.byteLength > room || !(await reader.read()).done;
+      await reader.cancel().catch(() => {});
+      return { body: concat(chunks, maxBytes), truncated: more };
+    }
+    chunks.push(value);
+    size += value.byteLength;
+  }
+}
+
+function concat(chunks: Uint8Array[], size: number): Uint8Array {
+  const out = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+function failure(
+  error: unknown,
+  url: string,
+  signal: AbortSignal,
+  callerSignal: AbortSignal | undefined,
+): WebFetchResult {
+  if (callerSignal?.aborted) return { ok: false, code: "aborted", reason: "the request was cancelled", url };
+  if (signal.aborted) return { ok: false, code: "timeout", reason: "the request timed out", url };
+  const ssrf = findCode(error) === "EGRESS_SSRF_BLOCKED";
+  return ssrf
+    ? { ok: false, code: "url_not_allowed", reason: "the host resolves to a private or reserved address", url }
+    : { ok: false, code: "fetch_failed", reason: error instanceof Error ? error.message : String(error), url };
+}
+
+function findCode(error: unknown): unknown {
+  for (let current = error, depth = 0; current && depth < 5; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (code !== undefined) return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
 }
