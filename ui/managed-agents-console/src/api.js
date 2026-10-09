@@ -658,16 +658,19 @@ export async function hydrateSession(session) {
   const [eventsPage, filesPage, fresh] = await Promise.all([
     fetchCursorPages(`/v1/sessions/${encodeURIComponent(session.id)}/events?order=asc`, { limit: EVENT_PAGE_LIMIT }),
     fetchFilePages(`/v1/files?scope_id=${encodeURIComponent(session.id)}`),
-    // Usage and time change with every turn (plan 0148).
-    request(`/v1/sessions/${encodeURIComponent(session.id)}`),
+    // Usage and time change with every turn (plan 0148). Optional: if this
+    // fails, keep the labels the session already has.
+    request(`/v1/sessions/${encodeURIComponent(session.id)}`).catch(() => undefined),
   ]);
   const sessionSignals = sessionSignalsFromEvents(eventsPage.data);
   const events = toUiEvents(eventsPage.data);
   return {
     ...session,
-    dur: activeTimeLabel(fresh.usage),
-    tokens: usageLabel(fresh.usage),
-    cost: costLabel(fresh.usage),
+    ...(fresh === undefined ? {} : {
+      dur: activeTimeLabel(fresh.usage),
+      tokens: usageLabel(fresh.usage),
+      cost: costLabel(fresh.usage),
+    }),
     ...sessionSignals,
     events,
     files: filesPage.data.map(toUiFile),

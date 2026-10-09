@@ -865,6 +865,20 @@ describe("session usage in the console (plan 0148)", () => {
     expect(hydrated.cost).toBe("$0.05");
   });
 
+  it("still hydrates a session when the usage refresh fails", async () => {
+    // Usage is optional: a failed session GET must not hide events or files.
+    vi.stubGlobal("fetch", vi.fn((url) => Promise.resolve(
+      url.startsWith("/v1/sessions/sesn_usage/events") ? { ok:true, status:200, text:() => Promise.resolve(JSON.stringify({ data:[], has_more:false, next_page:null })) } :
+      url.startsWith("/v1/sessions/sesn_usage") ? { ok:false, status:503, text:() => Promise.resolve(JSON.stringify({ type:"error", error:{ type:"overloaded_error", message:"busy" } })) } :
+      { ok:true, status:200, text:() => Promise.resolve(JSON.stringify({ data:[], has_more:false, last_id:null })) },
+    )));
+    vi.stubGlobal("window", { location: { origin: "http://oma.local" } });
+
+    const hydrated = await hydrateSession({ id:"sesn_usage", cost:"$0.03" });
+
+    expect(hydrated.cost).toBe("$0.03");
+  });
+
   it("keeps placeholders for a server that reports no usage", async () => {
     const session = await loadOneSession({ usage:null });
 
