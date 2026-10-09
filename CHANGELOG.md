@@ -19,7 +19,9 @@
   `always_ask` policy works through the usual confirmation flow. Where the
   sandbox has no egress (no provider, microsandbox, or docker-local without
   the sidecar), environments with allowed hosts are now accepted for agents
-  that enable `web_fetch`; the sandbox itself stays offline.
+  that enable `web_fetch`; the sandbox itself stays offline. Agents
+  created before this keep their stored `web_fetch: enabled: false`; enable
+  it in the agent's toolset config to use it.
 - **Agents can search the web with `web_search`** when a provider is
   configured (`OMA_WEB_SEARCH_PROVIDER=tavily` and
   `OMA_WEB_SEARCH_API_KEY`). Results come only from the environment's

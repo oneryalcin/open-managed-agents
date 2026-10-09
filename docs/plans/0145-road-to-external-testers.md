@@ -66,7 +66,7 @@ see what it cost.
 |---|---|
 | #164 split `events/service.ts` | **Done** (#262, #263; plan 0146). `service.ts` 3080 → 1847 lines |
 | Durable conversation ([ADR 0018](../adrs/0018-session-durability-and-parking.md) stage 1) | **Done** (#269–#272, #274; plan 0147). The conversation survives the idle eviction and restarts; a cut-off turn is reported to the model |
-| Web tools (`web_fetch` / `web_search`) | **`web_fetch` done** ([plan 0149](0149-web-tools.md), #293–#296 and D4): control-plane fetch under the environment allowlist with hosted's prior-context rule. `web_search` (Tavily) is slice 2 |
+| Web tools (`web_fetch` / `web_search`) | **Done** ([plan 0149](0149-web-tools.md), #293–#297, #299, #300): `web_fetch` in the control plane under the environment allowlist with hosted's prior-context rule; `web_search` through a configured provider (Tavily); searches counted in usage |
 | Usage metering (0114 Arc D) | **Done** ([plan 0148](0148-usage-metering.md); #280, #285, console PR). Sessions report tokens, estimated model cost and active time; the console shows them |
 | Environment resource (packages / runtimes) | Environments are ~35% parity; decide the image/package story beyond the single coding image |
 | Session surface gaps | Update, overrides and `resources.*` (~65% parity); pick what a tester needs, defer the rest with honest 400s |
@@ -115,6 +115,19 @@ when all of these hold:
   drift or show as unknown until Pi is upgraded (#249). It prices the
   requested model even when a fallback answered, and it is a lower bound when
   a request was cut off mid-flight.
+  **Web tools (plan 0149):**
+  - `web_fetch` reads only hosts in the session environment's
+    `allowed_hosts`, and only URLs already shown in the conversation (in a
+    user message, a search result, or a page fetched earlier), as on hosted.
+  - `web_search` needs the operator to configure a provider
+    (`OMA_WEB_SEARCH_PROVIDER=tavily` with a key). The provider sees every
+    query.
+  - Where the sandbox has no egress, allowed hosts govern only the web tools:
+    `curl` inside the sandbox still has no network.
+  - **Agents created before web tools existed keep `web_fetch` off.** Their
+    stored config says `enabled: false`, and editing them keeps it unless the
+    toolset config enables `web_fetch` explicitly. Create a new agent, or
+    enable it in the agent's toolset, before trying web tools.
 
 ## Deferred to post-v1
 
