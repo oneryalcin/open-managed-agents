@@ -19,6 +19,7 @@ import anthropic
 MODEL = os.environ.get("OMA_WEB_PROBE_MODEL", "claude-sonnet-5")
 RUN_ID = f"{int(time.time())}-{os.getpid()}"
 # Run 1 (2026-10-09): no hosts. Run 2: OMA_WEB_PROBE_HOSTS=example.com,www.anthropic.com
+# Run 3: OMA_WEB_PROBE_EDGES=1 OMA_WEB_PROBE_HOSTS=example.com,anthropic.com,www.anthropic.com
 HOSTS = [h for h in os.environ.get("OMA_WEB_PROBE_HOSTS", "").split(",") if h]
 
 
@@ -127,6 +128,17 @@ def main() -> None:
                 {"name": "web_search", "enabled": True, "permission_policy": {"type": policy}},
             ],
         }]
+        if os.environ.get("OMA_WEB_PROBE_EDGES"):
+            findings["fetch_unseen_url"] = scenario(
+                client, env.id, "unseen", only_web("always_allow"),
+                "Use web_fetch once to read the home page of the domain example dot com (write the URL yourself). Reply with its <h1> text only.",
+            )
+            findings["fetch_redirect"] = scenario(
+                client, env.id, "redirect", only_web("always_allow"),
+                "Use web_fetch exactly once on https://anthropic.com and reply with the page title only.",
+            )
+            print(json.dumps(findings, indent=2, sort_keys=True, default=str))
+            return
         findings["fetch_allow"] = scenario(
             client, env.id, "fetch", only_web("always_allow"),
             "Use web_fetch exactly once on https://example.com and reply with the page's <h1> text only.",

@@ -35,3 +35,24 @@ Artifacts: `artifacts/72-managed-agents-web-tools-probe-no-hosts.json`,
   fetch counts nothing (`web_fetch_requests: 0`). Search looks like the
   Anthropic server web search with `allowed_domains` = the allowed hosts;
   fetch looks harness-executed.
+
+## Edge cases (run 3, 2026-10-09)
+
+`OMA_WEB_PROBE_EDGES=1 OMA_WEB_PROBE_HOSTS=example.com,anthropic.com,www.anthropic.com`;
+artifact `artifacts/72-managed-agents-web-tools-probe-edges.json`.
+
+- **URLs must have been shown first.** Asked to fetch "the home page of the
+  domain example dot com" (writing the URL itself), the model's
+  `https://example.com` is refused: `url_not_in_prior_context`. "A URL counts
+  as shown when it appeared in a message from the user, in a web_search
+  result, or in the text of a page fetched earlier (its links count too for
+  a while)". After a search showed `https://example.com/cdn-cgi/trace`, that
+  URL fetched fine.
+- **Near-matches fetch the shown URL, with a note**: asking for
+  `https://www.example.com/cdn-cgi/trace` fetched the shown
+  `https://example.com/cdn-cgi/trace` with "Note: fetched …, not the URL you
+  gave … If it differs from yours by more than http or https, www. or a
+  trailing slash, the content below is that page's".
+- **Redirects are followed**: `https://anthropic.com` (in the user message)
+  returned www.anthropic.com's page (both hosts allowed).
+- The fetcher identifies as `Claude-User/1.0` (seen in the trace page).
