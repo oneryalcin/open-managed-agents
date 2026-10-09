@@ -128,4 +128,38 @@ describe("Tavily provider", () => {
 
     expect(String(error).includes(KEY)).toBe(false);
   });
+
+  it("does not leak a key prefix when an error body is cut short", async () => {
+    const { provider } = tavily(() => ({ status: 500, json: { detail: `${"x".repeat(280)}${KEY}` } }));
+
+    const error = await provider.search("guide", ["docs.example.com"]).catch((e: Error) => e);
+
+    expect(String(error).includes(KEY.slice(0, 8))).toBe(false);
+  });
+
+  it("refuses a response larger than its cap", async () => {
+    const provider = createTavilySearchProvider({
+      apiKey: KEY,
+      maxResponseBytes: 1_000,
+      fetch: async () => new Response(JSON.stringify({ results: [{ url: "https://docs.example.com/a", title: "x".repeat(5_000) }] })),
+    });
+
+    await expect(provider.search("guide", ["docs.example.com"])).rejects.toThrow("too large");
+  });
+
+  it("gives up on a provider that never finishes answering", async () => {
+    const provider = createTavilySearchProvider({
+      apiKey: KEY,
+      timeoutMs: 100,
+      fetch: async (_url, init) =>
+        new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("{"));
+            init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+          },
+        })),
+    });
+
+    await expect(provider.search("guide", ["docs.example.com"])).rejects.toThrow("timed out");
+  });
 });

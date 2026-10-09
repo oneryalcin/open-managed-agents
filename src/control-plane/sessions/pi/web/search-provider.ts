@@ -22,15 +22,30 @@ export interface WebSearchProvider {
 const TAVILY_ENDPOINT = "https://api.tavily.com/search";
 const MAX_RESULTS = 5;
 
+const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
+const DEFAULT_TIMEOUT_MS = 20_000;
+
 export function createTavilySearchProvider(opts: {
   apiKey: string;
   /** The SSRF-guarded fetch (redirects refused, so the key cannot be redirected). */
   fetch?: GuardedFetch;
+  maxResponseBytes?: number;
+  /** Covers the whole exchange, body included. */
+  timeoutMs?: number;
 }): WebSearchProvider {
   const fetch = opts.fetch ?? createGuardedFetch();
   const scrub = (text: string) => scrubKnownSecrets(text, [opts.apiKey]);
+  const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   return {
-    async search(query, domains, signal) {
+    async search(query, domains, callerSignal) {
+      const timeout = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      const signal = callerSignal === undefined ? timeout : AbortSignal.any([callerSignal, timeout]);
+      const fail = (message: string): never => {
+        if (timeout.aborted) throw new Error("search provider timed out");
+        // Scrub the whole text before cutting it: a key across the cut would
+        // otherwise leave its prefix behind.
+        throw new Error(scrub(message).slice(0, 400));
+      };
       let response: Response;
       try {
         response = await fetch(TAVILY_ENDPOINT, {
@@ -43,15 +58,18 @@ export function createTavilySearchProvider(opts: {
             include_domains: domains,
             include_domains_mode: "restrict",
           }),
-          ...(signal === undefined ? {} : { signal }),
+          signal,
         });
       } catch (error) {
-        throw new Error(scrub(`search provider request failed: ${error instanceof Error ? error.message : String(error)}`));
+        return fail(`search provider request failed: ${error instanceof Error ? error.message : String(error)}`);
       }
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(scrub(`search provider answered ${response.status}: ${text.slice(0, 300)}`));
+      let text: string;
+      try {
+        text = await readCapped(response, maxBytes);
+      } catch (error) {
+        return fail(`search provider response failed: ${error instanceof Error ? error.message : String(error)}`);
       }
+      if (!response.ok) return fail(`search provider answered ${response.status}: ${text}`);
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -69,6 +87,25 @@ export function createTavilySearchProvider(opts: {
       });
     },
   };
+}
+
+/** The body as text, refusing more than `maxBytes` while streaming. */
+async function readCapped(response: Response, maxBytes: number): Promise<string> {
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`response too large (over ${maxBytes} bytes)`);
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
