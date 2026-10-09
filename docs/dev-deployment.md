@@ -64,6 +64,14 @@ docker compose up -d
 docker compose logs oma | grep x-api-key
 ```
 
+The container serves the API and console with **no sandbox provider**: agents
+run, and custom tools (executed by your client) and MCP tools work, but
+builtin tools (`bash`, `read`, `write`, `edit`, `glob`, `grep`) are left out
+of the model's tools, and sessions with file resources fail (there is nowhere
+to mount them). For agents that need either, run OMA on the host with `oma up`
+(Docker sandboxes and the egress sidecar) or `oma up --sandbox microsandbox`.
+The image does not mount the host Docker socket; see the socket policy below.
+
 The first boot initializes storage under `OMA_HOME` (default `~/.oma`, `/data`
 in the container) and prints the initial workspace API key **once** — it is
 stored only as a hash. If it was not saved, `oma keys mint` creates a new key
@@ -268,18 +276,18 @@ The safer local shape is:
 2. let OMA create one Docker sandbox container per live session;
 3. keep the Docker socket out of the sandbox containers.
 
-A Dockerized control-plane container is possible, but it creates a separate
-security decision: if that container needs to launch sandbox containers, it
-usually needs access to the host Docker socket. Treat that as a local-dev-only
-convenience unless a future ADR explicitly accepts the risk.
+The shipped control-plane container (`docker compose up`) runs without a
+sandbox provider for exactly this reason: launching sandbox containers from
+inside it would need the host Docker socket. Decided 2026-10-09 (0145 M2):
+host-run `oma up` is the supported path for builtin tools; there is no
+socket-mounting compose profile. Revisit only through an ADR that accepts the
+risk.
 
 ### Docker socket policy
 
 - Sandbox containers must never receive the Docker socket.
 - The recommended Docker-local development shape is host-run OMA plus the local
   Docker daemon.
-- A future Compose file may mount the Docker socket into the control-plane
-  container only as an explicitly dev-only convenience.
 - Compose-with-socket must not be documented as production-safe. Docker socket
   access is effectively host-level control.
 

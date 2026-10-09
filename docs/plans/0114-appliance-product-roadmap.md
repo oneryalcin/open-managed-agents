@@ -70,9 +70,10 @@ Greenfield or stub — the visible product parts:
 - **Packaging: Arc A slice 1 shipped (#135, plan 0115).** `Dockerfile` +
   `docker-compose.yml` + `bin/open-managed-agents` + `src/main.ts` boot a
   durable, authenticated server (Hono via `@hono/node-server`, `OMA_PORT`
-  4180) and mint + print the first-boot key. **Remaining in Arc A:** serve the
-  console from the same process; compose docs for docker-local egress
-  (docker.sock + `OMA_EGRESS_SIDECAR_IMAGE` + `OMA_MASTER_KEY`).
+  4180) and mint + print the first-boot key. The console is served from the
+  same process. Docker-local from inside the container was decided against
+  (2026-10-09): it needs the host Docker socket; the container runs without a
+  sandbox provider and host-run `oma up` is the path for builtin tools.
 - **First boot: key minting done (#135).** First boot initializes durable
   storage and prints the initial API key; the separate provisioning CLI path
   still exists for later keys.
