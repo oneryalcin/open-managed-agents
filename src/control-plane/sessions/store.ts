@@ -145,6 +145,7 @@ export class SqliteSessionStore implements SessionStore {
   private readonly countAllActiveStmt: StatementSync;
   private readonly retrieveAnyStmt: StatementSync;
   private readonly archiveStmt: StatementSync;
+  private readonly updateDetailsStmt: StatementSync;
   private readonly insertPendingSnapshotDeletesStmt: StatementSync;
   private readonly deleteStmt: StatementSync;
   private readonly deleteResourcesStmt: StatementSync;
@@ -217,6 +218,10 @@ export class SqliteSessionStore implements SessionStore {
       `UPDATE sessions
        SET status = 'terminated', updated_at = ?, archived_at = COALESCE(archived_at, ?)
        WHERE workspace_id = ? AND id = ?`,
+    );
+    this.updateDetailsStmt = this.db.prepare(
+      `UPDATE sessions SET title = ?, metadata = ?, updated_at = ?
+       WHERE workspace_id = ? AND id = ? AND archived_at IS NULL`,
     );
     this.insertPendingSnapshotDeletesStmt = this.db.prepare(
       `INSERT OR IGNORE INTO pending_internal_snapshot_deletes (
@@ -420,6 +425,21 @@ export class SqliteSessionStore implements SessionStore {
       sessionId,
     ) as unknown as SessionDbRow | undefined;
     return row ? this.deserialize(row) : undefined;
+  }
+
+  updateDetails(
+    workspaceId: string,
+    sessionId: string,
+    details: { title: string | null; metadata: Record<string, string>; updatedAt: string },
+  ): SessionRow | undefined {
+    const result = this.updateDetailsStmt.run(
+      details.title,
+      JSON.stringify(details.metadata),
+      details.updatedAt,
+      workspaceId,
+      sessionId,
+    );
+    return result.changes === 0 ? undefined : this.retrieveAny(workspaceId, sessionId);
   }
 
   archive(

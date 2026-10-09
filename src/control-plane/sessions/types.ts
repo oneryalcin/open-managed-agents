@@ -111,6 +111,12 @@ export interface SessionStore {
     sessionId: string,
     archivedAt: string,
   ): SessionRow | undefined;
+  /** Title and metadata of an active session; undefined if none matched. */
+  updateDetails(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    details: { title: string | null; metadata: Record<string, string>; updatedAt: string },
+  ): SessionRow | undefined;
   delete(
     workspaceId: WorkspaceId,
     sessionId: string,
@@ -179,6 +185,12 @@ export interface SessionService {
   retrieve(
     workspaceId: WorkspaceId,
     sessionId: string,
+  ): ManagedAgentsSession;
+  /** POST /v1/sessions/{id}: title and metadata (agent/budget/vaults refused). */
+  update(
+    workspaceId: WorkspaceId,
+    sessionId: string,
+    input: unknown,
   ): ManagedAgentsSession;
   delete(
     workspaceId: WorkspaceId,

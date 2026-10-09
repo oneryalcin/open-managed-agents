@@ -73,6 +73,11 @@ export function sessionsRoutes(
     );
   });
 
+  app.post("/:id", async (c) => {
+    const body = await parseJsonBody(c.req);
+    return c.json(service.update(workspaceIdFrom(c), c.req.param("id"), body), 200);
+  });
+
   app.post("/:id/archive", async (c) => {
     const sessionId = c.req.param("id");
     events.archiveSessionRowAfterPreflight(workspaceIdFrom(c), sessionId);
