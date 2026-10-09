@@ -625,9 +625,10 @@ describe("deployment runtime config", () => {
     });
 
     await sendMessage(app, created.id, "work");
-    for (let i = 0; i < 100; i += 1) {
+    for (let i = 0; ; i += 1) {
       const events = await getEvents(app, created.id);
       if (events.some((event) => event.type === "session.status_running")) break;
+      if (i === 100) throw new Error("turn never started");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const res = await app.request(`/v1/sessions/${created.id}`);
