@@ -135,8 +135,6 @@ export class EventStore implements SessionEventStore {
   private readonly latestSessionStatusStmt: StatementSync;
   private readonly insertModelRequestCostStmt: StatementSync;
   private readonly sessionUsageStmt: StatementSync;
-  private readonly deleteUsageTotalsForSessionStmt: StatementSync;
-  private readonly deleteModelRequestCostsForSessionStmt: StatementSync;
   private readonly deleteConversationForSessionStmt: StatementSync;
   private readonly insertConversationTurnStmt: StatementSync;
   private readonly conversationTurnsStmt: StatementSync;
@@ -229,12 +227,6 @@ export class EventStore implements SessionEventStore {
               cache_write_tokens, cache_write_1h_tokens, cost_micros,
               spans_with_tokens, priced_spans_with_tokens, active_ms, running_since
        FROM session_usage_totals WHERE workspace_id = ? AND session_id = ?`,
-    );
-    this.deleteUsageTotalsForSessionStmt = this.db.prepare(
-      `DELETE FROM session_usage_totals WHERE workspace_id = ? AND session_id = ?`,
-    );
-    this.deleteModelRequestCostsForSessionStmt = this.db.prepare(
-      `DELETE FROM session_model_request_costs WHERE workspace_id = ? AND session_id = ?`,
     );
     this.latestSessionStatusStmt = this.db.prepare(
       `SELECT type FROM events
@@ -645,8 +637,6 @@ export class EventStore implements SessionEventStore {
       this.deleteForSessionStmt.run(workspaceId, sessionId);
       this.deleteConversationForSessionStmt.run(workspaceId, sessionId);
       this.deleteConversationTurnsForSessionStmt.run(workspaceId, sessionId);
-      this.deleteModelRequestCostsForSessionStmt.run(workspaceId, sessionId);
-      this.deleteUsageTotalsForSessionStmt.run(workspaceId, sessionId);
       this.deleteIdempotencyKeysForSessionStmt.run(
         workspaceId,
         `/v1/sessions/${sessionId}/events`,

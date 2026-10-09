@@ -319,6 +319,22 @@ BEGIN
 END;
 `;
 
+// Deleting events forgets their cost rows, and a session's totals once its
+// last event is gone. In the database, so an older OMA's deletes clean up too.
+const SESSION_USAGE_DELETE_TRIGGER = `
+CREATE TRIGGER IF NOT EXISTS session_usage_event_deleted
+AFTER DELETE ON events
+BEGIN
+  DELETE FROM session_model_request_costs
+  WHERE workspace_id = OLD.workspace_id AND span_event_id = OLD.id;
+  DELETE FROM session_usage_totals
+  WHERE workspace_id = OLD.workspace_id AND session_id = OLD.session_id
+    AND NOT EXISTS (
+      SELECT 1 FROM events
+      WHERE workspace_id = OLD.workspace_id AND session_id = OLD.session_id);
+END;
+`;
+
 function SPAN_HAS_TOKENS(payload: string): string {
   return `(COALESCE(json_extract(${payload}, '$.model_usage.input_tokens'), 0) +
     COALESCE(json_extract(${payload}, '$.model_usage.output_tokens'), 0) +
@@ -372,6 +388,7 @@ function ensureSessionUsageTotals(db: DatabaseSync): void {
       backfillActiveTime(db);
     }
     db.exec(SESSION_USAGE_TRIGGERS);
+    db.exec(SESSION_USAGE_DELETE_TRIGGER);
   });
 }
 

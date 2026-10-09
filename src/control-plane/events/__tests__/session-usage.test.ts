@@ -237,6 +237,24 @@ describe("usage totals across versions", () => {
     });
   });
 
+  it("forgets a session's usage when an older OMA deletes its events", () => {
+    // A rollback: the older version deletes events without knowing the totals.
+    withFile((path) => {
+      const store = EventStore.open(path);
+      const a = spanEnd({ input: 2, output: 54 });
+      store.appendBatchWithRuntimeChanges([a], { modelRequestCosts: [priced(a, 41_500)] });
+      const raw = new DatabaseSync(path);
+      raw.prepare("DELETE FROM events WHERE workspace_id = ? AND session_id = ?").run(WS, SESSION);
+      const left = raw.prepare(
+        `SELECT (SELECT COUNT(*) FROM session_model_request_costs)
+              + (SELECT COUNT(*) FROM session_usage_totals) AS n`,
+      ).get() as { n: number };
+      raw.close();
+
+      expect(left.n).toBe(0);
+    });
+  });
+
   it("does not let a zero-token request's $0 stand in for a missing cost", () => {
     const store = EventStore.open(":memory:");
     const free = spanEnd({});

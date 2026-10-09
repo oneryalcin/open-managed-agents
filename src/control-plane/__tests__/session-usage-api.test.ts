@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createInMemoryControlPlaneApp } from "./helpers.ts";
 import { getSession, sendMessage, setupSession, waitForIdle } from "./api-helpers.ts";
 import { translatePiEvent } from "../sessions/pi/translator.ts";
+import type { ManagedAgentsSession } from "../../types/sessions.ts";
 import type {
   RuntimeEventRunner,
   RuntimeToolPermissionUseEvent,
@@ -139,5 +140,19 @@ describe("session usage API", () => {
     const session = await sessionAfterTurns(new PricedToolPermissionRunner(PROBE_71[0]!), 1);
 
     expect(session.usage.list_cost).toEqual({ amount: "4", currency: "USD" });
+  });
+
+  it("reports the session's final usage in the archive response", async () => {
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner: new PricedRunner(PROBE_71), translate: translatePiEvent },
+    });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "turn 1");
+    await waitForIdle(app, session.id, 1);
+
+    const res = await app.request(`/v1/sessions/${session.id}/archive`, { method: "POST" });
+    const archived = (await res.json()) as ManagedAgentsSession;
+
+    expect(archived.usage.output_tokens).toBe(54);
   });
 });
