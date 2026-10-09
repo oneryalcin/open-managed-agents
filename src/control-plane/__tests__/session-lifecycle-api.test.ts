@@ -35,6 +35,7 @@ import type {
   ManagedAgentsSessionStatus,
 } from "../../types/sessions.ts";
 import { DefaultSessionService } from "../sessions/service.ts";
+import { translatePiEvent } from "../sessions/pi/translator.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
 const VALID_AGENT = {
@@ -51,6 +52,41 @@ const VALID_ENVIRONMENT = {
 };
 
 describe("session lifecycle API", () => {
+  it("reports a session as running while its turn runs (#279)", async () => {
+    const runner = new StartedThenBlockedRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: translatePiEvent },
+    });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "work");
+    await waitFor(async () =>
+      (await listEvents(app, session.id)).data.some((e) => e.type === "session.status_running"),
+    );
+
+    const res = await app.request(`/v1/sessions/${session.id}`);
+    const status = ((await res.json()) as ManagedAgentsSession).status;
+    runner.release();
+
+    expect(status).toBe("running");
+  });
+
+  it("lists a session as running while its turn runs (#279)", async () => {
+    const runner = new StartedThenBlockedRunner();
+    const app = createInMemoryControlPlaneApp({
+      runtime: { runner, translate: translatePiEvent },
+    });
+    const session = await setupSession(app);
+    await sendMessage(app, session.id, "work");
+    await waitFor(async () =>
+      (await listEvents(app, session.id)).data.some((e) => e.type === "session.status_running"),
+    );
+
+    const listed = await listSessions(app, "/v1/sessions");
+    runner.release();
+
+    expect(listed.data.find((s) => s.id === session.id)?.status).toBe("running");
+  });
+
   it("archives a session without deleting its event history", async () => {
     const runner = new CloseTrackingRunner();
     const app = createInMemoryControlPlaneApp({
@@ -1174,6 +1210,23 @@ class ThrowingCloseRunner extends CloseTrackingRunner {
   ): Promise<void> {
     await super.closeSession(workspaceId, sessionId);
     throw new Error("runtime cleanup failed");
+  }
+}
+
+class StartedThenBlockedRunner implements RuntimeEventRunner {
+  private resume: (() => void) | undefined;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.resume = resolve;
+  });
+
+  async *runUserMessage(): AsyncIterable<unknown> {
+    yield { type: "agent_start" };
+    await this.gate;
+    yield { type: "agent_end", messages: [] };
+  }
+
+  release(): void {
+    this.resume?.();
   }
 }
 

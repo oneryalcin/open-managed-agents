@@ -34,6 +34,7 @@ import type { ManagedAgentsContentBlock } from "../../types/events.ts";
 import { unfinishedUserMessages } from "./conversation-coverage.ts";
 import { withSqliteTransaction } from "../sqlite-transaction.ts";
 import type { WorkspaceId } from "../workspace.ts";
+import type { ManagedAgentsSessionStatus } from "../../types/sessions.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
@@ -223,6 +224,7 @@ export class EventStore implements SessionEventStore {
   private readonly userMessagesForSessionStmt: StatementSync;
   private readonly insertConversationEntryStmt: StatementSync;
   private readonly listConversationEntriesStmt: StatementSync;
+  private readonly latestSessionStatusStmt: StatementSync;
   private readonly deleteConversationForSessionStmt: StatementSync;
   private readonly insertConversationTurnStmt: StatementSync;
   private readonly conversationTurnsStmt: StatementSync;
@@ -309,6 +311,13 @@ export class EventStore implements SessionEventStore {
        FROM session_conversation_entries
        WHERE workspace_id = ? AND session_id = ?
        ON CONFLICT (workspace_id, session_id, entry_id) DO NOTHING`,
+    );
+    this.latestSessionStatusStmt = this.db.prepare(
+      `SELECT type FROM events
+       WHERE workspace_id = ? AND session_id = ?
+         AND type IN ('session.status_running', 'session.status_idle',
+                      'session.status_rescheduled', 'session.status_terminated')
+       ORDER BY rowid DESC LIMIT 1`,
     );
     this.listConversationEntriesStmt = this.db.prepare(
       `SELECT entry_id, entry_json, turn_id, pi_version
@@ -1105,6 +1114,25 @@ export class EventStore implements SessionEventStore {
     );
   }
 
+  latestSessionStatuses(
+    workspaceId: WorkspaceId,
+    sessionIds: readonly string[],
+  ): Map<string, ManagedAgentsSessionStatus> {
+    // Rowid, not the time-ordered id: a clock rewind across a restart can make
+    // a later event's id sort first (#281). Accepted work reads idle until its
+    // session.status_running, as on hosted (probe 70); counting accepted turns
+    // as running would hide requires_action behind a queued batch message.
+    const statuses = new Map<string, ManagedAgentsSessionStatus>();
+    for (const sessionId of sessionIds) {
+      const row = this.latestSessionStatusStmt.get(workspaceId, sessionId) as
+        | { type: string }
+        | undefined;
+      const status = row === undefined ? undefined : STATUS_BY_EVENT_TYPE[row.type];
+      if (status !== undefined) statuses.set(sessionId, status);
+    }
+    return statuses;
+  }
+
   isRuntimeTurnClosedBy(fence: {
     workspaceId: WorkspaceId;
     sessionId: string;
@@ -1265,6 +1293,13 @@ export class EventStore implements SessionEventStore {
     return stmt;
   }
 }
+
+const STATUS_BY_EVENT_TYPE: Record<string, ManagedAgentsSessionStatus> = {
+  "session.status_running": "running",
+  "session.status_idle": "idle",
+  "session.status_rescheduled": "rescheduling",
+  "session.status_terminated": "terminated",
+};
 
 function selectListArgs(
   workspaceId: WorkspaceId,

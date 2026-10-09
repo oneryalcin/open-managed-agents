@@ -14,6 +14,7 @@ import type {
   RequestIdempotencyKey,
 } from "../request-idempotency.ts";
 import type { SessionRow } from "../sessions/types.ts";
+import type { ManagedAgentsSessionStatus } from "../../types/sessions.ts";
 import type { WorkspaceId } from "../workspace.ts";
 
 export type {
@@ -291,6 +292,14 @@ export interface SessionEventStore {
     ownerId: string;
     ownerGeneration: number;
   }): boolean;
+  /**
+   * The status each session's latest `session.status_*` event reports, for
+   * the sessions that have one (#279: the row is not updated while running).
+   */
+  latestSessionStatuses(
+    workspaceId: WorkspaceId,
+    sessionIds: readonly string[],
+  ): Map<string, ManagedAgentsSessionStatus>;
   /**
    * Whether the turn is closed and this owner and generation still own it:
    * what this owner's own interrupt leaves behind (plan 0147).
