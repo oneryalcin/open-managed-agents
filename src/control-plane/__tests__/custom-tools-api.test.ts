@@ -559,6 +559,43 @@ describe("Custom tool API round trip", () => {
     expect(res.status).toBe(200);
   });
 
+  it("accepts late results for parallel waits left by a previous process in one batch", async () => {
+    const fixture = makeFixture(new FakeParallelCustomToolRunner());
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask both");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) =>
+        events.some(
+          (event) =>
+            event.type === "session.status_idle" &&
+            JSON.stringify(event.stop_reason).includes("requires_action"),
+        ),
+    );
+    const customUses = waiting.filter(
+      (event) => event.type === "agent.custom_tool_use",
+    );
+
+    const recreated = fixture.recreate(new NoPendingCustomToolRunner());
+    fixture.service.recoverAllAbandonedRuntimeTurns({ takeOverPreviousOwners: true });
+    const res = await recreated.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: customUses.map((use) => ({
+          type: "user.custom_tool_result",
+          custom_tool_use_id: use.id,
+          content: [{ type: "text", text: "late" }],
+          is_error: false,
+        })),
+      }),
+    });
+
+    expect(res.status).toBe(200);
+  });
+
   it("interrupt closes durable custom tool waits after restart", async () => {
     const fixture = makeFixture(new FakeCustomToolRunner());
     const session = await setupSession(fixture.app);

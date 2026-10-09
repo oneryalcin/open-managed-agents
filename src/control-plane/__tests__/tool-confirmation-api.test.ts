@@ -575,6 +575,59 @@ describe("builtin tool confirmations", () => {
     expect(res.status).toBe(200);
   });
 
+  async function answerMixedWaitsAfterRestart() {
+    const fixture = makeSharedFixture(new MixedPendingRunner());
+    const session = await setupSession(fixture.app);
+
+    await sendMessage(fixture.app, session.id, "ask both");
+    const waiting = await eventuallyEvents(
+      fixture.app,
+      session.id,
+      (events) =>
+        events.some(
+          (event) =>
+            event.type === "session.status_idle" &&
+            (event.stop_reason as { type?: unknown } | undefined)?.type ===
+              "requires_action",
+        ),
+    );
+    const customUse = waiting.find((event) => event.type === "agent.custom_tool_use");
+    const toolUse = waiting.find((event) => event.type === "agent.tool_use");
+
+    const recreated = fixture.recreate(new NoPendingMixedRunner());
+    fixture.service.recoverAllAbandonedRuntimeTurns({ takeOverPreviousOwners: true });
+    const res = await recreated.request(`/v1/sessions/${session.id}/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [
+          {
+            type: "user.custom_tool_result",
+            custom_tool_use_id: customUse?.id,
+            content: [{ type: "text", text: "late" }],
+          },
+          { type: "user.tool_confirmation", tool_use_id: toolUse?.id, result: "allow" },
+        ],
+      }),
+    });
+    return { res, events: await getEvents(recreated, session.id), toolUse };
+  }
+
+  it("accepts a custom result and a confirmation left by a previous process in one batch", async () => {
+    const { res } = await answerMixedWaitsAfterRestart();
+
+    expect(res.status).toBe(200);
+  });
+
+  it("ends a lost mixed batch with the confirmed tool's result, then one idle", async () => {
+    const { events, toolUse } = await answerMixedWaitsAfterRestart();
+
+    expect(events.slice(-2)).toMatchObject([
+      { type: "agent.tool_result", tool_use_id: toolUse?.id, is_error: true },
+      { type: "session.status_idle", stop_reason: { type: "end_turn" } },
+    ]);
+  });
+
   it("does not emit stale requires_action when custom and builtin waits resolve in one batch", async () => {
     const runner = new MixedPendingRunner();
     const app = createInMemoryControlPlaneApp({
@@ -1085,6 +1138,18 @@ class NoPendingToolPermissionRunner implements RuntimeEventRunner {
   async *runUserMessage(): AsyncIterable<unknown> {}
 
   claimToolConfirmation(): (() => void) | undefined {
+    return undefined;
+  }
+}
+
+class NoPendingMixedRunner implements RuntimeEventRunner {
+  async *runUserMessage(): AsyncIterable<unknown> {}
+
+  claimToolConfirmation(): (() => void) | undefined {
+    return undefined;
+  }
+
+  claimCustomToolResult(): (() => void) | undefined {
     return undefined;
   }
 }

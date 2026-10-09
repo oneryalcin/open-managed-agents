@@ -465,10 +465,16 @@ export class EventStore implements SessionEventStore {
          AND state = 'accepted'
          AND (owner_id = ? OR owner_id = ? OR lease_expires_at <= ?)`,
     );
+    // Re-claiming a turn this owner is already terminalizing keeps its
+    // generation, so one batch answering several of its waits shares a
+    // single claim instead of fencing out its own close.
     this.claimTerminalizingRuntimeTurnStmt = this.db.prepare(
       `UPDATE pending_runtime_turns
-       SET owner_id = ?,
-           owner_generation = owner_generation + 1,
+       SET owner_generation = CASE
+             WHEN state = 'terminalizing' AND owner_id = ?1 THEN owner_generation
+             ELSE owner_generation + 1
+           END,
+           owner_id = ?1,
            lease_expires_at = ?,
            state = 'terminalizing',
            updated_at = ?

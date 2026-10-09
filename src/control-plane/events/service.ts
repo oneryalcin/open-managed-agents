@@ -342,17 +342,17 @@ export class DefaultSessionEventsService implements SessionEventsService {
             runtimeChanges,
           )
         : [];
-    const terminalRows = this.customTools.customToolTerminalizationRows(
-      workspaceId,
-      sessionId,
-      customToolResultClaims,
-      now,
-      runtimeChanges,
-    );
     const toolConfirmationTerminalRows = this.toolConfirmations.toolConfirmationTerminalizationRows(
       workspaceId,
       sessionId,
       toolConfirmationClaims,
+      now,
+      runtimeChanges,
+    );
+    const terminalRows = this.customTools.customToolTerminalizationRows(
+      workspaceId,
+      sessionId,
+      customToolResultClaims,
       now,
       runtimeChanges,
     );
